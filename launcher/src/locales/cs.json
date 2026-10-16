@@ -1,0 +1,115 @@
+{
+  "meta": {
+    "title": "Azura Launcher"
+  },
+  "a11y": {
+    "sections": "Sekce",
+    "quality": "Kvalita"
+  },
+  "nav": {
+    "play": "Hrát",
+    "install": "Instalace",
+    "graphics": "Grafika",
+    "online": "Multiplayer",
+    "soon": "Brzy"
+  },
+  "rail": {
+    "language": "Jazyk",
+    "systemLanguage": "Systém ({name})",
+    "launcherVersion": "Launcher {version}",
+    "runtimeVersion": "Runtime ReXGlue {version}"
+  },
+  "play": {
+    "eyebrow": "Nativní port pro macOS · Gears of War 3",
+    "lede": "Vaše kopie hry, překompilovaná pro Apple Silicon.",
+    "launch": "Hrát",
+    "launching": "Spouštění",
+    "mode": "Kampaň",
+    "install": "Instalovat",
+    "installSub": "Nastavte herní soubory",
+    "running": "Hraje se"
+  },
+  "status": {
+    "gameFiles": "Herní soubory",
+    "noFolder": "Není vybrána žádná složka",
+    "xexFound": "Edice {versionName} · Media ID {mediaId}",
+    "runtime": "Runtime",
+    "gpu": "GPU",
+    "gpuValue": "{machine} · Vulkan přes Metal",
+    "runtimeMissing": "Zatím nezkompilováno"
+  },
+  "news": {
+    "title": "Novinky",
+    "skeleton": "První kostra projektu: runtime, manifest a launcher."
+  },
+  "install": {
+    "title": "Instalace",
+    "gameFolder": "Složka hry",
+    "gameFolderHelp": "Složka s vaší kopií Gears of War 3, která obsahuje {file}.",
+    "noFolder": "Není vybrána žádná složka",
+    "choose": "Vybrat…",
+    "languageTitle": "Jazyk a překlad",
+    "languageHelp": "Kam nainstalovat přeložené soubory hry.",
+    "gameLanguage": "Jazyk hry",
+    "translationTarget": "Umístění překladu",
+    "change": "Změnit…",
+    "notADirectory": "Tato cesta není složka, nebo už neexistuje.",
+    "missingXex": "V této složce ani v jejích přímých podsložkách není default.xex.",
+    "invalidXex": "default.xex není platný spustitelný soubor Xbox 360.",
+    "ok": "Gears of War 3 · Edice {versionName} · Media ID {mediaId}",
+    "unsupportedVersion": "Tato edice Gears of War 3 (Media ID {mediaId}) zatím není podporována.",
+    "wrongGame": "Toto není Gears of War 3 (Title ID {titleId}).",
+    "chooseFolderFirst": "Nejprve vyberte složku hry"
+  },
+  "graphics": {
+    "title": "Grafika",
+    "startup": "Před spuštěním",
+    "startupHelp": "Hra čte tato nastavení při spuštění. Změny se projeví při příštím hraní.",
+    "low": "Nízká",
+    "medium": "Střední",
+    "high": "Vysoká",
+    "auto": "Auto",
+    "mode": "Režim",
+    "windowed": "V okně",
+    "fullscreen": "Celá obrazovka",
+    "custom": "Vlastní",
+    "autoResolved": "Auto na tomto Macu používá {preset}",
+    "renderResolution": "Rozlišení vykreslování",
+    "original": "původní",
+    "advanced": "Pokročilé",
+    "advancedHelp": "Změna kteréhokoli z těchto nastavení přepne předvolbu na Vlastní.",
+    "anisotropic": "Anizotropní filtrování",
+    "off": "Vypnuto",
+    "antialiasing": "Vyhlazování hran",
+    "fxaaExtreme": "FXAA (extrémní)",
+    "upscaling": "Škálování obrazu",
+    "bilinear": "Bilineární (původní)",
+    "cas": "AMD CAS (zostření)",
+    "fsr": "AMD FSR 1",
+    "textureMemory": "Paměť textur",
+    "inGame": "Ve hře",
+    "inGameHelp": "Limit FPS, rozmazání pohybu, vyhlazování hran, citlivost myši a přiřazení kláves a ovladače se mění během hraní: stiskněte {key}."
+  },
+  "online": {
+    "title": "Multiplayer",
+    "panelTitle": "Kooperace a soukromé zápasy",
+    "help": "Kooperativní kampaň a zápasy hostované hráči s přímým spojením mezi počítači. Přijde v pozdější fázi projektu.",
+    "host": "Hostovat zápas",
+    "join": "Připojit se kódem"
+  },
+  "toast": {
+    "pick": "Maketa: v Tauri se zde otevře výběr složky systému macOS."
+  },
+  "log": {
+    "title": "Záznam hry",
+    "hide": "Skrýt",
+    "starting": "Spouštění hry…",
+    "running": "Hra běží.",
+    "exitOk": "Hra se ukončila normálně.",
+    "exitError": "Hra se ukončila s chybou (kód {code}).",
+    "exitSignal": "Systém hru zastavil.",
+    "runtimeMissing": "Runtime zatím není zkompilován. Jeho instalace z vaší kopie hry bude dalším krokem launcheru.",
+    "alreadyRunning": "Hra už běží.",
+    "startFailed": "Hru se nepodařilo spustit: {detail}"
+  }
+}

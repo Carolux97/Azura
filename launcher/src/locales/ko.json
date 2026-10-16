@@ -1,0 +1,115 @@
+{
+  "meta": {
+    "title": "Azura Launcher"
+  },
+  "a11y": {
+    "sections": "섹션",
+    "quality": "품질"
+  },
+  "nav": {
+    "play": "플레이",
+    "install": "설치",
+    "graphics": "그래픽",
+    "online": "멀티플레이어",
+    "soon": "예정"
+  },
+  "rail": {
+    "language": "언어",
+    "systemLanguage": "시스템 ({name})",
+    "launcherVersion": "런처 {version}",
+    "runtimeVersion": "Runtime ReXGlue {version}"
+  },
+  "play": {
+    "eyebrow": "macOS 네이티브 포트 · Gears of War 3",
+    "lede": "내 게임을 Apple Silicon용으로 다시 컴파일했습니다.",
+    "launch": "플레이",
+    "launching": "시작 중",
+    "mode": "캠페인",
+    "install": "설치",
+    "installSub": "게임 파일 설정",
+    "running": "플레이 중"
+  },
+  "status": {
+    "gameFiles": "게임 파일",
+    "noFolder": "선택한 폴더 없음",
+    "xexFound": "{versionName} 에디션 · Media ID {mediaId}",
+    "runtime": "런타임",
+    "gpu": "GPU",
+    "gpuValue": "{machine} · Metal 기반 Vulkan",
+    "runtimeMissing": "아직 컴파일되지 않음"
+  },
+  "news": {
+    "title": "새 소식",
+    "skeleton": "첫 프로젝트 골격: 런타임, 매니페스트, 런처."
+  },
+  "install": {
+    "title": "설치",
+    "gameFolder": "게임 폴더",
+    "gameFolderHelp": "{file} 파일이 들어 있는 Gears of War 3 사본 폴더입니다.",
+    "noFolder": "선택한 폴더 없음",
+    "choose": "선택…",
+    "languageTitle": "언어 및 번역",
+    "languageHelp": "번역된 게임 파일을 설치할 위치입니다.",
+    "gameLanguage": "게임 언어",
+    "translationTarget": "번역 파일 위치",
+    "change": "변경…",
+    "notADirectory": "이 경로는 폴더가 아니거나 더 이상 존재하지 않습니다.",
+    "missingXex": "이 폴더와 바로 아래 폴더에 default.xex가 없습니다.",
+    "invalidXex": "default.xex가 올바른 Xbox 360 실행 파일이 아닙니다.",
+    "ok": "Gears of War 3 · {versionName} 에디션 · Media ID {mediaId}",
+    "unsupportedVersion": "이 Gears of War 3 에디션(Media ID {mediaId})은 아직 지원되지 않습니다.",
+    "wrongGame": "Gears of War 3가 아닙니다(Title ID {titleId}).",
+    "chooseFolderFirst": "먼저 게임 폴더를 선택하세요"
+  },
+  "graphics": {
+    "title": "그래픽",
+    "startup": "실행 전 설정",
+    "startupHelp": "게임이 시작될 때 이 설정을 읽습니다. 변경 사항은 다음 플레이부터 적용됩니다.",
+    "low": "낮음",
+    "medium": "중간",
+    "high": "높음",
+    "auto": "자동",
+    "mode": "화면 모드",
+    "windowed": "창 모드",
+    "fullscreen": "전체 화면",
+    "custom": "사용자 지정",
+    "autoResolved": "이 Mac에서는 자동으로 '{preset}' 사용",
+    "renderResolution": "렌더링 해상도",
+    "original": "원본",
+    "advanced": "고급",
+    "advancedHelp": "이 설정 중 하나라도 변경하면 프리셋이 사용자 지정으로 바뀝니다.",
+    "anisotropic": "비등방성 필터링",
+    "off": "끔",
+    "antialiasing": "안티앨리어싱",
+    "fxaaExtreme": "FXAA (최대)",
+    "upscaling": "이미지 스케일링",
+    "bilinear": "바이리니어 (원본)",
+    "cas": "AMD CAS (선명화)",
+    "fsr": "AMD FSR 1",
+    "textureMemory": "텍스처 메모리",
+    "inGame": "게임 내",
+    "inGameHelp": "프레임 제한, 모션 블러, 안티앨리어싱, 마우스 감도, 키보드 및 컨트롤러 키 설정은 플레이 중에 변경합니다. {key} 키를 누르세요."
+  },
+  "online": {
+    "title": "멀티플레이어",
+    "panelTitle": "협동 및 비공개 매치",
+    "help": "협동 캠페인과 플레이어가 호스트하는 매치로, 컴퓨터끼리 직접 연결됩니다. 프로젝트의 이후 단계에서 제공될 예정입니다.",
+    "host": "매치 만들기",
+    "join": "코드로 참가"
+  },
+  "toast": {
+    "pick": "목업: Tauri에서는 macOS 폴더 선택 창이 열립니다."
+  },
+  "log": {
+    "title": "게임 로그",
+    "hide": "숨기기",
+    "starting": "게임을 시작하는 중…",
+    "running": "게임이 실행 중입니다.",
+    "exitOk": "게임이 정상적으로 종료되었습니다.",
+    "exitError": "게임이 오류로 종료되었습니다(코드 {code}).",
+    "exitSignal": "시스템이 게임을 중지했습니다.",
+    "runtimeMissing": "런타임이 아직 컴파일되지 않았습니다. 내 게임 사본에서 설치하는 것이 런처의 다음 단계입니다.",
+    "alreadyRunning": "게임이 이미 실행 중입니다.",
+    "startFailed": "게임을 시작할 수 없습니다: {detail}"
+  }
+}

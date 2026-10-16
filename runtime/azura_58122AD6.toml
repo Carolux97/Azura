@@ -1,0 +1,23 @@
+# ReXGlue project manifest for Gears of War 3 (Xbox 360), World edition (media ID 58122AD6).
+#
+# `rexglue codegen` reads this file and translates the game's PowerPC code (game/default.xex) into
+# C++ under generated/. The generated code is derived from your own copy of the game and is never
+# committed. versions.toml (at the repository root) maps each known default.xex to its manifest;
+# scripts/build.sh uses it to pick this file.
+#
+# Every manifest keeps project name "azura": the generated init header is named after it.
+
+[project]
+name = "azura"
+sdk_version = "0.10.0"
+game_root = "game"
+
+[entrypoint]
+file_path = "game/default.xex"
+out_directory_path = "generated/default"
+includes = []
+
+# Function entry hints: addresses that the automatic function discovery misses. They are found by
+# running the game and reading the runtime log, and they only match the default.xex this manifest
+# is for (see versions.toml).
+[entrypoint.functions]
