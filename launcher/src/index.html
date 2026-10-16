@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Azura Launcher</title>
+  <!-- Bundled OFL fonts (see scripts/fetch-fonts.mjs), so the launcher works offline. Oswald
+       covers Cyrillic, which the Latin-only display fonts lack. -->
+  <link rel="stylesheet" href="fonts/fonts.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Lambent backdrop: dark rock with glowing imulsion veins and drifting spores. Decorative only. -->
+  <div class="backdrop" aria-hidden="true">
+    <svg class="veins" viewBox="0 0 1200 760" preserveAspectRatio="xMidYMid slice">
+      <defs>
+        <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur stdDeviation="6" result="blur"/>
+          <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+        <radialGradient id="pool" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="#ffd25a" stop-opacity=".55"/>
+          <stop offset="100%" stop-color="#ff9e1b" stop-opacity="0"/>
+        </radialGradient>
+      </defs>
+      <ellipse cx="1040" cy="690" rx="260" ry="120" fill="url(#pool)"/>
+      <ellipse cx="160" cy="80" rx="180" ry="90" fill="url(#pool)" opacity=".5"/>
+      <g class="vein-group" filter="url(#glow)">
+        <path class="vein" d="M1200 640 C1080 610 1010 560 930 575 S790 640 700 610 S560 520 470 540"/>
+        <path class="vein v2" d="M930 575 C905 520 920 470 880 430 S800 390 770 340"/>
+        <path class="vein v3" d="M1200 720 C1120 700 1060 720 990 760"/>
+        <path class="vein v2" d="M700 610 C680 660 640 690 600 760"/>
+        <path class="vein v3" d="M0 120 C70 110 130 140 190 120 S300 60 360 80"/>
+        <path class="vein" d="M190 120 C210 170 190 220 230 260"/>
+      </g>
+    </svg>
+    <div class="spores"></div>
+    <div class="grain"></div>
+  </div>
+
+  <div class="shell">
+    <!-- Navigation rail -->
+    <nav class="rail" data-i18n-attr="aria-label:a11y.sections">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-name">Azura</span>
+      </div>
+      <ul class="nav">
+        <li><button class="nav-item is-active" data-view="play" data-i18n="nav.play"></button></li>
+        <li><button class="nav-item" data-view="install" data-i18n="nav.install"></button></li>
+        <li><button class="nav-item" data-view="graphics" data-i18n="nav.graphics"></button></li>
+        <li>
+          <button class="nav-item" data-view="online">
+            <span data-i18n="nav.online"></span>
+            <span class="tag" data-i18n="nav.soon"></span>
+          </button>
+        </li>
+      </ul>
+      <div class="rail-foot">
+        <label class="field rail-language">
+          <span data-i18n="rail.language"></span>
+          <select id="ui-language"></select>
+        </label>
+        <span class="version" id="launcher-version"></span>
+        <span class="version" id="runtime-version"></span>
+      </div>
+    </nav>
+
+    <main class="content">
+      <!-- PLAY -->
+      <section class="view is-active" data-view="play" aria-labelledby="play-title">
+        <header class="hero">
+          <p class="eyebrow" data-i18n="play.eyebrow"></p>
+          <h1 id="play-title" class="wordmark">AZURA</h1>
+          <p class="lede" data-i18n="play.lede"></p>
+        </header>
+
+        <div class="play-row">
+          <!-- Its label and action depend on the installation: "Play" when the game files are set,
+               "Install" (which opens the Installation view) when they are not. See renderPlay(). -->
+          <button class="btn-launch" id="launch">
+            <span class="btn-launch-label"></span>
+            <span class="btn-launch-sub"></span>
+          </button>
+          <div class="status-list">
+            <div class="status" id="status-game" data-state="warn">
+              <span class="dot"></span>
+              <div><strong data-i18n="status.gameFiles"></strong><span class="status-detail"></span></div>
+            </div>
+            <div class="status" id="status-runtime" data-state="warn">
+              <span class="dot"></span>
+              <div><strong data-i18n="status.runtime"></strong><span class="status-detail"></span></div>
+            </div>
+            <div class="status" data-state="ok">
+              <span class="dot"></span>
+              <div><strong data-i18n="status.gpu"></strong><span class="status-detail" id="status-gpu-detail"></span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Game log: shown while the game runs and after it ends or fails to start. -->
+        <div class="panel log-panel" id="game-log" hidden>
+          <div class="log-head">
+            <h2 class="panel-title" data-i18n="log.title"></h2>
+            <span class="log-state" id="game-log-state"></span>
+            <button class="btn btn-small" id="game-log-hide" data-i18n="log.hide"></button>
+          </div>
+          <pre class="log-body" id="game-log-body"></pre>
+        </div>
+
+        <div class="panel news">
+          <h2 class="panel-title" data-i18n="news.title"></h2>
+          <article class="news-item">
+            <time datetime="2026-10-16"></time>
+            <p data-i18n="news.skeleton"></p>
+          </article>
+        </div>
+      </section>
+
+      <!-- INSTALL -->
+      <section class="view" data-view="install" aria-labelledby="install-title">
+        <h1 id="install-title" class="view-title" data-i18n="install.title"></h1>
+        <div class="panel">
+          <h2 class="panel-title" data-i18n="install.gameFolder"></h2>
+          <p class="help" data-i18n="install.gameFolderHelp"></p>
+          <div class="path-row">
+            <input class="path" id="game-path" type="text" readonly data-i18n-attr="placeholder:install.noFolder">
+            <button class="btn" id="pick-game" data-i18n="install.choose"></button>
+          </div>
+          <!-- Result of checking the folder; renderInstall() fills it. -->
+          <p class="check" id="game-check" hidden></p>
+        </div>
+        <div class="panel">
+          <h2 class="panel-title" data-i18n="install.languageTitle"></h2>
+          <p class="help" data-i18n="install.languageHelp"></p>
+          <div class="field-grid">
+            <label class="field">
+              <span data-i18n="install.gameLanguage"></span>
+              <select id="game-language"></select>
+            </label>
+            <label class="field">
+              <span data-i18n="install.translationTarget"></span>
+              <div class="path-row">
+                <input class="path" type="text" readonly value="~/Library/Application Support/azura/lang">
+                <button class="btn" data-i18n="install.change"></button>
+              </div>
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <!-- GRAPHICS: only the settings the runtime reads at start-up. The rest live in the game. -->
+      <section class="view" data-view="graphics" aria-labelledby="graphics-title">
+        <h1 id="graphics-title" class="view-title" data-i18n="graphics.title"></h1>
+        <div class="panel">
+          <h2 class="panel-title" data-i18n="graphics.startup"></h2>
+          <p class="help" data-i18n="graphics.startupHelp"></p>
+          <div class="preset-row">
+            <div class="segmented" id="preset" role="radiogroup" data-i18n-attr="aria-label:a11y.quality">
+              <button role="radio" data-preset="low" data-i18n="graphics.low"></button>
+              <button role="radio" data-preset="medium" data-i18n="graphics.medium"></button>
+              <button role="radio" data-preset="high" data-i18n="graphics.high"></button>
+              <button role="radio" data-preset="auto" data-i18n="graphics.auto"></button>
+              <!-- Shown only when the advanced values match no preset; it cannot be clicked. -->
+              <button role="radio" data-preset="custom" data-i18n="graphics.custom" disabled hidden></button>
+            </div>
+            <span class="preset-note" id="preset-note"></span>
+          </div>
+          <div class="field-grid">
+            <label class="field">
+              <span data-i18n="graphics.mode"></span>
+              <select id="display-mode">
+                <option value="windowed" data-i18n="graphics.windowed"></option>
+                <option value="fullscreen" data-i18n="graphics.fullscreen"></option>
+              </select>
+            </label>
+            <label class="field">
+              <span data-i18n="graphics.renderResolution"></span>
+              <select data-setting="resolutionScale" id="resolution-scale">
+                <option value="1"></option>
+                <option value="2"></option>
+                <option value="3"></option>
+              </select>
+            </label>
+          </div>
+
+          <details class="advanced">
+            <summary data-i18n="graphics.advanced"></summary>
+            <p class="help" data-i18n="graphics.advancedHelp"></p>
+            <div class="field-grid">
+              <label class="field">
+                <span data-i18n="graphics.anisotropic"></span>
+                <select data-setting="anisotropic">
+                  <option value="0" data-i18n="graphics.off"></option>
+                  <option value="1">1×</option>
+                  <option value="2">2×</option>
+                  <option value="3">4×</option>
+                  <option value="4">8×</option>
+                  <option value="5">16×</option>
+                </select>
+              </label>
+              <label class="field">
+                <span data-i18n="graphics.antialiasing"></span>
+                <select data-setting="antialiasing">
+                  <option value="none" data-i18n="graphics.off"></option>
+                  <option value="fxaa">FXAA</option>
+                  <option value="fxaa_extreme" data-i18n="graphics.fxaaExtreme"></option>
+                </select>
+              </label>
+              <label class="field">
+                <span data-i18n="graphics.upscaling"></span>
+                <select data-setting="upscaling">
+                  <option value="bilinear" data-i18n="graphics.bilinear"></option>
+                  <option value="cas" data-i18n="graphics.cas"></option>
+                  <option value="fsr" data-i18n="graphics.fsr"></option>
+                </select>
+              </label>
+              <label class="field">
+                <span data-i18n="graphics.textureMemory"></span>
+                <select data-setting="textureMemory">
+                  <option value="384">384 MB</option>
+                  <option value="768">768 MB</option>
+                  <option value="1536">1536 MB</option>
+                </select>
+              </label>
+            </div>
+          </details>
+        </div>
+        <div class="panel panel-note">
+          <h2 class="panel-title" data-i18n="graphics.inGame"></h2>
+          <p class="help" data-i18n="graphics.inGameHelp"></p>
+        </div>
+      </section>
+
+      <!-- ONLINE -->
+      <section class="view" data-view="online" aria-labelledby="online-title">
+        <h1 id="online-title" class="view-title" data-i18n="online.title"></h1>
+        <div class="panel panel-locked">
+          <h2 class="panel-title" data-i18n="online.panelTitle"></h2>
+          <p class="help" data-i18n="online.help"></p>
+          <div class="field-grid">
+            <button class="btn" disabled data-i18n="online.host"></button>
+            <button class="btn" disabled data-i18n="online.join"></button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script type="module" src="main.js"></script>
+</body>
+</html>

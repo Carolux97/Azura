@@ -1,0 +1,115 @@
+{
+  "meta": {
+    "title": "Azura Launcher"
+  },
+  "a11y": {
+    "sections": "區段",
+    "quality": "畫質"
+  },
+  "nav": {
+    "play": "開始遊戲",
+    "install": "安裝",
+    "graphics": "圖形",
+    "online": "多人遊戲",
+    "soon": "即將推出"
+  },
+  "rail": {
+    "language": "語言",
+    "systemLanguage": "系統（{name}）",
+    "launcherVersion": "啟動器 {version}",
+    "runtimeVersion": "Runtime ReXGlue {version}"
+  },
+  "play": {
+    "eyebrow": "macOS 原生移植版 · Gears of War 3",
+    "lede": "你的遊戲副本，為 Apple Silicon 重新編譯。",
+    "launch": "開始遊戲",
+    "launching": "啟動中",
+    "mode": "戰役",
+    "install": "安裝",
+    "installSub": "設定遊戲檔案",
+    "running": "遊玩中"
+  },
+  "status": {
+    "gameFiles": "遊戲檔案",
+    "noFolder": "尚未選擇資料夾",
+    "xexFound": "{versionName} 版 · Media ID {mediaId}",
+    "runtime": "執行環境",
+    "gpu": "GPU",
+    "gpuValue": "{machine} · 透過 Metal 執行 Vulkan",
+    "runtimeMissing": "尚未編譯"
+  },
+  "news": {
+    "title": "最新消息",
+    "skeleton": "專案的第一個骨架：執行環境、清單檔與啟動器。"
+  },
+  "install": {
+    "title": "安裝",
+    "gameFolder": "遊戲資料夾",
+    "gameFolderHelp": "你的 Gears of War 3 副本資料夾，也就是包含 {file} 的資料夾。",
+    "noFolder": "尚未選擇資料夾",
+    "choose": "選擇…",
+    "languageTitle": "語言與翻譯",
+    "languageHelp": "翻譯後遊戲檔案的安裝位置。",
+    "gameLanguage": "遊戲語言",
+    "translationTarget": "翻譯檔案位置",
+    "change": "變更…",
+    "notADirectory": "此路徑不是資料夾，或已不存在。",
+    "missingXex": "此資料夾及其直接子資料夾中都沒有 default.xex。",
+    "invalidXex": "default.xex 不是有效的 Xbox 360 執行檔。",
+    "ok": "Gears of War 3 · {versionName} 版 · Media ID {mediaId}",
+    "unsupportedVersion": "尚未支援此 Gears of War 3 版本（Media ID {mediaId}）。",
+    "wrongGame": "這不是 Gears of War 3（Title ID {titleId}）。",
+    "chooseFolderFirst": "請先選擇遊戲資料夾"
+  },
+  "graphics": {
+    "title": "圖形",
+    "startup": "啟動前設定",
+    "startupHelp": "遊戲會在啟動時讀取這些設定，變更將於下次遊玩時生效。",
+    "low": "低",
+    "medium": "中",
+    "high": "高",
+    "auto": "自動",
+    "mode": "顯示模式",
+    "windowed": "視窗",
+    "fullscreen": "全螢幕",
+    "custom": "自訂",
+    "autoResolved": "自動模式在這台 Mac 上使用「{preset}」",
+    "renderResolution": "繪製解析度",
+    "original": "原始",
+    "advanced": "進階",
+    "advancedHelp": "變更其中任何一項設定，預設組合就會變為自訂。",
+    "anisotropic": "非等向性過濾",
+    "off": "關閉",
+    "antialiasing": "反鋸齒",
+    "fxaaExtreme": "FXAA（極致）",
+    "upscaling": "影像縮放",
+    "bilinear": "雙線性（原始）",
+    "cas": "AMD CAS（銳利化）",
+    "fsr": "AMD FSR 1",
+    "textureMemory": "材質記憶體",
+    "inGame": "遊戲內",
+    "inGameHelp": "影格率上限、動態模糊、反鋸齒、滑鼠靈敏度以及鍵盤和控制器按鍵配置，都可在遊玩時變更：請按 {key}。"
+  },
+  "online": {
+    "title": "多人遊戲",
+    "panelTitle": "合作與私人對戰",
+    "help": "合作戰役與由玩家主持的對戰，電腦之間直接連線。將於專案後續階段推出。",
+    "host": "主持對戰",
+    "join": "使用代碼加入"
+  },
+  "toast": {
+    "pick": "模型：在 Tauri 中，這裡會開啟 macOS 的資料夾選擇視窗。"
+  },
+  "log": {
+    "title": "遊戲記錄",
+    "hide": "隱藏",
+    "starting": "正在啟動遊戲…",
+    "running": "遊戲正在執行。",
+    "exitOk": "遊戲已正常關閉。",
+    "exitError": "遊戲因錯誤而關閉（代碼 {code}）。",
+    "exitSignal": "系統已停止遊戲。",
+    "runtimeMissing": "執行環境尚未編譯。從你的遊戲副本進行安裝將是啟動器的下一步。",
+    "alreadyRunning": "遊戲已在執行中。",
+    "startFailed": "無法啟動遊戲：{detail}"
+  }
+}

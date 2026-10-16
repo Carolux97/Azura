@@ -1,0 +1,48 @@
+{
+    "version": 6,
+    "cmakeMinimumRequired": {
+        "major": 3,
+        "minor": 25,
+        "patch": 0
+    },
+    "configurePresets": [
+        {
+            "name": "mac-arm64",
+            "displayName": "macOS on Apple Silicon",
+            "generator": "Ninja Multi-Config",
+            "binaryDir": "${sourceDir}/out/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++",
+                "CMAKE_C_FLAGS": "-march=armv8-a",
+                "CMAKE_CXX_FLAGS": "-march=armv8-a",
+                "CMAKE_OSX_ARCHITECTURES": "arm64",
+                "CMAKE_CONFIGURATION_TYPES": "Debug;Release;RelWithDebInfo",
+                "CMAKE_DEFAULT_BUILD_TYPE": "RelWithDebInfo",
+                "CMAKE_PREFIX_PATH": "${sourceDir}/../sdk/rexglue-0.10.0-mac-arm64/mac-arm64"
+            },
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Darwin"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "mac-arm64-debug",
+            "configurePreset": "mac-arm64",
+            "configuration": "Debug"
+        },
+        {
+            "name": "mac-arm64-relwithdebinfo",
+            "configurePreset": "mac-arm64",
+            "configuration": "RelWithDebInfo"
+        },
+        {
+            "name": "mac-arm64-release",
+            "configurePreset": "mac-arm64",
+            "configuration": "Release"
+        }
+    ]
+}

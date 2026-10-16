@@ -1,0 +1,115 @@
+{
+  "meta": {
+    "title": "Azura Launcher"
+  },
+  "a11y": {
+    "sections": "Bereiche",
+    "quality": "Qualität"
+  },
+  "nav": {
+    "play": "Spielen",
+    "install": "Installation",
+    "graphics": "Grafik",
+    "online": "Mehrspieler",
+    "soon": "Bald"
+  },
+  "rail": {
+    "language": "Sprache",
+    "systemLanguage": "System ({name})",
+    "launcherVersion": "Launcher {version}",
+    "runtimeVersion": "Runtime ReXGlue {version}"
+  },
+  "play": {
+    "eyebrow": "Nativer macOS-Port · Gears of War 3",
+    "lede": "Deine Kopie des Spiels, neu kompiliert für Apple Silicon.",
+    "launch": "Spielen",
+    "launching": "Startet",
+    "mode": "Kampagne",
+    "install": "Installieren",
+    "installSub": "Spieldateien einrichten",
+    "running": "Läuft"
+  },
+  "status": {
+    "gameFiles": "Spieldateien",
+    "noFolder": "Kein Ordner ausgewählt",
+    "xexFound": "Edition {versionName} · Media ID {mediaId}",
+    "runtime": "Runtime",
+    "gpu": "GPU",
+    "gpuValue": "{machine} · Vulkan über Metal",
+    "runtimeMissing": "Noch nicht kompiliert"
+  },
+  "news": {
+    "title": "Neuigkeiten",
+    "skeleton": "Erstes Projektgerüst: Runtime, Manifest und Launcher."
+  },
+  "install": {
+    "title": "Installation",
+    "gameFolder": "Spielordner",
+    "gameFolderHelp": "Der Ordner deiner Gears of War 3-Kopie, der {file} enthält.",
+    "noFolder": "Kein Ordner ausgewählt",
+    "choose": "Auswählen…",
+    "languageTitle": "Sprache und Übersetzung",
+    "languageHelp": "Wohin die übersetzten Spieldateien installiert werden.",
+    "gameLanguage": "Spielsprache",
+    "translationTarget": "Zielordner der Übersetzung",
+    "change": "Ändern…",
+    "notADirectory": "Dieser Pfad ist kein Ordner oder existiert nicht mehr.",
+    "missingXex": "Keine default.xex in diesem Ordner oder seinen direkten Unterordnern.",
+    "invalidXex": "default.xex ist keine gültige Xbox 360-Programmdatei.",
+    "ok": "Gears of War 3 · Edition {versionName} · Media ID {mediaId}",
+    "unsupportedVersion": "Diese Edition von Gears of War 3 (Media ID {mediaId}) wird noch nicht unterstützt.",
+    "wrongGame": "Das ist nicht Gears of War 3 (Title ID {titleId}).",
+    "chooseFolderFirst": "Wähle zuerst den Spielordner"
+  },
+  "graphics": {
+    "title": "Grafik",
+    "startup": "Vor dem Start",
+    "startupHelp": "Das Spiel liest diese Einstellungen beim Start. Änderungen gelten ab dem nächsten Spielstart.",
+    "low": "Niedrig",
+    "medium": "Mittel",
+    "high": "Hoch",
+    "auto": "Auto",
+    "mode": "Modus",
+    "windowed": "Fenster",
+    "fullscreen": "Vollbild",
+    "custom": "Benutzerdefiniert",
+    "autoResolved": "Auto verwendet {preset} auf diesem Mac",
+    "renderResolution": "Renderauflösung",
+    "original": "Original",
+    "advanced": "Erweitert",
+    "advancedHelp": "Wenn du eine dieser Einstellungen änderst, wird die Voreinstellung zu Benutzerdefiniert.",
+    "anisotropic": "Anisotrope Filterung",
+    "off": "Aus",
+    "antialiasing": "Kantenglättung",
+    "fxaaExtreme": "FXAA (extrem)",
+    "upscaling": "Bildskalierung",
+    "bilinear": "Bilinear (Original)",
+    "cas": "AMD CAS (Schärfung)",
+    "fsr": "AMD FSR 1",
+    "textureMemory": "Texturspeicher",
+    "inGame": "Im Spiel",
+    "inGameHelp": "FPS-Limit, Bewegungsunschärfe, Kantenglättung, Mausempfindlichkeit sowie Tastatur- und Controllerbelegung änderst du während des Spiels: Drücke {key}."
+  },
+  "online": {
+    "title": "Mehrspieler",
+    "panelTitle": "Koop und private Partien",
+    "help": "Koop-Kampagne und von Spielern gehostete Partien, direkt zwischen Computern verbunden. Folgt in einer späteren Projektphase.",
+    "host": "Partie hosten",
+    "join": "Mit Code beitreten"
+  },
+  "toast": {
+    "pick": "Entwurf: Unter Tauri öffnet sich hier die Ordnerauswahl von macOS."
+  },
+  "log": {
+    "title": "Spielprotokoll",
+    "hide": "Ausblenden",
+    "starting": "Spiel wird gestartet…",
+    "running": "Das Spiel läuft.",
+    "exitOk": "Das Spiel wurde normal beendet.",
+    "exitError": "Das Spiel wurde mit einem Fehler beendet (Code {code}).",
+    "exitSignal": "Das System hat das Spiel beendet.",
+    "runtimeMissing": "Die Runtime ist noch nicht kompiliert. Sie aus deiner Spielkopie zu installieren, ist der nächste Schritt des Launchers.",
+    "alreadyRunning": "Das Spiel läuft bereits.",
+    "startFailed": "Das Spiel konnte nicht gestartet werden: {detail}"
+  }
+}

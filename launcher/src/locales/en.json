@@ -1,0 +1,115 @@
+{
+  "meta": {
+    "title": "Azura Launcher"
+  },
+  "a11y": {
+    "sections": "Sections",
+    "quality": "Quality"
+  },
+  "nav": {
+    "play": "Play",
+    "install": "Installation",
+    "graphics": "Graphics",
+    "online": "Multiplayer",
+    "soon": "Soon"
+  },
+  "rail": {
+    "language": "Language",
+    "systemLanguage": "System ({name})",
+    "launcherVersion": "Launcher {version}",
+    "runtimeVersion": "Runtime ReXGlue {version}"
+  },
+  "play": {
+    "eyebrow": "Native macOS port · Gears of War 3",
+    "lede": "Your copy of the game, recompiled for Apple Silicon.",
+    "launch": "Play",
+    "launching": "Starting",
+    "mode": "Campaign",
+    "install": "Install",
+    "installSub": "Set up the game files",
+    "running": "Playing"
+  },
+  "status": {
+    "gameFiles": "Game files",
+    "noFolder": "No folder selected",
+    "xexFound": "{versionName} edition · Media ID {mediaId}",
+    "runtime": "Runtime",
+    "gpu": "GPU",
+    "gpuValue": "{machine} · Vulkan on Metal",
+    "runtimeMissing": "Not built yet"
+  },
+  "news": {
+    "title": "News",
+    "skeleton": "First project skeleton: runtime, manifest and launcher."
+  },
+  "install": {
+    "title": "Installation",
+    "gameFolder": "Game folder",
+    "gameFolderHelp": "The folder of your Gears of War 3 dump, the one that contains {file}.",
+    "noFolder": "No folder selected",
+    "choose": "Choose…",
+    "languageTitle": "Language and translation",
+    "languageHelp": "Where to install the game's translated files.",
+    "gameLanguage": "Game language",
+    "translationTarget": "Translation destination",
+    "change": "Change…",
+    "notADirectory": "That path is not a folder, or it no longer exists.",
+    "missingXex": "No default.xex in this folder or in the folders right inside it.",
+    "invalidXex": "default.xex is not a valid Xbox 360 executable.",
+    "ok": "Gears of War 3 · {versionName} edition · Media ID {mediaId}",
+    "unsupportedVersion": "This edition of Gears of War 3 (Media ID {mediaId}) is not supported yet.",
+    "wrongGame": "This is not Gears of War 3 (Title ID {titleId}).",
+    "chooseFolderFirst": "Choose the game folder first"
+  },
+  "graphics": {
+    "title": "Graphics",
+    "startup": "Before launch",
+    "startupHelp": "The game reads these settings when it starts. Changes apply the next time you play.",
+    "low": "Low",
+    "medium": "Medium",
+    "high": "High",
+    "auto": "Auto",
+    "mode": "Mode",
+    "windowed": "Windowed",
+    "fullscreen": "Fullscreen",
+    "custom": "Custom",
+    "autoResolved": "Auto uses {preset} on this Mac",
+    "renderResolution": "Render resolution",
+    "original": "original",
+    "advanced": "Advanced",
+    "advancedHelp": "Changing any of these turns the preset into Custom.",
+    "anisotropic": "Anisotropic filtering",
+    "off": "Off",
+    "antialiasing": "Anti-aliasing",
+    "fxaaExtreme": "FXAA (extreme)",
+    "upscaling": "Image scaling",
+    "bilinear": "Bilinear (original)",
+    "cas": "AMD CAS (sharpening)",
+    "fsr": "AMD FSR 1",
+    "textureMemory": "Texture memory",
+    "inGame": "In game",
+    "inGameHelp": "Frame rate limit, motion blur, anti-aliasing, mouse sensitivity and keyboard and controller bindings are changed while playing: press {key}."
+  },
+  "online": {
+    "title": "Multiplayer",
+    "panelTitle": "Co-op and private matches",
+    "help": "Co-op campaign and player-hosted matches, connecting directly between computers. Coming in a later phase of the project.",
+    "host": "Host match",
+    "join": "Join with code"
+  },
+  "toast": {
+    "pick": "Mockup: in Tauri this will open the macOS folder picker."
+  },
+  "log": {
+    "title": "Game log",
+    "hide": "Hide",
+    "starting": "Starting the game…",
+    "running": "The game is running.",
+    "exitOk": "The game closed normally.",
+    "exitError": "The game closed with an error (code {code}).",
+    "exitSignal": "The game was stopped by the system.",
+    "runtimeMissing": "The runtime is not built yet. Installing it from your copy of the game will be the launcher's next step.",
+    "alreadyRunning": "The game is already running.",
+    "startFailed": "The game could not start: {detail}"
+  }
+}

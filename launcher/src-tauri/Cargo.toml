@@ -1,0 +1,26 @@
+[package]
+name = "azura-launcher"
+version = "0.1.0"
+description = "Launcher for the Gears3-Azura native macOS port"
+authors = ["Gears3-Azura contributors"]
+edition = "2024"
+rust-version = "1.90"
+
+[lib]
+# The library holds the app so the same code can later back other entry points; main.rs only calls it.
+name = "azura_launcher_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.1", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2.12.1", features = [] }
+tauri-plugin-log = "2"
+tauri-plugin-dialog = "2.8.1"
+sha2 = "0.10.9"
+toml = "1.1.8"
+toml_edit = "0.25.17"

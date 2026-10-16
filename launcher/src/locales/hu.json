@@ -1,0 +1,115 @@
+{
+  "meta": {
+    "title": "Azura Launcher"
+  },
+  "a11y": {
+    "sections": "Szakaszok",
+    "quality": "Minőség"
+  },
+  "nav": {
+    "play": "Játék",
+    "install": "Telepítés",
+    "graphics": "Grafika",
+    "online": "Többjátékos",
+    "soon": "Hamarosan"
+  },
+  "rail": {
+    "language": "Nyelv",
+    "systemLanguage": "Rendszer ({name})",
+    "launcherVersion": "Launcher {version}",
+    "runtimeVersion": "Runtime ReXGlue {version}"
+  },
+  "play": {
+    "eyebrow": "Natív macOS-port · Gears of War 3",
+    "lede": "A saját játékpéldányod, Apple Siliconra újrafordítva.",
+    "launch": "Játék",
+    "launching": "Indítás",
+    "mode": "Kampány",
+    "install": "Telepítés",
+    "installSub": "Játékfájlok beállítása",
+    "running": "Játékban"
+  },
+  "status": {
+    "gameFiles": "Játékfájlok",
+    "noFolder": "Nincs kiválasztott mappa",
+    "xexFound": "{versionName} kiadás · Media ID {mediaId}",
+    "runtime": "Runtime",
+    "gpu": "GPU",
+    "gpuValue": "{machine} · Vulkan Metalon",
+    "runtimeMissing": "Még nincs lefordítva"
+  },
+  "news": {
+    "title": "Hírek",
+    "skeleton": "A projekt első váza: runtime, manifest és launcher."
+  },
+  "install": {
+    "title": "Telepítés",
+    "gameFolder": "Játékmappa",
+    "gameFolderHelp": "A Gears of War 3 példányod mappája, amely tartalmazza a(z) {file} fájlt.",
+    "noFolder": "Nincs kiválasztott mappa",
+    "choose": "Kiválasztás…",
+    "languageTitle": "Nyelv és fordítás",
+    "languageHelp": "Hova kerüljenek a játék lefordított fájljai.",
+    "gameLanguage": "Játék nyelve",
+    "translationTarget": "Fordítás helye",
+    "change": "Módosítás…",
+    "notADirectory": "Ez az elérési út nem mappa, vagy már nem létezik.",
+    "missingXex": "Sem ebben a mappában, sem a közvetlen almappáiban nincs default.xex.",
+    "invalidXex": "A default.xex nem érvényes Xbox 360 futtatható fájl.",
+    "ok": "Gears of War 3 · {versionName} kiadás · Media ID {mediaId}",
+    "unsupportedVersion": "A Gears of War 3 ezen kiadása (Media ID {mediaId}) még nem támogatott.",
+    "wrongGame": "Ez nem a Gears of War 3 (Title ID {titleId}).",
+    "chooseFolderFirst": "Előbb válaszd ki a játék mappáját"
+  },
+  "graphics": {
+    "title": "Grafika",
+    "startup": "Indítás előtt",
+    "startupHelp": "A játék indításkor olvassa be ezeket a beállításokat. A változások a következő játéktól érvényesek.",
+    "low": "Alacsony",
+    "medium": "Közepes",
+    "high": "Magas",
+    "auto": "Auto",
+    "mode": "Mód",
+    "windowed": "Ablakos",
+    "fullscreen": "Teljes képernyő",
+    "custom": "Egyéni",
+    "autoResolved": "Az Auto ezen a Macen ezt használja: {preset}",
+    "renderResolution": "Renderelési felbontás",
+    "original": "eredeti",
+    "advanced": "Speciális",
+    "advancedHelp": "Ha ezek közül bármelyiket módosítod, a beállításkészlet Egyénire vált.",
+    "anisotropic": "Anizotróp szűrés",
+    "off": "Ki",
+    "antialiasing": "Élsimítás",
+    "fxaaExtreme": "FXAA (extrém)",
+    "upscaling": "Képskálázás",
+    "bilinear": "Bilineáris (eredeti)",
+    "cas": "AMD CAS (élesítés)",
+    "fsr": "AMD FSR 1",
+    "textureMemory": "Textúramemória",
+    "inGame": "Játékban",
+    "inGameHelp": "Az FPS-korlát, a mozgási elmosódás, az élsimítás, az egér érzékenysége, valamint a billentyűzet és a kontroller kiosztása játék közben módosítható: nyomd meg a(z) {key} billentyűt."
+  },
+  "online": {
+    "title": "Többjátékos",
+    "panelTitle": "Kooperatív és privát meccsek",
+    "help": "Kooperatív kampány és játékosok által hosztolt meccsek, közvetlen kapcsolattal a számítógépek között. A projekt egy későbbi szakaszában érkezik.",
+    "host": "Meccs hosztolása",
+    "join": "Csatlakozás kóddal"
+  },
+  "toast": {
+    "pick": "Makett: Tauriban itt a macOS mappaválasztója nyílik meg."
+  },
+  "log": {
+    "title": "Játéknapló",
+    "hide": "Elrejtés",
+    "starting": "A játék indítása…",
+    "running": "A játék fut.",
+    "exitOk": "A játék rendben bezárult.",
+    "exitError": "A játék hibával zárult be (kód: {code}).",
+    "exitSignal": "A rendszer leállította a játékot.",
+    "runtimeMissing": "A runtime még nincs lefordítva. A saját játékpéldányodból való telepítése lesz a launcher következő lépése.",
+    "alreadyRunning": "A játék már fut.",
+    "startFailed": "A játékot nem sikerült elindítani: {detail}"
+  }
+}

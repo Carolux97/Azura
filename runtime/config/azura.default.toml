@@ -1,0 +1,15 @@
+# Gears3-Azura settings.
+#
+# The build installs this file beside the executable as azura.default.toml. The runtime reads
+# azura.toml from that same folder: copy this file there under that name to change a setting.
+# The build never overwrites azura.toml. Command-line flags (--name=value) override the file.
+#
+# Every key is a runtime setting (cvar) name.
+
+# ---------- Graphics ----------
+# GPU emulation plugin loaded at start-up. "xenos" translates the console GPU to Vulkan, which
+# runs on Metal through MoltenVK on macOS.
+gpu_plugin = "xenos"
+
+# ---------- Display ----------
+fullscreen = false

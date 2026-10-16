@@ -1,0 +1,23 @@
+# ReXGlue SDK binaries (downloaded per machine, see README)
+sdk/
+
+# Your own game files and everything derived from them. None of this may ever be committed.
+runtime/game/
+runtime/generated/
+*.xex
+*.iso
+
+# Build output
+runtime/out/
+launcher/node_modules/
+launcher/dist/
+launcher/src-tauri/target/
+
+# Run-time files
+logs/
+saves/
+azura.toml
+*.log
+
+# macOS
+.DS_Store

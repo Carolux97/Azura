@@ -1,0 +1,115 @@
+{
+  "meta": {
+    "title": "Azura Launcher"
+  },
+  "a11y": {
+    "sections": "Разделы",
+    "quality": "Качество"
+  },
+  "nav": {
+    "play": "Играть",
+    "install": "Установка",
+    "graphics": "Графика",
+    "online": "Мультиплеер",
+    "soon": "Скоро"
+  },
+  "rail": {
+    "language": "Язык",
+    "systemLanguage": "Системный ({name})",
+    "launcherVersion": "Лаунчер {version}",
+    "runtimeVersion": "Runtime ReXGlue {version}"
+  },
+  "play": {
+    "eyebrow": "Нативный порт для macOS · Gears of War 3",
+    "lede": "Ваша копия игры, перекомпилированная для Apple Silicon.",
+    "launch": "Играть",
+    "launching": "Запуск",
+    "mode": "Кампания",
+    "install": "Установить",
+    "installSub": "Настройте файлы игры",
+    "running": "В игре"
+  },
+  "status": {
+    "gameFiles": "Файлы игры",
+    "noFolder": "Папка не выбрана",
+    "xexFound": "Издание {versionName} · Media ID {mediaId}",
+    "runtime": "Runtime",
+    "gpu": "GPU",
+    "gpuValue": "{machine} · Vulkan поверх Metal",
+    "runtimeMissing": "Ещё не скомпилирован"
+  },
+  "news": {
+    "title": "Новости",
+    "skeleton": "Первый каркас проекта: runtime, манифест и лаунчер."
+  },
+  "install": {
+    "title": "Установка",
+    "gameFolder": "Папка игры",
+    "gameFolderHelp": "Папка с вашей копией Gears of War 3, в которой лежит {file}.",
+    "noFolder": "Папка не выбрана",
+    "choose": "Выбрать…",
+    "languageTitle": "Язык и перевод",
+    "languageHelp": "Куда установить переведённые файлы игры.",
+    "gameLanguage": "Язык игры",
+    "translationTarget": "Папка перевода",
+    "change": "Изменить…",
+    "notADirectory": "Этот путь не является папкой или больше не существует.",
+    "missingXex": "Нет default.xex ни в этой папке, ни во вложенных в неё папках первого уровня.",
+    "invalidXex": "default.xex не является корректным исполняемым файлом Xbox 360.",
+    "ok": "Gears of War 3 · Издание {versionName} · Media ID {mediaId}",
+    "unsupportedVersion": "Это издание Gears of War 3 (Media ID {mediaId}) пока не поддерживается.",
+    "wrongGame": "Это не Gears of War 3 (Title ID {titleId}).",
+    "chooseFolderFirst": "Сначала выберите папку игры"
+  },
+  "graphics": {
+    "title": "Графика",
+    "startup": "Перед запуском",
+    "startupHelp": "Игра считывает эти настройки при запуске. Изменения вступят в силу при следующем запуске.",
+    "low": "Низкое",
+    "medium": "Среднее",
+    "high": "Высокое",
+    "auto": "Авто",
+    "mode": "Режим",
+    "windowed": "В окне",
+    "fullscreen": "Полный экран",
+    "custom": "Пользовательское",
+    "autoResolved": "Авто выбирает «{preset}» на этом Mac",
+    "renderResolution": "Разрешение рендеринга",
+    "original": "оригинал",
+    "advanced": "Дополнительно",
+    "advancedHelp": "Если изменить любую из этих настроек, пресет станет пользовательским.",
+    "anisotropic": "Анизотропная фильтрация",
+    "off": "Выкл.",
+    "antialiasing": "Сглаживание",
+    "fxaaExtreme": "FXAA (максимальное)",
+    "upscaling": "Масштабирование изображения",
+    "bilinear": "Билинейное (оригинал)",
+    "cas": "AMD CAS (резкость)",
+    "fsr": "AMD FSR 1",
+    "textureMemory": "Память текстур",
+    "inGame": "В игре",
+    "inGameHelp": "Ограничение FPS, размытие в движении, сглаживание, чувствительность мыши и назначение клавиш клавиатуры и геймпада меняются прямо в игре: нажмите {key}."
+  },
+  "online": {
+    "title": "Мультиплеер",
+    "panelTitle": "Кооператив и приватные матчи",
+    "help": "Кооперативная кампания и матчи, которые создают сами игроки, с прямым подключением между компьютерами. Появится на одном из следующих этапов проекта.",
+    "host": "Создать матч",
+    "join": "Войти по коду"
+  },
+  "toast": {
+    "pick": "Макет: в Tauri здесь откроется окно выбора папки macOS."
+  },
+  "log": {
+    "title": "Журнал игры",
+    "hide": "Скрыть",
+    "starting": "Запуск игры…",
+    "running": "Игра запущена.",
+    "exitOk": "Игра закрылась без ошибок.",
+    "exitError": "Игра закрылась с ошибкой (код {code}).",
+    "exitSignal": "Система остановила игру.",
+    "runtimeMissing": "Runtime ещё не скомпилирован. Установка его из вашей копии игры — следующий шаг лаунчера.",
+    "alreadyRunning": "Игра уже запущена.",
+    "startFailed": "Не удалось запустить игру: {detail}"
+  }
+}
