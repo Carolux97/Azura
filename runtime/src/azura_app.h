@@ -58,6 +58,16 @@ class AzuraApp : public rex::ReXApp {
   // Stop the prompt thread before the runtime and its memory go away.
   void OnShutdown() override { button_prompts_.reset(); }
 
+  // Prioritize azura.toml in the current working directory (e.g. launcher's runtime folder)
+  // over the canonical symlink executable folder.
+  void OnConfigurePaths(rex::PathConfig& paths) override {
+    auto cwd_config = std::filesystem::current_path() / (std::string(GetName()) + ".toml");
+    if (std::filesystem::exists(cwd_config)) {
+      paths.config_path = cwd_config;
+      REXLOG_INFO("[Azura] Prioritizing config from working directory: {}", cwd_config.string());
+    }
+  }
+
   // ReXApp computes path_config BEFORE LoadConfig(config_path_) is executed, so
   // game_data_root defined in azura.toml is only available in REXCVAR_GET after LoadConfig.
   // OnFinalizePaths runs after LoadConfig and before ConstructRuntime, so we update it here.
