@@ -79,9 +79,31 @@ export const saveSettings = async (settings) => {
 /** Describes this Mac ({ chip, memoryGb, arch }); null in a browser, where it is unknown. */
 export const getSystemInfo = async () => (isNativeApp ? tauri.core.invoke("get_system_info") : null);
 
-/** Whether the runtime executable is installed ({ installed, path }). A browser has none. */
+/**
+ * State of the runtime (see src-tauri/src/install.rs): { installed, buildFound, updateAvailable,
+ * path }. A browser has none installed and pretends a build is available.
+ */
 export const getRuntimeStatus = async () =>
-  isNativeApp ? tauri.core.invoke("get_runtime_status") : { installed: false, path: "" };
+  isNativeApp
+    ? tauri.core.invoke("get_runtime_status")
+    : { installed: false, buildFound: true, updateAvailable: true, path: "" };
+
+/** Installs or updates the runtime from the project's build; resolves to the new state. */
+export const installRuntime = async () =>
+  isNativeApp
+    ? tauri.core.invoke("install_runtime")
+    : { installed: true, buildFound: true, updateAvailable: false, path: "" };
+
+/** Opens the folder picker for the saves; resolves to the path, or null when cancelled. */
+export const pickSavesFolder = async () =>
+  isNativeApp ? tauri.core.invoke("pick_saves_folder") : "~/Documents/Games Saves/Gears3-Azura";
+
+/**
+ * Moves the saves to `folder` and makes it the saves folder. Rejects with { kind, detail }:
+ * "destinationHasSaves" (call again with `replace` to replace them), "nestedFolders" or "io".
+ */
+export const changeSavesFolder = async (folder, replace = false) =>
+  isNativeApp ? tauri.core.invoke("change_saves_folder", { folder, replace }) : folder;
 
 /** Listeners for the simulated game in a browser; the app uses Tauri events instead. */
 const simulated = { output: new Set(), exit: new Set() };

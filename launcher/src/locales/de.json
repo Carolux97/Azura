@@ -27,7 +27,8 @@
     "mode": "Kampagne",
     "install": "Installieren",
     "installSub": "Spieldateien einrichten",
-    "running": "Läuft"
+    "running": "Läuft",
+    "runtimeWillInstall": "Installiert zuerst die Runtime"
   },
   "status": {
     "gameFiles": "Spieldateien",
@@ -36,8 +37,10 @@
     "runtime": "Runtime",
     "gpu": "GPU",
     "gpuValue": "{machine} · Vulkan über Metal",
-    "runtimeMissing": "Noch nicht kompiliert",
-    "player": "Spieler"
+    "runtimeMissing": "Kein Build gefunden",
+    "player": "Spieler",
+    "runtimeNotInstalled": "Wird beim Klick auf Spielen installiert",
+    "runtimeUpdate": "Update bereit, wird beim Klick auf Spielen installiert"
   },
   "news": {
     "title": "Neuigkeiten",
@@ -65,7 +68,21 @@
     "playerHelp": "Im Spiel in Lobbys, Menüs und Mehrspieler angezeigter Gamertag.",
     "userName": "Gamertag / Benutzername",
     "userNamePlaceholder": "User (bis zu 15 Zeichen)",
-    "defaultUserName": "User"
+    "defaultUserName": "User",
+    "runtimeTitle": "Spiel-Runtime",
+    "runtimeHelp": "Das neu kompilierte Spiel, das der Launcher startet. Es wird aus dem Build von scripts/build.sh installiert und aktualisiert, sobald es einen neueren gibt.",
+    "runtimeInstalled": "Installiert und aktuell.",
+    "runtimeUpdate": "Ein neuerer Build ist bereit zur Installation.",
+    "runtimeNotInstalled": "Noch nicht installiert.",
+    "runtimeNoBuild": "Kein Runtime-Build gefunden. Erstelle ihn mit scripts/build.sh.",
+    "installRuntime": "Installieren",
+    "updateRuntime": "Aktualisieren",
+    "installingRuntime": "Wird installiert…",
+    "savesTitle": "Spielstände",
+    "savesHelp": "Ordner für deine Kampagnen-Checkpoints und dein Profil. Beim Ändern werden deine Spielstände dorthin verschoben.",
+    "savesConflict": "{folder} enthält bereits Spielstände. Durch deine aktuellen Spielstände ersetzen?",
+    "savesReplace": "Ersetzen",
+    "savesCancel": "Abbrechen"
   },
   "graphics": {
     "title": "Grafik",
@@ -104,7 +121,12 @@
     "join": "Mit Code beitreten"
   },
   "toast": {
-    "pick": "Entwurf: Unter Tauri öffnet sich hier die Ordnerauswahl von macOS."
+    "pick": "Entwurf: Unter Tauri öffnet sich hier die Ordnerauswahl von macOS.",
+    "savesMoved": "Spielstände verschoben.",
+    "savesNested": "Wähle einen Ordner, der nicht im aktuellen liegt (und umgekehrt).",
+    "savesFailed": "Verschieben der Spielstände fehlgeschlagen: {detail}",
+    "runtimeInstalled": "Spiel-Runtime installiert.",
+    "saveFailed": "Einstellungen konnten nicht gespeichert werden: {detail}"
   },
   "log": {
     "title": "Spielprotokoll",
@@ -114,9 +136,12 @@
     "exitOk": "Das Spiel wurde normal beendet.",
     "exitError": "Das Spiel wurde mit einem Fehler beendet (Code {code}).",
     "exitSignal": "Das System hat das Spiel beendet.",
-    "runtimeMissing": "Die Runtime ist noch nicht kompiliert. Sie aus deiner Spielkopie zu installieren, ist der nächste Schritt des Launchers.",
+    "runtimeMissing": "Kein Runtime-Build gefunden. Erstelle ihn mit scripts/build.sh und versuche es erneut.",
     "alreadyRunning": "Das Spiel läuft bereits.",
-    "startFailed": "Das Spiel konnte nicht gestartet werden: {detail}"
+    "startFailed": "Das Spiel konnte nicht gestartet werden: {detail}",
+    "installingRuntime": "Spiel-Runtime wird installiert…",
+    "installFailed": "Installation der Runtime fehlgeschlagen: {detail}",
+    "savesUnavailable": "Der Spielstand-Ordner ist nicht verfügbar: {detail}"
   },
   "update": {
     "available": "Auf {version} aktualisieren",

@@ -4,9 +4,11 @@
 //! window that shows it and exposes the commands the interface calls through `invoke`.
 
 mod game_folder;
+mod install;
 #[cfg(test)]
 mod test_support;
 mod runtime;
+mod saves;
 mod settings;
 mod system;
 mod updater;
@@ -15,7 +17,9 @@ mod versions;
 use std::path::Path;
 
 use game_folder::FolderCheck;
-use runtime::{GameProcess, LaunchError, RuntimeStatus};
+use install::RuntimeStatus;
+use runtime::{GameProcess, LaunchError, LaunchFolders};
+use saves::SavesError;
 use settings::{Settings, SettingsPaths};
 use system::SystemInfo;
 use tauri::Manager;
@@ -55,20 +59,73 @@ fn runtime_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     Ok(app.path().app_data_dir().map_err(|e| e.to_string())?.join("runtime"))
 }
 
-/// Reports whether the runtime executable is installed.
-#[tauri::command]
-async fn get_runtime_status(app: tauri::AppHandle) -> Result<RuntimeStatus, String> {
-    Ok(runtime::status(&runtime_dir(&app)?))
+/// Folder for the runtime's shader cache, under the app data folder.
+fn cache_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    Ok(app.path().app_data_dir().map_err(|e| e.to_string())?.join("cache"))
 }
 
-/// Starts the game. Its output and its end arrive as `game-output` and `game-exit` events.
+/// Reports whether the runtime is installed and whether a newer build can be installed.
+#[tauri::command]
+async fn get_runtime_status(app: tauri::AppHandle) -> Result<RuntimeStatus, String> {
+    Ok(install::status(&runtime_dir(&app)?, install::find_build().as_deref()))
+}
+
+/// Installs (or updates) the runtime from the project's build (see `install.rs`). `async`: it
+/// copies about a hundred megabytes.
+#[tauri::command]
+async fn install_runtime(app: tauri::AppHandle) -> Result<RuntimeStatus, String> {
+    let build = install::find_build().ok_or_else(|| "no runtime build found".to_string())?;
+    let dir = runtime_dir(&app)?;
+    install::install(&build, &dir)?;
+    Ok(install::status(&dir, Some(&build)))
+}
+
+/// Starts the game with the chosen saves folder. Its output and its end arrive as `game-output`
+/// and `game-exit` events.
 #[tauri::command]
 async fn launch_game(
     app: tauri::AppHandle,
     process: tauri::State<'_, GameProcess>,
 ) -> Result<(), LaunchError> {
-    let dir = runtime_dir(&app).map_err(LaunchError::StartFailed)?;
-    process.launch(app, &dir)
+    let runtime = runtime_dir(&app).map_err(LaunchError::StartFailed)?;
+    let cache = cache_dir(&app).map_err(LaunchError::StartFailed)?;
+    let paths = settings_paths(&app).map_err(LaunchError::StartFailed)?;
+    let game = paths.load().map_err(LaunchError::StartFailed)?.game_folder.map(std::path::PathBuf::from);
+    let saves = paths.saves_folder().map_err(LaunchError::SavesUnavailable)?;
+    saves::prepare(&saves, &cache).map_err(|e| LaunchError::SavesUnavailable(format!("{e:?}")))?;
+    let folders = LaunchFolders { runtime: &runtime, game: game.as_deref(), saves: &saves, cache: &cache };
+    process.launch(app, &folders)
+}
+
+/// Opens the folder picker for a new saves folder. Returns `None` when the user cancels; nothing
+/// moves until `change_saves_folder`.
+#[tauri::command]
+async fn pick_saves_folder(app: tauri::AppHandle) -> Option<String> {
+    let picked = app.dialog().file().blocking_pick_folder()?;
+    Some(picked.into_path().ok()?.to_string_lossy().into_owned())
+}
+
+/// Moves the saves to `folder` and makes it the saves folder. With saves already in `folder` it
+/// fails with `destinationHasSaves` unless `replace` is set (the interface asks first).
+#[tauri::command]
+async fn change_saves_folder(
+    app: tauri::AppHandle,
+    process: tauri::State<'_, GameProcess>,
+    folder: String,
+    replace: bool,
+) -> Result<String, SavesError> {
+    if process.is_running() {
+        return Err(SavesError::Io("the game is running".into()));
+    }
+    let paths = settings_paths(&app).map_err(SavesError::Io)?;
+    let current = paths.saves_folder().map_err(SavesError::Io)?;
+    let target = std::path::PathBuf::from(&folder);
+    // Saves still in the runtime's old folder count as the current ones.
+    let source = if saves::has_saves(&current) { current } else { saves::legacy_folder() };
+    saves::move_saves(&source, &target, replace)?;
+    std::fs::create_dir_all(&target).map_err(|e| SavesError::Io(e.to_string()))?;
+    paths.set_saves_folder(&target).map_err(SavesError::Io)?;
+    Ok(folder)
 }
 
 /// Loads the launcher and runtime settings (see `settings.rs`).
@@ -115,7 +172,10 @@ pub fn run() {
             save_settings,
             get_system_info,
             get_runtime_status,
+            install_runtime,
             launch_game,
+            pick_saves_folder,
+            change_saves_folder,
             check_for_update,
             install_update
         ])

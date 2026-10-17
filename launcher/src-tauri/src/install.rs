@@ -1,0 +1,225 @@
+//! Installs the game runtime into the launcher's data folder.
+//!
+//! The runtime (`azura` and the libraries, Vulkan loader and assets beside it) is built from the
+//! project with `scripts/build.sh`. Installing copies that build into `<app data>/runtime/`, next
+//! to the `azura.toml` the launcher writes: the runtime reads its settings from beside its own
+//! executable, so it must be a real copy there, not a link to the build folder.
+//!
+//! The build is found, in order, in:
+//! - the folder named by the `AZURA_RUNTIME_BUILD` environment variable;
+//! - `runtime/out/build/mac-arm64-sdk-source/<config>/` of the project the launcher was built in,
+//!   found by walking up from the launcher executable.
+//!
+//! A build newer than the installed copy is reported as an update, so after rebuilding the runtime
+//! the launcher offers to install it again.
+
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+
+use serde::Serialize;
+
+use crate::runtime::{executable_path, RUNTIME_EXECUTABLE};
+
+/// Environment variable that points at a runtime build folder.
+const BUILD_ENV: &str = "AZURA_RUNTIME_BUILD";
+
+/// Build folders of the project, relative to its root, in order of preference.
+const PROJECT_BUILDS: [&str; 2] = [
+    "runtime/out/build/mac-arm64-sdk-source/RelWithDebInfo",
+    "runtime/out/build/mac-arm64-sdk-source/Release",
+];
+
+/// Entries of a build folder that make up the runtime. Everything else there (logs, the
+/// developer's own `azura.toml`) stays behind.
+const RUNTIME_ENTRIES: [&str; 6] = [
+    RUNTIME_EXECUTABLE,
+    "azura.default.toml",
+    "gamecontrollerdb.txt",
+    "assets",
+    "vulkan",
+    // Libraries are matched by extension; this marks where they go in the copy order.
+    "*.dylib",
+];
+
+/// State of the runtime, sent to the interface as JSON.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeStatus {
+    /// The runtime executable is in the runtime folder.
+    pub installed: bool,
+    /// A build is available to install from.
+    pub build_found: bool,
+    /// The available build is newer than the installed copy (or nothing is installed).
+    pub update_available: bool,
+    /// Path of the installed executable.
+    pub path: String,
+}
+
+/// Finds the runtime build to install from, if any.
+pub fn find_build() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os(BUILD_ENV).map(PathBuf::from) {
+        return executable_path(&dir).is_file().then_some(dir);
+    }
+    let exe = std::env::current_exe().ok()?;
+    let mut dir = exe.parent();
+    while let Some(current) = dir {
+        for build in PROJECT_BUILDS {
+            let candidate = current.join(build);
+            if executable_path(&candidate).is_file() {
+                return Some(candidate);
+            }
+        }
+        dir = current.parent();
+    }
+    None
+}
+
+fn modified(path: &Path) -> Option<SystemTime> {
+    fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
+/// Reports whether the runtime is installed in `runtime_dir` and whether `build` is newer.
+pub fn status(runtime_dir: &Path, build: Option<&Path>) -> RuntimeStatus {
+    let installed_exe = executable_path(runtime_dir);
+    // A link to a build (how the runtime was placed by hand before the launcher installed it)
+    // does not count as installed: the runtime would read the build folder's settings.
+    let installed = fs::symlink_metadata(&installed_exe).map(|m| m.is_file()).unwrap_or(false);
+    let update_available = match build {
+        None => false,
+        Some(build) => {
+            !installed
+                || match (modified(&executable_path(build)), modified(&installed_exe)) {
+                    (Some(built), Some(copied)) => built > copied,
+                    _ => true,
+                }
+        }
+    };
+    RuntimeStatus {
+        installed,
+        build_found: build.is_some(),
+        update_available,
+        path: installed_exe.to_string_lossy().into_owned(),
+    }
+}
+
+/// Copies `from` to `to`: a file, or a folder with everything in it. Links are followed, so the
+/// copy holds real files.
+fn copy_entry(from: &Path, to: &Path) -> io::Result<()> {
+    if fs::metadata(from)?.is_dir() {
+        fs::create_dir_all(to)?;
+        for entry in fs::read_dir(from)? {
+            let entry = entry?;
+            copy_entry(&entry.path(), &to.join(entry.file_name()))?;
+        }
+        Ok(())
+    } else {
+        fs::copy(from, to).map(|_| ())
+    }
+}
+
+/// Removes a file, a link or a folder; a missing entry is not an error.
+fn remove_entry(path: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+        Ok(meta) if meta.is_dir() => fs::remove_dir_all(path),
+        Ok(_) => fs::remove_file(path),
+    }
+}
+
+/// Names of the runtime entries present in `build`.
+fn runtime_entries(build: &Path) -> io::Result<Vec<String>> {
+    let mut names = Vec::new();
+    for name in RUNTIME_ENTRIES {
+        if name == "*.dylib" {
+            for entry in fs::read_dir(build)? {
+                let file = entry?.file_name().to_string_lossy().into_owned();
+                if file.ends_with(".dylib") {
+                    names.push(file);
+                }
+            }
+        } else if build.join(name).exists() {
+            names.push(name.to_string());
+        }
+    }
+    Ok(names)
+}
+
+/// Installs the runtime from `build` into `runtime_dir`, replacing the previous copy (or links)
+/// but keeping `azura.toml` and anything else that is not part of the runtime. The executable is
+/// copied last, so an interrupted install never looks complete.
+pub fn install(build: &Path, runtime_dir: &Path) -> Result<(), String> {
+    let entries = runtime_entries(build).map_err(|e| format!("{}: {e}", build.display()))?;
+    if !entries.iter().any(|name| name == RUNTIME_EXECUTABLE) {
+        return Err(format!("{} holds no runtime build", build.display()));
+    }
+    fs::create_dir_all(runtime_dir).map_err(|e| e.to_string())?;
+    remove_entry(&executable_path(runtime_dir)).map_err(|e| e.to_string())?;
+    for name in entries.iter().filter(|name| name.as_str() != RUNTIME_EXECUTABLE) {
+        let target = runtime_dir.join(name);
+        remove_entry(&target).map_err(|e| format!("{}: {e}", target.display()))?;
+        copy_entry(&build.join(name), &target).map_err(|e| format!("{}: {e}", target.display()))?;
+    }
+    copy_entry(&executable_path(build), &executable_path(runtime_dir)).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::TempFolder;
+
+    /// A fake build folder with an executable, a library, a data folder and files that must not
+    /// be installed.
+    fn fake_build(dir: &Path) {
+        fs::write(dir.join(RUNTIME_EXECUTABLE), b"runtime").unwrap();
+        fs::write(dir.join("librex.dylib"), b"lib").unwrap();
+        fs::create_dir_all(dir.join("vulkan/icd.d")).unwrap();
+        fs::write(dir.join("vulkan/icd.d/MoltenVK_icd.json"), b"{}").unwrap();
+        fs::write(dir.join("azura.toml"), b"fullscreen = true").unwrap();
+        fs::create_dir_all(dir.join("logs")).unwrap();
+    }
+
+    #[test]
+    fn installs_a_real_copy_and_keeps_the_settings() {
+        let build = TempFolder::new("build");
+        let runtime = TempFolder::new("runtime");
+        fake_build(&build);
+        fs::write(runtime.join("azura.toml"), b"user_name = \"Marcus\"").unwrap();
+
+        assert!(!status(&runtime, Some(&build)).installed);
+        install(&build, &runtime).unwrap();
+
+        assert!(fs::symlink_metadata(executable_path(&runtime)).unwrap().is_file());
+        assert!(runtime.join("librex.dylib").is_file());
+        assert!(runtime.join("vulkan/icd.d/MoltenVK_icd.json").is_file());
+        assert!(!runtime.join("logs").exists());
+        assert_eq!(fs::read_to_string(runtime.join("azura.toml")).unwrap(), "user_name = \"Marcus\"");
+        let after = status(&runtime, Some(&build));
+        assert!(after.installed);
+        assert!(!after.update_available);
+    }
+
+    #[test]
+    fn a_link_to_the_build_is_not_an_installed_runtime() {
+        let build = TempFolder::new("build-link");
+        let runtime = TempFolder::new("runtime-link");
+        fake_build(&build);
+        std::os::unix::fs::symlink(executable_path(&build), executable_path(&runtime)).unwrap();
+
+        let before = status(&runtime, Some(&build));
+        assert!(!before.installed);
+        assert!(before.update_available);
+        install(&build, &runtime).unwrap();
+        assert!(status(&runtime, Some(&build)).installed);
+    }
+
+    #[test]
+    fn without_a_build_nothing_is_offered() {
+        let runtime = TempFolder::new("runtime-none");
+        let found = status(&runtime, None);
+        assert!(!found.build_found);
+        assert!(!found.update_available);
+    }
+}

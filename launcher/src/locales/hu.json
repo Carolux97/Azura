@@ -27,7 +27,8 @@
     "mode": "Kampány",
     "install": "Telepítés",
     "installSub": "Játékfájlok beállítása",
-    "running": "Játékban"
+    "running": "Játékban",
+    "runtimeWillInstall": "Előbb telepíti a futtatókörnyezetet"
   },
   "status": {
     "gameFiles": "Játékfájlok",
@@ -36,8 +37,10 @@
     "runtime": "Runtime",
     "gpu": "GPU",
     "gpuValue": "{machine} · Vulkan Metalon",
-    "runtimeMissing": "Még nincs lefordítva",
-    "player": "Player"
+    "runtimeMissing": "Nem található build",
+    "player": "Player",
+    "runtimeNotInstalled": "A Játék gomb megnyomásakor települ",
+    "runtimeUpdate": "Frissítés kész, a Játék gomb megnyomásakor települ"
   },
   "news": {
     "title": "Hírek",
@@ -65,7 +68,21 @@
     "playerHelp": "Gamertag displayed in game lobbies, menus, and multiplayer.",
     "userName": "Gamertag / Username",
     "userNamePlaceholder": "User (up to 15 characters)",
-    "defaultUserName": "User"
+    "defaultUserName": "User",
+    "runtimeTitle": "Játék futtatókörnyezet",
+    "runtimeHelp": "Az újrafordított játék, amelyet a launcher indít. A scripts/build.sh buildjéből települ, és frissül, ha van újabb.",
+    "runtimeInstalled": "Telepítve és naprakész.",
+    "runtimeUpdate": "Egy újabb build telepítésre kész.",
+    "runtimeNotInstalled": "Még nincs telepítve.",
+    "runtimeNoBuild": "Nem található futtatókörnyezet-build. Készítsd el a scripts/build.sh segítségével.",
+    "installRuntime": "Telepítés",
+    "updateRuntime": "Frissítés",
+    "installingRuntime": "Telepítés…",
+    "savesTitle": "Mentett játékok",
+    "savesHelp": "A kampány ellenőrzőpontjainak és a profilodnak a mappája. Megváltoztatásakor a mentések oda kerülnek.",
+    "savesConflict": "{folder} már tartalmaz mentéseket. Lecseréled őket a jelenlegi mentéseidre?",
+    "savesReplace": "Csere",
+    "savesCancel": "Mégse"
   },
   "graphics": {
     "title": "Grafika",
@@ -104,7 +121,12 @@
     "join": "Csatlakozás kóddal"
   },
   "toast": {
-    "pick": "Makett: Tauriban itt a macOS mappaválasztója nyílik meg."
+    "pick": "Makett: Tauriban itt a macOS mappaválasztója nyílik meg.",
+    "savesMoved": "Mentések áthelyezve.",
+    "savesNested": "Olyan mappát válassz, amely nincs a jelenlegin belül (és fordítva).",
+    "savesFailed": "A mentések áthelyezése sikertelen: {detail}",
+    "runtimeInstalled": "A játék futtatókörnyezete telepítve.",
+    "saveFailed": "A beállításokat nem sikerült menteni: {detail}"
   },
   "log": {
     "title": "Játéknapló",
@@ -114,9 +136,12 @@
     "exitOk": "A játék rendben bezárult.",
     "exitError": "A játék hibával zárult be (kód: {code}).",
     "exitSignal": "A rendszer leállította a játékot.",
-    "runtimeMissing": "A runtime még nincs lefordítva. A saját játékpéldányodból való telepítése lesz a launcher következő lépése.",
+    "runtimeMissing": "Nem található futtatókörnyezet-build. Készítsd el a scripts/build.sh segítségével, majd próbáld újra.",
     "alreadyRunning": "A játék már fut.",
-    "startFailed": "A játékot nem sikerült elindítani: {detail}"
+    "startFailed": "A játékot nem sikerült elindítani: {detail}",
+    "installingRuntime": "A játék futtatókörnyezetének telepítése…",
+    "installFailed": "A futtatókörnyezet telepítése sikertelen: {detail}",
+    "savesUnavailable": "A mentések mappája nem érhető el: {detail}"
   },
   "update": {
     "available": "Frissítés erre: {version}",

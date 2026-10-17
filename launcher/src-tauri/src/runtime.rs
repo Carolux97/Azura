@@ -2,8 +2,12 @@
 //!
 //! The runtime is the recompiled game executable, `azura`. It lives in the `runtime` folder of the
 //! app data folder, next to the `azura.toml` the launcher writes, because the runtime reads its
-//! settings from beside its own executable. Building and placing it there is the installation
-//! step; until then the launcher reports it as missing.
+//! settings from beside its own executable (`install.rs` puts it there).
+//!
+//! The folders for saves and for the shader cache are passed on the command line
+//! (`--user_data_root`, `--cache_root`): the runtime picks them before it reads `azura.toml`, so
+//! the config file cannot set them. The game folder goes on the command line too
+//! (`--game_data_root`), so starting does not depend on `azura.toml` having been written.
 //!
 //! While the game runs, every line it prints is sent to the interface as a `game-output` event,
 //! and its end as a `game-exit` event, so the interface can show a live log and explain a failed
@@ -28,14 +32,6 @@ pub const OUTPUT_EVENT: &str = "game-output";
 /// Event sent once when the game process ends.
 pub const EXIT_EVENT: &str = "game-exit";
 
-/// Whether the runtime is installed, sent to the interface as JSON.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RuntimeStatus {
-    pub installed: bool,
-    pub path: String,
-}
-
 /// One line of output; `stream` is "stdout" or "stderr".
 #[derive(Debug, Clone, Serialize)]
 pub struct OutputLine {
@@ -59,6 +55,8 @@ pub enum LaunchError {
     RuntimeMissing,
     /// A game started by this launcher is still running.
     AlreadyRunning,
+    /// The saves folder could not be prepared (see `saves.rs`).
+    SavesUnavailable(String),
     /// The operating system refused to start the process.
     StartFailed(String),
 }
@@ -75,13 +73,27 @@ pub fn executable_path(runtime_dir: &Path) -> PathBuf {
     runtime_dir.join(RUNTIME_EXECUTABLE)
 }
 
-/// Reports whether the runtime executable is present.
-pub fn status(runtime_dir: &Path) -> RuntimeStatus {
-    let path = executable_path(runtime_dir);
-    RuntimeStatus {
-        installed: path.is_file(),
-        path: path.to_string_lossy().into_owned(),
+/// Folders the runtime is started with.
+pub struct LaunchFolders<'a> {
+    /// Holds the runtime executable and its `azura.toml`.
+    pub runtime: &'a Path,
+    /// The game files (`game_data_root`), when one is chosen.
+    pub game: Option<&'a Path>,
+    /// The player's saves (`user_data_root`).
+    pub saves: &'a Path,
+    /// The shader cache (`cache_root`).
+    pub cache: &'a Path,
+}
+
+/// Command-line arguments that point the runtime at the saves and cache folders.
+pub fn folder_arguments(folders: &LaunchFolders) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(game) = folders.game {
+        args.push(format!("--game_data_root={}", game.display()));
     }
+    args.push(format!("--user_data_root={}", folders.saves.display()));
+    args.push(format!("--cache_root={}", folders.cache.display()));
+    args
 }
 
 /// Reads `source` line by line on its own thread and emits each line as a `game-output` event.
@@ -94,9 +106,15 @@ fn relay_lines(app: AppHandle, stream: &'static str, source: impl Read + Send + 
 }
 
 impl GameProcess {
+    /// Whether a game started by this launcher is running.
+    pub fn is_running(&self) -> bool {
+        self.running.load(Ordering::SeqCst)
+    }
+
     /// Starts the runtime from its folder, so it finds `azura.toml` and writes its logs there.
     /// Returns once the process has started; output and exit arrive later as events.
-    pub fn launch(&self, app: AppHandle, runtime_dir: &Path) -> Result<(), LaunchError> {
+    pub fn launch(&self, app: AppHandle, folders: &LaunchFolders) -> Result<(), LaunchError> {
+        let runtime_dir = folders.runtime;
         let executable = executable_path(runtime_dir);
         if !executable.is_file() {
             return Err(LaunchError::RuntimeMissing);
@@ -107,6 +125,7 @@ impl GameProcess {
         }
 
         let spawned = Command::new(&executable)
+            .args(folder_arguments(folders))
             .current_dir(runtime_dir)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -146,14 +165,22 @@ mod tests {
     use crate::test_support::TempFolder;
 
     #[test]
-    fn reports_a_missing_runtime() {
-        let dir = TempFolder::new("runtime");
-        assert!(!status(&dir).installed);
-
-        std::fs::write(executable_path(&dir), b"").unwrap();
-        let found = status(&dir);
-        assert!(found.installed);
-        assert!(found.path.ends_with("/azura"));
+    fn passes_the_saves_and_cache_folders() {
+        let runtime = TempFolder::new("runtime-args");
+        let folders = LaunchFolders {
+            runtime: &runtime,
+            game: Some(Path::new("/Games/Gears of War 3")),
+            saves: Path::new("/Users/me/Documents/Games Saves/Gears3-Azura"),
+            cache: Path::new("/tmp/cache"),
+        };
+        assert_eq!(
+            folder_arguments(&folders),
+            [
+                "--game_data_root=/Games/Gears of War 3",
+                "--user_data_root=/Users/me/Documents/Games Saves/Gears3-Azura",
+                "--cache_root=/tmp/cache"
+            ]
+        );
     }
 
     #[test]

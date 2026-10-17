@@ -27,7 +27,8 @@
     "mode": "Кампания",
     "install": "Установить",
     "installSub": "Настройте файлы игры",
-    "running": "В игре"
+    "running": "В игре",
+    "runtimeWillInstall": "Сначала установит среду выполнения"
   },
   "status": {
     "gameFiles": "Файлы игры",
@@ -36,8 +37,10 @@
     "runtime": "Runtime",
     "gpu": "GPU",
     "gpuValue": "{machine} · Vulkan поверх Metal",
-    "runtimeMissing": "Ещё не скомпилирован",
-    "player": "Player"
+    "runtimeMissing": "Сборка не найдена",
+    "player": "Player",
+    "runtimeNotInstalled": "Установится при нажатии «Играть»",
+    "runtimeUpdate": "Обновление готово, установится при нажатии «Играть»"
   },
   "news": {
     "title": "Новости",
@@ -65,7 +68,21 @@
     "playerHelp": "Gamertag displayed in game lobbies, menus, and multiplayer.",
     "userName": "Gamertag / Username",
     "userNamePlaceholder": "User (up to 15 characters)",
-    "defaultUserName": "User"
+    "defaultUserName": "User",
+    "runtimeTitle": "Среда выполнения игры",
+    "runtimeHelp": "Перекомпилированная игра, которую запускает лаунчер. Устанавливается из сборки scripts/build.sh и обновляется, когда появляется более новая.",
+    "runtimeInstalled": "Установлено, последняя версия.",
+    "runtimeUpdate": "Готова к установке более новая сборка.",
+    "runtimeNotInstalled": "Ещё не установлено.",
+    "runtimeNoBuild": "Сборка среды выполнения не найдена. Соберите её с помощью scripts/build.sh.",
+    "installRuntime": "Установить",
+    "updateRuntime": "Обновить",
+    "installingRuntime": "Установка…",
+    "savesTitle": "Сохранения",
+    "savesHelp": "Папка для контрольных точек кампании и профиля. При её смене сохранения переносятся туда.",
+    "savesConflict": "В {folder} уже есть сохранения. Заменить их текущими сохранениями?",
+    "savesReplace": "Заменить",
+    "savesCancel": "Отмена"
   },
   "graphics": {
     "title": "Графика",
@@ -104,7 +121,12 @@
     "join": "Войти по коду"
   },
   "toast": {
-    "pick": "Макет: в Tauri здесь откроется окно выбора папки macOS."
+    "pick": "Макет: в Tauri здесь откроется окно выбора папки macOS.",
+    "savesMoved": "Сохранения перенесены.",
+    "savesNested": "Выберите папку, которая не находится внутри текущей (и наоборот).",
+    "savesFailed": "Не удалось перенести сохранения: {detail}",
+    "runtimeInstalled": "Среда выполнения игры установлена.",
+    "saveFailed": "Не удалось сохранить настройки: {detail}"
   },
   "log": {
     "title": "Журнал игры",
@@ -114,9 +136,12 @@
     "exitOk": "Игра закрылась без ошибок.",
     "exitError": "Игра закрылась с ошибкой (код {code}).",
     "exitSignal": "Система остановила игру.",
-    "runtimeMissing": "Runtime ещё не скомпилирован. Установка его из вашей копии игры — следующий шаг лаунчера.",
+    "runtimeMissing": "Сборка среды выполнения не найдена. Соберите её с помощью scripts/build.sh и попробуйте снова.",
     "alreadyRunning": "Игра уже запущена.",
-    "startFailed": "Не удалось запустить игру: {detail}"
+    "startFailed": "Не удалось запустить игру: {detail}",
+    "installingRuntime": "Установка среды выполнения игры…",
+    "installFailed": "Не удалось установить среду выполнения: {detail}",
+    "savesUnavailable": "Папка сохранений недоступна: {detail}"
   },
   "update": {
     "available": "Обновить до {version}",

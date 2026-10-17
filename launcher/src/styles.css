@@ -451,6 +451,11 @@ select:hover, .path:hover { border-color: var(--steel-hi); }
 .check::before { content: ""; flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 8px var(--ok); }
 .check[data-state="error"] { color: var(--text); }
 .check[data-state="error"]::before { background: var(--crimson); box-shadow: 0 0 8px var(--crimson); }
+.check[data-state="warn"]::before { background: var(--imulsion); box-shadow: 0 0 8px var(--imulsion-glow); }
+/* A status line sharing a row with its button. */
+.path-row .check { flex: 1; margin: 0; }
+.path-row[hidden] { display: none; }
+#saves-conflict { margin-top: 12px; }
 
 .btn {
   flex: none;

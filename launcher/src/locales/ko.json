@@ -27,7 +27,8 @@
     "mode": "캠페인",
     "install": "설치",
     "installSub": "게임 파일 설정",
-    "running": "플레이 중"
+    "running": "플레이 중",
+    "runtimeWillInstall": "먼저 런타임을 설치합니다"
   },
   "status": {
     "gameFiles": "게임 파일",
@@ -36,8 +37,10 @@
     "runtime": "런타임",
     "gpu": "GPU",
     "gpuValue": "{machine} · Metal 기반 Vulkan",
-    "runtimeMissing": "아직 컴파일되지 않음",
-    "player": "Player"
+    "runtimeMissing": "빌드를 찾을 수 없음",
+    "player": "Player",
+    "runtimeNotInstalled": "플레이를 누르면 설치됩니다",
+    "runtimeUpdate": "업데이트 준비 완료, 플레이를 누르면 설치됩니다"
   },
   "news": {
     "title": "새 소식",
@@ -65,7 +68,21 @@
     "playerHelp": "Gamertag displayed in game lobbies, menus, and multiplayer.",
     "userName": "Gamertag / Username",
     "userNamePlaceholder": "User (up to 15 characters)",
-    "defaultUserName": "User"
+    "defaultUserName": "User",
+    "runtimeTitle": "게임 런타임",
+    "runtimeHelp": "런처가 실행하는 재컴파일된 게임입니다. scripts/build.sh 빌드에서 설치되며 더 새로운 빌드가 있으면 업데이트됩니다.",
+    "runtimeInstalled": "설치됨, 최신 상태입니다.",
+    "runtimeUpdate": "설치할 수 있는 새 빌드가 있습니다.",
+    "runtimeNotInstalled": "아직 설치되지 않았습니다.",
+    "runtimeNoBuild": "런타임 빌드를 찾을 수 없습니다. scripts/build.sh로 빌드하세요.",
+    "installRuntime": "설치",
+    "updateRuntime": "업데이트",
+    "installingRuntime": "설치 중…",
+    "savesTitle": "저장된 게임",
+    "savesHelp": "캠페인 체크포인트와 프로필이 저장되는 폴더입니다. 변경하면 저장된 게임이 그곳으로 이동합니다.",
+    "savesConflict": "{folder}에 이미 저장된 게임이 있습니다. 현재 저장된 게임으로 바꾸시겠습니까?",
+    "savesReplace": "바꾸기",
+    "savesCancel": "취소"
   },
   "graphics": {
     "title": "그래픽",
@@ -104,7 +121,12 @@
     "join": "코드로 참가"
   },
   "toast": {
-    "pick": "목업: Tauri에서는 macOS 폴더 선택 창이 열립니다."
+    "pick": "목업: Tauri에서는 macOS 폴더 선택 창이 열립니다.",
+    "savesMoved": "저장된 게임을 이동했습니다.",
+    "savesNested": "현재 폴더 안에 있지 않은(또는 그 반대가 아닌) 폴더를 선택하세요.",
+    "savesFailed": "저장된 게임 이동 실패: {detail}",
+    "runtimeInstalled": "게임 런타임을 설치했습니다.",
+    "saveFailed": "설정을 저장할 수 없습니다: {detail}"
   },
   "log": {
     "title": "게임 로그",
@@ -114,9 +136,12 @@
     "exitOk": "게임이 정상적으로 종료되었습니다.",
     "exitError": "게임이 오류로 종료되었습니다(코드 {code}).",
     "exitSignal": "시스템이 게임을 중지했습니다.",
-    "runtimeMissing": "런타임이 아직 컴파일되지 않았습니다. 내 게임 사본에서 설치하는 것이 런처의 다음 단계입니다.",
+    "runtimeMissing": "런타임 빌드를 찾을 수 없습니다. scripts/build.sh로 빌드한 후 다시 시도하세요.",
     "alreadyRunning": "게임이 이미 실행 중입니다.",
-    "startFailed": "게임을 시작할 수 없습니다: {detail}"
+    "startFailed": "게임을 시작할 수 없습니다: {detail}",
+    "installingRuntime": "게임 런타임을 설치하는 중…",
+    "installFailed": "런타임 설치 실패: {detail}",
+    "savesUnavailable": "저장된 게임 폴더를 사용할 수 없습니다: {detail}"
   },
   "update": {
     "available": "{version}(으)로 업데이트",

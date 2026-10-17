@@ -27,7 +27,8 @@
     "mode": "Campaign",
     "install": "Install",
     "installSub": "Set up the game files",
-    "running": "Playing"
+    "running": "Playing",
+    "runtimeWillInstall": "Installs the runtime first"
   },
   "status": {
     "gameFiles": "Game files",
@@ -37,7 +38,9 @@
     "runtime": "Runtime",
     "gpu": "GPU",
     "gpuValue": "{machine} · Vulkan on Metal",
-    "runtimeMissing": "Not built yet"
+    "runtimeMissing": "No build found",
+    "runtimeNotInstalled": "Installs when you press Play",
+    "runtimeUpdate": "Update ready, installs when you press Play"
   },
   "news": {
     "title": "News",
@@ -65,7 +68,21 @@
     "ok": "Gears of War 3 · {versionName} edition · Media ID {mediaId}",
     "unsupportedVersion": "This edition of Gears of War 3 (Media ID {mediaId}) is not supported yet.",
     "wrongGame": "This is not Gears of War 3 (Title ID {titleId}).",
-    "chooseFolderFirst": "Choose the game folder first"
+    "chooseFolderFirst": "Choose the game folder first",
+    "runtimeTitle": "Game runtime",
+    "runtimeHelp": "The recompiled game the launcher starts. It is installed from the build made with scripts/build.sh and updated whenever there is a newer one.",
+    "runtimeInstalled": "Installed and up to date.",
+    "runtimeUpdate": "A newer build is ready to install.",
+    "runtimeNotInstalled": "Not installed yet.",
+    "runtimeNoBuild": "No runtime build found. Build it with scripts/build.sh.",
+    "installRuntime": "Install",
+    "updateRuntime": "Update",
+    "installingRuntime": "Installing…",
+    "savesTitle": "Saved games",
+    "savesHelp": "Folder for your campaign checkpoints and profile. Changing it moves your saves there.",
+    "savesConflict": "{folder} already holds saved games. Replace them with your current saves?",
+    "savesReplace": "Replace",
+    "savesCancel": "Cancel"
   },
   "graphics": {
     "title": "Graphics",
@@ -104,7 +121,12 @@
     "join": "Join with code"
   },
   "toast": {
-    "pick": "Mockup: in Tauri this will open the macOS folder picker."
+    "pick": "Mockup: in Tauri this will open the macOS folder picker.",
+    "savesMoved": "Saved games moved.",
+    "savesNested": "Choose a folder that is not inside the current one (or the other way round).",
+    "savesFailed": "Moving the saved games failed: {detail}",
+    "runtimeInstalled": "Game runtime installed.",
+    "saveFailed": "Settings could not be saved: {detail}"
   },
   "log": {
     "title": "Game log",
@@ -114,9 +136,12 @@
     "exitOk": "The game closed normally.",
     "exitError": "The game closed with an error (code {code}).",
     "exitSignal": "The game was stopped by the system.",
-    "runtimeMissing": "The runtime is not built yet. Installing it from your copy of the game will be the launcher's next step.",
+    "runtimeMissing": "No runtime build found. Build it with scripts/build.sh and try again.",
     "alreadyRunning": "The game is already running.",
-    "startFailed": "The game could not start: {detail}"
+    "startFailed": "The game could not start: {detail}",
+    "installingRuntime": "Installing the game runtime…",
+    "installFailed": "Installing the runtime failed: {detail}",
+    "savesUnavailable": "The saved games folder is not available: {detail}"
   },
   "update": {
     "available": "Update to {version}",

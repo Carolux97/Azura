@@ -27,7 +27,8 @@
     "mode": "Kampaň",
     "install": "Instalovat",
     "installSub": "Nastavte herní soubory",
-    "running": "Hraje se"
+    "running": "Hraje se",
+    "runtimeWillInstall": "Nejprve nainstaluje běhové prostředí"
   },
   "status": {
     "gameFiles": "Herní soubory",
@@ -36,8 +37,10 @@
     "runtime": "Runtime",
     "gpu": "GPU",
     "gpuValue": "{machine} · Vulkan přes Metal",
-    "runtimeMissing": "Zatím nezkompilováno",
-    "player": "Player"
+    "runtimeMissing": "Žádné sestavení nenalezeno",
+    "player": "Player",
+    "runtimeNotInstalled": "Nainstaluje se po stisknutí Hrát",
+    "runtimeUpdate": "Aktualizace připravena, nainstaluje se po stisknutí Hrát"
   },
   "news": {
     "title": "Novinky",
@@ -65,7 +68,21 @@
     "playerHelp": "Gamertag displayed in game lobbies, menus, and multiplayer.",
     "userName": "Gamertag / Username",
     "userNamePlaceholder": "User (up to 15 characters)",
-    "defaultUserName": "User"
+    "defaultUserName": "User",
+    "runtimeTitle": "Běhové prostředí hry",
+    "runtimeHelp": "Překompilovaná hra, kterou launcher spouští. Instaluje se ze sestavení scripts/build.sh a aktualizuje, když je k dispozici novější.",
+    "runtimeInstalled": "Nainstalováno a aktuální.",
+    "runtimeUpdate": "Novější sestavení je připraveno k instalaci.",
+    "runtimeNotInstalled": "Zatím nenainstalováno.",
+    "runtimeNoBuild": "Sestavení běhového prostředí nenalezeno. Sestavte ho pomocí scripts/build.sh.",
+    "installRuntime": "Nainstalovat",
+    "updateRuntime": "Aktualizovat",
+    "installingRuntime": "Instaluje se…",
+    "savesTitle": "Uložené hry",
+    "savesHelp": "Složka pro kontrolní body kampaně a profil. Při změně se uložené hry přesunou tam.",
+    "savesConflict": "{folder} už obsahuje uložené hry. Nahradit je vašimi současnými uloženými hrami?",
+    "savesReplace": "Nahradit",
+    "savesCancel": "Zrušit"
   },
   "graphics": {
     "title": "Grafika",
@@ -104,7 +121,12 @@
     "join": "Připojit se kódem"
   },
   "toast": {
-    "pick": "Maketa: v Tauri se zde otevře výběr složky systému macOS."
+    "pick": "Maketa: v Tauri se zde otevře výběr složky systému macOS.",
+    "savesMoved": "Uložené hry přesunuty.",
+    "savesNested": "Vyberte složku, která není uvnitř současné (ani naopak).",
+    "savesFailed": "Přesun uložených her selhal: {detail}",
+    "runtimeInstalled": "Běhové prostředí hry nainstalováno.",
+    "saveFailed": "Nastavení se nepodařilo uložit: {detail}"
   },
   "log": {
     "title": "Záznam hry",
@@ -114,9 +136,12 @@
     "exitOk": "Hra se ukončila normálně.",
     "exitError": "Hra se ukončila s chybou (kód {code}).",
     "exitSignal": "Systém hru zastavil.",
-    "runtimeMissing": "Runtime zatím není zkompilován. Jeho instalace z vaší kopie hry bude dalším krokem launcheru.",
+    "runtimeMissing": "Sestavení běhového prostředí nenalezeno. Sestavte ho pomocí scripts/build.sh a zkuste to znovu.",
     "alreadyRunning": "Hra už běží.",
-    "startFailed": "Hru se nepodařilo spustit: {detail}"
+    "startFailed": "Hru se nepodařilo spustit: {detail}",
+    "installingRuntime": "Instaluje se běhové prostředí hry…",
+    "installFailed": "Instalace běhového prostředí selhala: {detail}",
+    "savesUnavailable": "Složka uložených her není dostupná: {detail}"
   },
   "update": {
     "available": "Aktualizovat na {version}",

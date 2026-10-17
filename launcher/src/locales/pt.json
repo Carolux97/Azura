@@ -27,7 +27,8 @@
     "mode": "Campanha",
     "install": "Instalar",
     "installSub": "Configure os arquivos do jogo",
-    "running": "Jogando"
+    "running": "Jogando",
+    "runtimeWillInstall": "Instala o runtime primeiro"
   },
   "status": {
     "gameFiles": "Arquivos do jogo",
@@ -36,8 +37,10 @@
     "runtime": "Runtime",
     "gpu": "GPU",
     "gpuValue": "{machine} · Vulkan sobre Metal",
-    "runtimeMissing": "Ainda não compilado",
-    "player": "Jogador"
+    "runtimeMissing": "Nenhuma compilação encontrada",
+    "player": "Jogador",
+    "runtimeNotInstalled": "Será instalado ao clicar em Jogar",
+    "runtimeUpdate": "Atualização pronta, será instalada ao clicar em Jogar"
   },
   "news": {
     "title": "Novidades",
@@ -65,7 +68,21 @@
     "playerHelp": "Gamertag exibido nas salas, menus e multijogador.",
     "userName": "Gamertag / Nome de usuário",
     "userNamePlaceholder": "User (até 15 caracteres)",
-    "defaultUserName": "User"
+    "defaultUserName": "User",
+    "runtimeTitle": "Runtime do jogo",
+    "runtimeHelp": "O jogo recompilado que o launcher inicia. É instalado a partir da compilação do scripts/build.sh e atualizado quando houver uma mais recente.",
+    "runtimeInstalled": "Instalado e atualizado.",
+    "runtimeUpdate": "Uma compilação mais recente está pronta para instalar.",
+    "runtimeNotInstalled": "Ainda não instalado.",
+    "runtimeNoBuild": "Nenhuma compilação do runtime encontrada. Compile com scripts/build.sh.",
+    "installRuntime": "Instalar",
+    "updateRuntime": "Atualizar",
+    "installingRuntime": "Instalando…",
+    "savesTitle": "Jogos salvos",
+    "savesHelp": "Pasta dos seus checkpoints de campanha e do seu perfil. Ao mudá-la, seus jogos salvos são movidos para lá.",
+    "savesConflict": "{folder} já contém jogos salvos. Substituí-los pelos seus jogos salvos atuais?",
+    "savesReplace": "Substituir",
+    "savesCancel": "Cancelar"
   },
   "graphics": {
     "title": "Gráficos",
@@ -104,7 +121,12 @@
     "join": "Entrar com código"
   },
   "toast": {
-    "pick": "Protótipo: no Tauri, isto abrirá o seletor de pastas do macOS."
+    "pick": "Protótipo: no Tauri, isto abrirá o seletor de pastas do macOS.",
+    "savesMoved": "Jogos salvos movidos.",
+    "savesNested": "Escolha uma pasta que não esteja dentro da atual (nem o contrário).",
+    "savesFailed": "Falha ao mover os jogos salvos: {detail}",
+    "runtimeInstalled": "Runtime do jogo instalado.",
+    "saveFailed": "Não foi possível salvar as configurações: {detail}"
   },
   "log": {
     "title": "Registro do jogo",
@@ -114,9 +136,12 @@
     "exitOk": "O jogo foi fechado normalmente.",
     "exitError": "O jogo foi fechado com um erro (código {code}).",
     "exitSignal": "O sistema interrompeu o jogo.",
-    "runtimeMissing": "O runtime ainda não foi compilado. Instalá-lo a partir da sua cópia do jogo será o próximo passo do launcher.",
+    "runtimeMissing": "Nenhuma compilação do runtime encontrada. Compile com scripts/build.sh e tente novamente.",
     "alreadyRunning": "O jogo já está em execução.",
-    "startFailed": "Não foi possível iniciar o jogo: {detail}"
+    "startFailed": "Não foi possível iniciar o jogo: {detail}",
+    "installingRuntime": "Instalando o runtime do jogo…",
+    "installFailed": "Falha ao instalar o runtime: {detail}",
+    "savesUnavailable": "A pasta de jogos salvos não está disponível: {detail}"
   },
   "update": {
     "available": "Atualizar para {version}",
