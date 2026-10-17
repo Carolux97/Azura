@@ -29,9 +29,41 @@ add_compile_options(-fmacro-prefix-map=${CMAKE_SOURCE_DIR}=. -ffile-prefix-map=$
 
 add_executable(azura ${AZURA_SOURCES})
 
+# The SDK stages MoltenVK's ICD file from ${REXGLUE_ROOT}/cmake, a variable only the packaged SDK
+# defines. When the SDK is built from source, its source tree is that root.
+if(REXSDK_DIR AND NOT REXGLUE_ROOT)
+    set(REXGLUE_ROOT ${REXSDK_DIR})
+endif()
+
 # GPU_PLUGINS xenos stages librexgpu-xenos.dylib next to the executable; on macOS the SDK also
 # stages the Vulkan loader and MoltenVK.
 rexglue_setup_target(azura GPU_PLUGINS xenos)
+
+# The SDK copies MoltenVK into vulkan/lib in azura's POST_BUILD step, which only runs when azura
+# relinks. We patch MoltenVK (see scripts/build_moltenvk.sh and patches/), so re-copy it on every
+# build whether we are using the source SDK (MoltenVK::MoltenVK) or the prebuilt SDK (rex::moltenvk).
+if(TARGET MoltenVK::MoltenVK)
+    set(AZURA_MOLTENVK_TARGET MoltenVK::MoltenVK)
+elseif(TARGET rex::moltenvk)
+    set(AZURA_MOLTENVK_TARGET rex::moltenvk)
+endif()
+if(AZURA_MOLTENVK_TARGET)
+    add_custom_target(azura_stage_moltenvk ALL
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:azura>/vulkan/lib"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:${AZURA_MOLTENVK_TARGET}>"
+            "$<TARGET_FILE_DIR:azura>/vulkan/lib/libMoltenVK.dylib"
+        COMMENT "Staging MoltenVK next to the executable"
+        VERBATIM)
+    add_dependencies(azura_stage_moltenvk azura)
+endif()
+
+# With the SDK built from source (preset mac-arm64-sdk-source), the SDK's public headers include
+# imgui.h, but the SDK does not pass imgui's folder on to its consumers the way the packaged SDK
+# does (there, imgui.h sits in the SDK's include folder). Take it from the imgui target.
+if(REXSDK_DIR AND TARGET imgui)
+    target_include_directories(azura PRIVATE $<TARGET_PROPERTY:imgui,INTERFACE_INCLUDE_DIRECTORIES>)
+endif()
 
 # Post-codegen patch: codegen writes azura_register.cpp as one function of ~57,000 registration
 # calls, which takes clang close to ten minutes to compile (its cost grows faster than linearly

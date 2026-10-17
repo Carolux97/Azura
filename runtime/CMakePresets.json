@@ -26,6 +26,16 @@
                 "lhs": "${hostSystemName}",
                 "rhs": "Darwin"
             }
+        },
+        {
+            "name": "mac-arm64-sdk-source",
+            "displayName": "macOS on Apple Silicon, ReXGlue SDK built from source",
+            "description": "Builds the SDK from sdk/rexglue-0.10.0-src as part of the runtime, so its code can be traced and patched. Uses its own build folder.",
+            "inherits": "mac-arm64",
+            "binaryDir": "${sourceDir}/out/build/mac-arm64-sdk-source",
+            "cacheVariables": {
+                "REXSDK_DIR": "${sourceDir}/../sdk/rexglue-0.10.0-src"
+            }
         }
     ],
     "buildPresets": [
@@ -42,6 +52,21 @@
         {
             "name": "mac-arm64-release",
             "configurePreset": "mac-arm64",
+            "configuration": "Release"
+        },
+        {
+            "name": "mac-arm64-sdk-source-debug",
+            "configurePreset": "mac-arm64-sdk-source",
+            "configuration": "Debug"
+        },
+        {
+            "name": "mac-arm64-sdk-source-relwithdebinfo",
+            "configurePreset": "mac-arm64-sdk-source",
+            "configuration": "RelWithDebInfo"
+        },
+        {
+            "name": "mac-arm64-sdk-source-release",
+            "configurePreset": "mac-arm64-sdk-source",
             "configuration": "Release"
         }
     ]

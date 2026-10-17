@@ -1,0 +1,31 @@
+diff --git a/source/utf8/checked.h b/source/utf8/checked.h
+index 96ceb4d..0fba979 100644
+--- a/source/utf8/checked.h
++++ b/source/utf8/checked.h
+@@ -156,13 +156,15 @@ namespace utf8
+             case internal::UTF8_OK :
+                 break;
+             case internal::NOT_ENOUGH_ROOM :
++                if (it != end) {
++                    return static_cast<unsigned char>(*it++);
++                }
+                 throw not_enough_room();
+             case internal::INVALID_LEAD :
+             case internal::INCOMPLETE_SEQUENCE :
+             case internal::OVERLONG_SEQUENCE :
+-                throw invalid_utf8(static_cast<utfchar8_t>(*it));
+             case internal::INVALID_CODE_POINT :
+-                throw invalid_code_point(cp);
++                return static_cast<unsigned char>(*it++);
+         }
+         return cp;
+     }
+@@ -194,7 +196,7 @@ namespace utf8
+         // Go back until we hit either a lead octet or start
+         while (utf8::internal::is_trail(*(--it)))
+             if (it == start)
+-                throw invalid_utf8(*it); // error - no lead byte in the sequence
++                break;
+         return utf8::peek_next(it, end);
+     }
+ 

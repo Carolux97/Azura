@@ -1,0 +1,521 @@
+diff --git a/include/rex/input/device.h b/include/rex/input/device.h
+index 7b67ceb..431a201 100644
+--- a/include/rex/input/device.h
++++ b/include/rex/input/device.h
+@@ -22,12 +22,32 @@ constexpr uint32_t kMaxGuestUsers = 4;
+ /// device took the freed slot.
+ enum class DeviceId : uint64_t { kInvalid = 0 };
+ 
++/// Controller family, used to pick which button prompts to show.
++enum class ControllerSubtype {
++  kUnknown = 0,
++  kXbox,
++  kPlayStation,
++  kNintendo,
++};
++
++/// Kind of device a guest user last pressed something on. Published by
++/// InputSystem::GetState and readable from any thread.
++enum class ActiveDeviceKind : uint8_t {
++  kNone = 0,       // nothing pressed yet
++  kKeyboardMouse,  // keyboard/mouse emulation
++  kXbox,
++  kPlayStation,
++  kNintendo,
++  kOtherPad,
++};
++
+ struct DeviceInfo {
+   DeviceId id = DeviceId::kInvalid;
+   uint32_t ordinal = 0;  // connection order, assigned by InputSystem
+   std::string name;
+   std::string guid;
+   bool synthetic = false;  // keyboard/mouse emulation or the NOP stand-in
++  ControllerSubtype controller_subtype = ControllerSubtype::kUnknown;
+ };
+ 
+ }  // namespace rex::input
+diff --git a/include/rex/input/flags.h b/include/rex/input/flags.h
+index f29d8ac..02fb132 100644
+--- a/include/rex/input/flags.h
++++ b/include/rex/input/flags.h
+@@ -16,3 +16,30 @@
+ REXCVAR_DECLARE(bool, guide_button);
+ REXCVAR_DECLARE(std::string, hid_mappings_file);
+ REXCVAR_DECLARE(std::string, input_backend);
++REXCVAR_DECLARE(bool, mnk_mode);
++
++REXCVAR_DECLARE(std::string, keybind_a);
++REXCVAR_DECLARE(std::string, keybind_b);
++REXCVAR_DECLARE(std::string, keybind_x);
++REXCVAR_DECLARE(std::string, keybind_y);
++REXCVAR_DECLARE(std::string, keybind_left_trigger);
++REXCVAR_DECLARE(std::string, keybind_right_trigger);
++REXCVAR_DECLARE(std::string, keybind_left_shoulder);
++REXCVAR_DECLARE(std::string, keybind_right_shoulder);
++REXCVAR_DECLARE(std::string, keybind_lstick_up);
++REXCVAR_DECLARE(std::string, keybind_lstick_down);
++REXCVAR_DECLARE(std::string, keybind_lstick_left);
++REXCVAR_DECLARE(std::string, keybind_lstick_right);
++REXCVAR_DECLARE(std::string, keybind_lstick_press);
++REXCVAR_DECLARE(std::string, keybind_rstick_up);
++REXCVAR_DECLARE(std::string, keybind_rstick_down);
++REXCVAR_DECLARE(std::string, keybind_rstick_left);
++REXCVAR_DECLARE(std::string, keybind_rstick_right);
++REXCVAR_DECLARE(std::string, keybind_rstick_press);
++REXCVAR_DECLARE(std::string, keybind_dpad_up);
++REXCVAR_DECLARE(std::string, keybind_dpad_down);
++REXCVAR_DECLARE(std::string, keybind_dpad_left);
++REXCVAR_DECLARE(std::string, keybind_dpad_right);
++REXCVAR_DECLARE(std::string, keybind_back);
++REXCVAR_DECLARE(std::string, keybind_start);
++REXCVAR_DECLARE(std::string, keybind_guide);
+diff --git a/include/rex/input/input_system.h b/include/rex/input/input_system.h
+index 1cb3faa..d48df09 100644
+--- a/include/rex/input/input_system.h
++++ b/include/rex/input/input_system.h
+@@ -10,6 +10,8 @@
+  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
+  */
+ 
++#include <array>
++#include <atomic>
+ #include <memory>
+ #include <vector>
+ 
+@@ -47,12 +49,22 @@ class InputSystem : public system::IInputSystem {
+   X_RESULT SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration);
+   X_RESULT GetKeystroke(uint32_t user_index, uint32_t flags, X_INPUT_KEYSTROKE* out_keystroke);
+ 
++  /// Kind of the device the user last pressed something on. Safe to call from
++  /// any thread; updated by GetState.
++  ActiveDeviceKind ActiveKind(uint32_t user_index) const {
++    if (user_index >= kMaxGuestUsers) {
++      return ActiveDeviceKind::kNone;
++    }
++    return static_cast<ActiveDeviceKind>(active_kind_[user_index].load(std::memory_order_relaxed));
++  }
++
+  private:
+   /// Re-enumerates every driver and notifies the assignment when the set
+   /// changed.
+   void RefreshDevices();
+   InputDriver* DriverForDevice(DeviceId id);
+   const DeviceInfo* DeviceInfoFor(DeviceId id) const;
++  ActiveDeviceKind KindOf(DeviceId id) const;
+ 
+   rex::ui::Window* window_ = nullptr;
+ 
+@@ -60,6 +72,7 @@ class InputSystem : public system::IInputSystem {
+ 
+   std::unique_ptr<DeviceAssignment> assignment_;
+   ActiveDeviceTracker active_devices_;
++  std::array<std::atomic<uint8_t>, kMaxGuestUsers> active_kind_ = {};
+ 
+   // Ordered by ordinal. Ordinals are never recycled, so unplugging pad one
+   // does not renumber pad two.
+diff --git a/include/rex/ui/overlay/settings_overlay.h b/include/rex/ui/overlay/settings_overlay.h
+index 5b80eac..38236e6 100644
+--- a/include/rex/ui/overlay/settings_overlay.h
++++ b/include/rex/ui/overlay/settings_overlay.h
+@@ -11,6 +11,7 @@
+  */
+ #pragma once
+ #include <filesystem>
++#include <functional>
+ #include <string>
+ #include <rex/ui/imgui_dialog.h>
+ 
+@@ -19,7 +20,9 @@ namespace rex::ui {
+ class SettingsDialog : public ImGuiDialog {
+  public:
+   // config_path: where "Save to config" writes (e.g. exe_dir / "app.toml")
+-  SettingsDialog(ImGuiDrawer* imgui_drawer, std::filesystem::path config_path);
++  // on_quit: when set, a "Quit game" button asks for confirmation and then calls it.
++  SettingsDialog(ImGuiDrawer* imgui_drawer, std::filesystem::path config_path,
++                 std::function<void()> on_quit = nullptr);
+   ~SettingsDialog();
+ 
+  protected:
+@@ -27,6 +30,7 @@ class SettingsDialog : public ImGuiDialog {
+ 
+  private:
+   std::filesystem::path config_path_;
++  std::function<void()> on_quit_;
+   char search_buf_[128] = {};
+   std::string selected_category_;
+   std::string capturing_bind_name_;
+diff --git a/src/core/utf8.cpp b/src/core/utf8.cpp
+index 4fcfd7b..b2a18ad 100644
+--- a/src/core/utf8.cpp
++++ b/src/core/utf8.cpp
+@@ -28,11 +28,35 @@ using utf8_citer = utfcpp::iterator<std::string_view::const_iterator>;
+ namespace rex::string {
+ 
+ std::string to_utf8(const std::u16string_view source) {
+-  return utfcpp::utf16to8(source);
++  try {
++    return utfcpp::utf16to8(source);
++  } catch (...) {
++    std::string result;
++    result.reserve(source.size());
++    for (char16_t c : source) {
++      if (c < 128) {
++        result.push_back(static_cast<char>(c));
++      } else {
++        result.push_back('?');
++      }
++    }
++    return result;
++  }
+ }
+ 
+ std::u16string to_utf16(const std::string_view source) {
+-  return utfcpp::utf8to16(source);
++  try {
++    return utfcpp::utf8to16(source);
++  } catch (...) {
++    // Fallback: decode as Latin-1 / Windows-1252 directly into UTF-16 codepoints
++    // so characters like á, é, í, ó, ú, ñ (0x80-0xFF) are preserved without throwing.
++    std::u16string result;
++    result.reserve(source.size());
++    for (unsigned char c : source) {
++      result.push_back(static_cast<char16_t>(c));
++    }
++    return result;
++  }
+ }
+ 
+ std::string to_string(char32_t c) {
+diff --git a/src/input/input_system.cpp b/src/input/input_system.cpp
+index 813bb1c..203f75d 100644
+--- a/src/input/input_system.cpp
++++ b/src/input/input_system.cpp
+@@ -242,6 +242,11 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
+     }
+   }
+ 
++  if (user_index < kMaxGuestUsers) {
++    active_kind_[user_index].store(static_cast<uint8_t>(KindOf(active_devices_.Active(user_index))),
++                                   std::memory_order_relaxed);
++  }
++
+   if (!any) {
+     return X_ERROR_DEVICE_NOT_CONNECTED;
+   }
+@@ -251,6 +256,26 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
+   return X_ERROR_SUCCESS;
+ }
+ 
++ActiveDeviceKind InputSystem::KindOf(DeviceId id) const {
++  const DeviceInfo* info = DeviceInfoFor(id);
++  if (!info) {
++    return ActiveDeviceKind::kNone;
++  }
++  if (info->synthetic) {
++    return ActiveDeviceKind::kKeyboardMouse;
++  }
++  switch (info->controller_subtype) {
++    case ControllerSubtype::kXbox:
++      return ActiveDeviceKind::kXbox;
++    case ControllerSubtype::kPlayStation:
++      return ActiveDeviceKind::kPlayStation;
++    case ControllerSubtype::kNintendo:
++      return ActiveDeviceKind::kNintendo;
++    default:
++      return ActiveDeviceKind::kOtherPad;
++  }
++}
++
+ X_RESULT InputSystem::SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration) {
+   SCOPE_profile_cpu_f("hid");
+   if (!assignment_) {
+diff --git a/src/input/mnk/mnk_input_driver.cpp b/src/input/mnk/mnk_input_driver.cpp
+index 3f9422d..38c1555 100644
+--- a/src/input/mnk/mnk_input_driver.cpp
++++ b/src/input/mnk/mnk_input_driver.cpp
+@@ -24,38 +24,40 @@
+ #include <string_view>
+ 
+ REXCVAR_DEFINE_BOOL(mnk_mode, false, "Input", "Enable keyboard/mouse controller emulation");
+-REXCVAR_DEFINE_BOOL(mnk_mouse, false, "Input",
++REXCVAR_DEFINE_BOOL(mnk_mouse, true, "Input",
+                     "Use the mouse for the right stick. Off means the right stick comes "
+                     "from the keybind_rstick_* keys only");
+ REXCVAR_DEFINE_DOUBLE(mnk_sensitivity, 1.0, "Input", "Mouse sensitivity for right stick")
+     .range(0.01, 10.0);
+ 
+-REXCVAR_DEFINE_STRING(keybind_a, "Semicolon,Space", "Input/Keybinds/Controller", "A button");
+-REXCVAR_DEFINE_STRING(keybind_b, "Quote,Backspace", "Input/Keybinds/Controller", "B button");
+-REXCVAR_DEFINE_STRING(keybind_x, "L", "Input/Keybinds/Controller", "X button");
+-REXCVAR_DEFINE_STRING(keybind_y, "P", "Input/Keybinds/Controller", "Y button");
+-REXCVAR_DEFINE_STRING(keybind_left_trigger, "Q,I", "Input/Keybinds/Controller", "Left trigger");
+-REXCVAR_DEFINE_STRING(keybind_right_trigger, "E,O", "Input/Keybinds/Controller", "Right trigger");
+-REXCVAR_DEFINE_STRING(keybind_left_shoulder, "1", "Input/Keybinds/Controller", "Left shoulder");
+-REXCVAR_DEFINE_STRING(keybind_right_shoulder, "3", "Input/Keybinds/Controller", "Right shoulder");
++REXCVAR_DEFINE_STRING(keybind_a, "Space", "Input/Keybinds/Controller", "A button");
++REXCVAR_DEFINE_STRING(keybind_b, "F,Backspace", "Input/Keybinds/Controller", "B button");
++REXCVAR_DEFINE_STRING(keybind_x, "E", "Input/Keybinds/Controller", "X button");
++REXCVAR_DEFINE_STRING(keybind_y, "V,C", "Input/Keybinds/Controller", "Y button");
++REXCVAR_DEFINE_STRING(keybind_left_trigger, "RMB,Q", "Input/Keybinds/Controller", "Left trigger");
++REXCVAR_DEFINE_STRING(keybind_right_trigger, "LMB", "Input/Keybinds/Controller", "Right trigger");
++REXCVAR_DEFINE_STRING(keybind_left_shoulder, "Q", "Input/Keybinds/Controller", "Left shoulder");
++REXCVAR_DEFINE_STRING(keybind_right_shoulder, "R", "Input/Keybinds/Controller", "Right shoulder");
+ REXCVAR_DEFINE_STRING(keybind_lstick_up, "W", "Input/Keybinds/Controller", "Left stick up");
+ REXCVAR_DEFINE_STRING(keybind_lstick_down, "S", "Input/Keybinds/Controller", "Left stick down");
+ REXCVAR_DEFINE_STRING(keybind_lstick_left, "A", "Input/Keybinds/Controller", "Left stick left");
+ REXCVAR_DEFINE_STRING(keybind_lstick_right, "D", "Input/Keybinds/Controller", "Left stick right");
+-REXCVAR_DEFINE_STRING(keybind_lstick_press, "F", "Input/Keybinds/Controller", "Left stick press");
+-REXCVAR_DEFINE_STRING(keybind_rstick_up, "Up", "Input/Keybinds/Controller", "Right stick up");
+-REXCVAR_DEFINE_STRING(keybind_rstick_down, "Down", "Input/Keybinds/Controller", "Right stick down");
+-REXCVAR_DEFINE_STRING(keybind_rstick_left, "Left", "Input/Keybinds/Controller", "Right stick left");
+-REXCVAR_DEFINE_STRING(keybind_rstick_right, "Right", "Input/Keybinds/Controller",
++REXCVAR_DEFINE_STRING(keybind_lstick_press, "Shift,Control", "Input/Keybinds/Controller",
++                      "Left stick press");
++REXCVAR_DEFINE_STRING(keybind_rstick_up, "I", "Input/Keybinds/Controller", "Right stick up");
++REXCVAR_DEFINE_STRING(keybind_rstick_down, "K", "Input/Keybinds/Controller", "Right stick down");
++REXCVAR_DEFINE_STRING(keybind_rstick_left, "J", "Input/Keybinds/Controller", "Right stick left");
++REXCVAR_DEFINE_STRING(keybind_rstick_right, "L", "Input/Keybinds/Controller",
+                       "Right stick right");
+-REXCVAR_DEFINE_STRING(keybind_rstick_press, "K", "Input/Keybinds/Controller", "Right stick press");
+-REXCVAR_DEFINE_STRING(keybind_dpad_up, "Shift+Up", "Input/Keybinds/Controller", "D-pad up");
+-REXCVAR_DEFINE_STRING(keybind_dpad_down, "Shift+Down", "Input/Keybinds/Controller", "D-pad down");
+-REXCVAR_DEFINE_STRING(keybind_dpad_left, "Shift+Left", "Input/Keybinds/Controller", "D-pad left");
+-REXCVAR_DEFINE_STRING(keybind_dpad_right, "Shift+Right", "Input/Keybinds/Controller",
++REXCVAR_DEFINE_STRING(keybind_rstick_press, "MMB,Z", "Input/Keybinds/Controller",
++                      "Right stick press");
++REXCVAR_DEFINE_STRING(keybind_dpad_up, "Up,4", "Input/Keybinds/Controller", "D-pad up");
++REXCVAR_DEFINE_STRING(keybind_dpad_down, "Down,3", "Input/Keybinds/Controller", "D-pad down");
++REXCVAR_DEFINE_STRING(keybind_dpad_left, "Left,1", "Input/Keybinds/Controller", "D-pad left");
++REXCVAR_DEFINE_STRING(keybind_dpad_right, "Right,2", "Input/Keybinds/Controller",
+                       "D-pad right");
+-REXCVAR_DEFINE_STRING(keybind_back, "Z,Tab", "Input/Keybinds/Controller", "Back button");
+-REXCVAR_DEFINE_STRING(keybind_start, "X,Return", "Input/Keybinds/Controller", "Start button");
++REXCVAR_DEFINE_STRING(keybind_back, "Tab", "Input/Keybinds/Controller", "Back button");
++REXCVAR_DEFINE_STRING(keybind_start, "Return,Escape", "Input/Keybinds/Controller", "Start button");
+ REXCVAR_DEFINE_STRING(keybind_guide, "", "Input/Keybinds/Controller", "Guide button");
+ 
+ namespace rex::input::mnk {
+@@ -66,11 +68,7 @@ namespace {
+ constexpr rex::input::DeviceId kMnkDevice = static_cast<rex::input::DeviceId>(0x4D4E4B00);
+ 
+ // Bind values are a comma-separated list of alternatives, each optionally
+-// carrying modifier prefixes: "Q,I" or "Shift+W". Modifier matching is exact,
+-// so "Up" stays silent while Shift is held and "Shift+Up" stays silent without
+-// it. That is what lets the D-pad share the arrow keys. A consequence is
+-// that binding a bare modifier name ("Shift") can never fire, since holding it
+-// makes the live mask non-zero while the bind wants zero.
++// carrying modifier prefixes: "Q,I" or "Shift+W".
+ constexpr uint8_t kModShift = 1u << 0;
+ constexpr uint8_t kModCtrl = 1u << 1;
+ constexpr uint8_t kModAlt = 1u << 2;
+@@ -123,8 +121,11 @@ std::string_view TrimSpaces(std::string_view s) {
+ }
+ 
+ bool TokenPressed(const bool (&key_down)[256], std::string_view token, uint8_t live_mods) {
++  if (token == "Ctrl") {
++    token = "Control";
++  }
+   uint8_t want = TakeModifiers(token);
+-  if (want != live_mods) {
++  if (want != 0 && (live_mods & want) != want) {
+     return false;
+   }
+   rex::ui::VirtualKey vk = rex::ui::ParseVirtualKey(token);
+@@ -510,6 +511,12 @@ void MnkInputDriver::OnMouseDown(rex::ui::MouseEvent& e) {
+     case rex::ui::MouseEvent::Button::kMiddle:
+       SetKeyState(static_cast<uint16_t>(VirtualKey::kMButton), true);
+       break;
++    case rex::ui::MouseEvent::Button::kX1:
++      SetKeyState(static_cast<uint16_t>(VirtualKey::kXButton1), true);
++      break;
++    case rex::ui::MouseEvent::Button::kX2:
++      SetKeyState(static_cast<uint16_t>(VirtualKey::kXButton2), true);
++      break;
+     default:
+       break;
+   }
+@@ -529,6 +536,12 @@ void MnkInputDriver::OnMouseUp(rex::ui::MouseEvent& e) {
+     case rex::ui::MouseEvent::Button::kMiddle:
+       SetKeyState(static_cast<uint16_t>(VirtualKey::kMButton), false);
+       break;
++    case rex::ui::MouseEvent::Button::kX1:
++      SetKeyState(static_cast<uint16_t>(VirtualKey::kXButton1), false);
++      break;
++    case rex::ui::MouseEvent::Button::kX2:
++      SetKeyState(static_cast<uint16_t>(VirtualKey::kXButton2), false);
++      break;
+     default:
+       break;
+   }
+diff --git a/src/input/sdl/sdl_input_driver.cpp b/src/input/sdl/sdl_input_driver.cpp
+index c7c440d..82a252c 100644
+--- a/src/input/sdl/sdl_input_driver.cpp
++++ b/src/input/sdl/sdl_input_driver.cpp
+@@ -162,6 +162,31 @@ void SDLInputDriver::EnumerateDevices(std::vector<DeviceInfo>& out) {
+                      static_cast<int>(sizeof(guid_text)));
+     info.guid = guid_text;
+     info.synthetic = false;
++    auto pad_type = SDL_GetGamepadType(controller.sdl);
++    if (pad_type == SDL_GAMEPAD_TYPE_PS3 || pad_type == SDL_GAMEPAD_TYPE_PS4 ||
++        pad_type == SDL_GAMEPAD_TYPE_PS5) {
++      info.controller_subtype = ControllerSubtype::kPlayStation;
++    } else if (pad_type == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_PRO ||
++               pad_type == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_LEFT ||
++               pad_type == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT ||
++               pad_type == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_PAIR) {
++      info.controller_subtype = ControllerSubtype::kNintendo;
++    } else {
++      std::string name_lower = info.name;
++      for (auto& c : name_lower) {
++        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
++      }
++      if (name_lower.find("dualsense") != std::string::npos ||
++          name_lower.find("dualshock") != std::string::npos ||
++          name_lower.find("playstation") != std::string::npos ||
++          name_lower.find("ps5") != std::string::npos ||
++          name_lower.find("ps4") != std::string::npos ||
++          name_lower.find("sony") != std::string::npos) {
++        info.controller_subtype = ControllerSubtype::kPlayStation;
++      } else {
++        info.controller_subtype = ControllerSubtype::kXbox;
++      }
++    }
+     out.push_back(info);
+   }
+ }
+diff --git a/src/kernel/xam/xam_info.cpp b/src/kernel/xam/xam_info.cpp
+index 1fda053..1944372 100644
+--- a/src/kernel/xam/xam_info.cpp
++++ b/src/kernel/xam/xam_info.cpp
+@@ -15,6 +15,7 @@
+ #include <rex/hook.h>
+ #include <rex/types.h>
+ #include <rex/string.h>
++#include <rex/system/flags.h>
+ #include <rex/system/kernel_state.h>
+ #include <rex/system/user_module.h>
+ #include <rex/system/xenumerator.h>
+@@ -183,19 +184,11 @@ u32 XGetGameRegion_entry() {
+ }
+ 
+ u32 XGetLanguage_entry() {
+-  auto desired_language = XLanguage::kEnglish;
+-
+-  // Switch the language based on game region.
+-  // TODO(benvanik): pull from xex header.
+-  uint32_t game_region = XEX_REGION_NTSCU;
+-  if (game_region & XEX_REGION_NTSCU) {
+-    desired_language = XLanguage::kEnglish;
+-  } else if (game_region & XEX_REGION_NTSCJ) {
+-    desired_language = XLanguage::kJapanese;
++  uint32_t lang = REXCVAR_GET(user_language);
++  if (lang != 0) {
++    return lang;
+   }
+-  // Add more overrides?
+-
+-  return uint32_t(desired_language);
++  return uint32_t(XLanguage::kEnglish);
+ }
+ 
+ u32 XamGetCurrentTitleId_entry() {
+diff --git a/src/ui/keybinds.cpp b/src/ui/keybinds.cpp
+index 9822f3b..1799668 100644
+--- a/src/ui/keybinds.cpp
++++ b/src/ui/keybinds.cpp
+@@ -115,6 +115,7 @@ static const std::unordered_map<std::string, VirtualKey> kKeyNames = {
+     // Modifier
+     {"Shift", VirtualKey::kShift},
+     {"Control", VirtualKey::kControl},
++    {"Ctrl", VirtualKey::kControl},
+     {"Alt", VirtualKey::kMenu},
+     // Numpad
+     {"Numpad0", VirtualKey::kNumpad0},
+@@ -128,6 +129,7 @@ static const std::unordered_map<std::string, VirtualKey> kKeyNames = {
+     {"Numpad8", VirtualKey::kNumpad8},
+     {"Numpad9", VirtualKey::kNumpad9},
+     {"NumpadEnter", VirtualKey::kReturn},
++    {"Enter", VirtualKey::kReturn},
+     {"NumpadPlus", VirtualKey::kAdd},
+     {"NumpadMinus", VirtualKey::kSubtract},
+     {"NumpadStar", VirtualKey::kMultiply},
+@@ -141,6 +143,13 @@ static const std::unordered_map<std::string, VirtualKey> kKeyNames = {
+     {"LMB", VirtualKey::kLButton},
+     {"RMB", VirtualKey::kRButton},
+     {"MMB", VirtualKey::kMButton},
++    {"MiddleMouse", VirtualKey::kMButton},
++    {"MB4", VirtualKey::kXButton1},
++    {"Mouse4", VirtualKey::kXButton1},
++    {"XButton1", VirtualKey::kXButton1},
++    {"MB5", VirtualKey::kXButton2},
++    {"Mouse5", VirtualKey::kXButton2},
++    {"XButton2", VirtualKey::kXButton2},
+ };
+ 
+ VirtualKey ParseVirtualKey(std::string_view name) {
+diff --git a/src/ui/overlay/settings_overlay.cpp b/src/ui/overlay/settings_overlay.cpp
+index 4ede107..4779c03 100644
+--- a/src/ui/overlay/settings_overlay.cpp
++++ b/src/ui/overlay/settings_overlay.cpp
+@@ -24,8 +24,9 @@
+ 
+ namespace rex::ui {
+ 
+-SettingsDialog::SettingsDialog(ImGuiDrawer* imgui_drawer, std::filesystem::path config_path)
+-    : ImGuiDialog(imgui_drawer), config_path_(std::move(config_path)) {}
++SettingsDialog::SettingsDialog(ImGuiDrawer* imgui_drawer, std::filesystem::path config_path,
++                               std::function<void()> on_quit)
++    : ImGuiDialog(imgui_drawer), config_path_(std::move(config_path)), on_quit_(std::move(on_quit)) {}
+ 
+ SettingsDialog::~SettingsDialog() {}
+ 
+@@ -508,6 +509,29 @@ void SettingsDialog::OnDraw(ImGuiIO& /*io*/) {
+   ImGui::SameLine();
+   ImGui::TextDisabled("(%s)", config_path_.filename().string().c_str());
+ 
++  // Quit, right-aligned, behind a confirmation so a stray click does not lose progress.
++  if (on_quit_) {
++    const char* kQuitLabel = "Quit game";
++    const float quit_width = ImGui::CalcTextSize(kQuitLabel).x + ImGui::GetStyle().FramePadding.x * 2;
++    ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - quit_width);
++    if (ImGui::Button(kQuitLabel)) {
++      ImGui::OpenPopup("Quit game?##rex");
++    }
++    if (ImGui::BeginPopupModal("Quit game?##rex", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
++      ImGui::TextUnformatted("Quit the game? Progress since the last checkpoint will be lost.");
++      ImGui::Spacing();
++      if (ImGui::Button("Quit", ImVec2(120, 0))) {
++        ImGui::CloseCurrentPopup();
++        on_quit_();
++      }
++      ImGui::SameLine();
++      if (ImGui::Button("Cancel", ImVec2(120, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
++        ImGui::CloseCurrentPopup();
++      }
++      ImGui::EndPopup();
++    }
++  }
++
+   ImGui::End();
+ }
+ 
+diff --git a/src/ui/rex_app.cpp b/src/ui/rex_app.cpp
+index b94fe9e..4aaf669 100644
+--- a/src/ui/rex_app.cpp
++++ b/src/ui/rex_app.cpp
+@@ -413,7 +413,13 @@ void ReXApp::SetupOverlays(rex::ui::Presenter* presenter, rex::ui::ImmediateDraw
+     if (settings_overlay_) {
+       settings_overlay_.reset();
+     } else {
+-      settings_overlay_ = std::make_unique<ui::SettingsDialog>(imgui_drawer_.get(), config_path_);
++      // Closing the window runs the normal shutdown (OnClosing).
++      settings_overlay_ = std::make_unique<ui::SettingsDialog>(
++          imgui_drawer_.get(), config_path_, [this] {
++            if (window()) {
++              window()->RequestClose();
++            }
++          });
+     }
+   });
+   rex::ui::RegisterBind("bind_achievements", "F7", "Toggle achievements overlay", [this] {
