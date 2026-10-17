@@ -22,6 +22,10 @@ include(${AZURA_REXGLUE_CMAKE})
 set(AZURA_SOURCES
     src/main.cpp
     src/hooks.cpp
+    src/prompts/button_prompts.cpp
+    src/prompts/glyph_art.cpp
+    src/prompts/glyph_raster.cpp
+    src/prompts/xenos_dxt5.cpp
 )
 
 # Keep the build machine's folder names out of the binary (they would otherwise end up in the
@@ -98,3 +102,29 @@ add_custom_command(TARGET azura POST_BUILD
             ${CMAKE_CURRENT_SOURCE_DIR}/config/gamecontrollerdb.txt
             $<TARGET_FILE_DIR:azura>/gamecontrollerdb.txt
     COMMENT "Installing azura.default.toml and gamecontrollerdb.txt beside the executable")
+
+# Review tool for the button prompt designs: renders every glyph into a PNG without running the
+# game. Not part of the normal build: cmake --build --preset <preset> --target azura_glyph_sheet
+add_executable(azura_glyph_sheet EXCLUDE_FROM_ALL
+    tools/glyph_sheet.cpp
+    src/prompts/glyph_art.cpp
+    src/prompts/glyph_raster.cpp
+)
+
+# Unit tests for the button prompt engine (synthetic data only). Catch2 comes with the SDK source
+# tree; it is added here on its own so the SDK's much larger test suite is not built.
+# Run: ctest --test-dir out/build/mac-arm64-sdk-source -C RelWithDebInfo
+if(REXSDK_DIR)
+    if(NOT TARGET Catch2::Catch2WithMain)
+        add_subdirectory(${REXSDK_DIR}/thirdparty/catch2 catch2 EXCLUDE_FROM_ALL)
+    endif()
+    enable_testing()
+    add_executable(azura_prompts_tests
+        tests/prompts_tests.cpp
+        src/prompts/glyph_art.cpp
+        src/prompts/glyph_raster.cpp
+        src/prompts/xenos_dxt5.cpp
+    )
+    target_link_libraries(azura_prompts_tests PRIVATE Catch2::Catch2WithMain)
+    add_test(NAME azura_prompts_tests COMMAND azura_prompts_tests)
+endif()
