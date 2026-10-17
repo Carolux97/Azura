@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "../scripts/build-launcher.sh",
     "test": "node --test \"test/**/*.test.mjs\""
   },
   "devDependencies": {
