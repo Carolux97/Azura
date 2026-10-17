@@ -27,6 +27,13 @@ set(AZURA_SOURCES
     src/prompts/glyph_raster.cpp
     src/prompts/xenos_dxt5.cpp
 )
+if(APPLE)
+    # platform_mac.mm is Objective-C++ (it sets the Dock icon through AppKit). It is compiled by the
+    # C++ compiler in Objective-C++ mode rather than by enabling the OBJCXX language, which would
+    # change how the SDK's bundled SDL builds its Objective-C files.
+    list(APPEND AZURA_SOURCES src/platform_mac.mm)
+    set_source_files_properties(src/platform_mac.mm PROPERTIES LANGUAGE CXX COMPILE_OPTIONS "-xobjective-c++")
+endif()
 
 # Keep the build machine's folder names out of the binary (they would otherwise end up in the
 # __FILE__ strings of log messages).
@@ -43,6 +50,9 @@ endif()
 # GPU_PLUGINS xenos stages librexgpu-xenos.dylib next to the executable; on macOS the SDK also
 # stages the Vulkan loader and MoltenVK.
 rexglue_setup_target(azura GPU_PLUGINS xenos)
+if(APPLE)
+    target_link_libraries(azura PRIVATE "-framework Cocoa")
+endif()
 
 # The SDK copies MoltenVK into vulkan/lib in azura's POST_BUILD step, which only runs when azura
 # relinks. We patch MoltenVK (see scripts/build_moltenvk.sh and patches/), so re-copy it on every
@@ -101,7 +111,14 @@ add_custom_command(TARGET azura POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${CMAKE_CURRENT_SOURCE_DIR}/config/gamecontrollerdb.txt
             $<TARGET_FILE_DIR:azura>/gamecontrollerdb.txt
-    COMMENT "Installing azura.default.toml and gamecontrollerdb.txt beside the executable")
+    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:azura>/assets
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_SOURCE_DIR}/assets/azura-icon.png
+            $<TARGET_FILE_DIR:azura>/assets/azura-icon.png
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_SOURCE_DIR}/assets/azura-icon.icns
+            $<TARGET_FILE_DIR:azura>/assets/azura-icon.icns
+    COMMENT "Installing azura.default.toml, gamecontrollerdb.txt and assets beside the executable")
 
 # Review tool for the button prompt designs: renders every glyph into a PNG without running the
 # game. Not part of the normal build: cmake --build --preset <preset> --target azura_glyph_sheet

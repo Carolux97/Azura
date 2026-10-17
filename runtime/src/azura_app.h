@@ -13,6 +13,10 @@
 
 #include "prompts/button_prompts.h"
 
+#if defined(__APPLE__)
+#include "platform_mac.h"
+#endif
+
 class AzuraApp : public rex::ReXApp {
  public:
   using rex::ReXApp::ReXApp;
@@ -20,6 +24,9 @@ class AzuraApp : public rex::ReXApp {
   // Factory used by REX_DEFINE_APP. "azura" is the application name: it names the user data
   // folder, the log files and the config file (azura.toml).
   static std::unique_ptr<rex::ui::WindowedApp> Create(rex::ui::WindowedAppContext& ctx) {
+#if defined(__APPLE__)
+    AutoConfigureMacAppIcon();
+#endif
     return std::unique_ptr<AzuraApp>(new AzuraApp(ctx, "azura", PPCImageConfig));
   }
 
@@ -47,6 +54,9 @@ class AzuraApp : public rex::ReXApp {
       }
     }
     auto exe_dir = paths.config_path.parent_path();
+#if defined(__APPLE__)
+    AutoConfigureMacAppIcon(exe_dir.string());
+#endif
     auto controller_db = exe_dir / "gamecontrollerdb.txt";
     if (std::filesystem::exists(controller_db)) {
       rex::cvar::SetFlagByName("hid_mappings_file", controller_db.string());
