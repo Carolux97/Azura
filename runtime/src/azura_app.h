@@ -11,6 +11,8 @@
 
 #include <rex/rex_app.h>
 
+#include "prompts/button_prompts.h"
+
 class AzuraApp : public rex::ReXApp {
  public:
   using rex::ReXApp::ReXApp;
@@ -22,6 +24,16 @@ class AzuraApp : public rex::ReXApp {
   }
 
  protected:
+  // The game module is running and guest memory holds its textures: start keeping the button
+  // prompts in step with the player's device and bindings.
+  void OnPostLaunchModule(rex::system::XThread* thread) override {
+    (void)thread;
+    button_prompts_ = std::make_unique<azura::prompts::ButtonPrompts>(runtime());
+  }
+
+  // Stop the prompt thread before the runtime and its memory go away.
+  void OnShutdown() override { button_prompts_.reset(); }
+
   // ReXApp computes path_config BEFORE LoadConfig(config_path_) is executed, so
   // game_data_root defined in azura.toml is only available in REXCVAR_GET after LoadConfig.
   // OnFinalizePaths runs after LoadConfig and before ConstructRuntime, so we update it here.
@@ -42,4 +54,7 @@ class AzuraApp : public rex::ReXApp {
     }
     return paths;
   }
+
+ private:
+  std::unique_ptr<azura::prompts::ButtonPrompts> button_prompts_;
 };
