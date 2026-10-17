@@ -1,8 +1,9 @@
 # Gears3-Azura settings.
 #
-# The build installs this file beside the executable as azura.default.toml. The runtime reads
-# azura.toml from that same folder: copy this file there under that name to change a setting.
-# The build never overwrites azura.toml. Command-line flags (--name=value) override the file.
+# The build installs this file beside the executable as azura.default.toml. The runtime loads it
+# first, then azura.toml from the same folder (the player's settings, written by the launcher and
+# the F4 menu), so azura.toml only needs the keys it changes. The build never overwrites
+# azura.toml. Command-line flags (--name=value) override both files.
 #
 # Every key is a runtime setting (cvar) name.
 
