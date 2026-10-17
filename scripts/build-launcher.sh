@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Builds the Azura Launcher (macOS .app and .dmg).
-# Ensures that target/ always keeps only ONE .app and ONE fixed .dmg ("Azura Launcher.dmg"),
-# cleanly replacing previous builds and removing stale artifacts on every build/update.
+# Builds the Azura Launcher app for local use: target/release/bundle/macos/Azura Launcher.app.
+#
+# Only the .app is built, so the Mac knows a single "Azura Launcher". The .dmg players download is
+# made by scripts/release-launcher.sh into launcher/dist/. Leftovers that would show up as a second
+# launcher (an old .dmg in target/, LaunchServices entries for disk images Tauri mounted while
+# building one) are removed.
 #
 # Usage: scripts/build-launcher.sh
 
@@ -21,21 +24,16 @@ readonly LAUNCHER="${ROOT}/launcher"
 readonly BUNDLE="${LAUNCHER}/src-tauri/target/release/bundle"
 readonly DMG_DIR="${BUNDLE}/dmg"
 
-echo "==> Cleaning old launcher bundles in target..."
+echo "==> Cleaning old launcher bundles in target"
 rm -rf "${LAUNCHER}/src-tauri/target/debug/bundle"
 rm -rf "${DMG_DIR}"
-rm -f "${BUNDLE}/macos/"*.tar.gz* 2>/dev/null || true
+rm -f "${BUNDLE}/macos/"*.tar.gz* "${BUNDLE}/macos/"rw.*.dmg 2>/dev/null || true
 
-echo "==> Building Azura Launcher..."
-(cd "${LAUNCHER}" && npx tauri build --bundles app,dmg)
+echo "==> Building Azura Launcher"
+(cd "${LAUNCHER}" && npx tauri build --bundles app)
 
-echo "==> Normalizing DMG in target..."
-GENERATED_DMG="$(find "${DMG_DIR}" -name "*.dmg" ! -name "Azura Launcher.dmg" -print -quit 2>/dev/null || true)"
-if [[ -n "${GENERATED_DMG}" ]]; then
-  mv -f "${GENERATED_DMG}" "${DMG_DIR}/Azura Launcher.dmg"
-fi
-
-# Clean ghost registrations in macOS LaunchServices caused by temporary DMG mount volumes
+# Forget LaunchServices entries for apps inside disk images that are no longer mounted (Tauri
+# mounts one while building a .dmg; the entry outlives the mount).
 if [[ -x "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister" ]]; then
   readonly LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
   "${LSREGISTER}" -dump 2>/dev/null \
@@ -46,6 +44,4 @@ if [[ -x "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchSer
   "${LSREGISTER}" -gc 2>/dev/null || true
 fi
 
-echo "==> Success! Target contains single app and single DMG:"
-echo "    App: ${BUNDLE}/macos/Azura Launcher.app"
-echo "    DMG: ${DMG_DIR}/Azura Launcher.dmg"
+echo "==> Done: ${BUNDLE}/macos/Azura Launcher.app"

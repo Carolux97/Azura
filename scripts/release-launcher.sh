@@ -91,8 +91,9 @@ cp "${BUNDLE}/macos/Azura Launcher.app.tar.gz.sig" "${DIST}/${ARCHIVE}.sig"
 
 readonly GENERATED_DMG="$(find "${BUNDLE}/dmg" -name "*.dmg" -print -quit)"
 cp "${GENERATED_DMG}" "${DIST}/${DMG}"
-# Keep target clean: only one canonical Azura Launcher.dmg in target/release/bundle/dmg/
-mv -f "${GENERATED_DMG}" "${BUNDLE}/dmg/Azura Launcher.dmg"
+# The published copy lives in dist/; leaving the DMG in target/ would show a second
+# "Azura Launcher" when searching the Mac, so only the .app stays there.
+rm -rf "${BUNDLE}/dmg"
 
 # Clean ghost registrations in macOS LaunchServices caused by temporary DMG mount volumes
 if [[ -x "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister" ]]; then
