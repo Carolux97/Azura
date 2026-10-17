@@ -21,6 +21,7 @@ include(${AZURA_REXGLUE_CMAKE})
 
 set(AZURA_SOURCES
     src/main.cpp
+    src/hooks.cpp
 )
 
 # Keep the build machine's folder names out of the binary (they would otherwise end up in the
@@ -93,4 +94,7 @@ add_custom_command(TARGET azura POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${CMAKE_CURRENT_SOURCE_DIR}/config/azura.default.toml
             $<TARGET_FILE_DIR:azura>/azura.default.toml
-    COMMENT "Installing azura.default.toml beside the executable")
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_SOURCE_DIR}/config/gamecontrollerdb.txt
+            $<TARGET_FILE_DIR:azura>/gamecontrollerdb.txt
+    COMMENT "Installing azura.default.toml and gamecontrollerdb.txt beside the executable")
