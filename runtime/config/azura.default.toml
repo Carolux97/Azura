@@ -13,3 +13,38 @@ gpu_plugin = "xenos"
 
 # ---------- Display ----------
 fullscreen = false
+
+# ---------- Localization ----------
+# 1 = English, 2 = Japanese, 3 = German, 4 = French, 5 = Spanish, 6 = Italian,
+# 7 = Korean, 8 = Traditional Chinese, 9 = Portuguese, 10 = Simplified Chinese, 11 = Polish, 12 = Russian.
+user_language = 5
+
+# ---------- Input ----------
+# Enable keyboard/mouse controller emulation. If a physical gamepad is plugged in,
+# it works concurrently.
+mnk_mode = true
+mnk_mouse = true
+mnk_sensitivity = 1.0
+
+# ---------- Keybinds (Xbox 360 -> PC Gears of War 3) ----------
+keybind_a = "Space"                    # A: cover / roll / sprint / confirm in menus
+keybind_b = "F,Backspace"              # B: melee (F) / back in menus (Backspace)
+keybind_x = "E"                        # X: interact / pick up ammo or weapons / revive
+keybind_y = "V,C"                      # Y: point of interest / execution
+keybind_right_trigger = "LMB"          # RT: fire (left click)
+keybind_left_trigger = "RMB,Q"         # LT: aim (right click)
+keybind_right_shoulder = "R"           # RB: reload / active reload
+keybind_left_shoulder = "Q"            # LB: Tac-Com (view objectives and squad)
+keybind_lstick_up = "W"                # Left stick up
+keybind_lstick_down = "S"              # Left stick down
+keybind_lstick_left = "A"              # Left stick left
+keybind_lstick_right = "D"             # Left stick right
+keybind_lstick_press = "Shift,Control" # L3: press the left stick
+keybind_rstick_press = "MMB,Z"         # R3: zoom while aiming (middle click or Z)
+keybind_dpad_up = "Up,4"               # D-pad up: grenades (4) / menu up
+keybind_dpad_down = "Down,3"           # D-pad down: pistol (3) / menu down
+keybind_dpad_left = "Left,1"           # D-pad left: weapon 1 (1) / menu left
+keybind_dpad_right = "Right,2"         # D-pad right: weapon 2 (2) / menu right
+keybind_start = "Return,Escape"        # Start: Enter (shown on prompts) / Escape (pause)
+keybind_back = "Tab"                   # Back: scoreboard
+
