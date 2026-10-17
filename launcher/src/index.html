@@ -137,6 +137,29 @@
           <p class="check" id="game-check" hidden></p>
         </div>
         <div class="panel">
+          <h2 class="panel-title" data-i18n="install.runtimeTitle"></h2>
+          <p class="help" data-i18n="install.runtimeHelp"></p>
+          <div class="path-row">
+            <!-- State of the installed runtime; renderInstall() fills it. -->
+            <p class="check" id="runtime-check"></p>
+            <button class="btn" id="install-runtime"></button>
+          </div>
+        </div>
+        <div class="panel">
+          <h2 class="panel-title" data-i18n="install.savesTitle"></h2>
+          <p class="help" data-i18n="install.savesHelp"></p>
+          <div class="path-row">
+            <input class="path" id="saves-path" type="text" readonly>
+            <button class="btn" id="pick-saves" data-i18n="install.change"></button>
+          </div>
+          <!-- Shown when the chosen folder already holds saves, to confirm replacing them. -->
+          <div class="path-row" id="saves-conflict" hidden>
+            <p class="check" data-state="error" id="saves-conflict-text"></p>
+            <button class="btn" id="saves-replace" data-i18n="install.savesReplace"></button>
+            <button class="btn" id="saves-cancel" data-i18n="install.savesCancel"></button>
+          </div>
+        </div>
+        <div class="panel">
           <h2 class="panel-title" data-i18n="install.languageTitle"></h2>
           <p class="help" data-i18n="install.languageHelp"></p>
           <div class="field-grid">

@@ -27,7 +27,8 @@
     "mode": "Kampania",
     "install": "Zainstaluj",
     "installSub": "Skonfiguruj pliki gry",
-    "running": "W grze"
+    "running": "W grze",
+    "runtimeWillInstall": "Najpierw instaluje środowisko"
   },
   "status": {
     "gameFiles": "Pliki gry",
@@ -36,8 +37,10 @@
     "runtime": "Runtime",
     "gpu": "GPU",
     "gpuValue": "{machine} · Vulkan przez Metal",
-    "runtimeMissing": "Jeszcze nieskompilowany",
-    "player": "Player"
+    "runtimeMissing": "Nie znaleziono kompilacji",
+    "player": "Player",
+    "runtimeNotInstalled": "Zainstaluje się po kliknięciu Graj",
+    "runtimeUpdate": "Aktualizacja gotowa, zainstaluje się po kliknięciu Graj"
   },
   "news": {
     "title": "Nowości",
@@ -65,7 +68,21 @@
     "playerHelp": "Gamertag displayed in game lobbies, menus, and multiplayer.",
     "userName": "Gamertag / Username",
     "userNamePlaceholder": "User (up to 15 characters)",
-    "defaultUserName": "User"
+    "defaultUserName": "User",
+    "runtimeTitle": "Środowisko gry",
+    "runtimeHelp": "Ponownie skompilowana gra uruchamiana przez launcher. Instalowana z kompilacji scripts/build.sh i aktualizowana, gdy pojawi się nowsza.",
+    "runtimeInstalled": "Zainstalowane i aktualne.",
+    "runtimeUpdate": "Nowsza kompilacja jest gotowa do instalacji.",
+    "runtimeNotInstalled": "Jeszcze niezainstalowane.",
+    "runtimeNoBuild": "Nie znaleziono kompilacji środowiska. Skompiluj je za pomocą scripts/build.sh.",
+    "installRuntime": "Zainstaluj",
+    "updateRuntime": "Aktualizuj",
+    "installingRuntime": "Instalowanie…",
+    "savesTitle": "Zapisy gry",
+    "savesHelp": "Folder punktów kontrolnych kampanii i profilu. Po zmianie zapisy zostaną tam przeniesione.",
+    "savesConflict": "{folder} zawiera już zapisy gry. Zastąpić je obecnymi zapisami?",
+    "savesReplace": "Zastąp",
+    "savesCancel": "Anuluj"
   },
   "graphics": {
     "title": "Grafika",
@@ -104,7 +121,12 @@
     "join": "Dołącz kodem"
   },
   "toast": {
-    "pick": "Makieta: w Tauri otworzy się tu okno wyboru folderu macOS."
+    "pick": "Makieta: w Tauri otworzy się tu okno wyboru folderu macOS.",
+    "savesMoved": "Zapisy przeniesione.",
+    "savesNested": "Wybierz folder, który nie znajduje się w obecnym (ani odwrotnie).",
+    "savesFailed": "Przeniesienie zapisów nie powiodło się: {detail}",
+    "runtimeInstalled": "Środowisko gry zainstalowane.",
+    "saveFailed": "Nie udało się zapisać ustawień: {detail}"
   },
   "log": {
     "title": "Dziennik gry",
@@ -114,9 +136,12 @@
     "exitOk": "Gra została zamknięta prawidłowo.",
     "exitError": "Gra została zamknięta z błędem (kod {code}).",
     "exitSignal": "System zatrzymał grę.",
-    "runtimeMissing": "Runtime nie jest jeszcze skompilowany. Zainstalowanie go z twojej kopii gry będzie następnym krokiem launchera.",
+    "runtimeMissing": "Nie znaleziono kompilacji środowiska. Skompiluj je za pomocą scripts/build.sh i spróbuj ponownie.",
     "alreadyRunning": "Gra jest już uruchomiona.",
-    "startFailed": "Nie udało się uruchomić gry: {detail}"
+    "startFailed": "Nie udało się uruchomić gry: {detail}",
+    "installingRuntime": "Instalowanie środowiska gry…",
+    "installFailed": "Instalacja środowiska nie powiodła się: {detail}",
+    "savesUnavailable": "Folder zapisów jest niedostępny: {detail}"
   },
   "update": {
     "available": "Aktualizuj do {version}",

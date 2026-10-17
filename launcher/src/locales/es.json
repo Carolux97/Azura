@@ -27,7 +27,8 @@
     "mode": "Campaña",
     "install": "Instalar",
     "installSub": "Configura los archivos del juego",
-    "running": "Jugando"
+    "running": "Jugando",
+    "runtimeWillInstall": "Instala primero el runtime"
   },
   "status": {
     "gameFiles": "Archivos del juego",
@@ -37,7 +38,9 @@
     "runtime": "Runtime",
     "gpu": "GPU",
     "gpuValue": "{machine} · Vulkan sobre Metal",
-    "runtimeMissing": "Sin compilar todavía"
+    "runtimeMissing": "No hay ninguna compilación",
+    "runtimeNotInstalled": "Se instalará al pulsar Jugar",
+    "runtimeUpdate": "Actualización lista, se instalará al pulsar Jugar"
   },
   "news": {
     "title": "Novedades",
@@ -65,7 +68,21 @@
     "ok": "Gears of War 3 · Edición {versionName} · Media ID {mediaId}",
     "unsupportedVersion": "Esta edición de Gears of War 3 (Media ID {mediaId}) todavía no está soportada.",
     "wrongGame": "Esto no es Gears of War 3 (Title ID {titleId}).",
-    "chooseFolderFirst": "Elige primero la carpeta del juego"
+    "chooseFolderFirst": "Elige primero la carpeta del juego",
+    "runtimeTitle": "Runtime del juego",
+    "runtimeHelp": "El juego recompilado que arranca el launcher. Se instala a partir de la compilación de scripts/build.sh y se actualiza cuando hay una más nueva.",
+    "runtimeInstalled": "Instalado y al día.",
+    "runtimeUpdate": "Hay una compilación más nueva lista para instalar.",
+    "runtimeNotInstalled": "Todavía no está instalado.",
+    "runtimeNoBuild": "No se encuentra ninguna compilación del runtime. Compílalo con scripts/build.sh.",
+    "installRuntime": "Instalar",
+    "updateRuntime": "Actualizar",
+    "installingRuntime": "Instalando…",
+    "savesTitle": "Partidas guardadas",
+    "savesHelp": "Carpeta de tus puntos de control de campaña y tu perfil. Al cambiarla, tus partidas se mueven allí.",
+    "savesConflict": "{folder} ya contiene partidas guardadas. ¿Quieres reemplazarlas por tus partidas actuales?",
+    "savesReplace": "Reemplazar",
+    "savesCancel": "Cancelar"
   },
   "graphics": {
     "title": "Gráficos",
@@ -104,7 +121,12 @@
     "join": "Unirse con código"
   },
   "toast": {
-    "pick": "Maqueta: en Tauri se abrirá el selector de carpetas de macOS."
+    "pick": "Maqueta: en Tauri se abrirá el selector de carpetas de macOS.",
+    "savesMoved": "Partidas guardadas movidas.",
+    "savesNested": "Elige una carpeta que no esté dentro de la actual (ni al revés).",
+    "savesFailed": "No se pudieron mover las partidas: {detail}",
+    "runtimeInstalled": "Runtime del juego instalado.",
+    "saveFailed": "No se pudieron guardar los ajustes: {detail}"
   },
   "log": {
     "title": "Registro del juego",
@@ -114,9 +136,12 @@
     "exitOk": "El juego se cerró correctamente.",
     "exitError": "El juego se cerró con un error (código {code}).",
     "exitSignal": "El sistema detuvo el juego.",
-    "runtimeMissing": "El runtime todavía no está compilado. Instalarlo a partir de tu copia del juego será el siguiente paso del launcher.",
+    "runtimeMissing": "No se encuentra ninguna compilación del runtime. Compílalo con scripts/build.sh y vuelve a intentarlo.",
     "alreadyRunning": "El juego ya está en marcha.",
-    "startFailed": "No se pudo iniciar el juego: {detail}"
+    "startFailed": "No se pudo iniciar el juego: {detail}",
+    "installingRuntime": "Instalando el runtime del juego…",
+    "installFailed": "No se pudo instalar el runtime: {detail}",
+    "savesUnavailable": "La carpeta de partidas guardadas no está disponible: {detail}"
   },
   "update": {
     "available": "Actualizar a {version}",

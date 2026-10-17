@@ -2,9 +2,10 @@
  * Azura launcher: interface behaviour.
  *
  * Everything that needs the operating system goes through platform.js, which calls the Rust side
- * inside the app and simulates it in a plain browser. Starting the game is still simulated.
+ * inside the app and simulates it in a plain browser.
  *
- * Starting the game runs the runtime through platform.js and shows its output in the log panel.
+ * Starting the game installs the runtime first when it is missing or a newer build exists, then
+ * runs it through platform.js and shows its output in the log panel.
  *
  * Settings are loaded once on start-up, saved shortly after every change, and reloaded when the
  * window regains focus, because the in-game settings menu (F4) writes to the same azura.toml.
@@ -30,6 +31,7 @@ import {
   getAppVersion,
   getRuntimeStatus,
   getSystemInfo,
+  installRuntime,
   installUpdate,
   isNativeApp,
   launchGame,
@@ -37,7 +39,9 @@ import {
   onGameExit,
   onGameOutput,
   onUpdateProgress,
+  changeSavesFolder,
   pickGameFolder,
+  pickSavesFolder,
   saveSettings,
 } from "./platform.js";
 import { defaultGameLanguage, gameLanguageName } from "./gameLanguages.js";
@@ -64,8 +68,14 @@ const state = {
   // recomputed, so a folder that has the launcher's language gets it preselected.
   gameLanguage: null,
   gameLanguageChosen: false,
-  // Whether the runtime executable is installed (see platform.getRuntimeStatus).
-  runtimeInstalled: false,
+  // State of the runtime ({ installed, buildFound, updateAvailable }, see platform.getRuntimeStatus)
+  // and whether it is being installed.
+  runtime: { installed: false, buildFound: false, updateAvailable: false },
+  installingRuntime: false,
+  // Folder for the saves (shown in the Installation view; changed only by moving the saves) and
+  // the folder waiting for the player to confirm replacing the saves already in it.
+  savesFolder: "",
+  savesConflict: null,
   // "idle", "starting" (asked to start) or "running" (the process is up).
   game: "idle",
   // Message shown in the log header: a translation key, its values and "ok" / "error" / "".
@@ -93,6 +103,7 @@ const currentSettings = () => ({
   uiLanguage: getPreference(),
   gameLanguage: state.gameLanguage,
   gameLanguageChosen: state.gameLanguageChosen,
+  savesFolder: state.savesFolder,
 });
 
 /** Pending save timer; null when everything is saved. */
@@ -107,6 +118,7 @@ const persist = () => {
       await saveSettings(currentSettings());
     } catch (error) {
       console.error("Saving settings failed:", error);
+      toast(t("toast.saveFailed", { detail: String(error) }));
     }
   }, SAVE_DELAY_MS);
 };
@@ -155,6 +167,27 @@ const setupNavigation = () => {
 /** True once the chosen folder holds a valid game executable. */
 const isInstalled = () => state.gameCheck?.status === "ok";
 
+/** True when Play has to install the runtime (or a newer build of it) before starting. */
+const runtimeNeedsInstall = () => state.runtime.buildFound && (!state.runtime.installed || state.runtime.updateAvailable);
+
+/** Translation key describing the runtime, and its status tone ("ok", "warn" or "error"). */
+const runtimeState = () => {
+  const { installed, buildFound, updateAvailable } = state.runtime;
+  if (installed && !updateAvailable) return ["install.runtimeInstalled", "ok"];
+  if (installed) return ["install.runtimeUpdate", "warn"];
+  if (buildFound) return ["install.runtimeNotInstalled", "warn"];
+  return ["install.runtimeNoBuild", "error"];
+};
+
+/** Fetches the runtime state; a failure keeps the previous one. */
+const refreshRuntime = async () => {
+  try {
+    state.runtime = await getRuntimeStatus();
+  } catch (error) {
+    console.error("Checking the runtime failed:", error);
+  }
+};
+
 /**
  * Writes the state-dependent parts of the Play view. Without game files the main button becomes
  * "Install", so it never offers to start a game that cannot run.
@@ -168,10 +201,13 @@ const renderPlay = () => {
   status.querySelector(".status-detail").textContent = t(detail, state.gameCheck ?? {});
 
   const runtime = document.getElementById("status-runtime");
-  runtime.dataset.state = state.runtimeInstalled ? "ok" : "warn";
-  runtime.querySelector(".status-detail").textContent = state.runtimeInstalled
-    ? `ReXGlue ${RUNTIME_VERSION} · mac-arm64`
-    : t("status.runtimeMissing");
+  const [, tone] = runtimeState();
+  runtime.dataset.state = tone === "ok" ? "ok" : "warn";
+  let runtimeDetail = `ReXGlue ${RUNTIME_VERSION} · mac-arm64`;
+  if (!state.runtime.buildFound && !state.runtime.installed) runtimeDetail = t("status.runtimeMissing");
+  else if (!state.runtime.installed) runtimeDetail = t("status.runtimeNotInstalled");
+  else if (state.runtime.updateAvailable) runtimeDetail = t("status.runtimeUpdate");
+  runtime.querySelector(".status-detail").textContent = runtimeDetail;
 
   const player = document.getElementById("status-player");
   if (player) {
@@ -181,12 +217,12 @@ const renderPlay = () => {
 
   const button = document.getElementById("launch");
   button.classList.toggle("is-install", !isInstalled());
-  button.disabled = state.game !== "idle";
+  button.disabled = state.game !== "idle" || state.installingRuntime;
   let label = "play.install";
   let sub = "play.installSub";
   if (isInstalled()) {
     label = { idle: "play.launch", starting: "play.launching", running: "play.running" }[state.game];
-    sub = "play.mode";
+    sub = state.game === "idle" && runtimeNeedsInstall() ? "play.runtimeWillInstall" : "play.mode";
   }
   button.querySelector(".btn-launch-label").textContent = t(label);
   button.querySelector(".btn-launch-sub").textContent = t(sub);
@@ -241,6 +277,8 @@ const launchErrorMessage = (error) => {
       return ["log.runtimeMissing", {}];
     case "alreadyRunning":
       return ["log.alreadyRunning", {}];
+    case "savesUnavailable":
+      return ["log.savesUnavailable", { detail: error?.detail ?? "" }];
     default:
       return ["log.startFailed", { detail: error?.detail ?? String(error) }];
   }
@@ -259,6 +297,12 @@ const setupLaunch = () => {
     }
     document.getElementById("game-log-body").replaceChildren();
     state.game = "starting";
+    renderPlay();
+    if (runtimeNeedsInstall() && !(await runRuntimeInstall())) {
+      state.game = "idle";
+      renderPlay();
+      return;
+    }
     setLogState("log.starting");
     renderPlay();
     try {
@@ -287,6 +331,29 @@ const setupLaunch = () => {
   });
 };
 
+/**
+ * Installs or updates the runtime, reporting progress in the log panel. Resolves to whether it
+ * succeeded.
+ */
+const runRuntimeInstall = async () => {
+  state.installingRuntime = true;
+  setLogState("log.installingRuntime");
+  renderInstall();
+  renderPlay();
+  try {
+    state.runtime = await installRuntime();
+    toast(t("toast.runtimeInstalled"));
+    return true;
+  } catch (error) {
+    setLogState("log.installFailed", "error", { detail: String(error) });
+    return false;
+  } finally {
+    state.installingRuntime = false;
+    renderInstall();
+    renderPlay();
+  }
+};
+
 /** Writes the folder path and the result of its check into the Installation view. */
 const renderInstall = () => {
   const check = state.gameCheck;
@@ -298,6 +365,25 @@ const renderInstall = () => {
   const playerField = document.getElementById("player-name");
   if (playerField && playerField.value !== state.userName) {
     playerField.value = state.userName;
+  }
+
+  const [runtimeKey, runtimeTone] = runtimeState();
+  const runtimeLine = document.getElementById("runtime-check");
+  runtimeLine.dataset.state = runtimeTone;
+  runtimeLine.textContent = t(runtimeKey);
+  const runtimeButton = document.getElementById("install-runtime");
+  runtimeButton.hidden = !state.runtime.buildFound;
+  runtimeButton.disabled = state.installingRuntime || state.game !== "idle" || !runtimeNeedsInstall();
+  runtimeButton.textContent = t(
+    state.installingRuntime ? "install.installingRuntime" : state.runtime.installed ? "install.updateRuntime" : "install.installRuntime",
+  );
+
+  const savesField = document.getElementById("saves-path");
+  savesField.value = state.savesFolder;
+  savesField.title = state.savesFolder;
+  document.getElementById("saves-conflict").hidden = !state.savesConflict;
+  if (state.savesConflict) {
+    document.getElementById("saves-conflict-text").textContent = t("install.savesConflict", { folder: state.savesConflict });
   }
 
   const line = document.getElementById("game-check");
@@ -361,6 +447,32 @@ const setupInstall = () => {
     } finally {
       button.disabled = false;
     }
+  });
+
+  document.getElementById("install-runtime").addEventListener("click", () => runRuntimeInstall());
+
+  // Moving the saves: a folder that already holds saves needs a second, explicit confirmation.
+  const moveSaves = async (folder, replace) => {
+    try {
+      state.savesFolder = await changeSavesFolder(folder, replace);
+      state.savesConflict = null;
+      toast(t("toast.savesMoved"));
+    } catch (error) {
+      state.savesConflict = null;
+      if (error?.kind === "destinationHasSaves") state.savesConflict = folder;
+      else if (error?.kind === "nestedFolders") toast(t("toast.savesNested"));
+      else toast(t("toast.savesFailed", { detail: error?.detail ?? String(error) }));
+    }
+    renderInstall();
+  };
+  document.getElementById("pick-saves").addEventListener("click", async () => {
+    const folder = await pickSavesFolder();
+    if (folder && folder !== state.savesFolder) await moveSaves(folder, false);
+  });
+  document.getElementById("saves-replace").addEventListener("click", () => moveSaves(state.savesConflict, true));
+  document.getElementById("saves-cancel").addEventListener("click", () => {
+    state.savesConflict = null;
+    renderInstall();
   });
 
   const playerField = document.getElementById("player-name");
@@ -572,8 +684,9 @@ const renderAll = () => {
 const setupReloadOnFocus = () => {
   window.addEventListener("focus", async () => {
     try {
-      // The runtime may have been built or removed while the window was in the background.
-      state.runtimeInstalled = (await getRuntimeStatus()).installed;
+      // The runtime may have been rebuilt or removed while the window was in the background.
+      await refreshRuntime();
+      renderInstall();
       renderPlay();
       if (saveTimer) return;
       const settings = await loadSettings();
@@ -623,12 +736,9 @@ const detectSystem = async () => {
 
 // The machine is detected before the settings load, because "Auto" resolves from it.
 await detectSystem();
-try {
-  state.runtimeInstalled = (await getRuntimeStatus()).installed;
-} catch (error) {
-  console.error("Checking the runtime failed:", error);
-}
+await refreshRuntime();
 const settings = await loadSavedSettings();
+state.savesFolder = settings.savesFolder ?? "";
 applyStoredGraphics(settings);
 state.userName = (settings.userName ?? "").slice(0, 15);
 state.gameLanguage = settings.gameLanguage ?? null;

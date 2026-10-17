@@ -7,8 +7,9 @@
 //!   executable. It holds every setting that changes how the game runs, under the runtime's
 //!   setting (cvar) names. The in-game settings menu (F4) writes to it too, so the launcher only
 //!   ever rewrites its own keys and keeps everything else, comments included.
-//! - `launcher.toml`: what only the launcher uses (interface language, chosen preset, game
-//!   language until the runtime has a setting for it).
+//! - `launcher.toml`: what only the launcher uses (interface language, chosen preset, which game
+//!   language was picked, and the saves folder, which the runtime receives on the command line;
+//!   see `saves.rs`). The game language also reaches the runtime as `user_language`.
 //!
 //! Graphics values are passed through as found: a key missing from `azura.toml` is sent as
 //! `null`, and the interface fills it from the selected preset (the preset table lives in
@@ -38,6 +39,7 @@ const RUNTIME_CONFIG_HEADER: &str = "\
 // Runtime setting names the launcher writes. They are defined by the ReXGlue SDK.
 const KEY_GAME_DATA_ROOT: &str = "game_data_root";
 const KEY_USER_NAME: &str = "user_name";
+const KEY_USER_LANGUAGE: &str = "user_language";
 const KEY_GPU_PLUGIN: &str = "gpu_plugin";
 const KEY_FULLSCREEN: &str = "fullscreen";
 const KEY_SCALE_X: &str = "draw_resolution_scale_x";
@@ -47,6 +49,25 @@ const KEY_ANTIALIASING: &str = "swap_post_effect";
 const KEY_UPSCALING: &str = "present_effect";
 const KEY_TEXTURE_SOFT: &str = "texture_cache_memory_limit_soft";
 const KEY_TEXTURE_HARD: &str = "texture_cache_memory_limit_hard";
+
+/// Console language ID (the SDK's `XLanguage`) for an engine language code. Czech and Hungarian
+/// have none on the console, so they are not passed to the runtime.
+fn console_language(code: &str) -> Option<i64> {
+    Some(match code {
+        "INT" => 1,
+        "JPN" => 2,
+        "DEU" => 3,
+        "FRA" => 4,
+        "ESN" | "ESM" => 5,
+        "ITA" => 6,
+        "KOR" => 7,
+        "CHN" => 8,
+        "PTB" => 9,
+        "POL" => 11,
+        "RUS" => 12,
+        _ => return None,
+    })
+}
 
 /// GPU plugin the runtime needs to draw anything; written on every save.
 const GPU_PLUGIN: &str = "xenos";
@@ -82,6 +103,10 @@ pub struct Settings {
     pub game_language: Option<String>,
     /// Whether the user picked `game_language` (an automatic choice is recomputed per folder).
     pub game_language_chosen: bool,
+    /// Folder that holds the saves. Read-only here: `save` keeps the stored one, and only moving
+    /// the saves (`SettingsPaths::set_saves_folder`) changes it, so the interface may leave it out.
+    #[serde(default)]
+    pub saves_folder: String,
 }
 
 /// The part of [`Settings`] stored in `launcher.toml`. Every field has a default, so an old or
@@ -93,6 +118,7 @@ struct LauncherFile {
     ui_language: String,
     game_language: Option<String>,
     game_language_chosen: bool,
+    saves_folder: Option<String>,
 }
 
 impl Default for LauncherFile {
@@ -102,6 +128,7 @@ impl Default for LauncherFile {
             ui_language: "auto".into(),
             game_language: None,
             game_language_chosen: false,
+            saves_folder: None,
         }
     }
 }
@@ -157,6 +184,32 @@ impl SettingsPaths {
         }
     }
 
+    fn load_launcher_file(&self) -> Result<LauncherFile, String> {
+        let text = read_optional(&self.launcher_config).map_err(|e| e.to_string())?;
+        Ok(toml::from_str(&text).unwrap_or_default())
+    }
+
+    fn save_launcher_file(&self, file: &LauncherFile) -> Result<(), String> {
+        let text = toml::to_string(file).map_err(|e| e.to_string())?;
+        write_atomically(&self.launcher_config, &text).map_err(|e| e.to_string())
+    }
+
+    /// Folder for the saves: the one chosen, or the default.
+    pub fn saves_folder(&self) -> Result<PathBuf, String> {
+        Ok(self
+            .load_launcher_file()?
+            .saves_folder
+            .map(PathBuf::from)
+            .unwrap_or_else(crate::saves::default_folder))
+    }
+
+    /// Records `folder` as the saves folder (after the saves have been moved there).
+    pub fn set_saves_folder(&self, folder: &Path) -> Result<(), String> {
+        let mut file = self.load_launcher_file()?;
+        file.saves_folder = Some(folder.to_string_lossy().into_owned());
+        self.save_launcher_file(&file)
+    }
+
     /// Loads the settings; missing files and missing keys load as defaults.
     pub fn load(&self) -> Result<Settings, String> {
         let runtime_text = read_optional(&self.runtime_config).map_err(|e| e.to_string())?;
@@ -164,8 +217,11 @@ impl SettingsPaths {
             .parse()
             .map_err(|e| format!("{} is not valid TOML: {e}", self.runtime_config.display()))?;
 
-        let launcher_text = read_optional(&self.launcher_config).map_err(|e| e.to_string())?;
-        let launcher: LauncherFile = toml::from_str(&launcher_text).unwrap_or_default();
+        let launcher = self.load_launcher_file()?;
+        let saves_folder = launcher
+            .saves_folder
+            .clone()
+            .unwrap_or_else(|| crate::saves::default_folder().to_string_lossy().into_owned());
 
         Ok(Settings {
             game_folder: get_string(&runtime, KEY_GAME_DATA_ROOT),
@@ -185,6 +241,7 @@ impl SettingsPaths {
             ui_language: launcher.ui_language,
             game_language: launcher.game_language,
             game_language_chosen: launcher.game_language_chosen,
+            saves_folder,
         })
     }
 
@@ -213,6 +270,11 @@ impl SettingsPaths {
                 .filter(|s| !s.is_empty())
                 .map(value),
         );
+        set_or_remove(
+            &mut runtime,
+            KEY_USER_LANGUAGE,
+            settings.game_language.as_deref().and_then(console_language).map(value),
+        );
         set_or_remove(&mut runtime, KEY_SCALE_X, graphics.resolution_scale.map(value));
         set_or_remove(&mut runtime, KEY_SCALE_Y, graphics.resolution_scale.map(value));
         set_or_remove(&mut runtime, KEY_ANISOTROPIC, graphics.anisotropic.map(value));
@@ -233,9 +295,9 @@ impl SettingsPaths {
             ui_language: settings.ui_language.clone(),
             game_language: settings.game_language.clone(),
             game_language_chosen: settings.game_language_chosen,
+            saves_folder: self.load_launcher_file()?.saves_folder,
         };
-        let launcher_text = toml::to_string(&launcher).map_err(|e| e.to_string())?;
-        write_atomically(&self.launcher_config, &launcher_text).map_err(|e| e.to_string())
+        self.save_launcher_file(&launcher)
     }
 }
 
@@ -265,6 +327,7 @@ mod tests {
             ui_language: "es".into(),
             game_language: Some("ESN".into()),
             game_language_chosen: true,
+            saves_folder: crate::saves::default_folder().to_string_lossy().into_owned(),
         }
     }
 
@@ -278,6 +341,30 @@ mod tests {
         assert_eq!(settings.graphics, GraphicsValues::default());
         assert_eq!(settings.graphics_preset, "auto");
         assert_eq!(settings.ui_language, "auto");
+    }
+
+    #[test]
+    fn the_saves_folder_changes_only_through_set_saves_folder() {
+        let dir = temp_folder("saves-folder");
+        let paths = SettingsPaths::new(&dir);
+        assert_eq!(paths.saves_folder().unwrap(), crate::saves::default_folder());
+
+        paths.set_saves_folder(Path::new("/Volumes/Backup/Gears")).unwrap();
+        let mut settings = sample_settings();
+        settings.saves_folder = "/somewhere/else".into();
+        paths.save(&settings).unwrap();
+        assert_eq!(paths.saves_folder().unwrap(), PathBuf::from("/Volumes/Backup/Gears"));
+        assert_eq!(paths.load().unwrap().saves_folder, "/Volumes/Backup/Gears");
+    }
+
+    #[test]
+    fn settings_without_a_saves_folder_still_deserialize() {
+        // The interface may send its settings without the saves folder; they must still save.
+        let json = r#"{"gameFolder":"/Games/Gears of War 3","userName":"Marcus","fullscreen":false,
+            "graphics":{},"graphicsPreset":"auto","uiLanguage":"auto","gameLanguage":null,
+            "gameLanguageChosen":false}"#;
+        let settings: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.game_folder.as_deref(), Some("/Games/Gears of War 3"));
     }
 
     #[test]
@@ -298,6 +385,7 @@ mod tests {
             "user_name = \"Marcus\"",
             "fullscreen = true",
             "game_data_root = \"/Games/Gears of War 3\"",
+            "user_language = 5",
             "draw_resolution_scale_x = 2",
             "draw_resolution_scale_y = 2",
             "anisotropic_override = 5",

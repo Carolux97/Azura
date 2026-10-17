@@ -27,7 +27,8 @@
     "mode": "戰役",
     "install": "安裝",
     "installSub": "設定遊戲檔案",
-    "running": "遊玩中"
+    "running": "遊玩中",
+    "runtimeWillInstall": "會先安裝執行環境"
   },
   "status": {
     "gameFiles": "遊戲檔案",
@@ -36,8 +37,10 @@
     "runtime": "執行環境",
     "gpu": "GPU",
     "gpuValue": "{machine} · 透過 Metal 執行 Vulkan",
-    "runtimeMissing": "尚未編譯",
-    "player": "Player"
+    "runtimeMissing": "找不到組建",
+    "player": "Player",
+    "runtimeNotInstalled": "按下「遊玩」時安裝",
+    "runtimeUpdate": "更新已就緒，按下「遊玩」時安裝"
   },
   "news": {
     "title": "最新消息",
@@ -65,7 +68,21 @@
     "playerHelp": "Gamertag displayed in game lobbies, menus, and multiplayer.",
     "userName": "Gamertag / Username",
     "userNamePlaceholder": "User (up to 15 characters)",
-    "defaultUserName": "User"
+    "defaultUserName": "User",
+    "runtimeTitle": "遊戲執行環境",
+    "runtimeHelp": "啟動器所執行的重新編譯遊戲。它從 scripts/build.sh 的組建安裝，有更新的組建時會自動更新。",
+    "runtimeInstalled": "已安裝且為最新。",
+    "runtimeUpdate": "有更新的組建可供安裝。",
+    "runtimeNotInstalled": "尚未安裝。",
+    "runtimeNoBuild": "找不到執行環境組建。請使用 scripts/build.sh 進行組建。",
+    "installRuntime": "安裝",
+    "updateRuntime": "更新",
+    "installingRuntime": "安裝中…",
+    "savesTitle": "遊戲存檔",
+    "savesHelp": "戰役檢查點與個人檔案的資料夾。變更後，存檔會移到該處。",
+    "savesConflict": "{folder} 已有遊戲存檔。要以目前的存檔取代嗎？",
+    "savesReplace": "取代",
+    "savesCancel": "取消"
   },
   "graphics": {
     "title": "圖形",
@@ -104,7 +121,12 @@
     "join": "使用代碼加入"
   },
   "toast": {
-    "pick": "模型：在 Tauri 中，這裡會開啟 macOS 的資料夾選擇視窗。"
+    "pick": "模型：在 Tauri 中，這裡會開啟 macOS 的資料夾選擇視窗。",
+    "savesMoved": "已移動遊戲存檔。",
+    "savesNested": "請選擇不在目前資料夾內（反之亦然）的資料夾。",
+    "savesFailed": "移動遊戲存檔失敗：{detail}",
+    "runtimeInstalled": "已安裝遊戲執行環境。",
+    "saveFailed": "無法儲存設定：{detail}"
   },
   "log": {
     "title": "遊戲記錄",
@@ -114,9 +136,12 @@
     "exitOk": "遊戲已正常關閉。",
     "exitError": "遊戲因錯誤而關閉（代碼 {code}）。",
     "exitSignal": "系統已停止遊戲。",
-    "runtimeMissing": "執行環境尚未編譯。從你的遊戲副本進行安裝將是啟動器的下一步。",
+    "runtimeMissing": "找不到執行環境組建。請使用 scripts/build.sh 組建後再試一次。",
     "alreadyRunning": "遊戲已在執行中。",
-    "startFailed": "無法啟動遊戲：{detail}"
+    "startFailed": "無法啟動遊戲：{detail}",
+    "installingRuntime": "正在安裝遊戲執行環境…",
+    "installFailed": "執行環境安裝失敗：{detail}",
+    "savesUnavailable": "無法使用遊戲存檔資料夾：{detail}"
   },
   "update": {
     "available": "更新至 {version}",

@@ -27,7 +27,8 @@
     "mode": "キャンペーン",
     "install": "インストール",
     "installSub": "ゲームファイルを設定",
-    "running": "プレイ中"
+    "running": "プレイ中",
+    "runtimeWillInstall": "先にランタイムをインストールします"
   },
   "status": {
     "gameFiles": "ゲームファイル",
@@ -36,8 +37,10 @@
     "runtime": "ランタイム",
     "gpu": "GPU",
     "gpuValue": "{machine} · Metal 上の Vulkan",
-    "runtimeMissing": "未コンパイル",
-    "player": "Player"
+    "runtimeMissing": "ビルドが見つかりません",
+    "player": "Player",
+    "runtimeNotInstalled": "「プレイ」を押すとインストールされます",
+    "runtimeUpdate": "アップデートの準備完了。「プレイ」を押すとインストールされます"
   },
   "news": {
     "title": "お知らせ",
@@ -65,7 +68,21 @@
     "playerHelp": "Gamertag displayed in game lobbies, menus, and multiplayer.",
     "userName": "Gamertag / Username",
     "userNamePlaceholder": "User (up to 15 characters)",
-    "defaultUserName": "User"
+    "defaultUserName": "User",
+    "runtimeTitle": "ゲームランタイム",
+    "runtimeHelp": "ランチャーが起動する再コンパイル済みのゲームです。scripts/build.sh のビルドからインストールされ、新しいビルドがあれば更新されます。",
+    "runtimeInstalled": "インストール済み・最新です。",
+    "runtimeUpdate": "新しいビルドをインストールできます。",
+    "runtimeNotInstalled": "まだインストールされていません。",
+    "runtimeNoBuild": "ランタイムのビルドが見つかりません。scripts/build.sh でビルドしてください。",
+    "installRuntime": "インストール",
+    "updateRuntime": "アップデート",
+    "installingRuntime": "インストール中…",
+    "savesTitle": "セーブデータ",
+    "savesHelp": "キャンペーンのチェックポイントとプロフィールのフォルダです。変更するとセーブデータがそこへ移動します。",
+    "savesConflict": "{folder} には既にセーブデータがあります。現在のセーブデータで置き換えますか？",
+    "savesReplace": "置き換える",
+    "savesCancel": "キャンセル"
   },
   "graphics": {
     "title": "グラフィック",
@@ -104,7 +121,12 @@
     "join": "コードで参加"
   },
   "toast": {
-    "pick": "モックアップ：Tauri では macOS のフォルダー選択画面が開きます。"
+    "pick": "モックアップ：Tauri では macOS のフォルダー選択画面が開きます。",
+    "savesMoved": "セーブデータを移動しました。",
+    "savesNested": "現在のフォルダの中にない（またはその逆でない）フォルダを選んでください。",
+    "savesFailed": "セーブデータの移動に失敗しました: {detail}",
+    "runtimeInstalled": "ゲームランタイムをインストールしました。",
+    "saveFailed": "設定を保存できませんでした: {detail}"
   },
   "log": {
     "title": "ゲームログ",
@@ -114,9 +136,12 @@
     "exitOk": "ゲームは正常に終了しました。",
     "exitError": "ゲームはエラーで終了しました（コード {code}）。",
     "exitSignal": "システムがゲームを停止しました。",
-    "runtimeMissing": "ランタイムはまだコンパイルされていません。お持ちのゲームからのインストールがランチャーの次のステップです。",
+    "runtimeMissing": "ランタイムのビルドが見つかりません。scripts/build.sh でビルドしてから再度お試しください。",
     "alreadyRunning": "ゲームはすでに実行中です。",
-    "startFailed": "ゲームを起動できませんでした：{detail}"
+    "startFailed": "ゲームを起動できませんでした：{detail}",
+    "installingRuntime": "ゲームランタイムをインストールしています…",
+    "installFailed": "ランタイムのインストールに失敗しました: {detail}",
+    "savesUnavailable": "セーブデータのフォルダを利用できません: {detail}"
   },
   "update": {
     "available": "{version} に更新",
