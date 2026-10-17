@@ -7,8 +7,11 @@
 
 #pragma once
 
+#include <cstdlib>
+#include <filesystem>
 #include <memory>
 
+#include <rex/cvar.h>
 #include <rex/rex_app.h>
 #include <rex/system/flags.h>
 
@@ -29,11 +32,28 @@ class AzuraApp : public rex::ReXApp {
   static std::unique_ptr<rex::ui::WindowedApp> Create(rex::ui::WindowedAppContext& ctx) {
 #if defined(__APPLE__)
     AutoConfigureMacAppIcon();
+    // MoltenVK warns "Metal does not support disabling primitive restart" for nearly every
+    // pipeline the game creates (hundreds a second while shaders compile), which buries the log
+    // and floods the launcher's log panel. Only its errors are kept. Set before Vulkan starts;
+    // an MVK_CONFIG_LOG_LEVEL already in the environment wins.
+    setenv("MVK_CONFIG_LOG_LEVEL", "1", 0);
 #endif
     return std::unique_ptr<AzuraApp>(new AzuraApp(ctx, "azura", PPCImageConfig));
   }
 
  protected:
+  // Settings are layered: azura.default.toml (the project's defaults, installed beside the
+  // executable by every build), then azura.toml (the player's settings, written by the launcher
+  // and the F4 menu), then the command line. The SDK loads azura.toml right after this hook, so
+  // loading the defaults here lets any key missing from azura.toml keep the project's default
+  // (keyboard and mouse on, the key bindings, button prompts) instead of the SDK's.
+  void OnConfigurePaths(rex::PathConfig& paths) override {
+    const auto defaults = paths.config_path.parent_path() / (std::string(GetName()) + ".default.toml");
+    if (std::filesystem::exists(defaults)) {
+      rex::cvar::LoadConfig(defaults);
+    }
+  }
+
   // The runtime has mounted the game files and the game has not started: apply the menu changes
   // and route Quit Game to a normal window close (OnClosing shuts the title down).
   void OnPreLaunchModule() override {
@@ -58,15 +78,6 @@ class AzuraApp : public rex::ReXApp {
   // Stop the prompt thread before the runtime and its memory go away.
   void OnShutdown() override { button_prompts_.reset(); }
 
-  // Prioritize azura.toml in the current working directory (e.g. launcher's runtime folder)
-  // over the canonical symlink executable folder.
-  void OnConfigurePaths(rex::PathConfig& paths) override {
-    auto cwd_config = std::filesystem::current_path() / (std::string(GetName()) + ".toml");
-    if (std::filesystem::exists(cwd_config)) {
-      paths.config_path = cwd_config;
-      REXLOG_INFO("[Azura] Prioritizing config from working directory: {}", cwd_config.string());
-    }
-  }
 
   // ReXApp computes path_config BEFORE LoadConfig(config_path_) is executed, so
   // game_data_root defined in azura.toml is only available in REXCVAR_GET after LoadConfig.
