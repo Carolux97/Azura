@@ -212,10 +212,37 @@ index 4fcfd7b..b2a18ad 100644
  
  std::string to_string(char32_t c) {
 diff --git a/src/filesystem/virtual_file_system.cpp b/src/filesystem/virtual_file_system.cpp
-index a1b4dad..2ce6761 100644
+index a1b4dad..ebfd634 100644
 --- a/src/filesystem/virtual_file_system.cpp
 +++ b/src/filesystem/virtual_file_system.cpp
-@@ -215,18 +215,33 @@ X_STATUS VirtualFileSystem::OpenFile(Entry* root_entry, const std::string_view p
+@@ -52,8 +52,15 @@ bool VirtualFileSystem::UnregisterDevice(const std::string_view path) {
+ bool VirtualFileSystem::RegisterSymbolicLink(const std::string_view path,
+                                              const std::string_view target) {
+   auto global_lock = global_critical_region_.Acquire();
+-  symlinks_.insert({std::string(path), std::string(target)});
+-  REXFS_DEBUG("Registered symbolic link: {} => {}", path, target);
++  // Erase existing link if present (case-insensitive check) to ensure overwrite
++  auto it = std::find_if(symlinks_.begin(), symlinks_.end(), [&](const auto& s) {
++    return rex::string::utf8_equal_case(path, s.first);
++  });
++  if (it != symlinks_.end()) {
++    symlinks_.erase(it);
++  }
++  symlinks_[std::string(path)] = std::string(target);
++  REXLOG_INFO("[VFS] Registered symbolic link: '{}' => '{}'", path, target);
+ 
+   return true;
+ }
+@@ -66,7 +73,7 @@ bool VirtualFileSystem::UnregisterSymbolicLink(const std::string_view path) {
+   if (it == symlinks_.end()) {
+     return false;
+   }
+-  REXFS_DEBUG("Unregistered symbolic link: {} => {}", it->first, it->second);
++  REXLOG_INFO("[VFS] Unregistered symbolic link: '{}' => '{}'", it->first, it->second);
+ 
+   symlinks_.erase(it);
+   return true;
+@@ -215,18 +222,33 @@ X_STATUS VirtualFileSystem::OpenFile(Entry* root_entry, const std::string_view p
    Entry* parent_entry = nullptr;
    Entry* entry = nullptr;
  
@@ -456,6 +483,100 @@ index c7c440d..82a252c 100644
      out.push_back(info);
    }
  }
+diff --git a/src/kernel/xam/xam_content.cpp b/src/kernel/xam/xam_content.cpp
+index 1fb1e16..eeb9036 100644
+--- a/src/kernel/xam/xam_content.cpp
++++ b/src/kernel/xam/xam_content.cpp
+@@ -136,6 +136,9 @@ u32 xeXamContentCreate(u32 user_index, mapped_string root_name, mapped_void cont
+   }
+ 
+   auto content_manager = REX_KERNEL_STATE()->content_manager();
++  REXLOG_INFO("[XamContent] xeXamContentCreate root='{}' flags=0x{:X} (mode={}) file='{}' type={} overlapped={}",
++              root_name.value(), flags, flags & 0xF, content_data.file_name(), (uint32_t)content_data.content_type.get(),
++              (bool)overlapped_ptr);
+ 
+   if (overlapped_ptr && disposition_ptr) {
+     *disposition_ptr = 0;
+@@ -144,6 +147,9 @@ u32 xeXamContentCreate(u32 user_index, mapped_string root_name, mapped_void cont
+   auto run = [content_manager, xuid, root_name = root_name.value(), flags, content_data,
+               disposition_ptr,
+               license_mask_ptr](uint32_t& extended_error, uint32_t& length) -> X_RESULT {
++    // Close any previous mount under this root name first so reopening or reusing roots is clean.
++    content_manager->CloseContent(root_name);
++
+     X_RESULT result = X_ERROR_INVALID_PARAMETER;
+     kDispositionState disposition = kDispositionState::Unknown;
+     switch (flags & 0xF) {
+@@ -156,15 +162,9 @@ u32 xeXamContentCreate(u32 user_index, mapped_string root_name, mapped_void cont
+         }
+         break;
+       case 2:  // CREATE_ALWAYS
+-               // Overwrite existing, if any.
+-        // Close any existing mount under this root name first.
+-        // Games may reuse the same root without explicitly closing.
+-        content_manager->CloseContent(root_name);
+-        if (content_manager->ContentExists(xuid, content_data)) {
+-          content_manager->DeleteContent(xuid, content_data);
+-        }
+-        // Check filesystem state after deletion attempt to decide
+-        // whether to create fresh or open existing.
++               // In Xbox 360 container semantics, CREATE_ALWAYS on a directory container
++               // should open existing (preserving saves/checkpoints inside) or create fresh.
++               // Never wipe the user's saved game directory!
+         if (content_manager->ContentExists(xuid, content_data)) {
+           disposition = kDispositionState::Open;
+         } else {
+@@ -188,17 +188,10 @@ u32 xeXamContentCreate(u32 user_index, mapped_string root_name, mapped_void cont
+         }
+         break;
+       case 5:  // TRUNCATE_EXISTING
+-               // Fail if doesn't exist, if does exist delete and recreate.
+         if (!content_manager->ContentExists(xuid, content_data)) {
+           result = X_ERROR_PATH_NOT_FOUND;
+         } else {
+-          content_manager->CloseContent(root_name);
+-          content_manager->DeleteContent(xuid, content_data);
+-          if (content_manager->ContentExists(xuid, content_data)) {
+-            disposition = kDispositionState::Open;
+-          } else {
+-            disposition = kDispositionState::Create;
+-          }
++          disposition = kDispositionState::Open;
+         }
+         break;
+       default:
+@@ -216,6 +209,9 @@ u32 xeXamContentCreate(u32 user_index, mapped_string root_name, mapped_void cont
+       result = content_manager->OpenContent(root_name, xuid, content_data, content_license);
+     }
+ 
++    REXLOG_INFO("[XamContent] xeXamContentCreate run result=0x{:08X} disposition={} root='{}'",
++                result, (uint32_t)disposition, root_name);
++
+     if (license_mask_ptr && XSUCCEEDED(result)) {
+       *license_mask_ptr = content_license;
+     }
+@@ -233,7 +229,12 @@ u32 xeXamContentCreate(u32 user_index, mapped_string root_name, mapped_void cont
+     uint32_t extended_error, length;
+     return run(extended_error, length);
+   } else {
+-    REX_KERNEL_STATE()->CompleteOverlappedDeferredEx(run, overlapped_ptr.guest_address());
++    // Mount package and register VFS symlinks immediately so the device is present
++    // when guest threads attempt to open files inside it immediately following this call.
++    uint32_t extended_error, length;
++    X_RESULT result = run(extended_error, length);
++    REX_KERNEL_STATE()->CompleteOverlappedImmediateEx(overlapped_ptr.guest_address(), result,
++                                                     extended_error, length);
+     return X_ERROR_IO_PENDING;
+   }
+ }
+@@ -279,6 +280,7 @@ u32 XamContentFlush_entry(mapped_string root_name, mapped_void overlapped_ptr) {
+ }
+ 
+ u32 XamContentClose_entry(mapped_string root_name, mapped_void overlapped_ptr) {
++  REXLOG_INFO("[XamContent] XamContentClose root='{}' overlapped={}", root_name.value(), (bool)overlapped_ptr);
+   // Closes a previously opened root from XamContentCreate*.
+   auto result = REX_KERNEL_STATE()->content_manager()->CloseContent(root_name.value());
+ 
 diff --git a/src/kernel/xam/xam_info.cpp b/src/kernel/xam/xam_info.cpp
 index 1fda053..1944372 100644
 --- a/src/kernel/xam/xam_info.cpp
@@ -520,6 +641,37 @@ index bd43109..1fb0d77 100644
  }
  
  PPCFunc* ResolveIndirectFunction(uint32_t guest_address) {
+diff --git a/src/system/xam/content_manager.cpp b/src/system/xam/content_manager.cpp
+index bd6c797..ea849c8 100644
+--- a/src/system/xam/content_manager.cpp
++++ b/src/system/xam/content_manager.cpp
+@@ -50,12 +50,24 @@ ContentPackage::ContentPackage(KernelState* kernel_state, const std::string_view
+                                                                   /*allow_share_delete=*/true);
+   device->Initialize();
+   fs->RegisterDevice(std::move(device));
+-  fs->RegisterSymbolicLink(root_name_ + ":", device_path_);
++
++  std::string clean_root(root_name_);
++  while (!clean_root.empty() && clean_root.back() == ':') {
++    clean_root.pop_back();
++  }
++  fs->RegisterSymbolicLink(clean_root + ":", device_path_);
++  REXLOG_INFO("[Content] Mounted package root='{}:' -> device='{}' path='{}'",
++              clean_root, device_path_, package_path.string());
+ }
+ 
+ ContentPackage::~ContentPackage() {
++  std::string clean_root(root_name_);
++  while (!clean_root.empty() && clean_root.back() == ':') {
++    clean_root.pop_back();
++  }
++  REXLOG_INFO("[Content] Unmounting package root='{}:' -> device='{}'", clean_root, device_path_);
+   auto fs = kernel_state_->file_system();
+-  fs->UnregisterSymbolicLink(root_name_ + ":");
++  fs->UnregisterSymbolicLink(clean_root + ":");
+   fs->UnregisterDevice(device_path_);
+ }
+ 
 diff --git a/src/system/xam/user_profile.cpp b/src/system/xam/user_profile.cpp
 index a77f5e6..5b4bbb4 100644
 --- a/src/system/xam/user_profile.cpp
