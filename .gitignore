@@ -4,6 +4,8 @@ sdk/
 # Your own game files and everything derived from them. None of this may ever be committed.
 runtime/game/
 runtime/generated/
+# Link to the manifest of the build in runtime/game/, created by scripts/build.sh.
+runtime/azura_manifest.toml
 *.xex
 *.iso
 

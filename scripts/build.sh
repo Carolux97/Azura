@@ -3,10 +3,17 @@
 #
 # Steps:
 #   1. check that the SDK and the game executable are where the project expects them;
-#   2. identify the executable by its SHA-256 in versions.toml and pick the manifest of that build;
+#   2. identify the executable by its SHA-256 in versions.toml, pick the manifest of that build and
+#      point runtime/azura_manifest.toml at it (the generated CMake re-runs codegen with that fixed
+#      name whenever an input changes, so the name must always lead to the right manifest);
 #   3. run `rexglue codegen`, which translates default.xex into C++ under runtime/generated/
 #      (it skips the work when the inputs have not changed since the last run);
-#   4. configure and build with the CMake preset.
+#   4. apply our patches (patches/rexglue-0.10.0*.patch) to the ReXGlue SDK source tree, which the
+#      runtime builds from (input changes the prebuilt SDK cannot carry), and build the patched
+#      MoltenVK;
+#   5. configure and build with the CMake preset that compiles the SDK from source.
+#
+# The prebuilt SDK is still used for the `rexglue` code generator and the Vulkan headers.
 #
 # Usage: scripts/build.sh [debug|relwithdebinfo|release]   (default: relwithdebinfo)
 
@@ -19,6 +26,8 @@ readonly SDK_DIR="${ROOT}/sdk/rexglue-0.10.0-mac-arm64/mac-arm64"
 readonly REXGLUE="${SDK_DIR}/bin/rexglue"
 readonly XEX="${RUNTIME_DIR}/game/default.xex"
 readonly REGISTRY="${ROOT}/versions.toml"
+readonly SDK_SRC="${ROOT}/sdk/rexglue-0.10.0-src"
+readonly PRESET="mac-arm64-sdk-source"
 
 case "${CONFIG}" in
   debug|relwithdebinfo|release) ;;
@@ -30,6 +39,12 @@ esac
 
 if [[ ! -x "${REXGLUE}" ]]; then
   echo "ReXGlue SDK not found at ${SDK_DIR}. See the README for how to install it." >&2
+  exit 1
+fi
+
+if [[ ! -d "${SDK_SRC}/.git" && ! -f "${SDK_SRC}/.git" ]]; then
+  echo "ReXGlue SDK source not found at ${SDK_SRC}. Get it with:" >&2
+  echo "  git clone --recursive --branch v0.10.0 https://github.com/rexglue/rexglue-sdk.git ${SDK_SRC}" >&2
   exit 1
 fi
 
@@ -58,14 +73,57 @@ if [[ -z "${MANIFEST_REL}" ]]; then
   exit 1
 fi
 readonly MANIFEST="${ROOT}/${MANIFEST_REL}"
+if [[ "$(dirname "${MANIFEST}")" != "${RUNTIME_DIR}" ]]; then
+  echo "Manifest ${MANIFEST_REL} must be in runtime/, where its relative paths resolve." >&2
+  exit 1
+fi
+# Relative link, so the checkout can move without breaking it.
+ln -sfn "$(basename "${MANIFEST}")" "${RUNTIME_DIR}/azura_manifest.toml"
 
 echo "==> Recompiling default.xex with ${MANIFEST_REL}"
-(cd "${RUNTIME_DIR}" && "${REXGLUE}" codegen "${MANIFEST}")
+(cd "${RUNTIME_DIR}" && "${REXGLUE}" codegen azura_manifest.toml)
 
+# Applies a patch to a git checkout unless it is already applied. Stops when it applies neither
+# way, which means the checkout has other changes in the same lines.
+apply_patch() {
+  local dir="$1" patch="$2"
+  if git -C "${dir}" apply --reverse --check "${patch}" 2>/dev/null; then
+    return
+  fi
+  if ! git -C "${dir}" apply --check "${patch}" 2>/dev/null; then
+    echo "Cannot apply $(basename "${patch}") to ${dir}: the tree has conflicting changes." >&2
+    exit 1
+  fi
+  echo "==> Applying $(basename "${patch}")"
+  git -C "${dir}" apply "${patch}"
+}
+
+apply_patch "${SDK_SRC}" "${ROOT}/patches/rexglue-0.10.0.patch"
+apply_patch "${SDK_SRC}/thirdparty/utfcpp" "${ROOT}/patches/rexglue-0.10.0-utfcpp.patch"
+
+# Ensure the patched MoltenVK dylib is built and installed in the SDK before configuring/building.
+"${ROOT}/scripts/build_moltenvk.sh"
+
+# CMake reads CMakePresets.json from the current folder, so both steps run from runtime/.
 echo "==> Configuring"
-cmake --preset mac-arm64 -S "${RUNTIME_DIR}"
+(cd "${RUNTIME_DIR}" && cmake --preset "${PRESET}")
 
 echo "==> Building (${CONFIG})"
-cmake --build --preset "mac-arm64-${CONFIG}" --target azura
+(cd "${RUNTIME_DIR}" && cmake --build --preset "${PRESET}-${CONFIG}")
 
-echo "==> Done. Output: ${RUNTIME_DIR}/out/build/mac-arm64/"
+# Verify the staged MoltenVK is not the unpatched SDK original.
+CONFIG_DIR="RelWithDebInfo"
+case "${CONFIG}" in
+  debug) CONFIG_DIR="Debug" ;;
+  release) CONFIG_DIR="Release" ;;
+esac
+readonly STAGED_MVK="${RUNTIME_DIR}/out/build/${PRESET}/${CONFIG_DIR}/vulkan/lib/libMoltenVK.dylib"
+readonly UNPATCHED_MVK_HASH="$(awk '/^\[moltenvk\]/{s=1;next} /^\[/{s=0} s && /^unpatched_sha256[[:space:]]*=/{v=$0;sub(/^[^"]*"/,"",v);sub(/".*$/,"",v);print v;exit}' "${REGISTRY}")"
+readonly STAGED_MVK_HASH="$(shasum -a 256 "${STAGED_MVK}" | cut -d ' ' -f 1)"
+if [[ "${STAGED_MVK_HASH}" == "${UNPATCHED_MVK_HASH}" ]]; then
+  echo "Error: staged ${STAGED_MVK} matches unpatched MoltenVK (${UNPATCHED_MVK_HASH})!" >&2
+  exit 1
+fi
+
+echo "==> Done. Output: ${RUNTIME_DIR}/out/build/${PRESET}/${CONFIG_DIR}/"
+
