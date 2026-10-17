@@ -187,6 +187,54 @@ index 4fcfd7b..b2a18ad 100644
  }
  
  std::string to_string(char32_t c) {
+diff --git a/src/filesystem/virtual_file_system.cpp b/src/filesystem/virtual_file_system.cpp
+index a1b4dad..2ce6761 100644
+--- a/src/filesystem/virtual_file_system.cpp
++++ b/src/filesystem/virtual_file_system.cpp
+@@ -215,18 +215,33 @@ X_STATUS VirtualFileSystem::OpenFile(Entry* root_entry, const std::string_view p
+   Entry* parent_entry = nullptr;
+   Entry* entry = nullptr;
+ 
+-  auto base_path = rex::string::utf8_find_base_guest_path(path);
+-  if (!base_path.empty()) {
+-    parent_entry = !root_entry ? ResolvePath(base_path) : root_entry->ResolvePath(base_path);
+-    if (!parent_entry) {
+-      *out_action = FileAction::kDoesNotExist;
+-      return X_STATUS_NO_SUCH_FILE;
++  if (!root_entry) {
++    entry = ResolvePath(path);
++    if (entry) {
++      parent_entry = entry->parent();
++      if (entry->device() && entry->device()->mount_path() == "\\Device\\AzuraOverlay") {
++        REXFS_INFO("VFS redirected '{}' to overlay: '{}'", path, entry->absolute_path());
++      }
+     }
++  }
+ 
+-    auto file_name = rex::string::utf8_find_name_from_guest_path(path);
+-    entry = parent_entry->GetChild(file_name);
+-  } else {
+-    entry = !root_entry ? ResolvePath(path) : root_entry->GetChild(path);
++  if (!entry) {
++    auto base_path = rex::string::utf8_find_base_guest_path(path);
++    if (!base_path.empty()) {
++      parent_entry = !root_entry ? ResolvePath(base_path) : root_entry->ResolvePath(base_path);
++      if (!parent_entry) {
++        *out_action = FileAction::kDoesNotExist;
++        return X_STATUS_NO_SUCH_FILE;
++      }
++
++      auto file_name = rex::string::utf8_find_name_from_guest_path(path);
++      entry = parent_entry->GetChild(file_name);
++    } else {
++      entry = !root_entry ? ResolvePath(path) : root_entry->GetChild(path);
++      if (entry) {
++        parent_entry = entry->parent();
++      }
++    }
+   }
+ 
+   if (entry) {
 diff --git a/src/input/input_system.cpp b/src/input/input_system.cpp
 index 813bb1c..203f75d 100644
 --- a/src/input/input_system.cpp
@@ -420,6 +468,22 @@ index 1fda053..1944372 100644
  }
  
  u32 XamGetCurrentTitleId_entry() {
+diff --git a/src/system/function_dispatcher.cpp b/src/system/function_dispatcher.cpp
+index bd43109..1fb0d77 100644
+--- a/src/system/function_dispatcher.cpp
++++ b/src/system/function_dispatcher.cpp
+@@ -35,8 +35,9 @@ FunctionDispatcher* GetBoundFunctionDispatcher() {
+ }  // namespace
+ 
+ static void InvalidFunctionTrap(PPCContext& ctx, uint8_t* /*base*/) {
+-  REX_FATAL("Call to invalid or unregistered function at guest address 0x{:08X}",
+-            ctx.last_indirect_target);
++  // LR holds the return address of the indirect call, which identifies the guest code that made it.
++  REX_FATAL("Call to invalid or unregistered function at guest address 0x{:08X} (called from 0x{:08X})",
++            ctx.last_indirect_target, static_cast<uint32_t>(ctx.lr));
+ }
+ 
+ PPCFunc* ResolveIndirectFunction(uint32_t guest_address) {
 diff --git a/src/ui/keybinds.cpp b/src/ui/keybinds.cpp
 index 9822f3b..1799668 100644
 --- a/src/ui/keybinds.cpp
