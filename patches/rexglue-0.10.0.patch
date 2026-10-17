@@ -114,6 +114,30 @@ index 1cb3faa..d48df09 100644
  
    // Ordered by ordinal. Ordinals are never recycled, so unplugging pad one
    // does not renumber pad two.
+diff --git a/include/rex/system/flags.h b/include/rex/system/flags.h
+index 902bffd..5b66285 100644
+--- a/include/rex/system/flags.h
++++ b/include/rex/system/flags.h
+@@ -18,6 +18,7 @@ REXCVAR_DECLARE(bool, log_high_frequency_kernel_calls);
+ REXCVAR_DECLARE(uint32_t, license_mask);
+ REXCVAR_DECLARE(uint32_t, user_country);
+ REXCVAR_DECLARE(uint32_t, user_language);
++REXCVAR_DECLARE(std::string, user_name);
+ REXCVAR_DECLARE(bool, kernel_pix);
+ REXCVAR_DECLARE(std::string, cl);
+ REXCVAR_DECLARE(bool, kernel_debug_monitor);
+diff --git a/include/rex/system/xam/user_profile.h b/include/rex/system/xam/user_profile.h
+index ec37017..06888b9 100644
+--- a/include/rex/system/xam/user_profile.h
++++ b/include/rex/system/xam/user_profile.h
+@@ -221,6 +221,7 @@ class UserProfile {
+   uint32_t signin_state() const { return 1; }
+   uint32_t type() const { return 1 | 2; /* local | online profile? */ }
+ 
++  void set_name(std::string name) { name_ = std::move(name); }
+   void set_kernel_state(KernelState* ks) { kernel_state_ = ks; }
+ 
+   void AddSetting(std::unique_ptr<Setting> setting);
 diff --git a/include/rex/ui/overlay/settings_overlay.h b/include/rex/ui/overlay/settings_overlay.h
 index 5b80eac..38236e6 100644
 --- a/include/rex/ui/overlay/settings_overlay.h
@@ -468,6 +492,18 @@ index 1fda053..1944372 100644
  }
  
  u32 XamGetCurrentTitleId_entry() {
+diff --git a/src/kernel/xam/xam_user.cpp b/src/kernel/xam/xam_user.cpp
+index 8778066..94468e6 100644
+--- a/src/kernel/xam/xam_user.cpp
++++ b/src/kernel/xam/xam_user.cpp
+@@ -29,6 +29,7 @@
+ #include <rex/system/xtypes.h>
+ 
+ REXCVAR_DEFINE_UINT32(user_language, 1, "Kernel", "User's language ID");
++REXCVAR_DEFINE_STRING(user_name, "User", "Kernel", "User name / gamertag");
+ 
+ namespace rex {
+ namespace kernel {
 diff --git a/src/system/function_dispatcher.cpp b/src/system/function_dispatcher.cpp
 index bd43109..1fb0d77 100644
 --- a/src/system/function_dispatcher.cpp
@@ -484,6 +520,35 @@ index bd43109..1fb0d77 100644
  }
  
  PPCFunc* ResolveIndirectFunction(uint32_t guest_address) {
+diff --git a/src/system/xam/user_profile.cpp b/src/system/xam/user_profile.cpp
+index a77f5e6..5b4bbb4 100644
+--- a/src/system/xam/user_profile.cpp
++++ b/src/system/xam/user_profile.cpp
+@@ -14,6 +14,7 @@
+ #include <fmt/format.h>
+ 
+ #include <rex/logging.h>
++#include <rex/system/flags.h>
+ #include <rex/system/kernel_state.h>
+ #include <rex/system/xam/user_profile.h>
+ 
+@@ -26,7 +27,15 @@ UserProfile::UserProfile() {
+   // if non-zero, it prevents the user from playing the game.
+   // "You do not have permissions to perform this operation."
+   xuid_ = 0xB13EBABEBABEBABE;
+-  name_ = "User";
++  std::string config_name = REXCVAR_GET(user_name);
++  if (config_name.empty()) {
++    config_name = "User";
++  }
++  if (config_name.size() > 15) {
++    config_name.resize(15);
++  }
++  name_ = config_name;
++  REXLOG_INFO("[Kernel] UserProfile initialized with gamertag: '{}'", name_);
+ 
+   // https://cs.rin.ru/forum/viewtopic.php?f=38&t=60668&hilit=gfwl+live&start=195
+   // https://github.com/arkem/py360/blob/master/py360/constants.py
 diff --git a/src/ui/keybinds.cpp b/src/ui/keybinds.cpp
 index 9822f3b..1799668 100644
 --- a/src/ui/keybinds.cpp
@@ -583,3 +648,15 @@ index b94fe9e..4aaf669 100644
      }
    });
    rex::ui::RegisterBind("bind_achievements", "F7", "Toggle achievements overlay", [this] {
+diff --git a/thirdparty/moltenvk b/thirdparty/moltenvk
+--- a/thirdparty/moltenvk
++++ b/thirdparty/moltenvk
+@@ -1 +1 @@
+-Subproject commit db445ff2042d9ce348c439ad8451112f354b8d2a
++Subproject commit db445ff2042d9ce348c439ad8451112f354b8d2a-dirty
+diff --git a/thirdparty/utfcpp b/thirdparty/utfcpp
+--- a/thirdparty/utfcpp
++++ b/thirdparty/utfcpp
+@@ -1 +1 @@
+-Subproject commit 63d64de49fd6b829f7c8694df5ab2ee625cb7134
++Subproject commit 63d64de49fd6b829f7c8694df5ab2ee625cb7134-dirty

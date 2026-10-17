@@ -36,7 +36,8 @@
     "runtime": "런타임",
     "gpu": "GPU",
     "gpuValue": "{machine} · Metal 기반 Vulkan",
-    "runtimeMissing": "아직 컴파일되지 않음"
+    "runtimeMissing": "아직 컴파일되지 않음",
+    "player": "Player"
   },
   "news": {
     "title": "새 소식",
@@ -59,7 +60,12 @@
     "ok": "Gears of War 3 · {versionName} 에디션 · Media ID {mediaId}",
     "unsupportedVersion": "이 Gears of War 3 에디션(Media ID {mediaId})은 아직 지원되지 않습니다.",
     "wrongGame": "Gears of War 3가 아닙니다(Title ID {titleId}).",
-    "chooseFolderFirst": "먼저 게임 폴더를 선택하세요"
+    "chooseFolderFirst": "먼저 게임 폴더를 선택하세요",
+    "playerTitle": "Player Profile",
+    "playerHelp": "Gamertag displayed in game lobbies, menus, and multiplayer.",
+    "userName": "Gamertag / Username",
+    "userNamePlaceholder": "User (up to 15 characters)",
+    "defaultUserName": "User"
   },
   "graphics": {
     "title": "그래픽",

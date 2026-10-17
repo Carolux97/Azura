@@ -19,6 +19,10 @@ fullscreen = false
 # 7 = Korean, 8 = Traditional Chinese, 9 = Portuguese, 10 = Simplified Chinese, 11 = Polish, 12 = Russian.
 user_language = 5
 
+# ---------- Profile ----------
+# Player gamertag shown in lobbies, menus and multiplayer (15 characters max).
+user_name = "User"
+
 # ---------- Input ----------
 # Enable keyboard/mouse controller emulation. If a physical gamepad is plugged in,
 # it works concurrently.

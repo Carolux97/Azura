@@ -36,7 +36,8 @@
     "runtime": "Runtime",
     "gpu": "GPU",
     "gpuValue": "{machine} · Vulkan Metalon",
-    "runtimeMissing": "Még nincs lefordítva"
+    "runtimeMissing": "Még nincs lefordítva",
+    "player": "Player"
   },
   "news": {
     "title": "Hírek",
@@ -59,7 +60,12 @@
     "ok": "Gears of War 3 · {versionName} kiadás · Media ID {mediaId}",
     "unsupportedVersion": "A Gears of War 3 ezen kiadása (Media ID {mediaId}) még nem támogatott.",
     "wrongGame": "Ez nem a Gears of War 3 (Title ID {titleId}).",
-    "chooseFolderFirst": "Előbb válaszd ki a játék mappáját"
+    "chooseFolderFirst": "Előbb válaszd ki a játék mappáját",
+    "playerTitle": "Player Profile",
+    "playerHelp": "Gamertag displayed in game lobbies, menus, and multiplayer.",
+    "userName": "Gamertag / Username",
+    "userNamePlaceholder": "User (up to 15 characters)",
+    "defaultUserName": "User"
   },
   "graphics": {
     "title": "Grafika",

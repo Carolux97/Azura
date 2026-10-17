@@ -36,7 +36,8 @@
     "runtime": "執行環境",
     "gpu": "GPU",
     "gpuValue": "{machine} · 透過 Metal 執行 Vulkan",
-    "runtimeMissing": "尚未編譯"
+    "runtimeMissing": "尚未編譯",
+    "player": "Player"
   },
   "news": {
     "title": "最新消息",
@@ -59,7 +60,12 @@
     "ok": "Gears of War 3 · {versionName} 版 · Media ID {mediaId}",
     "unsupportedVersion": "尚未支援此 Gears of War 3 版本（Media ID {mediaId}）。",
     "wrongGame": "這不是 Gears of War 3（Title ID {titleId}）。",
-    "chooseFolderFirst": "請先選擇遊戲資料夾"
+    "chooseFolderFirst": "請先選擇遊戲資料夾",
+    "playerTitle": "Player Profile",
+    "playerHelp": "Gamertag displayed in game lobbies, menus, and multiplayer.",
+    "userName": "Gamertag / Username",
+    "userNamePlaceholder": "User (up to 15 characters)",
+    "defaultUserName": "User"
   },
   "graphics": {
     "title": "圖形",

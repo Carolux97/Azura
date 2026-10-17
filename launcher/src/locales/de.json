@@ -36,7 +36,8 @@
     "runtime": "Runtime",
     "gpu": "GPU",
     "gpuValue": "{machine} · Vulkan über Metal",
-    "runtimeMissing": "Noch nicht kompiliert"
+    "runtimeMissing": "Noch nicht kompiliert",
+    "player": "Spieler"
   },
   "news": {
     "title": "Neuigkeiten",
@@ -59,7 +60,12 @@
     "ok": "Gears of War 3 · Edition {versionName} · Media ID {mediaId}",
     "unsupportedVersion": "Diese Edition von Gears of War 3 (Media ID {mediaId}) wird noch nicht unterstützt.",
     "wrongGame": "Das ist nicht Gears of War 3 (Title ID {titleId}).",
-    "chooseFolderFirst": "Wähle zuerst den Spielordner"
+    "chooseFolderFirst": "Wähle zuerst den Spielordner",
+    "playerTitle": "Spielerprofil",
+    "playerHelp": "Im Spiel in Lobbys, Menüs und Mehrspieler angezeigter Gamertag.",
+    "userName": "Gamertag / Benutzername",
+    "userNamePlaceholder": "User (bis zu 15 Zeichen)",
+    "defaultUserName": "User"
   },
   "graphics": {
     "title": "Grafik",
