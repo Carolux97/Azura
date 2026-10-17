@@ -111,5 +111,10 @@
     "runtimeMissing": "Runtime nie jest jeszcze skompilowany. Zainstalowanie go z twojej kopii gry będzie następnym krokiem launchera.",
     "alreadyRunning": "Gra jest już uruchomiona.",
     "startFailed": "Nie udało się uruchomić gry: {detail}"
+  },
+  "update": {
+    "available": "Aktualizuj do {version}",
+    "downloading": "Pobieranie aktualizacji… {percent}",
+    "failed": "Nie udało się zainstalować aktualizacji. Spróbuj ponownie później."
   }
 }

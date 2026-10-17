@@ -117,3 +117,21 @@ export const onGameExit = (listener) => {
   if (isNativeApp) return tauri.event.listen("game-exit", (event) => listener(event.payload));
   simulated.exit.add(listener);
 };
+
+/**
+ * Asks for a newer launcher version: resolves to { version, currentVersion, notes } or null. It
+ * rejects when the update endpoint cannot be reached (offline, or a repository that is still
+ * private); a browser has no updater and always resolves to null.
+ */
+export const checkForUpdate = async () => (isNativeApp ? tauri.core.invoke("check_for_update") : null);
+
+/** Installs the newer version and restarts the launcher; rejects with a message on failure. */
+export const installUpdate = async () => tauri.core.invoke("install_update");
+
+/** Calls `listener` with { downloaded, total } while an update downloads. */
+export const onUpdateProgress = (listener) => {
+  if (isNativeApp) return tauri.event.listen("update-progress", (event) => listener(event.payload));
+};
+
+/** Version of the running launcher, from its bundle; `fallback` in a browser. */
+export const getAppVersion = async (fallback) => (isNativeApp ? tauri.app.getVersion() : fallback);

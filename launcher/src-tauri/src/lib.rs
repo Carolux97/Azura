@@ -9,6 +9,7 @@ mod test_support;
 mod runtime;
 mod settings;
 mod system;
+mod updater;
 mod versions;
 
 use std::path::Path;
@@ -19,6 +20,7 @@ use settings::{Settings, SettingsPaths};
 use system::SystemInfo;
 use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
+use updater::UpdateInfo;
 use versions::Registry;
 
 /// Opens the native folder picker and checks the chosen folder.
@@ -87,11 +89,24 @@ async fn get_system_info() -> SystemInfo {
     system::system_info()
 }
 
+/// Checks whether a newer launcher version is published (see `updater.rs`).
+#[tauri::command]
+async fn check_for_update(app: tauri::AppHandle) -> Result<Option<UpdateInfo>, String> {
+    updater::check(&app).await
+}
+
+/// Installs the newer launcher version and restarts into it.
+#[tauri::command]
+async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+    updater::install(app).await
+}
+
 /// Builds and runs the Tauri application. Blocks until the last window closes.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(GameProcess::default())
         .invoke_handler(tauri::generate_handler![
             pick_game_folder,
@@ -100,7 +115,9 @@ pub fn run() {
             save_settings,
             get_system_info,
             get_runtime_status,
-            launch_game
+            launch_game,
+            check_for_update,
+            install_update
         ])
         .setup(|app| {
             // Debug builds log to the terminal that started them; release builds stay quiet.

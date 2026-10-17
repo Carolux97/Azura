@@ -76,6 +76,35 @@ The interface also opens in any browser, which is handy for quick design changes
 python3 -m http.server 5180 --directory src
 ```
 
+## Updates and releases
+
+Installed launchers update themselves with Tauri's updater. On start-up the launcher reads
+`latest.json` from the fixed GitHub release `launcher-updates` of this repository; when it lists a
+newer version, the sidebar offers it, and installing downloads the archive, checks its signature
+against `plugins.updater.pubkey` in `src-tauri/tauri.conf.json` and restarts into it. While the
+repository is private that file cannot be downloaded, so the check fails quietly and nothing is
+offered.
+
+Releases are signed with a key that never enters the repository. Create it once (it asks for a
+password; keep both the file and the password in your password manager: losing either means
+installed launchers can never be updated again):
+
+```bash
+npx tauri signer generate -w ~/.tauri/azura-launcher.key
+```
+
+and put the contents of `~/.tauri/azura-launcher.key.pub` in `plugins.updater.pubkey`. Until then
+the release script fails (the build checks that key); debug builds and the app itself are fine.
+
+To release: bump the version in `src-tauri/tauri.conf.json`, `package.json` and
+`src-tauri/Cargo.toml`, then run
+
+```bash
+TAURI_SIGNING_PRIVATE_KEY=~/.tauri/azura-launcher.key TAURI_SIGNING_PRIVATE_KEY_PASSWORD=... ../scripts/release-launcher.sh --publish
+```
+
+Without `--publish` it only builds into `dist/<version>/`.
+
 ## Current state
 
 The folder picker, the game folder check, the settings files, the hardware detection behind the

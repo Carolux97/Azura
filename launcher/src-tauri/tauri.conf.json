@@ -41,5 +41,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ0NDAwQTU2QzEyNzMzRkQKUldUOU15ZkJWZ3BBMUcvRlpVTTRsTG9kWklhajgzRWxPcEZ2VGdGamg0TjRYbEVoeGNYMmo2ZnkK",
+      "endpoints": [
+        "https://github.com/Carolux97/Gears3-Azura/releases/download/launcher-updates/latest.json"
+      ]
+    }
   }
 }

@@ -111,5 +111,10 @@
     "runtimeMissing": "A runtime még nincs lefordítva. A saját játékpéldányodból való telepítése lesz a launcher következő lépése.",
     "alreadyRunning": "A játék már fut.",
     "startFailed": "A játékot nem sikerült elindítani: {detail}"
+  },
+  "update": {
+    "available": "Frissítés erre: {version}",
+    "downloading": "Frissítés letöltése… {percent}",
+    "failed": "A frissítést nem sikerült telepíteni. Próbáld újra később."
   }
 }

@@ -111,5 +111,10 @@
     "runtimeMissing": "執行環境尚未編譯。從你的遊戲副本進行安裝將是啟動器的下一步。",
     "alreadyRunning": "遊戲已在執行中。",
     "startFailed": "無法啟動遊戲：{detail}"
+  },
+  "update": {
+    "available": "更新至 {version}",
+    "downloading": "正在下載更新… {percent}",
+    "failed": "無法安裝更新，請稍後再試。"
   }
 }

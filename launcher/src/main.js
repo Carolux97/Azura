@@ -25,21 +25,26 @@ import {
   SETTING_KEYS,
 } from "./graphics.js";
 import {
+  checkForUpdate,
   checkGameFolder,
+  getAppVersion,
   getRuntimeStatus,
   getSystemInfo,
+  installUpdate,
   isNativeApp,
   launchGame,
   loadSettings,
   onGameExit,
   onGameOutput,
+  onUpdateProgress,
   pickGameFolder,
   saveSettings,
 } from "./platform.js";
 import { defaultGameLanguage, gameLanguageName } from "./gameLanguages.js";
 
 const SPORE_COUNT = 26;
-const LAUNCHER_VERSION = "0.1.0";
+/** Launcher version shown in a browser; the app reads its real version (see detectSystem). */
+const BROWSER_LAUNCHER_VERSION = "0.1.0";
 const RUNTIME_VERSION = "0.10.0";
 
 /** Delay before saving after a change, so a burst of edits writes the files once. */
@@ -65,8 +70,13 @@ const state = {
   game: "idle",
   // Message shown in the log header: a translation key, its values and "ok" / "error" / "".
   logState: null,
+  // Newer launcher version ({ version, ... }) when one is published, and the install progress:
+  // null (not installing) or a percentage, -1 while the size is unknown.
+  update: null,
+  updateProgress: null,
   // This Mac ({ chip, memoryGb, arch }), or null when unknown (always in a browser).
   system: null,
+  launcherVersion: BROWSER_LAUNCHER_VERSION,
   fullscreen: false,
   preset: "auto",
   graphics: presetValues("auto"),
@@ -184,7 +194,7 @@ const renderPlay = () => {
     new Date(`${date.dateTime}T12:00:00`),
   );
 
-  document.getElementById("launcher-version").textContent = t("rail.launcherVersion", { version: LAUNCHER_VERSION });
+  document.getElementById("launcher-version").textContent = t("rail.launcherVersion", { version: state.launcherVersion });
   document.getElementById("runtime-version").textContent = t("rail.runtimeVersion", { version: RUNTIME_VERSION });
 };
 
@@ -472,12 +482,61 @@ const renderLanguageOptions = () => {
   });
 };
 
+/** Writes the update button: hidden, "Update to X", or the download progress. */
+const renderUpdate = () => {
+  const button = document.getElementById("update-button");
+  button.hidden = !state.update;
+  if (!state.update) return;
+  button.disabled = state.updateProgress !== null;
+  if (state.updateProgress === null) {
+    button.textContent = t("update.available", { version: state.update.version });
+  } else if (state.updateProgress < 0) {
+    button.textContent = t("update.downloading", { percent: "…" });
+  } else {
+    const percent = new Intl.NumberFormat(getLocale(), { style: "percent" }).format(state.updateProgress / 100);
+    button.textContent = t("update.downloading", { percent });
+  }
+};
+
+/**
+ * Checks for a newer launcher in the background and offers it in the sidebar. An unreachable
+ * endpoint is expected while the repository is private (and when offline), so it is only logged.
+ * Installing restarts the launcher; only a failure comes back here.
+ */
+const setupUpdates = () => {
+  onUpdateProgress(({ downloaded, total }) => {
+    state.updateProgress = total ? Math.min(100, Math.round((downloaded / total) * 100)) : -1;
+    renderUpdate();
+  });
+
+  document.getElementById("update-button").addEventListener("click", async () => {
+    state.updateProgress = -1;
+    renderUpdate();
+    try {
+      await installUpdate();
+    } catch (error) {
+      console.error("Installing the update failed:", error);
+      state.updateProgress = null;
+      renderUpdate();
+      toast(t("update.failed"));
+    }
+  });
+
+  checkForUpdate()
+    .then((update) => {
+      state.update = update;
+      renderUpdate();
+    })
+    .catch((error) => console.info("No update information:", error));
+};
+
 const renderAll = () => {
   renderPlay();
   renderInstall();
   renderGameLanguages();
   renderGraphics();
   renderLanguageOptions();
+  renderUpdate();
 };
 
 /**
@@ -520,10 +579,14 @@ setupGraphics();
 setupLanguages();
 setupReloadOnFocus();
 
-/** Detects this Mac; a failure leaves it unknown, and "Auto" then resolves to medium. */
+/**
+ * Detects this Mac and the launcher version; a failure leaves them unknown, and "Auto" then
+ * resolves to medium.
+ */
 const detectSystem = async () => {
   try {
     state.system = await getSystemInfo();
+    state.launcherVersion = await getAppVersion(BROWSER_LAUNCHER_VERSION);
   } catch (error) {
     console.error("Detecting the system failed:", error);
   }
@@ -545,3 +608,4 @@ onLocaleChange(renderAll);
 await initI18n(settings.uiLanguage);
 document.getElementById("ui-language").value = getPreference();
 await restoreGameFolder(settings.gameFolder);
+setupUpdates();

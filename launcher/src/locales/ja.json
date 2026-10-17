@@ -111,5 +111,10 @@
     "runtimeMissing": "ランタイムはまだコンパイルされていません。お持ちのゲームからのインストールがランチャーの次のステップです。",
     "alreadyRunning": "ゲームはすでに実行中です。",
     "startFailed": "ゲームを起動できませんでした：{detail}"
+  },
+  "update": {
+    "available": "{version} に更新",
+    "downloading": "アップデートをダウンロード中… {percent}",
+    "failed": "アップデートをインストールできませんでした。後でもう一度お試しください。"
   }
 }
