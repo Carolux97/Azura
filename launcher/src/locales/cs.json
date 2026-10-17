@@ -36,7 +36,8 @@
     "runtime": "Runtime",
     "gpu": "GPU",
     "gpuValue": "{machine} · Vulkan přes Metal",
-    "runtimeMissing": "Zatím nezkompilováno"
+    "runtimeMissing": "Zatím nezkompilováno",
+    "player": "Player"
   },
   "news": {
     "title": "Novinky",
@@ -59,7 +60,12 @@
     "ok": "Gears of War 3 · Edice {versionName} · Media ID {mediaId}",
     "unsupportedVersion": "Tato edice Gears of War 3 (Media ID {mediaId}) zatím není podporována.",
     "wrongGame": "Toto není Gears of War 3 (Title ID {titleId}).",
-    "chooseFolderFirst": "Nejprve vyberte složku hry"
+    "chooseFolderFirst": "Nejprve vyberte složku hry",
+    "playerTitle": "Player Profile",
+    "playerHelp": "Gamertag displayed in game lobbies, menus, and multiplayer.",
+    "userName": "Gamertag / Username",
+    "userNamePlaceholder": "User (up to 15 characters)",
+    "defaultUserName": "User"
   },
   "graphics": {
     "title": "Grafika",

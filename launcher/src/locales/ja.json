@@ -36,7 +36,8 @@
     "runtime": "ランタイム",
     "gpu": "GPU",
     "gpuValue": "{machine} · Metal 上の Vulkan",
-    "runtimeMissing": "未コンパイル"
+    "runtimeMissing": "未コンパイル",
+    "player": "Player"
   },
   "news": {
     "title": "お知らせ",
@@ -59,7 +60,12 @@
     "ok": "Gears of War 3 · {versionName} 版 · Media ID {mediaId}",
     "unsupportedVersion": "この Gears of War 3 のエディション（Media ID {mediaId}）はまだサポートされていません。",
     "wrongGame": "これは Gears of War 3 ではありません（Title ID {titleId}）。",
-    "chooseFolderFirst": "先にゲームフォルダーを選択してください"
+    "chooseFolderFirst": "先にゲームフォルダーを選択してください",
+    "playerTitle": "Player Profile",
+    "playerHelp": "Gamertag displayed in game lobbies, menus, and multiplayer.",
+    "userName": "Gamertag / Username",
+    "userNamePlaceholder": "User (up to 15 characters)",
+    "defaultUserName": "User"
   },
   "graphics": {
     "title": "グラフィック",

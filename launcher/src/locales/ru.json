@@ -36,7 +36,8 @@
     "runtime": "Runtime",
     "gpu": "GPU",
     "gpuValue": "{machine} · Vulkan поверх Metal",
-    "runtimeMissing": "Ещё не скомпилирован"
+    "runtimeMissing": "Ещё не скомпилирован",
+    "player": "Player"
   },
   "news": {
     "title": "Новости",
@@ -59,7 +60,12 @@
     "ok": "Gears of War 3 · Издание {versionName} · Media ID {mediaId}",
     "unsupportedVersion": "Это издание Gears of War 3 (Media ID {mediaId}) пока не поддерживается.",
     "wrongGame": "Это не Gears of War 3 (Title ID {titleId}).",
-    "chooseFolderFirst": "Сначала выберите папку игры"
+    "chooseFolderFirst": "Сначала выберите папку игры",
+    "playerTitle": "Player Profile",
+    "playerHelp": "Gamertag displayed in game lobbies, menus, and multiplayer.",
+    "userName": "Gamertag / Username",
+    "userNamePlaceholder": "User (up to 15 characters)",
+    "defaultUserName": "User"
   },
   "graphics": {
     "title": "Графика",

@@ -89,6 +89,10 @@
               <span class="dot"></span>
               <div><strong data-i18n="status.gameFiles"></strong><span class="status-detail"></span></div>
             </div>
+            <div class="status" id="status-player" data-state="ok">
+              <span class="dot"></span>
+              <div><strong data-i18n="status.player"></strong><span class="status-detail" id="status-player-detail"></span></div>
+            </div>
             <div class="status" id="status-runtime" data-state="warn">
               <span class="dot"></span>
               <div><strong data-i18n="status.runtime"></strong><span class="status-detail"></span></div>
@@ -146,6 +150,16 @@
                 <input class="path" type="text" readonly value="~/Library/Application Support/azura/lang">
                 <button class="btn" data-i18n="install.change"></button>
               </div>
+            </label>
+          </div>
+        </div>
+        <div class="panel">
+          <h2 class="panel-title" data-i18n="install.playerTitle"></h2>
+          <p class="help" data-i18n="install.playerHelp"></p>
+          <div class="field-grid">
+            <label class="field">
+              <span data-i18n="install.userName"></span>
+              <input class="path" id="player-name" type="text" maxlength="15" data-i18n-attr="placeholder:install.userNamePlaceholder">
             </label>
           </div>
         </div>

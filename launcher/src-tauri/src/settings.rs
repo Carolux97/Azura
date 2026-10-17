@@ -37,6 +37,7 @@ const RUNTIME_CONFIG_HEADER: &str = "\
 
 // Runtime setting names the launcher writes. They are defined by the ReXGlue SDK.
 const KEY_GAME_DATA_ROOT: &str = "game_data_root";
+const KEY_USER_NAME: &str = "user_name";
 const KEY_GPU_PLUGIN: &str = "gpu_plugin";
 const KEY_FULLSCREEN: &str = "fullscreen";
 const KEY_SCALE_X: &str = "draw_resolution_scale_x";
@@ -67,6 +68,8 @@ pub struct GraphicsValues {
 pub struct Settings {
     /// Game folder (`game_data_root` in `azura.toml`).
     pub game_folder: Option<String>,
+    /// Gamertag / player name (`user_name` in `azura.toml`).
+    pub user_name: Option<String>,
     /// Display mode (`fullscreen` in `azura.toml`).
     pub fullscreen: bool,
     /// Graphics values found in `azura.toml`.
@@ -166,6 +169,7 @@ impl SettingsPaths {
 
         Ok(Settings {
             game_folder: get_string(&runtime, KEY_GAME_DATA_ROOT),
+            user_name: get_string(&runtime, KEY_USER_NAME),
             fullscreen: runtime
                 .get(KEY_FULLSCREEN)
                 .and_then(Item::as_bool)
@@ -199,6 +203,16 @@ impl SettingsPaths {
         runtime[KEY_GPU_PLUGIN] = value(GPU_PLUGIN);
         runtime[KEY_FULLSCREEN] = value(settings.fullscreen);
         set_or_remove(&mut runtime, KEY_GAME_DATA_ROOT, settings.game_folder.as_deref().map(value));
+        set_or_remove(
+            &mut runtime,
+            KEY_USER_NAME,
+            settings
+                .user_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(value),
+        );
         set_or_remove(&mut runtime, KEY_SCALE_X, graphics.resolution_scale.map(value));
         set_or_remove(&mut runtime, KEY_SCALE_Y, graphics.resolution_scale.map(value));
         set_or_remove(&mut runtime, KEY_ANISOTROPIC, graphics.anisotropic.map(value));
@@ -238,6 +252,7 @@ mod tests {
     fn sample_settings() -> Settings {
         Settings {
             game_folder: Some("/Games/Gears of War 3".into()),
+            user_name: Some("Marcus".into()),
             fullscreen: true,
             graphics: GraphicsValues {
                 resolution_scale: Some(2),
@@ -258,6 +273,7 @@ mod tests {
         let dir = temp_folder("defaults");
         let settings = SettingsPaths::new(&dir).load().unwrap();
         assert_eq!(settings.game_folder, None);
+        assert_eq!(settings.user_name, None);
         assert!(!settings.fullscreen);
         assert_eq!(settings.graphics, GraphicsValues::default());
         assert_eq!(settings.graphics_preset, "auto");
@@ -279,6 +295,7 @@ mod tests {
         let text = fs::read_to_string(dir.join(RUNTIME_CONFIG)).unwrap();
         for line in [
             "gpu_plugin = \"xenos\"",
+            "user_name = \"Marcus\"",
             "fullscreen = true",
             "game_data_root = \"/Games/Gears of War 3\"",
             "draw_resolution_scale_x = 2",
@@ -323,9 +340,11 @@ mod tests {
         paths.save(&sample_settings()).unwrap();
         let mut cleared = sample_settings();
         cleared.game_folder = None;
+        cleared.user_name = None;
         paths.save(&cleared).unwrap();
         let text = fs::read_to_string(dir.join(RUNTIME_CONFIG)).unwrap();
         assert!(!text.contains("game_data_root"));
+        assert!(!text.contains("user_name"));
     }
 
     #[test]

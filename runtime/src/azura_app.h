@@ -10,6 +10,7 @@
 #include <memory>
 
 #include <rex/rex_app.h>
+#include <rex/system/flags.h>
 
 #include "menu/menu_patches.h"
 #include "prompts/button_prompts.h"
@@ -36,6 +37,7 @@ class AzuraApp : public rex::ReXApp {
   // The runtime has mounted the game files and the game has not started: apply the menu changes
   // and route Quit Game to a normal window close (OnClosing shuts the title down).
   void OnPreLaunchModule() override {
+    REXLOG_INFO("[Azura] Active gamertag / user_name: '{}'", REXCVAR_GET(user_name));
     azura::menu::InstallMenuPatches(runtime());
     azura::script::SetQuitHandler([this] {
       app_context().CallInUIThread([this] {

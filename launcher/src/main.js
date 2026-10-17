@@ -77,6 +77,7 @@ const state = {
   // This Mac ({ chip, memoryGb, arch }), or null when unknown (always in a browser).
   system: null,
   launcherVersion: BROWSER_LAUNCHER_VERSION,
+  userName: "",
   fullscreen: false,
   preset: "auto",
   graphics: presetValues("auto"),
@@ -85,6 +86,7 @@ const state = {
 /** Builds the settings object platform.saveSettings stores (see src-tauri/src/settings.rs). */
 const currentSettings = () => ({
   gameFolder: state.savedGameFolder,
+  userName: state.userName || null,
   fullscreen: state.fullscreen,
   graphics: { ...state.graphics },
   graphicsPreset: state.preset,
@@ -170,6 +172,12 @@ const renderPlay = () => {
   runtime.querySelector(".status-detail").textContent = state.runtimeInstalled
     ? `ReXGlue ${RUNTIME_VERSION} · mac-arm64`
     : t("status.runtimeMissing");
+
+  const player = document.getElementById("status-player");
+  if (player) {
+    const name = state.userName.trim() || t("install.defaultUserName");
+    document.getElementById("status-player-detail").textContent = name;
+  }
 
   const button = document.getElementById("launch");
   button.classList.toggle("is-install", !isInstalled());
@@ -287,6 +295,11 @@ const renderInstall = () => {
   // Long paths are cut off in the field; the tooltip shows them whole.
   pathField.title = pathField.value;
 
+  const playerField = document.getElementById("player-name");
+  if (playerField && playerField.value !== state.userName) {
+    playerField.value = state.userName;
+  }
+
   const line = document.getElementById("game-check");
   line.hidden = !check;
   if (!check) return;
@@ -349,6 +362,18 @@ const setupInstall = () => {
       button.disabled = false;
     }
   });
+
+  const playerField = document.getElementById("player-name");
+  if (playerField) {
+    playerField.addEventListener("input", () => {
+      if (playerField.value.length > 15) {
+        playerField.value = playerField.value.slice(0, 15);
+      }
+      state.userName = playerField.value;
+      renderPlay();
+      persist();
+    });
+  }
 };
 
 /** Checks the folder saved in an earlier session, if any, and shows the result. */
@@ -554,7 +579,10 @@ const setupReloadOnFocus = () => {
       const settings = await loadSettings();
       if (!settings) return;
       applyStoredGraphics(settings);
+      state.userName = (settings.userName ?? "").slice(0, 15);
       renderGraphics();
+      renderInstall();
+      renderPlay();
     } catch (error) {
       console.error("Reloading settings failed:", error);
     }
@@ -602,6 +630,7 @@ try {
 }
 const settings = await loadSavedSettings();
 applyStoredGraphics(settings);
+state.userName = (settings.userName ?? "").slice(0, 15);
 state.gameLanguage = settings.gameLanguage ?? null;
 state.gameLanguageChosen = Boolean(settings.gameLanguageChosen);
 onLocaleChange(renderAll);
