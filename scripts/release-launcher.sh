@@ -24,6 +24,15 @@
 
 set -euo pipefail
 
+# Ensure cargo and rustup toolchains are in PATH
+if ! command -v cargo &>/dev/null; then
+  if [[ -d "${HOME}/.rustup/toolchains/stable-aarch64-apple-darwin/bin" ]]; then
+    export PATH="${HOME}/.rustup/toolchains/stable-aarch64-apple-darwin/bin:${PATH}"
+  elif [[ -d "${HOME}/.cargo/bin" ]]; then
+    export PATH="${HOME}/.cargo/bin:${PATH}"
+  fi
+fi
+
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly LAUNCHER="${ROOT}/launcher"
 readonly REPO="Carolux97/Gears3-Azura"
@@ -84,6 +93,17 @@ readonly GENERATED_DMG="$(find "${BUNDLE}/dmg" -name "*.dmg" -print -quit)"
 cp "${GENERATED_DMG}" "${DIST}/${DMG}"
 # Keep target clean: only one canonical Azura Launcher.dmg in target/release/bundle/dmg/
 mv -f "${GENERATED_DMG}" "${BUNDLE}/dmg/Azura Launcher.dmg"
+
+# Clean ghost registrations in macOS LaunchServices caused by temporary DMG mount volumes
+if [[ -x "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister" ]]; then
+  readonly LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+  "${LSREGISTER}" -dump 2>/dev/null \
+    | awk '/path:[[:space:]]*\/Volumes\/.*Azura Launcher\.app/ {sub(/^[[:space:]]*path:[[:space:]]*/, ""); sub(/[[:space:]]*\(0x[0-9a-f]+\)$/, ""); print}' \
+    | while IFS= read -r p; do
+        "${LSREGISTER}" -u "${p}" 2>/dev/null || true
+      done
+  "${LSREGISTER}" -gc 2>/dev/null || true
+fi
 
 readonly BASE_URL="${AZURA_UPDATE_BASE_URL:-https://github.com/${REPO}/releases/download/${TAG}}"
 echo "==> Writing latest.json"
