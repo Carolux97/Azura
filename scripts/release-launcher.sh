@@ -64,6 +64,10 @@ if ${PUBLISH} && gh release view "${TAG}" --repo "${REPO}" >/dev/null 2>&1; then
   exit 1
 fi
 
+echo "==> Cleaning old bundles in target"
+rm -rf "${LAUNCHER}/src-tauri/target/debug/bundle"
+rm -rf "${LAUNCHER}/src-tauri/target/release/bundle/dmg"
+
 echo "==> Building Azura Launcher ${VERSION}"
 (cd "${LAUNCHER}" && npx tauri build --bundles app,dmg --config '{"bundle":{"createUpdaterArtifacts":true}}')
 
@@ -75,7 +79,11 @@ rm -rf "${DIST}"
 mkdir -p "${DIST}"
 cp "${BUNDLE}/macos/Azura Launcher.app.tar.gz" "${DIST}/${ARCHIVE}"
 cp "${BUNDLE}/macos/Azura Launcher.app.tar.gz.sig" "${DIST}/${ARCHIVE}.sig"
-cp "${BUNDLE}/dmg/Azura Launcher_${VERSION}_aarch64.dmg" "${DIST}/${DMG}"
+
+readonly GENERATED_DMG="$(find "${BUNDLE}/dmg" -name "*.dmg" -print -quit)"
+cp "${GENERATED_DMG}" "${DIST}/${DMG}"
+# Keep target clean: only one canonical Azura Launcher.dmg in target/release/bundle/dmg/
+mv -f "${GENERATED_DMG}" "${BUNDLE}/dmg/Azura Launcher.dmg"
 
 readonly BASE_URL="${AZURA_UPDATE_BASE_URL:-https://github.com/${REPO}/releases/download/${TAG}}"
 echo "==> Writing latest.json"
