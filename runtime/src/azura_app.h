@@ -11,7 +11,9 @@
 
 #include <rex/rex_app.h>
 
+#include "menu/menu_patches.h"
 #include "prompts/button_prompts.h"
+#include "script_hooks.h"
 
 #if defined(__APPLE__)
 #include "platform_mac.h"
@@ -31,6 +33,19 @@ class AzuraApp : public rex::ReXApp {
   }
 
  protected:
+  // The runtime has mounted the game files and the game has not started: apply the menu changes
+  // and route Quit Game to a normal window close (OnClosing shuts the title down).
+  void OnPreLaunchModule() override {
+    azura::menu::InstallMenuPatches(runtime());
+    azura::script::SetQuitHandler([this] {
+      app_context().CallInUIThread([this] {
+        if (window()) {
+          window()->RequestClose();
+        }
+      });
+    });
+  }
+
   // The game module is running and guest memory holds its textures: start keeping the button
   // prompts in step with the player's device and bindings.
   void OnPostLaunchModule(rex::system::XThread* thread) override {

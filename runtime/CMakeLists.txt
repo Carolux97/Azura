@@ -22,6 +22,9 @@ include(${AZURA_REXGLUE_CMAKE})
 set(AZURA_SOURCES
     src/main.cpp
     src/hooks.cpp
+    src/script_hooks.cpp
+    src/menu/coalesced.cpp
+    src/menu/menu_patches.cpp
     src/prompts/button_prompts.cpp
     src/prompts/glyph_art.cpp
     src/prompts/glyph_raster.cpp
