@@ -169,6 +169,35 @@ index 5b80eac..38236e6 100644
    char search_buf_[128] = {};
    std::string selected_category_;
    std::string capturing_bind_name_;
+diff --git a/src/codegen/builders/system.cpp b/src/codegen/builders/system.cpp
+index b2d70f5..0a682ea 100644
+--- a/src/codegen/builders/system.cpp
++++ b/src/codegen/builders/system.cpp
+@@ -30,15 +30,20 @@ bool build_attn(BuilderContext& ctx) {
+   return true;
+ }
+ 
++// The guest relies on these barriers to publish data between threads (lock-free queues, the
++// render command ring). x86 orders memory strongly enough that they cost nothing, but ARM64
++// reorders loads and stores, so they must become real fences there. The fences also keep the
++// compiler from moving guest memory accesses across them.
+ bool build_sync(BuilderContext& ctx) {
+-  // Memory barrier, x86 has strong ordering so this is a no-op
+-  (void)ctx;
++  // Full barrier: orders every earlier access before every later one.
++  ctx.println("\tstd::atomic_thread_fence(std::memory_order_seq_cst);");
+   return true;
+ }
+ 
+ bool build_lwsync(BuilderContext& ctx) {
+-  // Lightweight memory barrier, x86 has strong ordering so this is a no-op
+-  (void)ctx;
++  // Lightweight barrier: orders load-load, load-store and store-store (not store-load), which an
++  // acquire-release fence covers.
++  ctx.println("\tstd::atomic_thread_fence(std::memory_order_acq_rel);");
+   return true;
+ }
+ 
 diff --git a/src/core/utf8.cpp b/src/core/utf8.cpp
 index 4fcfd7b..b2a18ad 100644
 --- a/src/core/utf8.cpp
@@ -212,15 +241,14 @@ index 4fcfd7b..b2a18ad 100644
  
  std::string to_string(char32_t c) {
 diff --git a/src/filesystem/virtual_file_system.cpp b/src/filesystem/virtual_file_system.cpp
-index a1b4dad..ebfd634 100644
+index a1b4dad..98cc5ec 100644
 --- a/src/filesystem/virtual_file_system.cpp
 +++ b/src/filesystem/virtual_file_system.cpp
-@@ -52,8 +52,15 @@ bool VirtualFileSystem::UnregisterDevice(const std::string_view path) {
+@@ -52,7 +52,14 @@ bool VirtualFileSystem::UnregisterDevice(const std::string_view path) {
  bool VirtualFileSystem::RegisterSymbolicLink(const std::string_view path,
                                               const std::string_view target) {
    auto global_lock = global_critical_region_.Acquire();
 -  symlinks_.insert({std::string(path), std::string(target)});
--  REXFS_DEBUG("Registered symbolic link: {} => {}", path, target);
 +  // Erase existing link if present (case-insensitive check) to ensure overwrite
 +  auto it = std::find_if(symlinks_.begin(), symlinks_.end(), [&](const auto& s) {
 +    return rex::string::utf8_equal_case(path, s.first);
@@ -229,20 +257,10 @@ index a1b4dad..ebfd634 100644
 +    symlinks_.erase(it);
 +  }
 +  symlinks_[std::string(path)] = std::string(target);
-+  REXLOG_INFO("[VFS] Registered symbolic link: '{}' => '{}'", path, target);
+   REXFS_DEBUG("Registered symbolic link: {} => {}", path, target);
  
    return true;
- }
-@@ -66,7 +73,7 @@ bool VirtualFileSystem::UnregisterSymbolicLink(const std::string_view path) {
-   if (it == symlinks_.end()) {
-     return false;
-   }
--  REXFS_DEBUG("Unregistered symbolic link: {} => {}", it->first, it->second);
-+  REXLOG_INFO("[VFS] Unregistered symbolic link: '{}' => '{}'", it->first, it->second);
- 
-   symlinks_.erase(it);
-   return true;
-@@ -215,18 +222,33 @@ X_STATUS VirtualFileSystem::OpenFile(Entry* root_entry, const std::string_view p
+@@ -215,18 +222,30 @@ X_STATUS VirtualFileSystem::OpenFile(Entry* root_entry, const std::string_view p
    Entry* parent_entry = nullptr;
    Entry* entry = nullptr;
  
@@ -256,9 +274,6 @@ index a1b4dad..ebfd634 100644
 +    entry = ResolvePath(path);
 +    if (entry) {
 +      parent_entry = entry->parent();
-+      if (entry->device() && entry->device()->mount_path() == "\\Device\\AzuraOverlay") {
-+        REXFS_INFO("VFS redirected '{}' to overlay: '{}'", path, entry->absolute_path());
-+      }
      }
 +  }
  
@@ -484,14 +499,14 @@ index c7c440d..82a252c 100644
    }
  }
 diff --git a/src/kernel/xam/xam_content.cpp b/src/kernel/xam/xam_content.cpp
-index 1fb1e16..eeb9036 100644
+index 1fb1e16..72a50cb 100644
 --- a/src/kernel/xam/xam_content.cpp
 +++ b/src/kernel/xam/xam_content.cpp
 @@ -136,6 +136,9 @@ u32 xeXamContentCreate(u32 user_index, mapped_string root_name, mapped_void cont
    }
  
    auto content_manager = REX_KERNEL_STATE()->content_manager();
-+  REXLOG_INFO("[XamContent] xeXamContentCreate root='{}' flags=0x{:X} (mode={}) file='{}' type={} overlapped={}",
++  REXLOG_DEBUG("[XamContent] xeXamContentCreate root='{}' flags=0x{:X} (mode={}) file='{}' type={} overlapped={}",
 +              root_name.value(), flags, flags & 0xF, content_data.file_name(), (uint32_t)content_data.content_type.get(),
 +              (bool)overlapped_ptr);
  
@@ -549,7 +564,7 @@ index 1fb1e16..eeb9036 100644
        result = content_manager->OpenContent(root_name, xuid, content_data, content_license);
      }
  
-+    REXLOG_INFO("[XamContent] xeXamContentCreate run result=0x{:08X} disposition={} root='{}'",
++    REXLOG_DEBUG("[XamContent] xeXamContentCreate run result=0x{:08X} disposition={} root='{}'",
 +                result, (uint32_t)disposition, root_name);
 +
      if (license_mask_ptr && XSUCCEEDED(result)) {
@@ -573,7 +588,7 @@ index 1fb1e16..eeb9036 100644
  }
  
  u32 XamContentClose_entry(mapped_string root_name, mapped_void overlapped_ptr) {
-+  REXLOG_INFO("[XamContent] XamContentClose root='{}' overlapped={}", root_name.value(), (bool)overlapped_ptr);
++  REXLOG_DEBUG("[XamContent] XamContentClose root='{}' overlapped={}", root_name.value(), (bool)overlapped_ptr);
    // Closes a previously opened root from XamContentCreate*.
    auto result = REX_KERNEL_STATE()->content_manager()->CloseContent(root_name.value());
  
@@ -642,7 +657,7 @@ index bd43109..1fb0d77 100644
  
  PPCFunc* ResolveIndirectFunction(uint32_t guest_address) {
 diff --git a/src/system/xam/content_manager.cpp b/src/system/xam/content_manager.cpp
-index bd6c797..ea849c8 100644
+index bd6c797..5f44a44 100644
 --- a/src/system/xam/content_manager.cpp
 +++ b/src/system/xam/content_manager.cpp
 @@ -50,12 +50,24 @@ ContentPackage::ContentPackage(KernelState* kernel_state, const std::string_view
@@ -656,7 +671,7 @@ index bd6c797..ea849c8 100644
 +    clean_root.pop_back();
 +  }
 +  fs->RegisterSymbolicLink(clean_root + ":", device_path_);
-+  REXLOG_INFO("[Content] Mounted package root='{}:' -> device='{}' path='{}'",
++  REXLOG_DEBUG("[Content] Mounted package root='{}:' -> device='{}' path='{}'",
 +              clean_root, device_path_, package_path.string());
  }
  
@@ -665,7 +680,7 @@ index bd6c797..ea849c8 100644
 +  while (!clean_root.empty() && clean_root.back() == ':') {
 +    clean_root.pop_back();
 +  }
-+  REXLOG_INFO("[Content] Unmounting package root='{}:' -> device='{}'", clean_root, device_path_);
++  REXLOG_DEBUG("[Content] Unmounting package root='{}:' -> device='{}'", clean_root, device_path_);
    auto fs = kernel_state_->file_system();
 -  fs->UnregisterSymbolicLink(root_name_ + ":");
 +  fs->UnregisterSymbolicLink(clean_root + ":");
@@ -673,7 +688,7 @@ index bd6c797..ea849c8 100644
  }
  
 diff --git a/src/system/xam/user_profile.cpp b/src/system/xam/user_profile.cpp
-index a77f5e6..5b4bbb4 100644
+index a77f5e6..7ed67aa 100644
 --- a/src/system/xam/user_profile.cpp
 +++ b/src/system/xam/user_profile.cpp
 @@ -14,6 +14,7 @@
@@ -697,7 +712,7 @@ index a77f5e6..5b4bbb4 100644
 +    config_name.resize(15);
 +  }
 +  name_ = config_name;
-+  REXLOG_INFO("[Kernel] UserProfile initialized with gamertag: '{}'", name_);
++  REXLOG_DEBUG("[Kernel] UserProfile initialized with gamertag: '{}'", name_);
  
    // https://cs.rin.ru/forum/viewtopic.php?f=38&t=60668&hilit=gfwl+live&start=195
    // https://github.com/arkem/py360/blob/master/py360/constants.py
@@ -800,15 +815,30 @@ index b94fe9e..4aaf669 100644
      }
    });
    rex::ui::RegisterBind("bind_achievements", "F7", "Toggle achievements overlay", [this] {
-diff --git a/thirdparty/moltenvk b/thirdparty/moltenvk
---- a/thirdparty/moltenvk
-+++ b/thirdparty/moltenvk
-@@ -1 +1 @@
--Subproject commit db445ff2042d9ce348c439ad8451112f354b8d2a
-+Subproject commit db445ff2042d9ce348c439ad8451112f354b8d2a-dirty
-diff --git a/thirdparty/utfcpp b/thirdparty/utfcpp
---- a/thirdparty/utfcpp
-+++ b/thirdparty/utfcpp
-@@ -1 +1 @@
--Subproject commit 63d64de49fd6b829f7c8694df5ab2ee625cb7134
-+Subproject commit 63d64de49fd6b829f7c8694df5ab2ee625cb7134-dirty
+diff --git a/src/ui/vulkan/vulkan_instance.cpp b/src/ui/vulkan/vulkan_instance.cpp
+index 914b311..a47f488 100644
+--- a/src/ui/vulkan/vulkan_instance.cpp
++++ b/src/ui/vulkan/vulkan_instance.cpp
+@@ -9,6 +9,7 @@
+  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
+  */
+ 
++#include <cstring>
+ #include <sstream>
+ #include <string>
+ #include <unordered_map>
+@@ -563,6 +564,14 @@ VkBool32 VulkanInstance::DebugUtilsMessengerCallback(
+     VkDebugUtilsMessageSeverityFlagBitsEXT message_severity,
+     VkDebugUtilsMessageTypeFlagsEXT message_types,
+     const VkDebugUtilsMessengerCallbackDataEXT* callback_data, [[maybe_unused]] void* user_data) {
++  // MoltenVK repeats this warning for every pipeline created with primitive restart disabled
++  // (Metal cannot turn it off). It says nothing new after the first time and floods the log with
++  // thousands of lines while the pipeline cache is being built, so it is dropped. Errors are kept.
++  if (message_severity < VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT && callback_data->pMessage &&
++      std::strstr(callback_data->pMessage, "does not support disabling primitive restart")) {
++    return VK_FALSE;
++  }
++
+   std::ostringstream log_str;
+ 
+   log_str << "Vulkan " << vk::to_string(vk::DebugUtilsMessageSeverityFlagBitsEXT(message_severity))
