@@ -111,5 +111,10 @@
     "runtimeMissing": "The runtime is not built yet. Installing it from your copy of the game will be the launcher's next step.",
     "alreadyRunning": "The game is already running.",
     "startFailed": "The game could not start: {detail}"
+  },
+  "update": {
+    "available": "Update to {version}",
+    "downloading": "Downloading update… {percent}",
+    "failed": "The update could not be installed. Try again later."
   }
 }

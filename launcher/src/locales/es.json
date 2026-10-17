@@ -111,5 +111,10 @@
     "runtimeMissing": "El runtime todavía no está compilado. Instalarlo a partir de tu copia del juego será el siguiente paso del launcher.",
     "alreadyRunning": "El juego ya está en marcha.",
     "startFailed": "No se pudo iniciar el juego: {detail}"
+  },
+  "update": {
+    "available": "Actualizar a {version}",
+    "downloading": "Descargando actualización… {percent}",
+    "failed": "No se pudo instalar la actualización. Inténtalo más tarde."
   }
 }

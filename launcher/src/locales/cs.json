@@ -111,5 +111,10 @@
     "runtimeMissing": "Runtime zatím není zkompilován. Jeho instalace z vaší kopie hry bude dalším krokem launcheru.",
     "alreadyRunning": "Hra už běží.",
     "startFailed": "Hru se nepodařilo spustit: {detail}"
+  },
+  "update": {
+    "available": "Aktualizovat na {version}",
+    "downloading": "Stahování aktualizace… {percent}",
+    "failed": "Aktualizaci se nepodařilo nainstalovat. Zkuste to později."
   }
 }
