@@ -10,7 +10,8 @@
     "install": "설치",
     "graphics": "그래픽",
     "online": "멀티플레이어",
-    "soon": "예정"
+    "soon": "예정",
+    "saves": "저장된 게임"
   },
   "rail": {
     "language": "언어",
@@ -127,5 +128,31 @@
     "available": "{version}(으)로 업데이트",
     "downloading": "업데이트 다운로드 중… {percent}",
     "failed": "업데이트를 설치할 수 없습니다. 나중에 다시 시도하세요."
+  },
+  "saves": {
+    "title": "Saved Games Manager",
+    "statusTitle": "Save & Checkpoints Status",
+    "statusHelp": "Checks your saved games and lets you repair them to prevent 'corrupted save points' errors. A backup is made before repairing or resetting.",
+    "checkpoints": "Detected Checkpoints",
+    "path": "Storage Path",
+    "lastSaved": "Last Modified",
+    "actionsTitle": "Maintenance & Repair",
+    "repair": "Repair Saves",
+    "repairHelp": "Removes orphan and incomplete checkpoint headers to prevent game warnings on startup.",
+    "clean": "Reset & Start Clean Campaign",
+    "cleanHelp": "Creates a backup and wipes corrupted checkpoints to start the campaign completely fresh.",
+    "backup": "Create Backup",
+    "backupHelp": "Creates a full backup copy of your current profile and campaign progress.",
+    "openFolder": "Open Saves Folder",
+    "backupsTitle": "Available Backups",
+    "noBackups": "No backups created yet.",
+    "restore": "Restore",
+    "stateOk": "Saves valid and intact",
+    "stateCorrupted": "Corrupted or orphaned headers detected",
+    "stateEmpty": "No active saves (ready for a clean game)",
+    "repairedToast": "Saves successfully repaired",
+    "resetToast": "Saves reset. Automatic backup created.",
+    "backupToast": "Backup successfully created",
+    "restoreToast": "Save restored successfully"
   }
 }
