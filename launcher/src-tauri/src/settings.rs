@@ -45,7 +45,6 @@ const KEY_FULLSCREEN: &str = "fullscreen";
 const KEY_SCALE_X: &str = "draw_resolution_scale_x";
 const KEY_SCALE_Y: &str = "draw_resolution_scale_y";
 const KEY_ANISOTROPIC: &str = "anisotropic_override";
-const KEY_ANTIALIASING: &str = "swap_post_effect";
 const KEY_UPSCALING: &str = "present_effect";
 const KEY_TEXTURE_SOFT: &str = "texture_cache_memory_limit_soft";
 const KEY_TEXTURE_HARD: &str = "texture_cache_memory_limit_hard";
@@ -78,7 +77,6 @@ const GPU_PLUGIN: &str = "xenos";
 pub struct GraphicsValues {
     pub resolution_scale: Option<i64>,
     pub anisotropic: Option<i64>,
-    pub antialiasing: Option<String>,
     pub upscaling: Option<String>,
     pub texture_memory: Option<i64>,
 }
@@ -233,7 +231,6 @@ impl SettingsPaths {
             graphics: GraphicsValues {
                 resolution_scale: get_integer(&runtime, KEY_SCALE_X),
                 anisotropic: get_integer(&runtime, KEY_ANISOTROPIC),
-                antialiasing: get_string(&runtime, KEY_ANTIALIASING),
                 upscaling: get_string(&runtime, KEY_UPSCALING),
                 texture_memory: get_integer(&runtime, KEY_TEXTURE_SOFT),
             },
@@ -278,7 +275,6 @@ impl SettingsPaths {
         set_or_remove(&mut runtime, KEY_SCALE_X, graphics.resolution_scale.map(value));
         set_or_remove(&mut runtime, KEY_SCALE_Y, graphics.resolution_scale.map(value));
         set_or_remove(&mut runtime, KEY_ANISOTROPIC, graphics.anisotropic.map(value));
-        set_or_remove(&mut runtime, KEY_ANTIALIASING, graphics.antialiasing.as_deref().map(value));
         set_or_remove(&mut runtime, KEY_UPSCALING, graphics.upscaling.as_deref().map(value));
         set_or_remove(&mut runtime, KEY_TEXTURE_SOFT, graphics.texture_memory.map(value));
         // The hard limit is kept at twice the soft one, as in the SDK defaults (384 / 768 MB).
@@ -319,7 +315,6 @@ mod tests {
             graphics: GraphicsValues {
                 resolution_scale: Some(2),
                 anisotropic: Some(5),
-                antialiasing: Some("fxaa".into()),
                 upscaling: Some("fsr".into()),
                 texture_memory: Some(768),
             },
@@ -389,7 +384,6 @@ mod tests {
             "draw_resolution_scale_x = 2",
             "draw_resolution_scale_y = 2",
             "anisotropic_override = 5",
-            "swap_post_effect = \"fxaa\"",
             "present_effect = \"fsr\"",
             "texture_cache_memory_limit_soft = 768",
             "texture_cache_memory_limit_hard = 1536",
@@ -419,6 +413,24 @@ mod tests {
         assert!(text.contains("vsync = false"));
         assert!(text.contains("anisotropic_override = 5"));
         assert!(!text.contains("anisotropic_override = 1"));
+    }
+
+    #[test]
+    fn settings_chosen_in_the_game_survive_a_save() {
+        let dir = temp_folder("in-game");
+        let config = dir.join(RUNTIME_CONFIG);
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        fs::write(
+            &config,
+            "swap_post_effect = \"fxaa_extreme\"\nmotion_blur = false\nmnk_sensitivity = 1.50\n",
+        )
+        .unwrap();
+
+        SettingsPaths::new(&dir).save(&sample_settings()).unwrap();
+        let text = fs::read_to_string(&config).unwrap();
+        assert!(text.contains("swap_post_effect = \"fxaa_extreme\""));
+        assert!(text.contains("motion_blur = false"));
+        assert!(text.contains("mnk_sensitivity = 1.50"));
     }
 
     #[test]

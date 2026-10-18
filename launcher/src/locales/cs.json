@@ -103,15 +103,13 @@
     "advancedHelp": "Změna kteréhokoli z těchto nastavení přepne předvolbu na Vlastní.",
     "anisotropic": "Anizotropní filtrování",
     "off": "Vypnuto",
-    "antialiasing": "Vyhlazování hran",
-    "fxaaExtreme": "FXAA (extrémní)",
     "upscaling": "Škálování obrazu",
     "bilinear": "Bilineární (původní)",
     "cas": "AMD CAS (zostření)",
     "fsr": "AMD FSR 1",
     "textureMemory": "Paměť textur",
     "inGame": "Ve hře",
-    "inGameHelp": "Limit FPS, rozmazání pohybu, vyhlazování hran, citlivost myši a přiřazení kláves a ovladače se mění během hraní: stiskněte {key}."
+    "inGameHelp": "Vertikální synchronizaci, vyhlazování hran, rozmazání pohybu a celou obrazovku najdete v nabídce Možnosti ve hře, v části Video; citlivost myši v části Klávesnice a myš. Přiřazení kláves se mění během hraní: stiskněte {key}."
   },
   "online": {
     "title": "Multiplayer",

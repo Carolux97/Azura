@@ -103,15 +103,13 @@
     "advancedHelp": "Modifier l'un de ces réglages fait passer le préréglage en Personnalisé.",
     "anisotropic": "Filtrage anisotrope",
     "off": "Désactivé",
-    "antialiasing": "Anticrénelage",
-    "fxaaExtreme": "FXAA (extrême)",
     "upscaling": "Mise à l'échelle",
     "bilinear": "Bilinéaire (d'origine)",
     "cas": "AMD CAS (netteté)",
     "fsr": "AMD FSR 1",
     "textureMemory": "Mémoire des textures",
     "inGame": "En jeu",
-    "inGameHelp": "La limite d'images par seconde, le flou de mouvement, l'anticrénelage, la sensibilité de la souris et les touches du clavier et de la manette se règlent en jeu : appuyez sur {key}."
+    "inGameHelp": "La synchro verticale, l'anticrénelage, le flou de mouvement et le plein écran se trouvent dans le menu Options du jeu, sous Vidéo ; la sensibilité de la souris, sous Clavier et souris. Les touches se règlent en jeu : appuyez sur {key}."
   },
   "online": {
     "title": "Multijoueur",
