@@ -21,6 +21,7 @@ the recompiled code is generated on your machine from your own `default.xex` and
 | `runtime/generated/` | C++ produced by `rexglue codegen` from your `default.xex`. Ignored by git. |
 | `launcher/` | The desktop launcher (Tauri): interface in `launcher/src/`, native side in `launcher/src-tauri/`. See its README. |
 | `scripts/` | Build scripts. |
+| `docs/` | Notes on the game's internals for modding menus and settings: [reverse-engineering.md](docs/reverse-engineering.md). |
 | `sdk/` | The ReXGlue SDK for your platform. Ignored by git. |
 
 ## Requirements (macOS)

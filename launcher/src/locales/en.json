@@ -104,15 +104,13 @@
     "advancedHelp": "Changing any of these turns the preset into Custom.",
     "anisotropic": "Anisotropic filtering",
     "off": "Off",
-    "antialiasing": "Anti-aliasing",
-    "fxaaExtreme": "FXAA (extreme)",
     "upscaling": "Image scaling",
     "bilinear": "Bilinear (original)",
     "cas": "AMD CAS (sharpening)",
     "fsr": "AMD FSR 1",
     "textureMemory": "Texture memory",
     "inGame": "In game",
-    "inGameHelp": "Frame rate limit, motion blur, anti-aliasing, mouse sensitivity and keyboard and controller bindings are changed while playing: press {key}."
+    "inGameHelp": "Vertical sync, anti-aliasing, motion blur and full screen are in the game's Options menu, under Video; mouse sensitivity is under Keyboard and mouse. Key bindings are changed while playing: press {key}."
   },
   "online": {
     "title": "Multiplayer",
