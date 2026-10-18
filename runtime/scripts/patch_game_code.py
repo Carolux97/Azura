@@ -29,9 +29,9 @@ def apply_patches(generated_dir: Path):
         },
         {
             "name": "Occlusion Query Fix (Part 1, 0x827B2BD0)",
-            "context": "827B2BD0",
-            "old": "\t// li r11,1\n\tctx.r11.s64 = 1;",
-            "new": "\t// li r11,1\n\tctx.r11.s64 = 0; // Patch: Occlusion Query Fix (li r11, 0)",
+            "context": "sub_827B2BA0",
+            "old": "\t// li r21,0\n\tctx.r21.s64 = 0;\n\t// li r11,1\n\tctx.r11.s64 = 1;",
+            "new": "\t// li r21,0\n\tctx.r21.s64 = 0;\n\t// li r11,1\n\tctx.r11.s64 = 0; // Patch: Occlusion Query Fix (li r11, 0)",
         },
         {
             "name": "Occlusion Query Fix (Part 2, 0x827B6C58)",
