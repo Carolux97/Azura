@@ -14,7 +14,12 @@
 
 #include "class_dump.h"
 
+#if defined(__APPLE__)
 #include <mach/mach.h>
+#elif defined(__linux__)
+#include <sys/uio.h>
+#include <unistd.h>
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -53,10 +58,20 @@ class GuestReader {
   explicit GuestReader(const uint8_t* base) : base_(base) {}
 
   bool Read(uint32_t address, void* out, size_t size) const {
+#if defined(__APPLE__)
     vm_size_t got = 0;
     return vm_read_overwrite(mach_task_self(), reinterpret_cast<vm_address_t>(base_ + address), size,
                              reinterpret_cast<vm_address_t>(out), &got) == KERN_SUCCESS &&
            got == size;
+#elif defined(__linux__)
+    struct iovec local_iov = {out, size};
+    struct iovec remote_iov = {const_cast<uint8_t*>(base_ + address), size};
+    ssize_t nread = process_vm_readv(getpid(), &local_iov, 1, &remote_iov, 1, 0);
+    return nread == static_cast<ssize_t>(size);
+#else
+    std::memcpy(out, base_ + address, size);
+    return true;
+#endif
   }
 
   // Big-endian u32 at `address`, or 0 when unreadable.
