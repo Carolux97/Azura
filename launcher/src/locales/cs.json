@@ -112,6 +112,7 @@
     "hide": "Skrýt",
     "starting": "Spouštění hry…",
     "running": "Hra běží.",
+    "restarting": "Hra se restartuje, aby se použilo nové nastavení…",
     "exitOk": "Hra se ukončila normálně.",
     "exitError": "Hra se ukončila s chybou (kód {code}).",
     "exitSignal": "Systém hru zastavil.",

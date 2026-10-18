@@ -112,6 +112,7 @@
     "hide": "Ausblenden",
     "starting": "Spiel wird gestartet…",
     "running": "Das Spiel läuft.",
+    "restarting": "Das Spiel wird neu gestartet, um die neuen Einstellungen zu übernehmen…",
     "exitOk": "Das Spiel wurde normal beendet.",
     "exitError": "Das Spiel wurde mit einem Fehler beendet (Code {code}).",
     "exitSignal": "Das System hat das Spiel beendet.",

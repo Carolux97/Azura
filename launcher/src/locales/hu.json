@@ -112,6 +112,7 @@
     "hide": "Elrejtés",
     "starting": "A játék indítása…",
     "running": "A játék fut.",
+    "restarting": "A játék újraindul az új beállítások alkalmazásához…",
     "exitOk": "A játék rendben bezárult.",
     "exitError": "A játék hibával zárult be (kód: {code}).",
     "exitSignal": "A rendszer leállította a játékot.",

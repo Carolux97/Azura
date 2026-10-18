@@ -112,6 +112,7 @@
     "hide": "隱藏",
     "starting": "正在啟動遊戲…",
     "running": "遊戲正在執行。",
+    "restarting": "正在重新啟動遊戲以套用新設定…",
     "exitOk": "遊戲已正常關閉。",
     "exitError": "遊戲因錯誤而關閉（代碼 {code}）。",
     "exitSignal": "系統已停止遊戲。",

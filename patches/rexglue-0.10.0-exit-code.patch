@@ -1,0 +1,53 @@
+diff --git a/include/rex/ui/windowed_app_context.h b/include/rex/ui/windowed_app_context.h
+index 02d3bca..65bfcee 100644
+--- a/include/rex/ui/windowed_app_context.h
++++ b/include/rex/ui/windowed_app_context.h
+@@ -10,6 +10,8 @@
+  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
+  */
+ 
++#include <atomic>
++#include <climits>
+ #include <cstdint>
+ #include <deque>
+ #include <functional>
+@@ -118,6 +120,16 @@ class WindowedAppContext {
+     CallInUIThreadDeferred([this] { QuitFromUIThread(); });
+   }
+ 
++  // Process exit code the app asks for once the UI loop ends, so a parent process can tell how it
++  // ended (for example, that it asks to be started again). Without one, the code reports whether
++  // the UI loop ran normally. Callable from any thread.
++  void SetExitCode(int exit_code) { exit_code_.store(exit_code); }
++  // The code set with SetExitCode, or `fallback` when none was set.
++  int GetExitCode(int fallback) const {
++    const int exit_code = exit_code_.load();
++    return exit_code == kNoExitCode ? fallback : exit_code;
++  }
++
+  protected:
+   WindowedAppContext() : ui_thread_id_(std::this_thread::get_id()) {}
+ 
+@@ -154,6 +166,10 @@ class WindowedAppContext {
+   // anything virtual in this case.
+   void ExecutePendingFunctionsFromUIThread(bool is_final);
+ 
++  // Set from any thread with SetExitCode; kNoExitCode until then.
++  static constexpr int kNoExitCode = INT_MIN;
++  std::atomic<int> exit_code_{kNoExitCode};
++
+   // Accessible by the UI thread.
+   bool has_quit_ = false;
+   bool is_in_destructor_ = false;
+diff --git a/src/ui/windowed_app_main_sdl.cpp b/src/ui/windowed_app_main_sdl.cpp
+index 77bb1dc..5e759d6 100644
+--- a/src/ui/windowed_app_main_sdl.cpp
++++ b/src/ui/windowed_app_main_sdl.cpp
+@@ -69,6 +69,7 @@ int RunWindowedApp(int argc, char** argv) {
+     result = app->OnInitialize() ? app_context.RunMainMessageLoop() : EXIT_FAILURE;
+ 
+     app->InvokeOnDestroy();
++    result = app_context.GetExitCode(result);
+   }
+ 
+ #if REX_PLATFORM_WIN32

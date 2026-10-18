@@ -74,11 +74,16 @@ class AzuraApp : public rex::ReXApp {
         }
       });
     });
-    // Accepting the restart message box (Video settings that apply at start-up): start the game
-    // again once this process exits, then close it like Quit Game.
+    // Accepting the restart message box (Video settings that apply at start-up): close the game
+    // like Quit Game and have it start again. A launcher that started it does so when it exits with
+    // kRestartExitCode, so it keeps following the game; otherwise the game starts itself again.
     azura::script::SetRestartHandler([this] {
       app_context().CallInUIThread([this] {
-        azura::RelaunchAfterExit();
+        if (azura::StartedByLauncher()) {
+          app_context().SetExitCode(azura::kRestartExitCode);
+        } else {
+          azura::RelaunchAfterExit();
+        }
         if (window()) {
           window()->RequestClose();
         }

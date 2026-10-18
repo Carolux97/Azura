@@ -117,8 +117,8 @@ const SIMULATED_OUTPUT = [
 
 /**
  * Starts the game. Rejects with { kind, detail } when it cannot start (see runtime.rs:
- * "runtimeMissing", "alreadyRunning", "startFailed"). Its output and end arrive through
- * onGameOutput and onGameExit.
+ * "runtimeMissing", "alreadyRunning", "startFailed"). Its output, restarts and end arrive
+ * through onGameOutput, onGameRestart and onGameExit.
  */
 export const launchGame = async () => {
   if (isNativeApp) return tauri.core.invoke("launch_game");
@@ -138,6 +138,15 @@ export const onGameOutput = (listener) => {
 export const onGameExit = (listener) => {
   if (isNativeApp) return tauri.event.listen("game-exit", (event) => listener(event.payload));
   simulated.exit.add(listener);
+};
+
+/**
+ * Calls `listener` when the game closes to start again (to apply settings that only take effect
+ * at start-up): the launcher starts it at once, so the game is still running. The browser
+ * simulation never restarts.
+ */
+export const onGameRestart = (listener) => {
+  if (isNativeApp) return tauri.event.listen("game-restart", () => listener());
 };
 
 /**

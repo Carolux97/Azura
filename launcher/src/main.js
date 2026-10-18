@@ -30,6 +30,7 @@ import {
   loadSettings,
   onGameExit,
   onGameOutput,
+  onGameRestart,
   onUpdateProgress,
   changeSavesFolder,
   pickGameFolder,
@@ -314,6 +315,11 @@ const setupLaunch = () => {
   });
 
   onGameOutput(appendLogLine);
+  onGameRestart(() => {
+    state.game = "running";
+    setLogState("log.restarting");
+    renderPlay();
+  });
   onGameExit(({ code, success }) => {
     state.game = "idle";
     if (success) setLogState("log.exitOk", "ok");

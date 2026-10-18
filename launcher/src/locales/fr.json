@@ -112,6 +112,7 @@
     "hide": "Masquer",
     "starting": "Lancement du jeu…",
     "running": "Le jeu est en cours d'exécution.",
+    "restarting": "Redémarrage du jeu pour appliquer les nouveaux réglages…",
     "exitOk": "Le jeu s'est fermé normalement.",
     "exitError": "Le jeu s'est fermé avec une erreur (code {code}).",
     "exitSignal": "Le système a arrêté le jeu.",
