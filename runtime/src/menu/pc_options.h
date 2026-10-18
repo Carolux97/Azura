@@ -68,4 +68,7 @@ void PatchValueNames(CoalescedSection& section, const std::string& language);
 // engine configuration (Xbox360-GearEngine.ini).
 void PatchSystemSettings(CoalescedSection& section);
 
+// Applies engine-level configuration to the [Engine.Engine] section of Xbox360-GearEngine.ini.
+void PatchEngineSettings(CoalescedSection& section);
+
 }  // namespace azura::menu
