@@ -116,12 +116,6 @@ if [[ "$(uname -s)" == "Darwin" && -x "${ROOT}/scripts/build_moltenvk.sh" ]]; th
   "${ROOT}/scripts/build_moltenvk.sh"
 fi
 
-# Apply community engine fixes (Ambient Occlusion & Occlusion Query fixes)
-if [[ -f "${RUNTIME_DIR}/scripts/patch_game_code.py" && -d "${RUNTIME_DIR}/generated/default" ]]; then
-  echo "==> Applying engine fixes (Ambient Occlusion & Occlusion Query fixes)"
-  python3 "${RUNTIME_DIR}/scripts/patch_game_code.py" "${RUNTIME_DIR}/generated/default" || true
-fi
-
 echo "==> Configuring"
 (cd "${RUNTIME_DIR}" && cmake --preset "${PRESET}")
 
@@ -134,6 +128,15 @@ if [[ "${PLATFORM}" == "mac-arm64" && (-d "${SDK_SRC}/.git" || -f "${SDK_SRC}/.g
     echo "==> Code generator changed: regenerating the recompiled code"
     rm -f "${CODEGEN_STAMP}"
   fi
+fi
+
+echo "==> Ensuring recompiled code is up to date"
+(cd "${RUNTIME_DIR}" && cmake --build --preset "${PRESET}-${CONFIG}" --target azura_codegen)
+
+# Apply community engine fixes (Ambient Occlusion & Occlusion Query fixes)
+if [[ -f "${RUNTIME_DIR}/scripts/patch_game_code.py" && -d "${RUNTIME_DIR}/generated/default" ]]; then
+  echo "==> Applying engine fixes (Ambient Occlusion & Occlusion Query fixes)"
+  python3 "${RUNTIME_DIR}/scripts/patch_game_code.py" "${RUNTIME_DIR}/generated/default"
 fi
 
 echo "==> Building (${CONFIG})"

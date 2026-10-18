@@ -14,10 +14,11 @@ gpu_plugin = "xenos"
 vulkan_device = 0
 render_target_path_vulkan = "fbo"
 gpu_allow_invalid_fetch_constants = true
+use_fuzzy_alpha_epsilon = true
 readback_resolve = "none"
 vulkan_readback_resolve = false
 clear_memory_page_state = true
-occlusion_query_enable = false
+occlusion_query_enable = true
 query_occlusion_fake_sample_count = 1000
 
 vulkan_async_skip_incomplete_frames = false

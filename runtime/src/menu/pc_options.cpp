@@ -544,22 +544,7 @@ void PatchValueNames(CoalescedSection& section, const std::string& language) {
 
 void PatchSystemSettings(CoalescedSection& section) {
   SetKey(section, "MotionBlur", REXCVAR_GET(motion_blur) ? "True" : "False");
-  SetKey(section, "AmbientOcclusion", "False");
-  SetKey(section, "Bloom", "False");
-  SetKey(section, "DepthOfField", "False");
-  SetKey(section, "DynamicShadows", "False");
-  SetKey(section, "LightEnvironmentShadows", "False");
-  SetKey(section, "bAllowWholeSceneDominantShadows", "False");
-  SetKey(section, "bEnableForegroundShadowsOnWorld", "False");
-  SetKey(section, "bEnableForegroundSelfShadowing", "False");
-  SetKey(section, "LensFlares", "False");
-  SetKey(section, "FogVolumes", "False");
-}
-
-void PatchEngineSettings(CoalescedSection& section) {
-  // Disable background level streaming to guarantee synchronous loading of initial sub-levels
-  // and prevent pawns from spawning in the void before collision geometry is ready.
-  SetKey(section, "bUseBackgroundLevelStreaming", "False");
 }
 
 }  // namespace azura::menu
+
