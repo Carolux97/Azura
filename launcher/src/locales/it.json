@@ -112,6 +112,7 @@
     "hide": "Nascondi",
     "starting": "Avvio del gioco…",
     "running": "Il gioco è in esecuzione.",
+    "restarting": "Riavvio del gioco per applicare le nuove impostazioni…",
     "exitOk": "Il gioco si è chiuso correttamente.",
     "exitError": "Il gioco si è chiuso con un errore (codice {code}).",
     "exitSignal": "Il sistema ha interrotto il gioco.",

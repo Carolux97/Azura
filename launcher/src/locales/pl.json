@@ -112,6 +112,7 @@
     "hide": "Ukryj",
     "starting": "Uruchamianie gry…",
     "running": "Gra jest uruchomiona.",
+    "restarting": "Ponowne uruchamianie gry w celu zastosowania nowych ustawień…",
     "exitOk": "Gra została zamknięta prawidłowo.",
     "exitError": "Gra została zamknięta z błędem (kod {code}).",
     "exitSignal": "System zatrzymał grę.",

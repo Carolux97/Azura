@@ -112,6 +112,7 @@
     "hide": "Hide",
     "starting": "Starting the game…",
     "running": "The game is running.",
+    "restarting": "Restarting the game to apply the new settings…",
     "exitOk": "The game closed normally.",
     "exitError": "The game closed with an error (code {code}).",
     "exitSignal": "The game was stopped by the system.",

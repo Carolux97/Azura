@@ -112,6 +112,7 @@
     "hide": "Ocultar",
     "starting": "Iniciando o jogo…",
     "running": "O jogo está em execução.",
+    "restarting": "A reiniciar o jogo para aplicar as novas definições…",
     "exitOk": "O jogo foi fechado normalmente.",
     "exitError": "O jogo foi fechado com um erro (código {code}).",
     "exitSignal": "O sistema interrompeu o jogo.",

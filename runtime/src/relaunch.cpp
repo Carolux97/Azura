@@ -4,6 +4,7 @@
 #include <unistd.h>
 
 #include <climits>
+#include <cstdlib>
 #include <fstream>
 #include <iterator>
 #include <string>
@@ -54,6 +55,11 @@ std::string Executable(std::vector<std::string>& arguments) {
 }
 
 }  // namespace
+
+bool StartedByLauncher() {
+  const char* value = std::getenv("AZURA_LAUNCHER");
+  return value && std::string(value) == "1";
+}
 
 void RelaunchAfterExit() {
   std::vector<std::string> arguments;
