@@ -1,3 +1,7 @@
+#if defined(__linux__)
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
 #include "button_prompts.h"
 
 #include <algorithm>
@@ -334,6 +338,13 @@ class ButtonPrompts::Impl {
       auto& list = atlas.instances;
       for (auto it = list.begin(); it != list.end();) {
         const uint8_t* tex = membase + it->physical;
+#if defined(__linux__)
+        unsigned char vec[1] = {0};
+        if (mincore(const_cast<void*>(static_cast<const void*>(tex)), 4096, vec) != 0 || !(vec[0] & 1)) {
+          it = list.erase(it);
+          continue;
+        }
+#endif
         if (!it->written.empty() && Matches(tex, atlas, it->written)) {
           ++it;
           continue;
@@ -365,7 +376,17 @@ class ButtonPrompts::Impl {
       return;
     }
     last_scan_ = now;
+#if defined(__linux__)
+    constexpr size_t kPageCount = kPhysicalSize / kTextureAlignment;
+    std::vector<unsigned char> mincore_vec(kPageCount, 0);
+    const bool mincore_ok = (mincore(const_cast<void*>(static_cast<const void*>(membase)), kPhysicalSize, mincore_vec.data()) == 0);
+#endif
     for (uint32_t page = 0; page < kPhysicalSize; page += kTextureAlignment) {
+#if defined(__linux__)
+      if (mincore_ok && !(mincore_vec[page / kTextureAlignment] & 1)) {
+        continue;
+      }
+#endif
       for (auto& atlas : atlases_) {
         if (page + atlas.def->byte_size > kPhysicalSize) continue;
         const uint8_t* tex = membase + page;

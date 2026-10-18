@@ -86,6 +86,15 @@ endif()
 if(REXSDK_DIR AND TARGET imgui)
     target_include_directories(azura PRIVATE $<TARGET_PROPERTY:imgui,INTERFACE_INCLUDE_DIRECTORIES>)
 endif()
+# Optional extra headers for the build machine (on Linux, the ALSA and PulseAudio headers a
+# distribution may lack), in sdk/compat/include when present; nothing in the repository creates it.
+set(AZURA_COMPAT_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/../sdk/compat/include")
+if(REXSDK_DIR AND EXISTS "${AZURA_COMPAT_INCLUDE}")
+    target_include_directories(azura PRIVATE "${AZURA_COMPAT_INCLUDE}")
+    if(TARGET azura_recomp)
+        target_include_directories(azura_recomp PRIVATE "${AZURA_COMPAT_INCLUDE}")
+    endif()
+endif()
 
 # Post-codegen patch: codegen writes azura_register.cpp as one function of ~57,000 registration
 # calls, which takes clang close to ten minutes to compile (its cost grows faster than linearly

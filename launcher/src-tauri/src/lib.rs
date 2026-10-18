@@ -19,7 +19,7 @@ use std::path::Path;
 use game_folder::FolderCheck;
 use install::RuntimeStatus;
 use runtime::{GameProcess, LaunchError, LaunchFolders};
-use saves::SavesError;
+use saves::{BackupInfo, SaveStatus, SavesError};
 use settings::{Settings, SettingsPaths};
 use system::SystemInfo;
 use tauri::Manager;
@@ -95,6 +95,54 @@ async fn launch_game(
     saves::prepare(&saves, &cache).map_err(|e| LaunchError::SavesUnavailable(format!("{e:?}")))?;
     let folders = LaunchFolders { runtime: &runtime, game: game.as_deref(), saves: &saves, cache: &cache };
     process.launch(app, &folders)
+}
+
+/// Returns the current state of saved games.
+#[tauri::command]
+async fn get_save_status(app: tauri::AppHandle) -> Result<SaveStatus, String> {
+    let paths = settings_paths(&app)?;
+    let saves = paths.saves_folder()?;
+    Ok(saves::inspect_saves(&app, &saves))
+}
+
+/// Removes orphaned checkpoint headers, after backing up the saves.
+#[tauri::command]
+async fn repair_saves(app: tauri::AppHandle) -> Result<String, String> {
+    let paths = settings_paths(&app)?;
+    let saves = paths.saves_folder()?;
+    saves::repair_saves_internal(&app, &saves)
+}
+
+/// Resets saved games so the player can start a clean campaign, backing up first.
+#[tauri::command]
+async fn reset_saves(app: tauri::AppHandle) -> Result<String, String> {
+    let paths = settings_paths(&app)?;
+    let saves = paths.saves_folder()?;
+    saves::reset_saves_internal(&app, &saves)
+}
+
+/// Creates a backup of the current saves.
+#[tauri::command]
+async fn create_save_backup(app: tauri::AppHandle, label: Option<String>) -> Result<BackupInfo, String> {
+    let paths = settings_paths(&app)?;
+    let saves = paths.saves_folder()?;
+    saves::create_backup_internal(&app, &saves, label)
+}
+
+/// Restores a chosen backup.
+#[tauri::command]
+async fn restore_save_backup(app: tauri::AppHandle, backup_id: String) -> Result<String, String> {
+    let paths = settings_paths(&app)?;
+    let saves = paths.saves_folder()?;
+    saves::restore_backup_internal(&app, &saves, &backup_id)
+}
+
+/// Opens the save games folder in the system file manager.
+#[tauri::command]
+async fn open_saves_folder(app: tauri::AppHandle) -> Result<(), String> {
+    let paths = settings_paths(&app)?;
+    let saves = paths.saves_folder()?;
+    saves::open_saves_folder_internal(&saves)
 }
 
 /// Opens the folder picker for a new saves folder. Returns `None` when the user cancels; nothing
@@ -177,7 +225,13 @@ pub fn run() {
             pick_saves_folder,
             change_saves_folder,
             check_for_update,
-            install_update
+            install_update,
+            get_save_status,
+            repair_saves,
+            reset_saves,
+            create_save_backup,
+            restore_save_backup,
+            open_saves_folder
         ])
         .setup(|app| {
             // Debug builds log to the terminal that started them; release builds stay quiet.

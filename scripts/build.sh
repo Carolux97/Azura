@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Builds the Gears3-Azura runtime on macOS (Apple Silicon), from default.xex to the executable.
+# Builds the Gears3-Azura runtime on macOS (Apple Silicon) or Linux (x86_64, ARM64), from default.xex
+# to the executable.
 #
 # Steps:
 #   1. check that the SDK and the game executable are where the project expects them;
@@ -8,12 +9,14 @@
 #      name whenever an input changes, so the name must always lead to the right manifest);
 #   3. on a first build, run the prebuilt `rexglue codegen` once to write the generated CMake files;
 #   4. apply our patches (patches/rexglue-0.10.0*.patch) to the ReXGlue SDK source tree, which the
-#      runtime builds from (input changes the prebuilt SDK cannot carry), and build the patched
-#      MoltenVK;
+#      runtime builds from (input changes the prebuilt SDK cannot carry), and, on macOS, build the
+#      patched MoltenVK;
 #   5. configure, build the patched code generator from source, regenerate the recompiled code with
 #      it when it changed (default.xex to C++ under runtime/generated/), and build the runtime.
 #
-# The prebuilt SDK is still used for the `rexglue` code generator and the Vulkan headers.
+# The prebuilt SDK of the platform is still used to bootstrap the generated CMake files and for the
+# Vulkan headers. Every platform builds from the patched SDK source: the patches carry fixes the
+# runtime needs everywhere, and the patched code generator emits the guest's memory fences.
 #
 # Usage: scripts/build.sh [debug|relwithdebinfo|release]   (default: relwithdebinfo)
 
@@ -22,12 +25,38 @@ set -euo pipefail
 readonly CONFIG="${1:-relwithdebinfo}"
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly RUNTIME_DIR="${ROOT}/runtime"
-readonly SDK_DIR="${ROOT}/sdk/rexglue-0.10.0-mac-arm64/mac-arm64"
-readonly REXGLUE="${SDK_DIR}/bin/rexglue"
 readonly XEX="${RUNTIME_DIR}/game/default.xex"
 readonly REGISTRY="${ROOT}/versions.toml"
 readonly SDK_SRC="${ROOT}/sdk/rexglue-0.10.0-src"
-readonly PRESET="mac-arm64-sdk-source"
+
+# Prebuilt SDK and CMake preset for this machine (see runtime/CMakePresets.json).
+case "$(uname -s):$(uname -m)" in
+  Darwin:arm64) readonly PLATFORM="mac-arm64" ;;
+  Linux:x86_64|Linux:amd64) readonly PLATFORM="linux-amd64" ;;
+  Linux:aarch64|Linux:arm64) readonly PLATFORM="linux-arm64" ;;
+  *)
+    echo "Unsupported build platform: $(uname -s) $(uname -m)." >&2
+    exit 1
+    ;;
+esac
+readonly SDK_DIR="${ROOT}/sdk/rexglue-0.10.0-${PLATFORM}/${PLATFORM}"
+readonly REXGLUE="${SDK_DIR}/bin/rexglue"
+readonly PRESET="${PLATFORM}-sdk-source"
+
+# Optional pkg-config files for the build machine (on Linux, for libraries a distribution may
+# lack), in sdk/compat/pkgconfig when present.
+if [[ -d "${ROOT}/sdk/compat/pkgconfig" ]]; then
+  export PKG_CONFIG_PATH="${ROOT}/sdk/compat/pkgconfig:${PKG_CONFIG_PATH:-}"
+fi
+
+# SHA-256 of a file: macOS ships shasum, most Linux distributions sha256sum.
+sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d ' ' -f 1
+  else
+    shasum -a 256 "$1" | cut -d ' ' -f 1
+  fi
+}
 
 case "${CONFIG}" in
   debug|relwithdebinfo|release) ;;
@@ -65,7 +94,7 @@ manifest_for_hash() {
   ' "${REGISTRY}"
 }
 
-readonly XEX_HASH="$(shasum -a 256 "${XEX}" | cut -d ' ' -f 1)"
+readonly XEX_HASH="$(sha256 "${XEX}")"
 readonly MANIFEST_REL="$(manifest_for_hash "${XEX_HASH}")"
 if [[ -z "${MANIFEST_REL}" ]]; then
   echo "This default.xex (SHA-256 ${XEX_HASH}) is not a supported build." >&2
@@ -107,8 +136,11 @@ apply_patch "${SDK_SRC}" "${ROOT}/patches/rexglue-0.10.0.patch"
 apply_patch "${SDK_SRC}" "${ROOT}/patches/rexglue-0.10.0-exit-code.patch"
 apply_patch "${SDK_SRC}/thirdparty/utfcpp" "${ROOT}/patches/rexglue-0.10.0-utfcpp.patch"
 
-# Ensure the patched MoltenVK dylib is built and installed in the SDK before configuring/building.
-"${ROOT}/scripts/build_moltenvk.sh"
+# On macOS, ensure the patched MoltenVK dylib is built and installed in the SDK before
+# configuring/building.
+if [[ "${PLATFORM}" == mac-* ]]; then
+  "${ROOT}/scripts/build_moltenvk.sh"
+fi
 
 # CMake reads CMakePresets.json from the current folder, so both steps run from runtime/.
 echo "==> Configuring"
@@ -127,21 +159,33 @@ if [[ ! -f "${CODEGEN_STAMP}" || -n "${GENERATOR}" ]]; then
   rm -f "${CODEGEN_STAMP}"
 fi
 
+# Linux only: community fixes applied to the recompiled code (see runtime/scripts/patch_game_code.py).
+# The generated code exists once codegen has run, which the build target below triggers first.
+if [[ "${PLATFORM}" == linux-* ]]; then
+  echo "==> Ensuring the recompiled code is up to date"
+  (cd "${RUNTIME_DIR}" && cmake --build --preset "${PRESET}-${CONFIG}" --target azura_codegen)
+  echo "==> Applying engine fixes to the recompiled code"
+  python3 "${RUNTIME_DIR}/scripts/patch_game_code.py" "${RUNTIME_DIR}/generated/default"
+fi
+
 echo "==> Building (${CONFIG})"
 (cd "${RUNTIME_DIR}" && cmake --build --preset "${PRESET}-${CONFIG}")
 
-# Verify the staged MoltenVK is not the unpatched SDK original.
 CONFIG_DIR="RelWithDebInfo"
 case "${CONFIG}" in
   debug) CONFIG_DIR="Debug" ;;
   release) CONFIG_DIR="Release" ;;
 esac
-readonly STAGED_MVK="${RUNTIME_DIR}/out/build/${PRESET}/${CONFIG_DIR}/vulkan/lib/libMoltenVK.dylib"
-readonly UNPATCHED_MVK_HASH="$(awk '/^\[moltenvk\]/{s=1;next} /^\[/{s=0} s && /^unpatched_sha256[[:space:]]*=/{v=$0;sub(/^[^"]*"/,"",v);sub(/".*$/,"",v);print v;exit}' "${REGISTRY}")"
-readonly STAGED_MVK_HASH="$(shasum -a 256 "${STAGED_MVK}" | cut -d ' ' -f 1)"
-if [[ "${STAGED_MVK_HASH}" == "${UNPATCHED_MVK_HASH}" ]]; then
-  echo "Error: staged ${STAGED_MVK} matches unpatched MoltenVK (${UNPATCHED_MVK_HASH})!" >&2
-  exit 1
+
+# On macOS, verify the staged MoltenVK is not the unpatched SDK original.
+if [[ "${PLATFORM}" == mac-* ]]; then
+  readonly STAGED_MVK="${RUNTIME_DIR}/out/build/${PRESET}/${CONFIG_DIR}/vulkan/lib/libMoltenVK.dylib"
+  readonly UNPATCHED_MVK_HASH="$(awk '/^\[moltenvk\]/{s=1;next} /^\[/{s=0} s && /^unpatched_sha256[[:space:]]*=/{v=$0;sub(/^[^"]*"/,"",v);sub(/".*$/,"",v);print v;exit}' "${REGISTRY}")"
+  readonly STAGED_MVK_HASH="$(sha256 "${STAGED_MVK}")"
+  if [[ "${STAGED_MVK_HASH}" == "${UNPATCHED_MVK_HASH}" ]]; then
+    echo "Error: staged ${STAGED_MVK} matches unpatched MoltenVK (${UNPATCHED_MVK_HASH})!" >&2
+    exit 1
+  fi
 fi
 
 echo "==> Done. Output: ${RUNTIME_DIR}/out/build/${PRESET}/${CONFIG_DIR}/"
