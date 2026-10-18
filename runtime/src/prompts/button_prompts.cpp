@@ -1,7 +1,12 @@
+#if defined(__linux__)
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
 #include "button_prompts.h"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <condition_variable>
@@ -12,6 +17,7 @@
 #include <thread>
 #include <vector>
 
+#include <SDL3/SDL.h>
 #include <rex/cvar.h>
 #include <rex/input/input_system.h>
 #include <rex/logging.h>
@@ -236,10 +242,17 @@ class ButtonPrompts::Impl {
       }
       atlases_.push_back(std::move(state));
     }
+    if (rex::cvar::GetFlagByName("mnk_mode") == "true") {
+      dynamic_style_.store(Style::kPc, std::memory_order_relaxed);
+    } else {
+      dynamic_style_.store(Style::kXbox, std::memory_order_relaxed);
+    }
+    SDL_AddEventWatch(&Impl::OnSdlEvent, this);
     thread_ = std::thread([this] { Run(); });
   }
 
   ~Impl() {
+    SDL_RemoveEventWatch(&Impl::OnSdlEvent, this);
     {
       std::lock_guard lock(mutex_);
       stopping_ = true;
@@ -260,24 +273,58 @@ class ButtonPrompts::Impl {
     }
   }
 
+  static bool SDLCALL OnSdlEvent(void* userdata, SDL_Event* event) {
+    auto* self = static_cast<Impl*>(userdata);
+    if (!self) return true;
+
+    if (event->type == SDL_EVENT_KEY_DOWN ||
+        event->type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
+        event->type == SDL_EVENT_MOUSE_WHEEL) {
+      self->SetDynamicStyle(Style::kPc);
+    } else if (event->type == SDL_EVENT_MOUSE_MOTION) {
+      if (std::abs(event->motion.xrel) > 1.5f || std::abs(event->motion.yrel) > 1.5f) {
+        self->SetDynamicStyle(Style::kPc);
+      }
+    } else if (event->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
+      SDL_GamepadType type = SDL_GetRealGamepadTypeForID(event->gbutton.which);
+      if (type == SDL_GAMEPAD_TYPE_PS3 || type == SDL_GAMEPAD_TYPE_PS4 || type == SDL_GAMEPAD_TYPE_PS5) {
+        self->SetDynamicStyle(Style::kPlayStation);
+      } else {
+        self->SetDynamicStyle(Style::kXbox);
+      }
+    } else if (event->type == SDL_EVENT_GAMEPAD_AXIS_MOTION) {
+      if (std::abs(event->gaxis.value) > 8000) {
+        SDL_GamepadType type = SDL_GetRealGamepadTypeForID(event->gaxis.which);
+        if (type == SDL_GAMEPAD_TYPE_PS3 || type == SDL_GAMEPAD_TYPE_PS4 || type == SDL_GAMEPAD_TYPE_PS5) {
+          self->SetDynamicStyle(Style::kPlayStation);
+        } else {
+          self->SetDynamicStyle(Style::kXbox);
+        }
+      }
+    } else if (event->type == SDL_EVENT_JOYSTICK_BUTTON_DOWN) {
+      self->SetDynamicStyle(Style::kXbox);
+    } else if (event->type == SDL_EVENT_JOYSTICK_AXIS_MOTION) {
+      if (std::abs(event->jaxis.value) > 8000) {
+        self->SetDynamicStyle(Style::kXbox);
+      }
+    }
+    return true;
+  }
+
+  void SetDynamicStyle(Style s) {
+    Style prev = dynamic_style_.exchange(s, std::memory_order_relaxed);
+    if (prev != s) {
+      wake_.notify_all();
+    }
+  }
+
   Style CurrentStyle() const {
     const std::string setting = Lower(rex::cvar::GetFlagByName("controller_icons"));
     if (setting == "xbox") return Style::kXbox;
     if (setting == "playstation") return Style::kPlayStation;
     if (setting == "pc") return Style::kPc;
-    // auto: follow the device the player last pressed something on.
-    auto* input = static_cast<rex::input::InputSystem*>(runtime_->input_system());
-    const auto kind = input ? input->ActiveKind(0) : rex::input::ActiveDeviceKind::kNone;
-    switch (kind) {
-      case rex::input::ActiveDeviceKind::kKeyboardMouse:
-        return Style::kPc;
-      case rex::input::ActiveDeviceKind::kPlayStation:
-        return Style::kPlayStation;
-      case rex::input::ActiveDeviceKind::kNone:
-        return rex::cvar::GetFlagByName("mnk_mode") == "true" ? Style::kPc : Style::kXbox;
-      default:
-        return Style::kXbox;
-    }
+    // auto: dynamically follow device used last!
+    return dynamic_style_.load(std::memory_order_relaxed);
   }
 
   static Bindings CurrentBindings() {
@@ -334,6 +381,13 @@ class ButtonPrompts::Impl {
       auto& list = atlas.instances;
       for (auto it = list.begin(); it != list.end();) {
         const uint8_t* tex = membase + it->physical;
+#if defined(__linux__)
+        unsigned char vec[1] = {0};
+        if (mincore(const_cast<void*>(static_cast<const void*>(tex)), 4096, vec) != 0 || !(vec[0] & 1)) {
+          it = list.erase(it);
+          continue;
+        }
+#endif
         if (!it->written.empty() && Matches(tex, atlas, it->written)) {
           ++it;
           continue;
@@ -365,7 +419,17 @@ class ButtonPrompts::Impl {
       return;
     }
     last_scan_ = now;
+#if defined(__linux__)
+    constexpr size_t kPageCount = kPhysicalSize / kTextureAlignment;
+    std::vector<unsigned char> mincore_vec(kPageCount, 0);
+    const bool mincore_ok = (mincore(const_cast<void*>(static_cast<const void*>(membase)), kPhysicalSize, mincore_vec.data()) == 0);
+#endif
     for (uint32_t page = 0; page < kPhysicalSize; page += kTextureAlignment) {
+#if defined(__linux__)
+      if (mincore_ok && !(mincore_vec[page / kTextureAlignment] & 1)) {
+        continue;
+      }
+#endif
       for (auto& atlas : atlases_) {
         if (page + atlas.def->byte_size > kPhysicalSize) continue;
         const uint8_t* tex = membase + page;
@@ -450,6 +514,7 @@ class ButtonPrompts::Impl {
   }
 
   rex::Runtime* runtime_;
+  std::atomic<Style> dynamic_style_{Style::kPc};
   std::vector<AtlasState> atlases_;
   Style last_style_ = Style::kXbox;
   std::chrono::steady_clock::time_point last_scan_{};

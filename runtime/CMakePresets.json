@@ -7,6 +7,46 @@
     },
     "configurePresets": [
         {
+            "name": "linux-amd64",
+            "displayName": "Linux x86_64",
+            "generator": "Ninja Multi-Config",
+            "binaryDir": "${sourceDir}/out/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++",
+                "CMAKE_C_FLAGS": "-march=x86-64",
+                "CMAKE_CXX_FLAGS": "-march=x86-64",
+                "CMAKE_CONFIGURATION_TYPES": "Debug;Release;RelWithDebInfo",
+                "CMAKE_DEFAULT_BUILD_TYPE": "RelWithDebInfo",
+                "CMAKE_PREFIX_PATH": "${sourceDir}/../sdk/rexglue-0.10.0-linux-amd64/linux-amd64"
+            },
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Linux"
+            }
+        },
+        {
+            "name": "linux-arm64",
+            "displayName": "Linux ARM64",
+            "generator": "Ninja Multi-Config",
+            "binaryDir": "${sourceDir}/out/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++",
+                "CMAKE_C_FLAGS": "-march=armv8-a",
+                "CMAKE_CXX_FLAGS": "-march=armv8-a",
+                "CMAKE_CONFIGURATION_TYPES": "Debug;Release;RelWithDebInfo",
+                "CMAKE_DEFAULT_BUILD_TYPE": "RelWithDebInfo",
+                "CMAKE_PREFIX_PATH": "${sourceDir}/../sdk/rexglue-0.10.0-linux-arm64/linux-arm64"
+            },
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Linux"
+            }
+        },
+        {
             "name": "mac-arm64",
             "displayName": "macOS on Apple Silicon",
             "generator": "Ninja Multi-Config",
@@ -39,6 +79,36 @@
         }
     ],
     "buildPresets": [
+        {
+            "name": "linux-amd64-debug",
+            "configurePreset": "linux-amd64",
+            "configuration": "Debug"
+        },
+        {
+            "name": "linux-amd64-relwithdebinfo",
+            "configurePreset": "linux-amd64",
+            "configuration": "RelWithDebInfo"
+        },
+        {
+            "name": "linux-amd64-release",
+            "configurePreset": "linux-amd64",
+            "configuration": "Release"
+        },
+        {
+            "name": "linux-arm64-debug",
+            "configurePreset": "linux-arm64",
+            "configuration": "Debug"
+        },
+        {
+            "name": "linux-arm64-relwithdebinfo",
+            "configurePreset": "linux-arm64",
+            "configuration": "RelWithDebInfo"
+        },
+        {
+            "name": "linux-arm64-release",
+            "configurePreset": "linux-arm64",
+            "configuration": "Release"
+        },
         {
             "name": "mac-arm64-debug",
             "configurePreset": "mac-arm64",

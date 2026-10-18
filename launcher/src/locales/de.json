@@ -11,7 +11,8 @@
     "install": "Installation",
     "graphics": "Grafik",
     "online": "Mehrspieler",
-    "soon": "Bald"
+    "soon": "Bald",
+    "saves": "Spielstände"
   },
   "rail": {
     "language": "Sprache",
@@ -147,5 +148,31 @@
     "available": "Auf {version} aktualisieren",
     "downloading": "Update wird geladen… {percent}",
     "failed": "Das Update konnte nicht installiert werden. Versuche es später erneut."
+  },
+  "saves": {
+    "title": "Saved Games Manager",
+    "statusTitle": "Save & Checkpoints Status",
+    "statusHelp": "Monitors and automatically repairs save files to prevent 'corrupted save points' errors.",
+    "checkpoints": "Detected Checkpoints",
+    "path": "Storage Path",
+    "lastSaved": "Last Modified",
+    "actionsTitle": "Maintenance & Repair",
+    "repair": "Repair Saves",
+    "repairHelp": "Removes orphan and incomplete checkpoint headers to prevent game warnings on startup.",
+    "clean": "Reset & Start Clean Campaign",
+    "cleanHelp": "Creates a backup and wipes corrupted checkpoints to start the campaign completely fresh.",
+    "backup": "Create Backup",
+    "backupHelp": "Creates a full backup copy of your current profile and campaign progress.",
+    "openFolder": "Open Saves Folder",
+    "backupsTitle": "Available Backups",
+    "noBackups": "No backups created yet.",
+    "restore": "Restore",
+    "stateOk": "Saves valid and intact",
+    "stateCorrupted": "Corrupted or orphaned headers detected",
+    "stateEmpty": "No active saves (ready for a clean game)",
+    "repairedToast": "Saves successfully repaired",
+    "resetToast": "Saves reset. Automatic backup created.",
+    "backupToast": "Backup successfully created",
+    "restoreToast": "Save restored successfully"
   }
 }

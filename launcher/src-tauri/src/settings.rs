@@ -40,8 +40,12 @@ const RUNTIME_CONFIG_HEADER: &str = "\
 const KEY_GAME_DATA_ROOT: &str = "game_data_root";
 const KEY_USER_NAME: &str = "user_name";
 const KEY_USER_LANGUAGE: &str = "user_language";
+const KEY_USER_COUNTRY: &str = "user_country";
 const KEY_GPU_PLUGIN: &str = "gpu_plugin";
 const KEY_FULLSCREEN: &str = "fullscreen";
+const KEY_RESOLUTION: &str = "resolution";
+const KEY_WINDOW_WIDTH: &str = "window_width";
+const KEY_WINDOW_HEIGHT: &str = "window_height";
 const KEY_SCALE_X: &str = "draw_resolution_scale_x";
 const KEY_SCALE_Y: &str = "draw_resolution_scale_y";
 const KEY_ANISOTROPIC: &str = "anisotropic_override";
@@ -69,14 +73,54 @@ fn console_language(code: &str) -> Option<i64> {
     })
 }
 
+fn console_country(code: &str) -> Option<i64> {
+    Some(match code {
+        "ESN" => 31,
+        "ESM" => 43,
+        "INT" => 103,
+        "FRA" => 28,
+        "DEU" => 29,
+        "ITA" => 32,
+        "KOR" => 40,
+        "CHN" => 101,
+        "PTB" => 10,
+        "POL" => 49,
+        "RUS" => 53,
+        "CZE" => 21,
+        "HUN" => 30,
+        "JPN" => 36,
+        _ => return None,
+    })
+}
+
 /// GPU plugin the runtime needs to draw anything; written on every save.
 const GPU_PLUGIN: &str = "xenos";
+
+/// Allowed types for the resolution setting (integer scale 1, 2, 3 or string "1080p").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ResolutionScale {
+    Int(i64),
+    String(String),
+}
+
+impl From<i64> for ResolutionScale {
+    fn from(val: i64) -> Self {
+        ResolutionScale::Int(val)
+    }
+}
+
+impl From<&str> for ResolutionScale {
+    fn from(val: &str) -> Self {
+        ResolutionScale::String(val.to_string())
+    }
+}
 
 /// Graphics values as stored in `azura.toml`; `None` when the key is absent or has another type.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphicsValues {
-    pub resolution_scale: Option<i64>,
+    pub resolution_scale: Option<ResolutionScale>,
     pub anisotropic: Option<i64>,
     pub antialiasing: Option<String>,
     pub upscaling: Option<String>,
@@ -223,6 +267,19 @@ impl SettingsPaths {
             .clone()
             .unwrap_or_else(|| crate::saves::default_folder().to_string_lossy().into_owned());
 
+        let scale_int = get_integer(&runtime, KEY_SCALE_X);
+        let res_str = get_string(&runtime, KEY_RESOLUTION);
+        let win_w = get_integer(&runtime, KEY_WINDOW_WIDTH);
+
+        let resolution_scale = if res_str.as_deref() == Some("1080p")
+            || res_str.as_deref() == Some("1920x1080")
+            || (win_w == Some(1920) && (scale_int == Some(1) || scale_int.is_none()))
+        {
+            Some(ResolutionScale::String("1080p".into()))
+        } else {
+            scale_int.map(ResolutionScale::Int)
+        };
+
         Ok(Settings {
             game_folder: get_string(&runtime, KEY_GAME_DATA_ROOT),
             user_name: get_string(&runtime, KEY_USER_NAME),
@@ -231,7 +288,7 @@ impl SettingsPaths {
                 .and_then(Item::as_bool)
                 .unwrap_or(false),
             graphics: GraphicsValues {
-                resolution_scale: get_integer(&runtime, KEY_SCALE_X),
+                resolution_scale,
                 anisotropic: get_integer(&runtime, KEY_ANISOTROPIC),
                 antialiasing: get_string(&runtime, KEY_ANTIALIASING),
                 upscaling: get_string(&runtime, KEY_UPSCALING),
@@ -275,8 +332,55 @@ impl SettingsPaths {
             KEY_USER_LANGUAGE,
             settings.game_language.as_deref().and_then(console_language).map(value),
         );
-        set_or_remove(&mut runtime, KEY_SCALE_X, graphics.resolution_scale.map(value));
-        set_or_remove(&mut runtime, KEY_SCALE_Y, graphics.resolution_scale.map(value));
+        set_or_remove(
+            &mut runtime,
+            KEY_USER_COUNTRY,
+            settings.game_language.as_deref().and_then(console_country).map(value),
+        );
+
+        match &graphics.resolution_scale {
+            Some(ResolutionScale::String(s)) if s == "1080p" || s == "1920x1080" => {
+                runtime[KEY_RESOLUTION] = value("1080p");
+                runtime[KEY_WINDOW_WIDTH] = value(1920);
+                runtime[KEY_WINDOW_HEIGHT] = value(1080);
+                runtime[KEY_SCALE_X] = value(1);
+                runtime[KEY_SCALE_Y] = value(1);
+            }
+            Some(ResolutionScale::Int(1)) => {
+                runtime[KEY_RESOLUTION] = value("720p");
+                runtime[KEY_WINDOW_WIDTH] = value(1280);
+                runtime[KEY_WINDOW_HEIGHT] = value(720);
+                runtime[KEY_SCALE_X] = value(1);
+                runtime[KEY_SCALE_Y] = value(1);
+            }
+            Some(ResolutionScale::Int(2)) => {
+                runtime[KEY_RESOLUTION] = value("1440p");
+                runtime[KEY_WINDOW_WIDTH] = value(2560);
+                runtime[KEY_WINDOW_HEIGHT] = value(1440);
+                runtime[KEY_SCALE_X] = value(2);
+                runtime[KEY_SCALE_Y] = value(2);
+            }
+            Some(ResolutionScale::Int(3)) => {
+                runtime[KEY_RESOLUTION] = value("4k");
+                runtime[KEY_WINDOW_WIDTH] = value(3840);
+                runtime[KEY_WINDOW_HEIGHT] = value(2160);
+                runtime[KEY_SCALE_X] = value(3);
+                runtime[KEY_SCALE_Y] = value(3);
+            }
+            None => {
+                runtime.remove(KEY_RESOLUTION);
+                runtime.remove(KEY_WINDOW_WIDTH);
+                runtime.remove(KEY_WINDOW_HEIGHT);
+                runtime.remove(KEY_SCALE_X);
+                runtime.remove(KEY_SCALE_Y);
+            }
+            Some(other) => {
+                if let ResolutionScale::Int(scale) = other {
+                    runtime[KEY_SCALE_X] = value(*scale);
+                    runtime[KEY_SCALE_Y] = value(*scale);
+                }
+            }
+        }
         set_or_remove(&mut runtime, KEY_ANISOTROPIC, graphics.anisotropic.map(value));
         set_or_remove(&mut runtime, KEY_ANTIALIASING, graphics.antialiasing.as_deref().map(value));
         set_or_remove(&mut runtime, KEY_UPSCALING, graphics.upscaling.as_deref().map(value));
@@ -317,7 +421,7 @@ mod tests {
             user_name: Some("Marcus".into()),
             fullscreen: true,
             graphics: GraphicsValues {
-                resolution_scale: Some(2),
+                resolution_scale: Some(2.into()),
                 anisotropic: Some(5),
                 antialiasing: Some("fxaa".into()),
                 upscaling: Some("fsr".into()),
