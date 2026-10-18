@@ -213,7 +213,7 @@ mod tests {
 
     #[test]
     fn refuses_a_folder_inside_the_other() {
-        let from = TempFolder::new("nested");
+        let from = TempFolder::new("saves-nested");
         fake_user_data(&from);
         assert_eq!(move_saves(&from, &from.join("inner"), false), Err(SavesError::NestedFolders));
         assert_eq!(move_saves(&from, &from, false).unwrap(), 0);
