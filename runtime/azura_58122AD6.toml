@@ -65,3 +65,13 @@ labels = [0x82FDCF48, 0x82FDCF64, 0x82FDD0E4, 0x82FDD264, 0x82FDD3E4, 0x82FDD564
 0x82C0AE40 = {}
 0x82B8C670 = {}
 
+
+# Mid-function hooks: calls into runtime/src code at a given guest address.
+
+# Rendering thread, right before it reads the vtable of the next render command
+# (lwz r10,0(r18) in sub_823F4238): orders it after the write pointer read. See
+# runtime/src/render_queue.cpp.
+[[entrypoint.midasm_hook]]
+address = 0x823F42D8
+name = "AzuraCheckRenderCommand"
+registers = ["r18"]
