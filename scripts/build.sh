@@ -9,6 +9,8 @@ readonly RUNTIME_DIR="${ROOT}/runtime"
 readonly XEX="${RUNTIME_DIR}/game/default.xex"
 readonly REGISTRY="${ROOT}/versions.toml"
 
+export PKG_CONFIG_PATH="${ROOT}/sdk/compat/pkgconfig:${PKG_CONFIG_PATH:-}"
+
 case "$(uname -s):$(uname -m)" in
   Darwin:arm64)
     readonly PLATFORM="mac-arm64"
@@ -20,7 +22,7 @@ case "$(uname -s):$(uname -m)" in
     readonly PLATFORM="linux-amd64"
     readonly SDK_DIR="${ROOT}/sdk/rexglue-0.10.0-linux-amd64/linux-amd64"
     readonly SDK_SRC="${ROOT}/sdk/rexglue-0.10.0-src"
-    readonly PRESET="linux-amd64"
+    readonly PRESET="linux-amd64-sdk-source"
     ;;
   Linux:aarch64|Linux:arm64)
     readonly PLATFORM="linux-arm64"

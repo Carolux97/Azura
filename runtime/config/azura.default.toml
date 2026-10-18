@@ -11,6 +11,7 @@
 # GPU emulation plugin loaded at start-up. "xenos" translates the console GPU to Vulkan, which
 # runs on Metal through MoltenVK on macOS.
 gpu_plugin = "xenos"
+vulkan_device = 0
 render_target_path_vulkan = "fsi"
 gpu_allow_invalid_fetch_constants = true
 readback_resolve = "fast"
