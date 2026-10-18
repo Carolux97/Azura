@@ -39,6 +39,23 @@ index 02d3bca..65bfcee 100644
    // Accessible by the UI thread.
    bool has_quit_ = false;
    bool is_in_destructor_ = false;
+diff --git a/src/ui/rex_app.cpp b/src/ui/rex_app.cpp
+--- a/src/ui/rex_app.cpp
++++ b/src/ui/rex_app.cpp
+@@ -511,10 +511,11 @@
+   // Hard-exit rather than run subsystem teardown, which can deadlock on a host
+   // lock still held by a straggler TerminateTitle left running. Flush (not
+   // ShutdownLogging, which frees loggers a straggler may still use); the OS
+-  // reclaims the rest.
++  // reclaims the rest. The exit code is the one the app set, if any (see
++  // WindowedAppContext::SetExitCode).
+   REXLOG_INFO("Title terminated; hard-exiting process.");
+   rex::FlushLogging();
+-  std::_Exit(0);
++  std::_Exit(app_context().GetExitCode(0));
+ }
+ 
+ bool ReXApp::OnCloseRequested(ui::UIEvent& e) {
 diff --git a/src/ui/windowed_app_main_sdl.cpp b/src/ui/windowed_app_main_sdl.cpp
 index 77bb1dc..5e759d6 100644
 --- a/src/ui/windowed_app_main_sdl.cpp
