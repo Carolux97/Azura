@@ -18,6 +18,7 @@
 #include "menu/menu_patches.h"
 #include "menu/pc_options.h"
 #include "prompts/button_prompts.h"
+#include "relaunch.h"
 #include "script_hooks.h"
 
 #if defined(__APPLE__)
@@ -68,6 +69,16 @@ class AzuraApp : public rex::ReXApp {
     azura::menu::InstallMenuPatches(runtime());
     azura::script::SetQuitHandler([this] {
       app_context().CallInUIThread([this] {
+        if (window()) {
+          window()->RequestClose();
+        }
+      });
+    });
+    // Accepting the restart message box (Video settings that apply at start-up): start the game
+    // again once this process exits, then close it like Quit Game.
+    azura::script::SetRestartHandler([this] {
+      app_context().CallInUIThread([this] {
+        azura::RelaunchAfterExit();
         if (window()) {
           window()->RequestClose();
         }

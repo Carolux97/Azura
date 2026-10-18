@@ -392,7 +392,7 @@ Implemented in `runtime/src/menu/pc_options.{h,cpp}` (data and texts) and `scrip
 
 | Position | Category | Change |
 | --- | --- | --- |
-| 1 | Video | A list: Calibrate brightness (opens the game's calibration screen), Full screen, Vsync, Anti-aliasing, Motion blur. Back and Defaults |
+| 1 | Video | A list: Calibrate brightness (opens the game's calibration screen), Full screen, Vsync, Anti-aliasing, Motion blur, Anisotropic filtering, Image scaling. Back and Defaults |
 | 5 | Keyboard and mouse | Replaces the storage location: Mouse sensitivity. Back and Defaults |
 
 How:
@@ -402,14 +402,17 @@ How:
   (category titles, button names) kept from the file.
 - **List rows borrow profile settings the game never uses**, the engine's racing game preferences:
   Movement Control 18 (calibration), Transmission 19 (vsync), Race Camera 20 (anti-aliasing), Brake
-  21 (motion blur), Accelerator 22 (full screen). Their definitions (`ProfileMappings[11]` to
-  `[15]`) get our value names. The calibration row's definition has two values, both named "Open",
+  21 (motion blur), Accelerator 22 (full screen); and two generic Xbox profile settings with three
+  values that Gears does not read (**inferred**): Controller Sensitivity 13 (anisotropic filtering:
+  off, 4x, 16x) and Voice Via Speakers 6 (image scaling: bilinear, AMD CAS, AMD FSR). Their
+  definitions (`ProfileMappings[2]`, `[3]` and `[11]` to `[15]`) get our value names. The calibration row's definition has two values, both named "Open",
   since an array cannot shrink. The slider uses ID 9105, which the profile does not have.
 - **Showing values:** while `PopulateOptionsList` is on one of our rows, every call it makes
   (entered through `CallFunction`) rewrites its locals `Slider_Value` / `OptionList_Index` with the
   real value, so the call that hands them to Flash reads ours.
 - **Saving values:** when `GetOptionValueAt(Index)` returns for one of our rows, the value is
-  applied to its cvar (`fullscreen`, `vsync`, `swap_post_effect`, `motion_blur`, `mnk_sensitivity`)
+  applied to its cvar (`fullscreen`, `vsync`, `swap_post_effect`, `motion_blur`,
+  `anisotropic_override`, `present_effect`, `mnk_sensitivity`)
   and written to `azura.toml`, leaving the rest of the file as it is. The menu also writes the
   borrowed profile settings, which is harmless.
 - **Defaults** resets our rows to the values in `azura.default.toml` (the SDK's default when a key

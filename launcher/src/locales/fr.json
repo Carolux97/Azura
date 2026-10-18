@@ -3,8 +3,7 @@
     "title": "Azura Launcher"
   },
   "a11y": {
-    "sections": "Sections",
-    "quality": "Qualité"
+    "sections": "Sections"
   },
   "nav": {
     "play": "Jouer",
@@ -86,30 +85,12 @@
   },
   "graphics": {
     "title": "Graphismes",
-    "startup": "Avant de jouer",
-    "startupHelp": "Le jeu lit ces réglages au démarrage. Les modifications s'appliquent à la prochaine partie.",
-    "low": "Basse",
-    "medium": "Moyenne",
-    "high": "Haute",
-    "auto": "Auto",
     "mode": "Mode",
     "windowed": "Fenêtré",
     "fullscreen": "Plein écran",
-    "custom": "Personnalisé",
-    "autoResolved": "Auto utilise {preset} sur ce Mac",
     "renderResolution": "Résolution de rendu",
     "original": "d'origine",
-    "advanced": "Avancé",
-    "advancedHelp": "Modifier l'un de ces réglages fait passer le préréglage en Personnalisé.",
-    "anisotropic": "Filtrage anisotrope",
-    "off": "Désactivé",
-    "upscaling": "Mise à l'échelle",
-    "bilinear": "Bilinéaire (d'origine)",
-    "cas": "AMD CAS (netteté)",
-    "fsr": "AMD FSR 1",
-    "textureMemory": "Mémoire des textures",
-    "inGame": "En jeu",
-    "inGameHelp": "La synchro verticale, l'anticrénelage, le flou de mouvement et le plein écran se trouvent dans le menu Options du jeu, sous Vidéo ; la sensibilité de la souris, sous Clavier et souris. Les touches se règlent en jeu : appuyez sur {key}."
+    "resolutionAuto": "Automatique ({size})"
   },
   "online": {
     "title": "Multijoueur",

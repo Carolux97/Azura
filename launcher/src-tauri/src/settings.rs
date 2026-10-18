@@ -44,8 +44,6 @@ const KEY_GPU_PLUGIN: &str = "gpu_plugin";
 const KEY_FULLSCREEN: &str = "fullscreen";
 const KEY_SCALE_X: &str = "draw_resolution_scale_x";
 const KEY_SCALE_Y: &str = "draw_resolution_scale_y";
-const KEY_ANISOTROPIC: &str = "anisotropic_override";
-const KEY_UPSCALING: &str = "present_effect";
 const KEY_TEXTURE_SOFT: &str = "texture_cache_memory_limit_soft";
 const KEY_TEXTURE_HARD: &str = "texture_cache_memory_limit_hard";
 
@@ -76,9 +74,11 @@ const GPU_PLUGIN: &str = "xenos";
 #[serde(rename_all = "camelCase")]
 pub struct GraphicsValues {
     pub resolution_scale: Option<i64>,
-    pub anisotropic: Option<i64>,
-    pub upscaling: Option<String>,
     pub texture_memory: Option<i64>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Everything the interface reads and writes, exchanged with it as JSON.
@@ -93,8 +93,9 @@ pub struct Settings {
     pub fullscreen: bool,
     /// Graphics values found in `azura.toml`.
     pub graphics: GraphicsValues,
-    /// Preset the user selected: "low", "medium", "high", "auto" or "custom".
-    pub graphics_preset: String,
+    /// The render resolution follows this Mac ("Automatic") instead of the scale the user chose.
+    #[serde(default = "default_true")]
+    pub resolution_auto: bool,
     /// Interface language: "auto" (follow the system) or a launcher locale code.
     pub ui_language: String,
     /// Engine language code of the game ("INT", "ESN", ...), when one is selected.
@@ -112,7 +113,7 @@ pub struct Settings {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 struct LauncherFile {
-    graphics_preset: String,
+    resolution_auto: bool,
     ui_language: String,
     game_language: Option<String>,
     game_language_chosen: bool,
@@ -122,7 +123,7 @@ struct LauncherFile {
 impl Default for LauncherFile {
     fn default() -> Self {
         Self {
-            graphics_preset: "auto".into(),
+            resolution_auto: true,
             ui_language: "auto".into(),
             game_language: None,
             game_language_chosen: false,
@@ -230,11 +231,9 @@ impl SettingsPaths {
                 .unwrap_or(false),
             graphics: GraphicsValues {
                 resolution_scale: get_integer(&runtime, KEY_SCALE_X),
-                anisotropic: get_integer(&runtime, KEY_ANISOTROPIC),
-                upscaling: get_string(&runtime, KEY_UPSCALING),
                 texture_memory: get_integer(&runtime, KEY_TEXTURE_SOFT),
             },
-            graphics_preset: launcher.graphics_preset,
+            resolution_auto: launcher.resolution_auto,
             ui_language: launcher.ui_language,
             game_language: launcher.game_language,
             game_language_chosen: launcher.game_language_chosen,
@@ -274,8 +273,6 @@ impl SettingsPaths {
         );
         set_or_remove(&mut runtime, KEY_SCALE_X, graphics.resolution_scale.map(value));
         set_or_remove(&mut runtime, KEY_SCALE_Y, graphics.resolution_scale.map(value));
-        set_or_remove(&mut runtime, KEY_ANISOTROPIC, graphics.anisotropic.map(value));
-        set_or_remove(&mut runtime, KEY_UPSCALING, graphics.upscaling.as_deref().map(value));
         set_or_remove(&mut runtime, KEY_TEXTURE_SOFT, graphics.texture_memory.map(value));
         // The hard limit is kept at twice the soft one, as in the SDK defaults (384 / 768 MB).
         set_or_remove(&mut runtime, KEY_TEXTURE_HARD, graphics.texture_memory.map(|mb| value(mb * 2)));
@@ -287,7 +284,7 @@ impl SettingsPaths {
         write_atomically(&self.runtime_config, &runtime_out).map_err(|e| e.to_string())?;
 
         let launcher = LauncherFile {
-            graphics_preset: settings.graphics_preset.clone(),
+            resolution_auto: settings.resolution_auto,
             ui_language: settings.ui_language.clone(),
             game_language: settings.game_language.clone(),
             game_language_chosen: settings.game_language_chosen,
@@ -314,11 +311,9 @@ mod tests {
             fullscreen: true,
             graphics: GraphicsValues {
                 resolution_scale: Some(2),
-                anisotropic: Some(5),
-                upscaling: Some("fsr".into()),
                 texture_memory: Some(768),
             },
-            graphics_preset: "high".into(),
+            resolution_auto: false,
             ui_language: "es".into(),
             game_language: Some("ESN".into()),
             game_language_chosen: true,
@@ -334,7 +329,7 @@ mod tests {
         assert_eq!(settings.user_name, None);
         assert!(!settings.fullscreen);
         assert_eq!(settings.graphics, GraphicsValues::default());
-        assert_eq!(settings.graphics_preset, "auto");
+        assert!(settings.resolution_auto);
         assert_eq!(settings.ui_language, "auto");
     }
 
@@ -356,7 +351,7 @@ mod tests {
     fn settings_without_a_saves_folder_still_deserialize() {
         // The interface may send its settings without the saves folder; they must still save.
         let json = r#"{"gameFolder":"/Games/Gears of War 3","userName":"Marcus","fullscreen":false,
-            "graphics":{},"graphicsPreset":"auto","uiLanguage":"auto","gameLanguage":null,
+            "graphics":{},"uiLanguage":"auto","gameLanguage":null,
             "gameLanguageChosen":false}"#;
         let settings: Settings = serde_json::from_str(json).unwrap();
         assert_eq!(settings.game_folder.as_deref(), Some("/Games/Gears of War 3"));
@@ -383,13 +378,14 @@ mod tests {
             "user_language = 5",
             "draw_resolution_scale_x = 2",
             "draw_resolution_scale_y = 2",
-            "anisotropic_override = 5",
-            "present_effect = \"fsr\"",
             "texture_cache_memory_limit_soft = 768",
             "texture_cache_memory_limit_hard = 1536",
         ] {
             assert!(text.contains(line), "missing `{line}` in:\n{text}");
         }
+        // Set in the game's Options menu, not by the launcher.
+        assert!(!text.contains("anisotropic_override"));
+        assert!(!text.contains("present_effect"));
     }
 
     #[test]
@@ -405,14 +401,14 @@ mod tests {
         let dir = temp_folder("merge");
         let config = dir.join(RUNTIME_CONFIG);
         fs::create_dir_all(config.parent().unwrap()).unwrap();
-        fs::write(&config, "# Set from the F4 menu.\nvsync = false\nanisotropic_override = 1\n").unwrap();
+        fs::write(&config, "# Set from the F4 menu.\nvsync = false\ntexture_cache_memory_limit_soft = 1\n").unwrap();
 
         SettingsPaths::new(&dir).save(&sample_settings()).unwrap();
         let text = fs::read_to_string(&config).unwrap();
         assert!(text.contains("# Set from the F4 menu."));
         assert!(text.contains("vsync = false"));
-        assert!(text.contains("anisotropic_override = 5"));
-        assert!(!text.contains("anisotropic_override = 1"));
+        assert!(text.contains("texture_cache_memory_limit_soft = 768"));
+        assert!(!text.contains("texture_cache_memory_limit_soft = 1\n"));
     }
 
     #[test]
@@ -422,7 +418,8 @@ mod tests {
         fs::create_dir_all(config.parent().unwrap()).unwrap();
         fs::write(
             &config,
-            "swap_post_effect = \"fxaa_extreme\"\nmotion_blur = false\nmnk_sensitivity = 1.50\n",
+            "swap_post_effect = \"fxaa_extreme\"\nmotion_blur = false\nmnk_sensitivity = 1.50\n\
+             anisotropic_override = 1\npresent_effect = \"cas\"\n",
         )
         .unwrap();
 
@@ -431,6 +428,8 @@ mod tests {
         assert!(text.contains("swap_post_effect = \"fxaa_extreme\""));
         assert!(text.contains("motion_blur = false"));
         assert!(text.contains("mnk_sensitivity = 1.50"));
+        assert!(text.contains("anisotropic_override = 1"));
+        assert!(text.contains("present_effect = \"cas\""));
     }
 
     #[test]
@@ -452,9 +451,9 @@ mod tests {
         let dir = temp_folder("types");
         let config = dir.join(RUNTIME_CONFIG);
         fs::create_dir_all(config.parent().unwrap()).unwrap();
-        fs::write(&config, "anisotropic_override = \"high\"\nfullscreen = 1\n").unwrap();
+        fs::write(&config, "draw_resolution_scale_x = \"high\"\nfullscreen = 1\n").unwrap();
         let settings = SettingsPaths::new(&dir).load().unwrap();
-        assert_eq!(settings.graphics.anisotropic, None);
+        assert_eq!(settings.graphics.resolution_scale, None);
         assert!(!settings.fullscreen);
     }
 
