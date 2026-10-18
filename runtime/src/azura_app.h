@@ -133,6 +133,12 @@ class AzuraApp : public rex::ReXApp {
       rex::cvar::SetFlagByName("hid_mappings_file", controller_db.string());
       REXLOG_INFO("Configured hid_mappings_file to: {}", controller_db.string());
     }
+#if defined(__linux__)
+    // The Linux build relaxes these guest memory protections; macOS keeps the SDK defaults.
+    rex::cvar::SetFlagByName("protect_zero", "false");
+    rex::cvar::SetFlagByName("writable_executable_memory", "true");
+    rex::cvar::SetFlagByName("protect_on_release", "false");
+#endif
     return paths;
   }
 

@@ -33,8 +33,14 @@ import {
   onGameRestart,
   onUpdateProgress,
   changeSavesFolder,
+  createSaveBackup,
+  getSaveStatus,
+  openSavesFolder,
   pickGameFolder,
   pickSavesFolder,
+  repairSaves,
+  resetSaves,
+  restoreSaveBackup,
   saveSettings,
 } from "./platform.js";
 import { defaultGameLanguage, gameLanguageName } from "./gameLanguages.js";
@@ -85,6 +91,8 @@ const state = {
   // Render resolution: "Automatic" (follows this Mac) or the scale the user chose.
   resolutionAuto: true,
   resolutionScale: 1,
+  // State of the saved games (see saves.rs), or null until it is read.
+  saveStatus: null,
 };
 
 /** Resolution scale the game will use: the automatic one for this Mac, or the chosen one. */
@@ -153,6 +161,9 @@ const createSpores = () => {
 const showView = (name) => {
   document.querySelectorAll(".nav-item").forEach((item) => item.classList.toggle("is-active", item.dataset.view === name));
   document.querySelectorAll(".view").forEach((view) => view.classList.toggle("is-active", view.dataset.view === name));
+  if (name === "saves") {
+    refreshAndRenderSaves();
+  }
 };
 
 const setupNavigation = () => {
@@ -200,7 +211,13 @@ const renderPlay = () => {
   const runtime = document.getElementById("status-runtime");
   const [, tone] = runtimeState();
   runtime.dataset.state = tone === "ok" ? "ok" : "warn";
-  let runtimeDetail = `ReXGlue ${RUNTIME_VERSION} · mac-arm64`;
+  const system = state.system;
+  const platformName = system?.os === "linux"
+    ? `Linux ${system.arch}`
+    : system?.os === "macos"
+      ? `macOS ${system.arch}`
+      : system?.arch ? `mac-${system.arch}` : "mac-arm64";
+  let runtimeDetail = `ReXGlue ${RUNTIME_VERSION} · ${platformName}`;
   if (!state.runtime.buildFound && !state.runtime.installed) runtimeDetail = t("status.runtimeMissing");
   else if (!state.runtime.installed) runtimeDetail = t("status.runtimeNotInstalled");
   else if (state.runtime.updateAvailable) runtimeDetail = t("status.runtimeUpdate");
@@ -225,9 +242,10 @@ const renderPlay = () => {
   button.querySelector(".btn-launch-sub").textContent = t(sub);
   renderLogState();
 
-  // "Apple M4 · 24 GB"; a browser cannot tell, so it names the platform only.
+  // "Apple M4 · 24 GB" or "AMD Ryzen · 32 GB"; a browser cannot tell, so it names the platform only.
   const { chip, memoryGb } = state.system ?? {};
-  const machine = [chip ?? "Apple Silicon", memoryGb ? `${memoryGb} GB` : null].filter(Boolean).join(" · ");
+  const fallbackMachine = state.system?.os === "linux" ? "Linux PC · Vulkan" : "Apple Silicon";
+  const machine = [chip ?? fallbackMachine, memoryGb ? `${memoryGb} GB` : null].filter(Boolean).join(" · ");
   document.getElementById("status-gpu-detail").textContent = t("status.gpuValue", { machine });
 
   const date = document.querySelector(".news-item time");
@@ -631,6 +649,131 @@ const setupUpdates = () => {
     .catch((error) => console.info("No update information:", error));
 };
 
+/**
+ * Renders the save manager status, metrics, and backup list.
+ */
+const renderSaves = () => {
+  const s = state.saveStatus;
+  if (!s) return;
+
+  const badge = document.getElementById("save-status-badge");
+  if (badge) {
+    badge.dataset.state = s.status === "ok" ? "ok" : s.status === "corrupted" ? "warn" : "";
+  }
+  const statusText = document.getElementById("save-status-text");
+  if (statusText) {
+    statusText.textContent = t(
+      s.status === "ok"
+        ? "saves.stateOk"
+        : s.status === "corrupted"
+          ? "saves.stateCorrupted"
+          : "saves.stateEmpty",
+    );
+  }
+
+  const cpCount = document.getElementById("save-checkpoints-count");
+  if (cpCount) cpCount.textContent = String(s.checkpointCount);
+
+  const lastSaved = document.getElementById("save-last-modified");
+  if (lastSaved) lastSaved.textContent = s.lastSaved ?? "—";
+
+  const detailMsg = document.getElementById("save-detail-msg");
+  if (detailMsg) detailMsg.textContent = s.message;
+
+  const savePath = document.getElementById("save-path");
+  if (savePath) savePath.value = s.savePath;
+
+  const backupsContainer = document.getElementById("backups-list");
+  if (backupsContainer) {
+    if (!s.backups || s.backups.length === 0) {
+      backupsContainer.innerHTML = `<p class="help" data-i18n="saves.noBackups">${t("saves.noBackups")}</p>`;
+    } else {
+      backupsContainer.innerHTML = "";
+      for (const b of s.backups) {
+        const item = document.createElement("div");
+        item.className = "backup-item";
+        const sizeKb = (b.sizeBytes / 1024).toFixed(1);
+        item.innerHTML = `
+          <div>
+            <div class="backup-item-title">${b.id}</div>
+            <div class="backup-item-meta">${b.date} · ${sizeKb} KB</div>
+          </div>
+          <button class="btn btn-sm btn-restore-backup" data-id="${b.id}">${t("saves.restore")}</button>
+        `;
+        backupsContainer.appendChild(item);
+      }
+    }
+  }
+};
+
+const refreshAndRenderSaves = async () => {
+  try {
+    state.saveStatus = await getSaveStatus();
+    renderSaves();
+  } catch (error) {
+    console.error("Failed to load save status:", error);
+  }
+};
+
+const setupSaves = () => {
+  document.getElementById("btn-repair-saves")?.addEventListener("click", async () => {
+    try {
+      await repairSaves();
+      toast(t("saves.repairedToast"));
+      await refreshAndRenderSaves();
+    } catch (error) {
+      console.error("Repair failed:", error);
+      toast(String(error));
+    }
+  });
+
+  document.getElementById("btn-reset-saves")?.addEventListener("click", async () => {
+    if (!window.confirm(t("saves.cleanHelp"))) return;
+    try {
+      await resetSaves();
+      toast(t("saves.resetToast"));
+      await refreshAndRenderSaves();
+    } catch (error) {
+      console.error("Reset failed:", error);
+      toast(String(error));
+    }
+  });
+
+  document.getElementById("btn-backup-saves")?.addEventListener("click", async () => {
+    try {
+      await createSaveBackup();
+      toast(t("saves.backupToast"));
+      await refreshAndRenderSaves();
+    } catch (error) {
+      console.error("Backup failed:", error);
+      toast(String(error));
+    }
+  });
+
+  document.getElementById("open-saves-dir")?.addEventListener("click", async () => {
+    try {
+      await openSavesFolder();
+    } catch (error) {
+      console.error("Open folder failed:", error);
+    }
+  });
+
+  document.getElementById("backups-list")?.addEventListener("click", async (e) => {
+    const btn = e.target.closest(".btn-restore-backup");
+    if (!btn) return;
+    const backupId = btn.dataset.id;
+    if (!window.confirm(`${t("saves.restore")}: ${backupId}?`)) return;
+    try {
+      await restoreSaveBackup(backupId);
+      toast(t("saves.restoreToast"));
+      await refreshAndRenderSaves();
+    } catch (error) {
+      console.error("Restore failed:", error);
+      toast(String(error));
+    }
+  });
+};
+
 const renderAll = () => {
   renderPlay();
   renderInstall();
@@ -638,6 +781,7 @@ const renderAll = () => {
   renderGraphics();
   renderLanguageOptions();
   renderUpdate();
+  renderSaves();
 };
 
 /**
@@ -652,6 +796,9 @@ const setupReloadOnFocus = () => {
       await refreshRuntime();
       renderInstall();
       renderPlay();
+      if (document.querySelector('.view[data-view="saves"]')?.classList.contains("is-active")) {
+        await refreshAndRenderSaves();
+      }
       if (saveTimer) return;
       const settings = await loadSettings();
       if (!settings) return;
@@ -682,6 +829,7 @@ setupLaunch();
 setupInstall();
 setupGraphics();
 setupLanguages();
+setupSaves();
 setupReloadOnFocus();
 
 /**
@@ -711,4 +859,5 @@ onLocaleChange(renderAll);
 await initI18n(settings.uiLanguage);
 document.getElementById("ui-language").value = getPreference();
 await restoreGameFolder(settings.gameFolder);
+await refreshAndRenderSaves();
 setupUpdates();
