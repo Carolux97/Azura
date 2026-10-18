@@ -3,8 +3,7 @@
     "title": "Azura Launcher"
   },
   "a11y": {
-    "sections": "セクション",
-    "quality": "画質"
+    "sections": "セクション"
   },
   "nav": {
     "play": "プレイ",
@@ -86,30 +85,12 @@
   },
   "graphics": {
     "title": "グラフィック",
-    "startup": "起動前の設定",
-    "startupHelp": "これらの設定はゲーム起動時に読み込まれます。変更は次回のプレイから反映されます。",
-    "low": "低",
-    "medium": "中",
-    "high": "高",
-    "auto": "自動",
     "mode": "表示モード",
     "windowed": "ウィンドウ",
     "fullscreen": "フルスクリーン",
-    "custom": "カスタム",
-    "autoResolved": "この Mac では自動で「{preset}」を使用",
     "renderResolution": "レンダリング解像度",
     "original": "オリジナル",
-    "advanced": "詳細設定",
-    "advancedHelp": "これらの設定を変更すると、プリセットはカスタムになります。",
-    "anisotropic": "異方性フィルタリング",
-    "off": "オフ",
-    "upscaling": "画像スケーリング",
-    "bilinear": "バイリニア（オリジナル）",
-    "cas": "AMD CAS（シャープ化）",
-    "fsr": "AMD FSR 1",
-    "textureMemory": "テクスチャメモリ",
-    "inGame": "ゲーム内",
-    "inGameHelp": "垂直同期、アンチエイリアス、モーションブラー、フルスクリーンはゲームのオプションメニューの「ビデオ」に、マウス感度は「キーボードとマウス」にあります。キーの割り当てはプレイ中に変更できます。{key} を押してください。"
+    "resolutionAuto": "自動（{size}）"
   },
   "online": {
     "title": "マルチプレイ",

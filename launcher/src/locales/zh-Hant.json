@@ -3,8 +3,7 @@
     "title": "Azura Launcher"
   },
   "a11y": {
-    "sections": "區段",
-    "quality": "畫質"
+    "sections": "區段"
   },
   "nav": {
     "play": "開始遊戲",
@@ -86,30 +85,12 @@
   },
   "graphics": {
     "title": "圖形",
-    "startup": "啟動前設定",
-    "startupHelp": "遊戲會在啟動時讀取這些設定，變更將於下次遊玩時生效。",
-    "low": "低",
-    "medium": "中",
-    "high": "高",
-    "auto": "自動",
     "mode": "顯示模式",
     "windowed": "視窗",
     "fullscreen": "全螢幕",
-    "custom": "自訂",
-    "autoResolved": "自動模式在這台 Mac 上使用「{preset}」",
     "renderResolution": "繪製解析度",
     "original": "原始",
-    "advanced": "進階",
-    "advancedHelp": "變更其中任何一項設定，預設組合就會變為自訂。",
-    "anisotropic": "非等向性過濾",
-    "off": "關閉",
-    "upscaling": "影像縮放",
-    "bilinear": "雙線性（原始）",
-    "cas": "AMD CAS（銳利化）",
-    "fsr": "AMD FSR 1",
-    "textureMemory": "材質記憶體",
-    "inGame": "遊戲內",
-    "inGameHelp": "垂直同步、反鋸齒、動態模糊與全螢幕位於遊戲的選項選單「視訊」中，滑鼠靈敏度位於「鍵盤與滑鼠」中。按鍵配置可在遊玩時變更：請按 {key}。"
+    "resolutionAuto": "自動（{size}）"
   },
   "online": {
     "title": "多人遊戲",

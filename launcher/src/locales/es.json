@@ -3,8 +3,7 @@
     "title": "Azura Launcher"
   },
   "a11y": {
-    "sections": "Secciones",
-    "quality": "Calidad"
+    "sections": "Secciones"
   },
   "nav": {
     "play": "Jugar",
@@ -86,30 +85,12 @@
   },
   "graphics": {
     "title": "Gráficos",
-    "startup": "Antes de jugar",
-    "startupHelp": "El juego lee estos ajustes al arrancar. Los cambios se aplican la próxima vez que juegues.",
-    "low": "Baja",
-    "medium": "Media",
-    "high": "Alta",
-    "auto": "Auto",
     "mode": "Modo",
     "windowed": "Ventana",
     "fullscreen": "Pantalla completa",
-    "custom": "Personalizado",
-    "autoResolved": "Auto usa {preset} en este Mac",
     "renderResolution": "Resolución de renderizado",
     "original": "original",
-    "advanced": "Avanzado",
-    "advancedHelp": "Si cambias cualquiera de estos ajustes, el preset pasa a Personalizado.",
-    "anisotropic": "Filtrado anisotrópico",
-    "off": "Desactivado",
-    "upscaling": "Escalado de imagen",
-    "bilinear": "Bilineal (original)",
-    "cas": "AMD CAS (nitidez)",
-    "fsr": "AMD FSR 1",
-    "textureMemory": "Memoria de texturas",
-    "inGame": "Dentro del juego",
-    "inGameHelp": "La sincronización vertical, el antialiasing, el desenfoque de movimiento y la pantalla completa están en el menú Opciones del juego, en Vídeo; la sensibilidad del ratón, en Teclado y ratón. La asignación de teclas se cambia mientras juegas: pulsa {key}."
+    "resolutionAuto": "Automática ({size})"
   },
   "online": {
     "title": "Multijugador",

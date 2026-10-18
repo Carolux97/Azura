@@ -3,8 +3,7 @@
     "title": "Azura Launcher"
   },
   "a11y": {
-    "sections": "Sections",
-    "quality": "Quality"
+    "sections": "Sections"
   },
   "nav": {
     "play": "Play",
@@ -86,30 +85,12 @@
   },
   "graphics": {
     "title": "Graphics",
-    "startup": "Before launch",
-    "startupHelp": "The game reads these settings when it starts. Changes apply the next time you play.",
-    "low": "Low",
-    "medium": "Medium",
-    "high": "High",
-    "auto": "Auto",
     "mode": "Mode",
     "windowed": "Windowed",
     "fullscreen": "Fullscreen",
-    "custom": "Custom",
-    "autoResolved": "Auto uses {preset} on this Mac",
     "renderResolution": "Render resolution",
     "original": "original",
-    "advanced": "Advanced",
-    "advancedHelp": "Changing any of these turns the preset into Custom.",
-    "anisotropic": "Anisotropic filtering",
-    "off": "Off",
-    "upscaling": "Image scaling",
-    "bilinear": "Bilinear (original)",
-    "cas": "AMD CAS (sharpening)",
-    "fsr": "AMD FSR 1",
-    "textureMemory": "Texture memory",
-    "inGame": "In game",
-    "inGameHelp": "Vertical sync, anti-aliasing, motion blur and full screen are in the game's Options menu, under Video; mouse sensitivity is under Keyboard and mouse. Key bindings are changed while playing: press {key}."
+    "resolutionAuto": "Automatic ({size})"
   },
   "online": {
     "title": "Multiplayer",

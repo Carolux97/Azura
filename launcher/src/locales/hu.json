@@ -3,8 +3,7 @@
     "title": "Azura Launcher"
   },
   "a11y": {
-    "sections": "Szakaszok",
-    "quality": "Minőség"
+    "sections": "Szakaszok"
   },
   "nav": {
     "play": "Játék",
@@ -86,30 +85,12 @@
   },
   "graphics": {
     "title": "Grafika",
-    "startup": "Indítás előtt",
-    "startupHelp": "A játék indításkor olvassa be ezeket a beállításokat. A változások a következő játéktól érvényesek.",
-    "low": "Alacsony",
-    "medium": "Közepes",
-    "high": "Magas",
-    "auto": "Auto",
     "mode": "Mód",
     "windowed": "Ablakos",
     "fullscreen": "Teljes képernyő",
-    "custom": "Egyéni",
-    "autoResolved": "Az Auto ezen a Macen ezt használja: {preset}",
     "renderResolution": "Renderelési felbontás",
     "original": "eredeti",
-    "advanced": "Speciális",
-    "advancedHelp": "Ha ezek közül bármelyiket módosítod, a beállításkészlet Egyénire vált.",
-    "anisotropic": "Anizotróp szűrés",
-    "off": "Ki",
-    "upscaling": "Képskálázás",
-    "bilinear": "Bilineáris (eredeti)",
-    "cas": "AMD CAS (élesítés)",
-    "fsr": "AMD FSR 1",
-    "textureMemory": "Textúramemória",
-    "inGame": "Játékban",
-    "inGameHelp": "A függőleges szinkron, az élsimítás, a mozgási elmosódás és a teljes képernyő a játék Beállítások menüjében, a Videó részben található, az egér érzékenysége a Billentyűzet és egér részben. A billentyűkiosztás játék közben módosítható: nyomd meg a(z) {key} billentyűt."
+    "resolutionAuto": "Automatikus ({size})"
   },
   "online": {
     "title": "Többjátékos",

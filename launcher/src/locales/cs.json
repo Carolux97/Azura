@@ -3,8 +3,7 @@
     "title": "Azura Launcher"
   },
   "a11y": {
-    "sections": "Sekce",
-    "quality": "Kvalita"
+    "sections": "Sekce"
   },
   "nav": {
     "play": "Hrát",
@@ -86,30 +85,12 @@
   },
   "graphics": {
     "title": "Grafika",
-    "startup": "Před spuštěním",
-    "startupHelp": "Hra čte tato nastavení při spuštění. Změny se projeví při příštím hraní.",
-    "low": "Nízká",
-    "medium": "Střední",
-    "high": "Vysoká",
-    "auto": "Auto",
     "mode": "Režim",
     "windowed": "V okně",
     "fullscreen": "Celá obrazovka",
-    "custom": "Vlastní",
-    "autoResolved": "Auto na tomto Macu používá {preset}",
     "renderResolution": "Rozlišení vykreslování",
     "original": "původní",
-    "advanced": "Pokročilé",
-    "advancedHelp": "Změna kteréhokoli z těchto nastavení přepne předvolbu na Vlastní.",
-    "anisotropic": "Anizotropní filtrování",
-    "off": "Vypnuto",
-    "upscaling": "Škálování obrazu",
-    "bilinear": "Bilineární (původní)",
-    "cas": "AMD CAS (zostření)",
-    "fsr": "AMD FSR 1",
-    "textureMemory": "Paměť textur",
-    "inGame": "Ve hře",
-    "inGameHelp": "Vertikální synchronizaci, vyhlazování hran, rozmazání pohybu a celou obrazovku najdete v nabídce Možnosti ve hře, v části Video; citlivost myši v části Klávesnice a myš. Přiřazení kláves se mění během hraní: stiskněte {key}."
+    "resolutionAuto": "Automaticky ({size})"
   },
   "online": {
     "title": "Multiplayer",
