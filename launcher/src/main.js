@@ -16,15 +16,7 @@
 
 import { getLocale, getPreference, initI18n, onLocaleChange, setPreference, systemLocale, t } from "./i18n.js";
 import { SUPPORTED_LOCALES } from "./locale.js";
-import {
-  matchPreset,
-  PRESET_ORDER,
-  presetValues,
-  renderSize,
-  resolveAutoPreset,
-  setDetectedSystem,
-  SETTING_KEYS,
-} from "./graphics.js";
+import { RESOLUTION_SCALES, renderSize, resolveAutoScale, setDetectedSystem, textureMemoryFor } from "./graphics.js";
 import {
   checkForUpdate,
   checkGameFolder,
@@ -89,17 +81,21 @@ const state = {
   launcherVersion: BROWSER_LAUNCHER_VERSION,
   userName: "",
   fullscreen: false,
-  preset: "auto",
-  graphics: presetValues("auto"),
+  // Render resolution: "Automatic" (follows this Mac) or the scale the user chose.
+  resolutionAuto: true,
+  resolutionScale: 1,
 };
+
+/** Resolution scale the game will use: the automatic one for this Mac, or the chosen one. */
+const effectiveScale = () => (state.resolutionAuto ? resolveAutoScale() : state.resolutionScale);
 
 /** Builds the settings object platform.saveSettings stores (see src-tauri/src/settings.rs). */
 const currentSettings = () => ({
   gameFolder: state.savedGameFolder,
   userName: state.userName || null,
   fullscreen: state.fullscreen,
-  graphics: { ...state.graphics },
-  graphicsPreset: state.preset,
+  graphics: { resolutionScale: effectiveScale(), textureMemory: textureMemoryFor(effectiveScale()) },
+  resolutionAuto: state.resolutionAuto,
   uiLanguage: getPreference(),
   gameLanguage: state.gameLanguage,
   gameLanguageChosen: state.gameLanguageChosen,
@@ -499,80 +495,42 @@ const restoreGameFolder = async (folder) => {
   }
 };
 
-/**
- * Takes the graphics settings as stored. A value missing from the file comes from the saved
- * preset; the preset shown is then recomputed, so values changed in game (F4) show as "Custom".
- */
+/** Takes the graphics settings as stored. */
 const applyStoredGraphics = (settings) => {
-  const saved = PRESET_ORDER.includes(settings.graphicsPreset) ? settings.graphicsPreset : "auto";
-  const stored = Object.fromEntries(
-    Object.entries(settings.graphics ?? {}).filter(([key, value]) => SETTING_KEYS.includes(key) && value != null),
-  );
-  state.graphics = { ...presetValues(saved), ...stored };
-  state.preset = matchPreset(state.graphics, saved);
+  state.resolutionAuto = settings.resolutionAuto !== false;
+  const stored = Number(settings.graphics?.resolutionScale);
+  state.resolutionScale = Number.isInteger(stored) && stored > 0 ? stored : resolveAutoScale();
   state.fullscreen = Boolean(settings.fullscreen);
 };
 
-/** Reads a control's value with the type of the setting it edits (numbers stay numbers). */
-const readSetting = (control) => {
-  const value = control.value;
-  return typeof state.graphics[control.dataset.setting] === "number" ? Number(value) : value;
+/** Text of a resolution scale: "2560 × 1440 (2×)", or "1280 × 720 · original" for 1. */
+const resolutionLabel = (scale) => {
+  const { width, height } = renderSize(scale);
+  const size = `${width} × ${height}`;
+  return scale === 1 ? `${size} · ${t("graphics.original")}` : `${size} (${scale}×)`;
 };
 
-/** Writes the current graphics state into the preset selector and every setting control. */
+/** Writes the current graphics state into the controls. */
 const renderGraphics = () => {
-  document.querySelectorAll("#preset [data-preset]").forEach((button) => {
-    button.setAttribute("aria-checked", String(button.dataset.preset === state.preset));
-  });
-  document.querySelector('#preset [data-preset="custom"]').hidden = state.preset !== "custom";
-
-  const note = document.getElementById("preset-note");
-  note.textContent =
-    state.preset === "auto" ? t("graphics.autoResolved", { preset: t(`graphics.${resolveAutoPreset()}`) }) : "";
-
-  for (const key of SETTING_KEYS) {
-    const select = document.querySelector(`[data-setting="${key}"]`);
-    const value = String(state.graphics[key]);
-    // A value set outside the launcher (in game, or by hand) may not be one of the options; it
-    // is added as it is rather than shown as an empty field.
-    if (![...select.options].some((option) => option.value === value)) {
-      select.add(new Option(value, value));
-    }
-    select.value = value;
-  }
+  const select = document.getElementById("resolution-scale");
+  select.replaceChildren();
+  select.add(new Option(t("graphics.resolutionAuto", { size: resolutionLabel(resolveAutoScale()) }), "auto"));
+  // A scale set by hand in azura.toml may not be one the launcher offers; it is listed as it is.
+  const scales = RESOLUTION_SCALES.includes(state.resolutionScale)
+    ? RESOLUTION_SCALES
+    : [...RESOLUTION_SCALES, state.resolutionScale];
+  for (const scale of scales) select.add(new Option(resolutionLabel(scale), String(scale)));
+  select.value = state.resolutionAuto ? "auto" : String(state.resolutionScale);
   document.getElementById("display-mode").value = state.fullscreen ? "fullscreen" : "windowed";
-
-  // Render resolution options show the real size each scale produces ("2560 × 1440 (2×)").
-  document.querySelectorAll("#resolution-scale option").forEach((option) => {
-    const scale = Number(option.value);
-    const { width, height } = renderSize(scale);
-    const size = `${width} × ${height}`;
-    option.textContent = scale === 1 ? `${size} · ${t("graphics.original")}` : `${size} (${scale}×)`;
-  });
 };
 
-/**
- * Wires the preset selector and the setting controls. Choosing a preset copies its values into
- * every control; editing a control re-checks which preset (if any) the values still match, so a
- * hand-tuned combination shows as "Custom".
- */
+/** Wires the graphics controls; every change is saved. */
 const setupGraphics = () => {
-  document.querySelectorAll("#preset [data-preset]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.preset = button.dataset.preset;
-      state.graphics = presetValues(state.preset);
-      renderGraphics();
-      persist();
-    });
-  });
-
-  document.querySelectorAll("[data-setting]").forEach((control) => {
-    control.addEventListener("change", () => {
-      state.graphics = { ...state.graphics, [control.dataset.setting]: readSetting(control) };
-      state.preset = matchPreset(state.graphics, state.preset);
-      renderGraphics();
-      persist();
-    });
+  const resolution = document.getElementById("resolution-scale");
+  resolution.addEventListener("change", () => {
+    state.resolutionAuto = resolution.value === "auto";
+    if (!state.resolutionAuto) state.resolutionScale = Number(resolution.value);
+    persist();
   });
 
   const displayMode = document.getElementById("display-mode");
@@ -678,7 +636,7 @@ const renderAll = () => {
 
 /**
  * Refreshes the runtime status and reloads the settings when the window regains focus, to show
- * what the in-game menu (F4) changed. Settings are not reloaded while a save is pending, so an
+ * what the game changed (full screen, in its Options menu). Settings are not reloaded while a save is pending, so an
  * edit that is about to be written is never replaced.
  */
 const setupReloadOnFocus = () => {
@@ -721,8 +679,8 @@ setupLanguages();
 setupReloadOnFocus();
 
 /**
- * Detects this Mac and the launcher version; a failure leaves them unknown, and "Auto" then
- * resolves to medium.
+ * Detects this Mac and the launcher version; a failure leaves them unknown, and "Automatic"
+ * then resolves to the console's resolution.
  */
 const detectSystem = async () => {
   try {
@@ -734,7 +692,7 @@ const detectSystem = async () => {
   setDetectedSystem(state.system);
 };
 
-// The machine is detected before the settings load, because "Auto" resolves from it.
+// The machine is detected before the settings load, because "Automatic" resolves from it.
 await detectSystem();
 await refreshRuntime();
 const settings = await loadSavedSettings();

@@ -27,7 +27,6 @@ const AUTO = "auto";
  */
 const RICH_PLACEHOLDERS = {
   "install.gameFolderHelp": { file: ["code", "default.xex"] },
-  "graphics.inGameHelp": { key: ["kbd", "F4"] },
 };
 
 let fallbackMessages = {};

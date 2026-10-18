@@ -3,8 +3,7 @@
     "title": "Azura Launcher"
   },
   "a11y": {
-    "sections": "Sezioni",
-    "quality": "Qualità"
+    "sections": "Sezioni"
   },
   "nav": {
     "play": "Gioca",
@@ -86,30 +85,12 @@
   },
   "graphics": {
     "title": "Grafica",
-    "startup": "Prima di giocare",
-    "startupHelp": "Il gioco legge queste impostazioni all'avvio. Le modifiche si applicano dalla prossima partita.",
-    "low": "Bassa",
-    "medium": "Media",
-    "high": "Alta",
-    "auto": "Auto",
     "mode": "Modalità",
     "windowed": "Finestra",
     "fullscreen": "Schermo intero",
-    "custom": "Personalizzata",
-    "autoResolved": "Auto usa {preset} su questo Mac",
     "renderResolution": "Risoluzione di rendering",
     "original": "originale",
-    "advanced": "Avanzate",
-    "advancedHelp": "Se modifichi una di queste impostazioni, il preset diventa Personalizzata.",
-    "anisotropic": "Filtro anisotropico",
-    "off": "Disattivato",
-    "upscaling": "Ridimensionamento immagine",
-    "bilinear": "Bilineare (originale)",
-    "cas": "AMD CAS (nitidezza)",
-    "fsr": "AMD FSR 1",
-    "textureMemory": "Memoria texture",
-    "inGame": "Nel gioco",
-    "inGameHelp": "Sincronizzazione verticale, anti-aliasing, sfocatura di movimento e schermo intero sono nel menu Opzioni del gioco, in Video; la sensibilità del mouse è in Tastiera e mouse. I tasti si modificano durante il gioco: premi {key}."
+    "resolutionAuto": "Automatica ({size})"
   },
   "online": {
     "title": "Multigiocatore",

@@ -185,19 +185,6 @@
       <section class="view" data-view="graphics" aria-labelledby="graphics-title">
         <h1 id="graphics-title" class="view-title" data-i18n="graphics.title"></h1>
         <div class="panel">
-          <h2 class="panel-title" data-i18n="graphics.startup"></h2>
-          <p class="help" data-i18n="graphics.startupHelp"></p>
-          <div class="preset-row">
-            <div class="segmented" id="preset" role="radiogroup" data-i18n-attr="aria-label:a11y.quality">
-              <button role="radio" data-preset="low" data-i18n="graphics.low"></button>
-              <button role="radio" data-preset="medium" data-i18n="graphics.medium"></button>
-              <button role="radio" data-preset="high" data-i18n="graphics.high"></button>
-              <button role="radio" data-preset="auto" data-i18n="graphics.auto"></button>
-              <!-- Shown only when the advanced values match no preset; it cannot be clicked. -->
-              <button role="radio" data-preset="custom" data-i18n="graphics.custom" disabled hidden></button>
-            </div>
-            <span class="preset-note" id="preset-note"></span>
-          </div>
           <div class="field-grid">
             <label class="field">
               <span data-i18n="graphics.mode"></span>
@@ -208,51 +195,9 @@
             </label>
             <label class="field">
               <span data-i18n="graphics.renderResolution"></span>
-              <select data-setting="resolutionScale" id="resolution-scale">
-                <option value="1"></option>
-                <option value="2"></option>
-                <option value="3"></option>
-              </select>
+              <select id="resolution-scale"></select>
             </label>
           </div>
-
-          <details class="advanced">
-            <summary data-i18n="graphics.advanced"></summary>
-            <p class="help" data-i18n="graphics.advancedHelp"></p>
-            <div class="field-grid">
-              <label class="field">
-                <span data-i18n="graphics.anisotropic"></span>
-                <select data-setting="anisotropic">
-                  <option value="0" data-i18n="graphics.off"></option>
-                  <option value="1">1×</option>
-                  <option value="2">2×</option>
-                  <option value="3">4×</option>
-                  <option value="4">8×</option>
-                  <option value="5">16×</option>
-                </select>
-              </label>
-              <label class="field">
-                <span data-i18n="graphics.upscaling"></span>
-                <select data-setting="upscaling">
-                  <option value="bilinear" data-i18n="graphics.bilinear"></option>
-                  <option value="cas" data-i18n="graphics.cas"></option>
-                  <option value="fsr" data-i18n="graphics.fsr"></option>
-                </select>
-              </label>
-              <label class="field">
-                <span data-i18n="graphics.textureMemory"></span>
-                <select data-setting="textureMemory">
-                  <option value="384">384 MB</option>
-                  <option value="768">768 MB</option>
-                  <option value="1536">1536 MB</option>
-                </select>
-              </label>
-            </div>
-          </details>
-        </div>
-        <div class="panel panel-note">
-          <h2 class="panel-title" data-i18n="graphics.inGame"></h2>
-          <p class="help" data-i18n="graphics.inGameHelp"></p>
         </div>
       </section>
 

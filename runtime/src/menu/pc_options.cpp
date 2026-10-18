@@ -1,8 +1,10 @@
 #include "pc_options.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <sstream>
@@ -24,7 +26,17 @@ namespace {
 enum class Kind { kAction, kToggle, kChoice, kSlider };
 
 // Text keys of an option, looked up in Texts.
-enum class Label { kCalibrate, kFullscreen, kVsync, kAntialiasing, kMotionBlur, kMouseSensitivity, kCount };
+enum class Label {
+  kCalibrate,
+  kFullscreen,
+  kVsync,
+  kAntialiasing,
+  kMotionBlur,
+  kMouseSensitivity,
+  kAnisotropic,
+  kUpscaling,
+  kCount
+};
 
 // One PC option: the row it takes in a category of the menu, the cvar it edits, the profile
 // setting the row is tied to (`psid`) and, for lists, where that setting is defined with its value
@@ -44,8 +56,8 @@ struct Option {
 
 const std::vector<Option>& Options() {
   static const std::vector<Option> options = {
-      // List rows use profile settings the game never uses, the racing game preferences of the
-      // engine, and rewrite the value names of their definitions in place. Changing anything else
+      // List rows use profile settings the game never uses (here the racing game preferences of the
+      // engine) and rewrite the value names of their definitions in place. Changing anything else
       // in the list of definitions (moving one, or defining new IDs in its empty slots) makes the
       // game hang while it reads the profile. A definition keeps as many values as it had, so the
       // calibration row (Movement Control, two values) names both "Open".
@@ -55,6 +67,10 @@ const std::vector<Option>& Options() {
       {kVideoCategory, 3, Label::kAntialiasing, "swap_post_effect", Kind::kChoice, 20, 13,
        {"none", "fxaa", "fxaa_extreme"}},
       {kVideoCategory, 4, Label::kMotionBlur, "motion_blur", Kind::kToggle, 21, 14, {}},
+      // Generic Xbox profile settings with three values that Gears never reads: Controller
+      // Sensitivity (it has its own, 368, 59 and 60) and Voice Via Speakers.
+      {kVideoCategory, 5, Label::kAnisotropic, "anisotropic_override", Kind::kChoice, 13, 2, {"0", "3", "5"}},
+      {kVideoCategory, 6, Label::kUpscaling, "present_effect", Kind::kChoice, 6, 3, {"bilinear", "cas", "fsr"}},
       // A slider needs no definition, and its ID is one the profile does not have: the menu's reads
       // and writes of it fail and change nothing.
       {kKeyboardMouseCategory, 0, Label::kMouseSensitivity, "mnk_sensitivity", Kind::kSlider, 9105, -1, {}, 0.1f, 3.0f,
@@ -71,6 +87,9 @@ struct Texts {
   const char* fxaa;
   const char* fxaa_extreme;
   const char* open;  // the calibration row's only value
+  const char* bilinear;
+  const char* cas;
+  const char* fsr;
 };
 
 // Keyed by the extension of the localization files. Labels are upper case like the game's own.
@@ -83,8 +102,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"VSYNC", "Synchronise the image with the display to avoid tearing."},
          {"ANTI-ALIASING", "Smooth jagged edges. Takes effect the next time the game starts."},
          {"MOTION BLUR", "Blur the image during fast movement. Takes effect the next time the game starts."},
-         {"MOUSE SENSITIVITY", "Adjust how fast the camera turns with the mouse."}},
-        "Off", "On", "FXAA", "FXAA extreme", "Open"}},
+         {"MOUSE SENSITIVITY", "Adjust how fast the camera turns with the mouse."},
+         {"ANISOTROPIC FILTERING", "Keep textures sharp when seen at an angle."},
+         {"IMAGE SCALING", "How the image is scaled to the window. Takes effect the next time the game starts."}},
+        "Off", "On", "FXAA", "FXAA extreme", "Open", "Bilinear (original)", "AMD CAS (sharpening)", "AMD FSR 1"}},
       {"esn",
        {{"TECLADO Y RATÓN", "Ajuste las opciones del teclado y el ratón."},
         {{"CALIBRAR BRILLO", "Abra la pantalla de calibración del brillo."},
@@ -93,8 +114,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"ANTIALIASING", "Suavice los bordes dentados. Se aplica la próxima vez que inicie el juego."},
          {"DESENFOQUE DE MOVIMIENTO",
           "Desenfoque la imagen en los movimientos rápidos. Se aplica la próxima vez que inicie el juego."},
-         {"SENSIBILIDAD DEL RATÓN", "Ajuste la velocidad a la que gira la cámara con el ratón."}},
-        "Desactivado", "Activado", "FXAA", "FXAA extremo", "Abrir"}},
+         {"SENSIBILIDAD DEL RATÓN", "Ajuste la velocidad a la que gira la cámara con el ratón."},
+         {"FILTRADO ANISOTRÓPICO", "Mantenga nítidas las texturas vistas en ángulo."},
+         {"ESCALADO DE IMAGEN", "Cómo se escala la imagen a la ventana. Se aplica la próxima vez que inicie el juego."}},
+        "Desactivado", "Activado", "FXAA", "FXAA extremo", "Abrir", "Bilineal (original)", "AMD CAS (nitidez)", "AMD FSR 1"}},
       {"deu",
        {{"TASTATUR UND MAUS", "Passen Sie die Einstellungen für Tastatur und Maus an."},
         {{"HELLIGKEIT KALIBRIEREN", "Öffnet den Bildschirm zur Kalibrierung der Helligkeit."},
@@ -102,8 +125,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"VERTIKALE SYNCHRONISATION", "Synchronisiert das Bild mit dem Bildschirm, um Tearing zu vermeiden."},
          {"KANTENGLÄTTUNG", "Glättet gezackte Kanten. Wird beim nächsten Spielstart wirksam."},
          {"BEWEGUNGSUNSCHÄRFE", "Verwischt das Bild bei schnellen Bewegungen. Wird beim nächsten Spielstart wirksam."},
-         {"MAUSEMPFINDLICHKEIT", "Legt fest, wie schnell sich die Kamera mit der Maus dreht."}},
-        "Aus", "Ein", "FXAA", "FXAA extrem", "Öffnen"}},
+         {"MAUSEMPFINDLICHKEIT", "Legt fest, wie schnell sich die Kamera mit der Maus dreht."},
+         {"ANISOTROPE FILTERUNG", "Hält schräg betrachtete Texturen scharf."},
+         {"BILDSKALIERUNG", "Wie das Bild auf das Fenster skaliert wird. Wird beim nächsten Spielstart wirksam."}},
+        "Aus", "Ein", "FXAA", "FXAA extrem", "Öffnen", "Bilinear (Original)", "AMD CAS (Schärfung)", "AMD FSR 1"}},
       {"ita",
        {{"TASTIERA E MOUSE", "Regola le impostazioni di tastiera e mouse."},
         {{"CALIBRA LUMINOSITÀ", "Apri la schermata di calibrazione della luminosità."},
@@ -111,8 +136,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"SINCRONIZZAZIONE VERTICALE", "Sincronizza l'immagine con lo schermo per evitare lo screen tearing."},
          {"ANTI-ALIASING", "Smussa i bordi frastagliati. Ha effetto al prossimo avvio del gioco."},
          {"SFOCATURA DI MOVIMENTO", "Sfoca l'immagine durante i movimenti rapidi. Ha effetto al prossimo avvio del gioco."},
-         {"SENSIBILITÀ DEL MOUSE", "Regola la velocità con cui la visuale ruota con il mouse."}},
-        "Disattivato", "Attivato", "FXAA", "FXAA estremo", "Apri"}},
+         {"SENSIBILITÀ DEL MOUSE", "Regola la velocità con cui la visuale ruota con il mouse."},
+         {"FILTRO ANISOTROPICO", "Mantiene nitide le texture viste di sbieco."},
+         {"RIDIMENSIONAMENTO IMMAGINE", "Come l'immagine viene scalata nella finestra. Ha effetto al prossimo avvio del gioco."}},
+        "Disattivato", "Attivato", "FXAA", "FXAA estremo", "Apri", "Bilineare (originale)", "AMD CAS (nitidezza)", "AMD FSR 1"}},
       {"jpn",
        {{"キーボードとマウス", "キーボードとマウスの設定を調整します。"},
         {{"明るさの調整", "明るさの調整画面を開きます。"},
@@ -120,8 +147,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"垂直同期", "画面のティアリングを防ぐため、映像をディスプレイと同期させます。"},
          {"アンチエイリアス", "ギザギザした輪郭を滑らかにします。次回ゲーム起動時に適用されます。"},
          {"モーションブラー", "素早い動きの際に映像をぼかします。次回ゲーム起動時に適用されます。"},
-         {"マウス感度", "マウスでカメラを回転させる速さを調整します。"}},
-        "オフ", "オン", "FXAA", "FXAA (最大)", "開く"}},
+         {"マウス感度", "マウスでカメラを回転させる速さを調整します。"},
+         {"異方性フィルタリング", "斜めから見たテクスチャを鮮明に保ちます。"},
+         {"画像スケーリング", "映像をウィンドウに合わせて拡大する方法です。次回ゲーム起動時に適用されます。"}},
+        "オフ", "オン", "FXAA", "FXAA (最大)", "開く", "バイリニア（オリジナル）", "AMD CAS（シャープ化）", "AMD FSR 1"}},
       {"fra",
        {{"CLAVIER ET SOURIS", "Réglez les options du clavier et de la souris."},
         {{"CALIBRER LA LUMINOSITÉ", "Ouvrez l'écran de calibrage de la luminosité."},
@@ -129,8 +158,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"SYNCHRO VERTICALE", "Synchronisez l'image avec l'écran pour éviter les déchirures."},
          {"ANTICRÉNELAGE", "Lissez les bords crénelés. Prend effet au prochain lancement du jeu."},
          {"FLOU DE MOUVEMENT", "Floutez l'image lors des mouvements rapides. Prend effet au prochain lancement du jeu."},
-         {"SENSIBILITÉ DE LA SOURIS", "Réglez la vitesse de rotation de la caméra avec la souris."}},
-        "Désactivé", "Activé", "FXAA", "FXAA extrême", "Ouvrir"}},
+         {"SENSIBILITÉ DE LA SOURIS", "Réglez la vitesse de rotation de la caméra avec la souris."},
+         {"FILTRAGE ANISOTROPE", "Gardez les textures nettes vues en biais."},
+         {"MISE À L'ÉCHELLE", "Mise à l'échelle de l'image dans la fenêtre. Prend effet au prochain lancement du jeu."}},
+        "Désactivé", "Activé", "FXAA", "FXAA extrême", "Ouvrir", "Bilinéaire (d'origine)", "AMD CAS (netteté)", "AMD FSR 1"}},
       {"ptb",
        {{"TECLADO E MOUSE", "Ajuste as opções do teclado e do mouse."},
         {{"CALIBRAR BRILHO", "Abra a tela de calibração do brilho."},
@@ -139,8 +170,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"ANTISSERRILHAMENTO", "Suaviza bordas serrilhadas. Aplica-se na próxima vez que o jogo for iniciado."},
          {"DESFOQUE DE MOVIMENTO",
           "Desfoca a imagem em movimentos rápidos. Aplica-se na próxima vez que o jogo for iniciado."},
-         {"SENSIBILIDADE DO MOUSE", "Ajuste a velocidade com que a câmera gira com o mouse."}},
-        "Desativado", "Ativado", "FXAA", "FXAA extremo", "Abrir"}},
+         {"SENSIBILIDADE DO MOUSE", "Ajuste a velocidade com que a câmera gira com o mouse."},
+         {"FILTRAGEM ANISOTRÓPICA", "Mantém nítidas as texturas vistas em ângulo."},
+         {"ESCALA DA IMAGEM", "Como a imagem é dimensionada para a janela. Aplica-se na próxima vez que o jogo for iniciado."}},
+        "Desativado", "Ativado", "FXAA", "FXAA extremo", "Abrir", "Bilinear (original)", "AMD CAS (nitidez)", "AMD FSR 1"}},
       {"pol",
        {{"KLAWIATURA I MYSZ", "Dostosuj ustawienia klawiatury i myszy."},
         {{"KALIBRACJA JASNOŚCI", "Otwórz ekran kalibracji jasności."},
@@ -148,8 +181,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"SYNCHRONIZACJA PIONOWA", "Synchronizuje obraz z ekranem, aby uniknąć rozrywania."},
          {"WYGŁADZANIE KRAWĘDZI", "Wygładza postrzępione krawędzie. Zadziała po ponownym uruchomieniu gry."},
          {"ROZMYCIE RUCHU", "Rozmywa obraz podczas szybkiego ruchu. Zadziała po ponownym uruchomieniu gry."},
-         {"CZUŁOŚĆ MYSZY", "Dostosuj szybkość obrotu kamery myszą."}},
-        "Wyłączone", "Włączone", "FXAA", "FXAA ekstremalne", "Otwórz"}},
+         {"CZUŁOŚĆ MYSZY", "Dostosuj szybkość obrotu kamery myszą."},
+         {"FILTROWANIE ANIZOTROPOWE", "Zachowuje ostrość tekstur oglądanych pod kątem."},
+         {"SKALOWANIE OBRAZU", "Sposób skalowania obrazu do okna. Zadziała po ponownym uruchomieniu gry."}},
+        "Wyłączone", "Włączone", "FXAA", "FXAA ekstremalne", "Otwórz", "Dwuliniowe (oryginalne)", "AMD CAS (wyostrzanie)", "AMD FSR 1"}},
       {"rus",
        {{"КЛАВИАТУРА И МЫШЬ", "Настройте параметры клавиатуры и мыши."},
         {{"КАЛИБРОВКА ЯРКОСТИ", "Откройте экран калибровки яркости."},
@@ -157,8 +192,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"ВЕРТИКАЛЬНАЯ СИНХРОНИЗАЦИЯ", "Синхронизирует изображение с экраном, чтобы избежать разрывов."},
          {"СГЛАЖИВАНИЕ", "Сглаживает неровные края. Вступит в силу при следующем запуске игры."},
          {"РАЗМЫТИЕ В ДВИЖЕНИИ", "Размывает изображение при быстром движении. Вступит в силу при следующем запуске игры."},
-         {"ЧУВСТВИТЕЛЬНОСТЬ МЫШИ", "Настройте скорость поворота камеры мышью."}},
-        "Выкл.", "Вкл.", "FXAA", "FXAA (макс.)", "Открыть"}},
+         {"ЧУВСТВИТЕЛЬНОСТЬ МЫШИ", "Настройте скорость поворота камеры мышью."},
+         {"АНИЗОТРОПНАЯ ФИЛЬТРАЦИЯ", "Сохраняет чёткость текстур, видимых под углом."},
+         {"МАСШТАБИРОВАНИЕ ИЗОБРАЖЕНИЯ", "Способ масштабирования изображения под окно. Вступит в силу при следующем запуске игры."}},
+        "Выкл.", "Вкл.", "FXAA", "FXAA (макс.)", "Открыть", "Билинейное (оригинал)", "AMD CAS (резкость)", "AMD FSR 1"}},
       {"cze",
        {{"KLÁVESNICE A MYŠ", "Upravte nastavení klávesnice a myši."},
         {{"KALIBRACE JASU", "Otevřete obrazovku kalibrace jasu."},
@@ -166,8 +203,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"VERTIKÁLNÍ SYNCHRONIZACE", "Synchronizuje obraz s displejem, aby se zabránilo trhání."},
          {"VYHLAZOVÁNÍ HRAN", "Vyhlazuje zubaté hrany. Projeví se při příštím spuštění hry."},
          {"ROZMAZÁNÍ POHYBU", "Rozmazává obraz při rychlém pohybu. Projeví se při příštím spuštění hry."},
-         {"CITLIVOST MYŠI", "Upravte rychlost otáčení kamery myší."}},
-        "Vypnuto", "Zapnuto", "FXAA", "FXAA extrémní", "Otevřít"}},
+         {"CITLIVOST MYŠI", "Upravte rychlost otáčení kamery myší."},
+         {"ANIZOTROPNÍ FILTROVÁNÍ", "Udržuje ostré textury viděné pod úhlem."},
+         {"ŠKÁLOVÁNÍ OBRAZU", "Způsob škálování obrazu do okna. Projeví se při příštím spuštění hry."}},
+        "Vypnuto", "Zapnuto", "FXAA", "FXAA extrémní", "Otevřít", "Bilineární (původní)", "AMD CAS (zostření)", "AMD FSR 1"}},
       {"hun",
        {{"BILLENTYŰZET ÉS EGÉR", "A billentyűzet és az egér beállításai."},
         {{"FÉNYERŐ KALIBRÁLÁSA", "Megnyitja a fényerő kalibrálási képernyőjét."},
@@ -175,8 +214,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"FÜGGŐLEGES SZINKRON", "Szinkronizálja a képet a kijelzővel a képtörés elkerülése érdekében."},
          {"ÉLSIMÍTÁS", "Kisimítja a recés éleket. A játék következő indításakor lép életbe."},
          {"MOZGÁSI ELMOSÓDÁS", "Elmossa a képet gyors mozgáskor. A játék következő indításakor lép életbe."},
-         {"EGÉRÉRZÉKENYSÉG", "Az egérrel történő kameraforgatás sebessége."}},
-        "Ki", "Be", "FXAA", "FXAA (extrém)", "Megnyitás"}},
+         {"EGÉRÉRZÉKENYSÉG", "Az egérrel történő kameraforgatás sebessége."},
+         {"ANIZOTRÓP SZŰRÉS", "Élesen tartja a ferdén látott textúrákat."},
+         {"KÉPSKÁLÁZÁS", "A kép ablakhoz méretezésének módja. A játék következő indításakor lép életbe."}},
+        "Ki", "Be", "FXAA", "FXAA (extrém)", "Megnyitás", "Bilineáris (eredeti)", "AMD CAS (élesítés)", "AMD FSR 1"}},
       {"chn",
        {{"鍵盤與滑鼠", "調整鍵盤與滑鼠設定。"},
         {{"校正亮度", "開啟亮度校正畫面。"},
@@ -184,8 +225,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"垂直同步", "讓畫面與顯示器同步，以避免畫面撕裂。"},
          {"反鋸齒", "讓鋸齒狀的邊緣更平滑。下次啟動遊戲時生效。"},
          {"動態模糊", "在快速移動時模糊畫面。下次啟動遊戲時生效。"},
-         {"滑鼠靈敏度", "調整用滑鼠轉動鏡頭的速度。"}},
-        "關閉", "開啟", "FXAA", "FXAA 極致", "開啟"}},
+         {"滑鼠靈敏度", "調整用滑鼠轉動鏡頭的速度。"},
+         {"非等向性過濾", "讓斜角觀看的材質保持清晰。"},
+         {"影像縮放", "影像縮放至視窗的方式。下次啟動遊戲時生效。"}},
+        "關閉", "開啟", "FXAA", "FXAA 極致", "開啟", "雙線性（原始）", "AMD CAS（銳利化）", "AMD FSR 1"}},
       {"kor",
        {{"키보드 및 마우스", "키보드 및 마우스 설정을 조정합니다."},
         {{"밝기 보정", "밝기 보정 화면을 엽니다."},
@@ -193,8 +236,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"수직 동기화", "화면 찢어짐을 막기 위해 화면과 동기화합니다."},
          {"안티에일리어싱", "계단 현상을 부드럽게 합니다. 다음에 게임을 시작할 때 적용됩니다."},
          {"모션 블러", "빠르게 움직일 때 화면을 흐리게 합니다. 다음에 게임을 시작할 때 적용됩니다."},
-         {"마우스 감도", "마우스로 카메라를 돌리는 속도를 조정합니다."}},
-        "끔", "켬", "FXAA", "FXAA 최대", "열기"}},
+         {"마우스 감도", "마우스로 카메라를 돌리는 속도를 조정합니다."},
+         {"비등방성 필터링", "비스듬히 보이는 텍스처를 선명하게 유지합니다."},
+         {"이미지 스케일링", "화면을 창 크기에 맞게 조정하는 방식입니다. 다음에 게임을 시작할 때 적용됩니다."}},
+        "끔", "켬", "FXAA", "FXAA 최대", "열기", "바이리니어 (원본)", "AMD CAS (선명화)", "AMD FSR 1"}},
   };
   return texts;
 }
@@ -210,9 +255,21 @@ std::filesystem::path g_config_path;
 // Value shown for each option once read: settings that apply at the next start keep their old
 // cvar value until then, so the menu shows what was chosen rather than what is in effect.
 std::map<int, float> g_values;
+// Value each option had when the game started (the first time it was read), to tell whether one
+// that only applies at start-up has changed since.
+std::map<int, float> g_started;
+// Values of the start-up options the player was last asked about, so that answering "Later" is
+// not asked again until something changes.
+std::string g_prompted_for;
 
 bool Valid(int option) {
   return option >= 0 && option < static_cast<int>(Options().size());
+}
+
+// Options that the runtime only reads when the game starts.
+bool NeedsRestart(const Option& option) {
+  return option.label == Label::kAntialiasing || option.label == Label::kUpscaling ||
+         option.label == Label::kMotionBlur;
 }
 
 float ReadCvar(const Option& option) {
@@ -223,11 +280,28 @@ float ReadCvar(const Option& option) {
       return 0.0f;
     case Kind::kToggle:
       return value == "true" || value == "1" ? 1.0f : 0.0f;
-    case Kind::kChoice:
+    case Kind::kChoice: {
       for (size_t i = 0; i < option.choices.size(); ++i) {
         if (value == option.choices[i]) return static_cast<float>(i);
       }
-      return 0.0f;
+      // A value the list does not offer (set by hand, or by an older launcher): the nearest one
+      // when the values are numbers, else the first.
+      size_t nearest = 0;
+      try {
+        const double wanted = std::stod(value);
+        double best = 1e300;
+        for (size_t i = 0; i < option.choices.size(); ++i) {
+          const double distance = std::abs(std::stod(option.choices[i]) - wanted);
+          if (distance < best) {
+            best = distance;
+            nearest = i;
+          }
+        }
+      } catch (...) {
+        nearest = 0;
+      }
+      return static_cast<float>(nearest);
+    }
     case Kind::kSlider:
       try {
         return std::stof(value);
@@ -428,7 +502,10 @@ float PcOptionDisplayValue(int option) {
   if (!Valid(option)) return 0.0f;
   std::lock_guard lock(g_mutex);
   auto found = g_values.find(option);
-  if (found == g_values.end()) found = g_values.emplace(option, ReadCvar(Options()[option])).first;
+  if (found == g_values.end()) {
+    found = g_values.emplace(option, ReadCvar(Options()[option])).first;
+    g_started.emplace(option, found->second);
+  }
   return found->second;
 }
 
@@ -440,6 +517,7 @@ void PcOptionStoreValue(int option, float value) {
     std::lock_guard lock(g_mutex);
     const auto found = g_values.find(option);
     const float shown = found != g_values.end() ? found->second : ReadCvar(entry);
+    g_started.emplace(option, shown);
     if (FormatValue(entry, shown, false) == FormatValue(entry, value, false)) return;
     g_values[option] = value;
     config_path = g_config_path;
@@ -475,6 +553,47 @@ void PcOptionsResetDefaults(int category) {
     if (!config_path.empty()) UpsertTomlKey(config_path, option.cvar, FormatValue(option, value, true));
     REXLOG_INFO("[Azura options] {} reset to {}", option.cvar, FormatValue(option, value, false));
   }
+}
+
+bool PcOptionsCategoryClosed(int category) {
+  std::lock_guard lock(g_mutex);
+  bool pending = false;
+  std::string chosen;
+  for (const auto& [option, value] : g_values) {
+    const Option& entry = Options()[option];
+    if (entry.category != category || !NeedsRestart(entry)) continue;
+    const auto started = g_started.find(option);
+    if (started != g_started.end() && FormatValue(entry, started->second, false) != FormatValue(entry, value, false)) {
+      pending = true;
+    }
+    chosen += std::string(entry.cvar) + "=" + FormatValue(entry, value, false) + ";";
+  }
+  if (!pending || chosen == g_prompted_for) return false;
+  g_prompted_for = chosen;
+  return true;
+}
+
+void PatchMessageBoxTexts(CoalescedSection& section, const std::string& language) {
+  // Title and question of the restart message box; its buttons are the game's Accept and Cancel.
+  static const std::map<std::string, std::pair<const char*, const char*>> texts = {
+      {"int", {"Restart required", "Some Video changes take effect when the game restarts. Restart now?"}},
+      {"esn", {"Reinicio necesario", "Algunos cambios de Vídeo se aplican al reiniciar el juego. ¿Reiniciar ahora?"}},
+      {"deu", {"Neustart erforderlich", "Einige Videoänderungen werden nach einem Neustart des Spiels wirksam. Jetzt neu starten?"}},
+      {"fra", {"Redémarrage nécessaire", "Certaines modifications vidéo prennent effet au redémarrage du jeu. Redémarrer maintenant ?"}},
+      {"ita", {"Riavvio necessario", "Alcune modifiche video hanno effetto al riavvio del gioco. Riavviare ora?"}},
+      {"ptb", {"Reinício necessário", "Algumas alterações de vídeo são aplicadas ao reiniciar o jogo. Reiniciar agora?"}},
+      {"pol", {"Wymagane ponowne uruchomienie", "Niektóre zmiany wideo zadziałają po ponownym uruchomieniu gry. Uruchomić ponownie teraz?"}},
+      {"rus", {"Требуется перезапуск", "Некоторые изменения видео вступят в силу после перезапуска игры. Перезапустить сейчас?"}},
+      {"cze", {"Je nutný restart", "Některé změny videa se projeví po restartu hry. Restartovat nyní?"}},
+      {"hun", {"Újraindítás szükséges", "Néhány videóbeállítás a játék újraindítása után lép életbe. Újraindítod most?"}},
+      {"jpn", {"再起動が必要です", "一部のビデオ設定はゲームの再起動後に適用されます。今すぐ再起動しますか？"}},
+      {"kor", {"다시 시작 필요", "일부 비디오 설정은 게임을 다시 시작하면 적용됩니다. 지금 다시 시작하시겠습니까?"}},
+      {"chn", {"需要重新啟動", "部分視訊設定會在重新啟動遊戲後生效。要立即重新啟動嗎？"}},
+  };
+  const auto found = texts.find(language == "esm" ? "esn" : language);
+  const auto& [title, message] = found != texts.end() ? found->second : texts.at("int");
+  SetKey(section, kRestartTitleKey, title);
+  SetKey(section, kRestartMessageKey, message);
 }
 
 void PatchOptionsMenu(CoalescedSection& section, const std::string& language) {
@@ -531,10 +650,16 @@ void PatchValueNames(CoalescedSection& section, const std::string& language) {
       case Kind::kToggle:
         values = std::string("(Id=0,Name=\"") + texts.off + "\"),(Id=1,Name=\"" + texts.on + "\")";
         break;
-      case Kind::kChoice:
-        values = std::string("(Id=0,Name=\"") + texts.off + "\"),(Id=1,Name=\"" + texts.fxaa + "\"),(Id=2,Name=\"" +
-                 texts.fxaa_extreme + "\")";
+      case Kind::kChoice: {
+        std::vector<std::string> names;
+        if (option.label == Label::kAntialiasing) names = {texts.off, texts.fxaa, texts.fxaa_extreme};
+        if (option.label == Label::kAnisotropic) names = {texts.off, "4×", "16×"};
+        if (option.label == Label::kUpscaling) names = {texts.bilinear, texts.cas, texts.fsr};
+        for (size_t i = 0; i < names.size(); ++i) {
+          values += (i ? "," : "") + std::string("(Id=") + std::to_string(i) + ",Name=\"" + names[i] + "\")";
+        }
         break;
+      }
       case Kind::kSlider:
         break;
     }

@@ -52,6 +52,7 @@
 #include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/ppc.h>
+#include <rex/system/kernel_state.h>
 
 #include "class_dump.h"
 #include "menu/menu_patches.h"
@@ -192,6 +193,7 @@ int32_t ParamOffset(const uint8_t* base, uint32_t function, const char* name) {
 
 std::mutex g_quit_mutex;
 std::function<void()> g_quit_handler;
+std::function<void()> g_restart_handler;
 std::atomic<bool> g_quit_requested{false};
 
 // Script functions the hooks react to, matched by FName index to keep the hooks cheap. The indices
@@ -206,14 +208,17 @@ enum WatchedName {
   kCloseVideoOptionsScene,   // UIScene_Options: the calibration screen closes
   kMenuOptionSelected,       // UIScene_Options.Callback_MenuOptionSelected: a category is chosen
   kReturnToMain,             // UIScene_Options.Callback_ReturnToMain: back to the categories
+  kResetAcceptAlias,         // button alias of the Defaults message box's Accept button
+  kGenericAcceptAlias,       // button alias of the game's plain Accept button
   kWatchedNameCount,
 };
 constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "HandleMenuSelection",   "PopulateOptionsList",    "GetOptionValueAt",
     "OnConfirm_ResetDefaults", "FilterButtonInput",    "Callback_VideoOptions",
-    "CloseVideoOptionsScene", "Callback_MenuOptionSelected", "Callback_ReturnToMain"};
+    "CloseVideoOptionsScene", "Callback_MenuOptionSelected", "Callback_ReturnToMain",
+    "ResetAccept",           "GenericAccept"};
 
-std::atomic<int32_t> g_names[kWatchedNameCount] = {-1, -1, -1, -1, -1, -1, -1, -1, -1};
+std::atomic<int32_t> g_names[kWatchedNameCount] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
 std::atomic<int> g_names_missing{kWatchedNameCount};
 std::atomic<uint32_t> g_names_scanned{0};
 std::atomic<uint32_t> g_calls{0};
@@ -390,7 +395,7 @@ void ShowPcOptionValue(uint8_t* base, uint32_t caller) {
   const uint32_t bits = slider ? FloatBits(value) : static_cast<uint32_t>(static_cast<int32_t>(value));
   if (LoadU32(base, address) == bits) return;
   StoreU32(base, address, bits);
-  REXLOG_INFO("[Azura options] Row {} of category {} shows {}", LoadU32(base, locals + kPopulateRow),
+  REXLOG_DEBUG("[Azura options] Row {} of category {} shows {}", LoadU32(base, locals + kPopulateRow),
                CurrentMode(base, LoadU32(base, caller + kFrameObject)), value);
 }
 
@@ -424,18 +429,136 @@ uint32_t FindClassFunction(const uint8_t* base, uint32_t cls, const std::string&
   return 0;
 }
 
-// Runs `function` (a script function without parameters or locals) on the frame that was about to
-// run another one of the same object, by pointing the frame at its node and bytecode for the time
-// of the call.
-void RunInstead(PPCContext& ctx, uint8_t* base, uint32_t function) {
+// Runs `function` (a script function without parameters) on the frame that was about to run, or
+// has just run, another one of the same object, by pointing the frame at its node and bytecode for
+// the time of the call. `locals` replaces the frame's locals when the function has some (the
+// frame's own are sized for the other function); 0 keeps them.
+void RunInstead(PPCContext& ctx, uint8_t* base, uint32_t function, uint32_t locals = 0) {
   const uint32_t frame = ctx.r4.u32;
   const uint32_t node = LoadU32(base, frame + kFrameNode);
   const uint32_t code = LoadU32(base, frame + kFrameCode);
+  const uint32_t own_locals = LoadU32(base, frame + kFrameLocals);
   StoreU32(base, frame + kFrameNode, function);
   StoreU32(base, frame + kFrameCode, LoadU32(base, function + kStructScript));
+  if (locals) StoreU32(base, frame + kFrameLocals, locals);
   __imp__sub_822DF9E0(ctx, base);
   StoreU32(base, frame + kFrameNode, node);
   StoreU32(base, frame + kFrameCode, code);
+  StoreU32(base, frame + kFrameLocals, own_locals);
+}
+
+// --- Restart message box ---
+//
+// When the player leaves a category of the Options menu (from the main menu) with a new value for
+// an option that only applies at start-up, the game's own message box offers to restart. It is the
+// one Defaults opens: Callback_ResetDefaults builds the button list ('ResetAccept',
+// 'GenericCancel'), then calls ShowUIMessage with the texts Localize("MessageBoxStrings",
+// "ResetOptions_Title" / "ResetOptions_Message", "GearGameUI") and OnConfirm_ResetDefaults as the
+// answer's delegate. For the time of one call, its bytecode is changed in place, every change
+// keeping the size: the two key names become ours (menu/pc_options.h, texts added to the game's
+// localization) and the 'ResetAccept' alias becomes 'GenericAccept' ("Accept"). The answer then
+// reaches OnConfirm_ResetDefaults with g_restart_dialog set, which restarts on Accept and does not
+// reset anything either way.
+constexpr uint8_t kTokenStringConst = 0x1F;
+constexpr uint8_t kTokenNameConst = 0x21;
+constexpr uint32_t kResetDefaultsLocalsSize = 64;  // ButtonAliases (a 12-byte array), with room
+std::atomic<bool> g_restart_dialog{false};
+uint32_t g_dialog_locals = 0;  // guest memory for Callback_ResetDefaults' locals
+
+// Offset of the zero-terminated string token holding `text` in `function`'s bytecode, or -1.
+int64_t FindStringConst(const uint8_t* base, uint32_t code, uint32_t size, const std::string& text) {
+  for (uint32_t i = 0; i + text.size() + 2 <= size; ++i) {
+    if (base[code + i] == kTokenStringConst && std::memcmp(base + code + i + 1, text.data(), text.size()) == 0 &&
+        base[code + i + 1 + text.size()] == 0) {
+      return i + 1;
+    }
+  }
+  return -1;
+}
+
+// Offset of the name token holding FName `index` in the bytecode, or -1.
+int64_t FindNameConst(const uint8_t* base, uint32_t code, uint32_t size, uint32_t index) {
+  for (uint32_t i = 0; i + 9 <= size; ++i) {
+    if (base[code + i] == kTokenNameConst && LoadU32(base, code + i + 1) == index &&
+        LoadU32(base, code + i + 5) == 0) {
+      return i + 1;
+    }
+  }
+  return -1;
+}
+
+// Guest memory for the locals and the return value of IsInFrontEnd (four 4-byte locals).
+constexpr uint32_t kFrontEndCallSize = 32;
+uint32_t g_front_end_call = 0;
+
+// Whether the options scene in `ctx` (the frame of Callback_ReturnToMain, which has just run) was
+// opened from the main menu. The game's own UIScene_Options.IsInFrontEnd decides it: the player's
+// HUD is the menu HUD and shows the front end movie. Its UBOOL return value is written to r5.
+bool IsInFrontEnd(PPCContext& ctx, uint8_t* base, uint32_t return_to_main) {
+  const uint32_t is_in_front_end =
+      FindClassFunction(base, LoadU32(base, return_to_main + kObjectOuter), "IsInFrontEnd");
+  if (!is_in_front_end) return false;
+  if (!g_front_end_call) {
+    g_front_end_call = rex::system::kernel_state()->memory()->SystemHeapAlloc(kFrontEndCallSize);
+    if (!g_front_end_call) return false;
+  }
+  std::memset(base + g_front_end_call, 0, kFrontEndCallSize);
+  const uint32_t result = g_front_end_call + kFrontEndCallSize - 4;
+  const uint64_t own_result = ctx.r5.u64;
+  ctx.r5.u64 = result;
+  RunInstead(ctx, base, is_in_front_end, g_front_end_call);
+  ctx.r5.u64 = own_result;
+  return LoadU32(base, result) != 0;
+}
+
+// Opens the restart message box. `ctx` holds the frame of Callback_ReturnToMain, which has just
+// run, on the options scene; `return_to_main` is that function (its class has the Defaults one).
+void OpenRestartDialog(PPCContext& ctx, uint8_t* base, uint32_t return_to_main) {
+  const int32_t reset_accept = g_names[kResetAcceptAlias].load();
+  const int32_t generic_accept = g_names[kGenericAcceptAlias].load();
+  const uint32_t reset_defaults =
+      FindClassFunction(base, LoadU32(base, return_to_main + kObjectOuter), "Callback_ResetDefaults");
+  if (!reset_defaults || reset_accept < 0 || generic_accept < 0) {
+    REXLOG_WARN("[Azura options] The restart message box is not available");
+    return;
+  }
+  const uint32_t code = LoadU32(base, reset_defaults + kStructScript);
+  const uint32_t size = LoadU32(base, reset_defaults + kStructScript + 4);
+  const int64_t title = FindStringConst(base, code, size, "ResetOptions_Title");
+  const int64_t message = FindStringConst(base, code, size, "ResetOptions_Message");
+  const int64_t alias = FindNameConst(base, code, size, static_cast<uint32_t>(reset_accept));
+  if (title < 0 || message < 0 || alias < 0) {
+    REXLOG_WARN("[Azura options] Callback_ResetDefaults is not as expected; no restart message box");
+    return;
+  }
+  if (!g_dialog_locals) {
+    g_dialog_locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kResetDefaultsLocalsSize);
+    if (!g_dialog_locals) return;
+  }
+  // A fresh, empty button list every time (the previous one, a few bytes, is left behind).
+  std::memset(base + g_dialog_locals, 0, kResetDefaultsLocalsSize);
+
+  const std::string title_key = azura::menu::kRestartTitleKey;
+  const std::string message_key = azura::menu::kRestartMessageKey;
+  std::memcpy(base + code + title, title_key.data(), title_key.size());
+  std::memcpy(base + code + message, message_key.data(), message_key.size());
+  StoreU32(base, code + alias, static_cast<uint32_t>(generic_accept));
+  g_restart_dialog.store(true);
+  RunInstead(ctx, base, reset_defaults, g_dialog_locals);
+  std::memcpy(base + code + title, "ResetOptions_Title", title_key.size());
+  std::memcpy(base + code + message, "ResetOptions_Message", message_key.size());
+  StoreU32(base, code + alias, static_cast<uint32_t>(reset_accept));
+  REXLOG_INFO("[Azura options] Offered to restart the game to apply Video settings");
+}
+
+void RequestRestart() {
+  std::function<void()> handler;
+  {
+    std::lock_guard lock(g_quit_mutex);
+    handler = g_restart_handler;
+  }
+  REXLOG_INFO("[Azura options] Restarting the game to apply Video settings");
+  if (handler) handler();
 }
 
 // Handles a button the options scene got. Returns true when it opened the calibration screen, in
@@ -505,6 +628,11 @@ void SetQuitHandler(std::function<void()> handler) {
   g_quit_handler = std::move(handler);
 }
 
+void SetRestartHandler(std::function<void()> handler) {
+  std::lock_guard lock(g_quit_mutex);
+  g_restart_handler = std::move(handler);
+}
+
 }  // namespace azura::script
 
 extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
@@ -533,7 +661,39 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     g_calibration_open.store(false);
     g_selected_row.store(0);
   }
+  // Leaving a category: the script saves its values first, then options that need a restart can
+  // offer one, only from the main menu.
+  if (Is(base, function, kReturnToMain)) {
+    const uint32_t scene = ctx.r3.u32;
+    const uint32_t frame = ctx.r4.u32;
+    const uint32_t result = ctx.r5.u32;
+    const int category = CurrentMode(base, scene);
+    __imp__sub_822DF9E0(ctx, base);
+    // In the middle of a game a restart would lose progress: only the rows' descriptions say when
+    // those options apply.
+    ctx.r3.u64 = scene;
+    ctx.r4.u64 = frame;
+    ctx.r5.u64 = result;
+    if (IsInFrontEnd(ctx, base, function) && azura::menu::PcOptionsCategoryClosed(category)) {
+      ctx.r3.u64 = scene;
+      ctx.r4.u64 = frame;
+      ctx.r5.u64 = result;
+      OpenRestartDialog(ctx, base, function);
+    }
+    return;
+  }
   if (Is(base, function, kFilterButtonInput) && HandleOptionsButton(ctx, base, function)) return;
+  // The answer of the restart message box (see OpenRestartDialog): Accept restarts; nothing is
+  // reset either way, so the Defaults code does not run.
+  if (Is(base, function, kResetDefaults) && g_restart_dialog.exchange(false)) {
+    const uint32_t locals = LoadU32(base, ctx.r4.u32 + kFrameLocals);
+    const int32_t alias = ParamOffset(base, function, "SelectedInputAlias");
+    if (alias >= 0 && LoadU32(base, locals + alias) == static_cast<uint32_t>(g_names[kGenericAcceptAlias].load())) {
+      RequestRestart();
+    }
+    if (ctx.r5.u32) StoreU32(base, ctx.r5.u32, 1);  // ReturnValue: the answer was handled
+    return;
+  }
   if (Is(base, function, kResetDefaults) && IsResetAccepted(base, ctx.r4.u32)) {
     // Our rows first; then the script resets the profile settings and redraws the list.
     azura::menu::PcOptionsResetDefaults(CurrentMode(base, ctx.r3.u32));
