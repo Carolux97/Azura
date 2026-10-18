@@ -16,8 +16,11 @@
 #include <rex/rex_app.h>
 #include <rex/system/flags.h>
 
+#include <rex/ui/keybinds.h>
+
 #include "menu/menu_patches.h"
 #include "menu/pc_options.h"
+#include "perf_overlay.h"
 #include "prompts/button_prompts.h"
 #include "script_hooks.h"
 
@@ -111,6 +114,17 @@ class AzuraApp : public rex::ReXApp {
     return paths;
   }
 
+  void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {
+    rex::ui::RegisterBind("bind_perf_overlay", "F6", "Toggle performance overlay", [this, drawer] {
+      if (perf_overlay_) {
+        perf_overlay_.reset();
+      } else {
+        perf_overlay_ = std::make_unique<azura::PerfOverlayDialog>(drawer);
+      }
+    });
+  }
+
  private:
   std::unique_ptr<azura::prompts::ButtonPrompts> button_prompts_;
+  std::unique_ptr<azura::PerfOverlayDialog> perf_overlay_;
 };
