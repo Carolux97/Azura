@@ -12,6 +12,7 @@
 #include <memory>
 
 #include <rex/cvar.h>
+#include <rex/perf/counter.h>
 #include <rex/rex_app.h>
 #include <rex/system/flags.h>
 
@@ -20,6 +21,9 @@
 #include "prompts/button_prompts.h"
 #include "relaunch.h"
 #include "script_hooks.h"
+
+// Defined by the SDK (core/perf/counter.cpp), which never opens the file itself.
+REXCVAR_DECLARE(std::string, perf_log_csv);
 
 #if defined(__APPLE__)
 #include "platform_mac.h"
@@ -62,6 +66,12 @@ class AzuraApp : public rex::ReXApp {
   // and route Quit Game to a normal window close (OnClosing shuts the title down).
   void OnPreLaunchModule() override {
     REXLOG_INFO("[Azura] Active gamertag / user_name: '{}'", REXCVAR_GET(user_name));
+    // The SDK writes one line per frame (frame time, FPS, draw calls...) to the CSV that
+    // perf_log_csv names, once it is opened here; empty, the default, writes nothing.
+    if (const std::string& csv = REXCVAR_GET(perf_log_csv); !csv.empty()) {
+      rex::perf::SetCsvLogPath(csv);
+      REXLOG_INFO("[Azura] Writing per-frame performance counters to {}", csv);
+    }
 #if defined(__APPLE__)
     // Again now that the window exists, so it gets the icon too (see platform_mac.mm).
     AutoConfigureMacAppIcon();
