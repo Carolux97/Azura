@@ -16,8 +16,6 @@
 #include <rex/rex_app.h>
 #include <rex/system/flags.h>
 
-REXCVAR_DECLARE(std::string, user_name);
-
 #include "menu/menu_patches.h"
 #include "menu/pc_options.h"
 #include "prompts/button_prompts.h"

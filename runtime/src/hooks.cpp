@@ -6,8 +6,6 @@
 #include <string_view>
 #include <iterator>
 
-REXCVAR_DEFINE_STRING(user_name, "User", "Kernel", "User name / gamertag");
-
 extern "C" void __imp__XGetLanguage(PPCContext& __restrict ctx, uint8_t* base) {
   (void)base;
   uint32_t lang = REXCVAR_GET(user_language);
