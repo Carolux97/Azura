@@ -11,6 +11,9 @@
 // Only options at the end of a list are removed, so no other option changes position: the game's
 // script identifies a choice by its index (UIScene_FrontEnd.HandleMenuSelection).
 //
+// The same files also get the changes to the Options menu and the engine settings described in
+// pc_options.h.
+//
 // The player's files are never modified. InstallMenuPatches writes patched copies to Azura's cache
 // folder and maps the game's paths to them in the virtual file system.
 

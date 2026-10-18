@@ -104,15 +104,13 @@
     "advancedHelp": "Ha ezek közül bármelyiket módosítod, a beállításkészlet Egyénire vált.",
     "anisotropic": "Anizotróp szűrés",
     "off": "Ki",
-    "antialiasing": "Élsimítás",
-    "fxaaExtreme": "FXAA (extrém)",
     "upscaling": "Képskálázás",
     "bilinear": "Bilineáris (eredeti)",
     "cas": "AMD CAS (élesítés)",
     "fsr": "AMD FSR 1",
     "textureMemory": "Textúramemória",
     "inGame": "Játékban",
-    "inGameHelp": "Az FPS-korlát, a mozgási elmosódás, az élsimítás, az egér érzékenysége, valamint a billentyűzet és a kontroller kiosztása játék közben módosítható: nyomd meg a(z) {key} billentyűt."
+    "inGameHelp": "A függőleges szinkron, az élsimítás, a mozgási elmosódás és a teljes képernyő a játék Beállítások menüjében, a Videó részben található, az egér érzékenysége a Billentyűzet és egér részben. A billentyűkiosztás játék közben módosítható: nyomd meg a(z) {key} billentyűt."
   },
   "online": {
     "title": "Többjátékos",

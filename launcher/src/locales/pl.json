@@ -104,15 +104,13 @@
     "advancedHelp": "Zmiana któregokolwiek z tych ustawień przełącza profil na Własne.",
     "anisotropic": "Filtrowanie anizotropowe",
     "off": "Wyłączone",
-    "antialiasing": "Wygładzanie krawędzi",
-    "fxaaExtreme": "FXAA (ekstremalne)",
     "upscaling": "Skalowanie obrazu",
     "bilinear": "Dwuliniowe (oryginalne)",
     "cas": "AMD CAS (wyostrzanie)",
     "fsr": "AMD FSR 1",
     "textureMemory": "Pamięć tekstur",
     "inGame": "W grze",
-    "inGameHelp": "Limit FPS, rozmycie ruchu, wygładzanie krawędzi, czułość myszy oraz przypisanie klawiszy i pada zmienisz w trakcie gry: naciśnij {key}."
+    "inGameHelp": "Synchronizację pionową, wygładzanie krawędzi, rozmycie ruchu i pełny ekran znajdziesz w menu Opcje gry, w sekcji Wideo, a czułość myszy w sekcji Klawiatura i mysz. Przypisanie klawiszy zmienisz w trakcie gry: naciśnij {key}."
   },
   "online": {
     "title": "Multiplayer",
