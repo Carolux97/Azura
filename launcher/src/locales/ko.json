@@ -103,15 +103,13 @@
     "advancedHelp": "이 설정 중 하나라도 변경하면 프리셋이 사용자 지정으로 바뀝니다.",
     "anisotropic": "비등방성 필터링",
     "off": "끔",
-    "antialiasing": "안티앨리어싱",
-    "fxaaExtreme": "FXAA (최대)",
     "upscaling": "이미지 스케일링",
     "bilinear": "바이리니어 (원본)",
     "cas": "AMD CAS (선명화)",
     "fsr": "AMD FSR 1",
     "textureMemory": "텍스처 메모리",
     "inGame": "게임 내",
-    "inGameHelp": "프레임 제한, 모션 블러, 안티앨리어싱, 마우스 감도, 키보드 및 컨트롤러 키 설정은 플레이 중에 변경합니다. {key} 키를 누르세요."
+    "inGameHelp": "수직 동기화, 안티에일리어싱, 모션 블러, 전체 화면은 게임 옵션 메뉴의 비디오에, 마우스 감도는 키보드 및 마우스에 있습니다. 키 설정은 플레이 중에 변경합니다. {key} 키를 누르세요."
   },
   "online": {
     "title": "멀티플레이어",

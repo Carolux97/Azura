@@ -103,15 +103,13 @@
     "advancedHelp": "Alterar qualquer uma destas opções muda a predefinição para Personalizada.",
     "anisotropic": "Filtragem anisotrópica",
     "off": "Desativado",
-    "antialiasing": "Antisserrilhamento",
-    "fxaaExtreme": "FXAA (extremo)",
     "upscaling": "Escala da imagem",
     "bilinear": "Bilinear (original)",
     "cas": "AMD CAS (nitidez)",
     "fsr": "AMD FSR 1",
     "textureMemory": "Memória de texturas",
     "inGame": "No jogo",
-    "inGameHelp": "Limite de FPS, desfoque de movimento, antisserrilhamento, sensibilidade do mouse e comandos de teclado e controle são alterados durante o jogo: pressione {key}."
+    "inGameHelp": "Sincronização vertical, antisserrilhamento, desfoque de movimento e tela cheia ficam no menu Opções do jogo, em Vídeo; a sensibilidade do mouse fica em Teclado e mouse. As teclas são alteradas durante o jogo: pressione {key}."
   },
   "online": {
     "title": "Multijogador",

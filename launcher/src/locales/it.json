@@ -103,15 +103,13 @@
     "advancedHelp": "Se modifichi una di queste impostazioni, il preset diventa Personalizzata.",
     "anisotropic": "Filtro anisotropico",
     "off": "Disattivato",
-    "antialiasing": "Antialiasing",
-    "fxaaExtreme": "FXAA (estremo)",
     "upscaling": "Ridimensionamento immagine",
     "bilinear": "Bilineare (originale)",
     "cas": "AMD CAS (nitidezza)",
     "fsr": "AMD FSR 1",
     "textureMemory": "Memoria texture",
     "inGame": "Nel gioco",
-    "inGameHelp": "Limite FPS, sfocatura di movimento, antialiasing, sensibilità del mouse e comandi di tastiera e controller si modificano durante il gioco: premi {key}."
+    "inGameHelp": "Sincronizzazione verticale, anti-aliasing, sfocatura di movimento e schermo intero sono nel menu Opzioni del gioco, in Video; la sensibilità del mouse è in Tastiera e mouse. I tasti si modificano durante il gioco: premi {key}."
   },
   "online": {
     "title": "Multigiocatore",
