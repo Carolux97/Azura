@@ -162,7 +162,36 @@ pub fn install(build: &Path, runtime_dir: &Path) -> Result<(), String> {
         remove_entry(&target).map_err(|e| format!("{}: {e}", target.display()))?;
         copy_entry(&build.join(name), &target).map_err(|e| format!("{}: {e}", target.display()))?;
     }
-    copy_entry(&executable_path(build), &executable_path(runtime_dir)).map_err(|e| e.to_string())
+    copy_entry(&executable_path(build), &executable_path(runtime_dir)).map_err(|e| e.to_string())?;
+
+    #[cfg(target_os = "macos")]
+    set_executable_icon(runtime_dir);
+
+    Ok(())
+}
+
+/// Gives the installed executable the Azura icon, so macOS shows it instead of a generic one (the
+/// runtime is a bare executable, not an app bundle). Done at install time only: setting a file's
+/// icon also updates its modification time, which `status` compares with the build's. Failing to
+/// set it changes nothing else, so errors are ignored.
+#[cfg(target_os = "macos")]
+fn set_executable_icon(runtime_dir: &Path) {
+    let icon_path = runtime_dir.join("assets").join("azura-icon.png");
+    let exe_path = executable_path(runtime_dir);
+    if !icon_path.is_file() || !exe_path.is_file() {
+        return;
+    }
+    // The paths go in as arguments, so no quoting of them is needed in the script.
+    const SCRIPT: &str = r#"function run(argv) {
+  ObjC.import("AppKit");
+  var image = $.NSImage.alloc.initWithContentsOfFile(argv[0]);
+  if (image) $.NSWorkspace.sharedWorkspace.setIconForFileOptions(image, argv[1], 0);
+}"#;
+    let _ = std::process::Command::new("osascript")
+        .args(["-l", "JavaScript", "-e", SCRIPT])
+        .arg(&icon_path)
+        .arg(&exe_path)
+        .status();
 }
 
 #[cfg(test)]
