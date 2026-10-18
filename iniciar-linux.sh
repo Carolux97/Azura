@@ -187,7 +187,9 @@ echo "=========================================================="
 echo "   Iniciando Gears3-Azura Launcher...                    "
 echo "=========================================================="
 cd "${LAUNCHER_DIR}"
-if [ -x "${LAUNCHER_DIR}/src-tauri/target/debug/azura-launcher" ]; then
+if [ -x "${LAUNCHER_DIR}/src-tauri/target/release/azura-launcher" ]; then
+  exec "${LAUNCHER_DIR}/src-tauri/target/release/azura-launcher"
+elif [ -x "${LAUNCHER_DIR}/src-tauri/target/debug/azura-launcher" ]; then
   exec "${LAUNCHER_DIR}/src-tauri/target/debug/azura-launcher"
 elif command -v npx >/dev/null 2>&1; then
   npx tauri dev
