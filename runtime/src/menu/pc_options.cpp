@@ -556,4 +556,10 @@ void PatchSystemSettings(CoalescedSection& section) {
   SetKey(section, "FogVolumes", "False");
 }
 
+void PatchEngineSettings(CoalescedSection& section) {
+  // Disable background level streaming to guarantee synchronous loading of initial sub-levels
+  // and prevent pawns from spawning in the void before collision geometry is ready.
+  SetKey(section, "bUseBackgroundLevelStreaming", "False");
+}
+
 }  // namespace azura::menu
