@@ -2,10 +2,10 @@
  * Graphics presets for the launcher, kept free of DOM access so they can be unit tested with Node.
  *
  * Every setting maps to a ReXGlue runtime setting (cvar) that the runtime reads at start-up, which
- * is why they belong in the launcher and not in the in-game menu:
+ * is why they belong in the launcher and not in the in-game menu (anti-aliasing, which also applies
+ * at start-up, is in the game's Options menu instead, next to the other Video settings):
  *   resolutionScale  draw_resolution_scale_x / _y   (1 = the console's 1280x720)
  *   anisotropic      anisotropic_override           (0 off, 1 1x, 2 2x, 3 4x, 4 8x, 5 16x)
- *   antialiasing     swap_post_effect               ("none", "fxaa", "fxaa_extreme")
  *   upscaling        present_effect                 ("bilinear", "cas", "fsr")
  *   textureMemory    texture_cache_memory_limit_soft (MB); the hard limit is twice this value
  *
@@ -15,9 +15,9 @@
 
 /** Values of each fixed preset. "auto" is not here: it resolves to one of these at launch. */
 export const PRESETS = {
-  low: { resolutionScale: 1, anisotropic: 2, antialiasing: "none", upscaling: "bilinear", textureMemory: 384 },
-  medium: { resolutionScale: 1, anisotropic: 3, antialiasing: "fxaa", upscaling: "cas", textureMemory: 384 },
-  high: { resolutionScale: 2, anisotropic: 5, antialiasing: "fxaa", upscaling: "fsr", textureMemory: 768 },
+  low: { resolutionScale: 1, anisotropic: 2, upscaling: "bilinear", textureMemory: 384 },
+  medium: { resolutionScale: 1, anisotropic: 3, upscaling: "cas", textureMemory: 384 },
+  high: { resolutionScale: 2, anisotropic: 5, upscaling: "fsr", textureMemory: 768 },
 };
 
 /** Preset names in the order the selector shows them. "custom" is never chosen directly. */

@@ -19,6 +19,7 @@
 REXCVAR_DECLARE(std::string, user_name);
 
 #include "menu/menu_patches.h"
+#include "menu/pc_options.h"
 #include "prompts/button_prompts.h"
 #include "script_hooks.h"
 
@@ -56,6 +57,8 @@ class AzuraApp : public rex::ReXApp {
     if (std::filesystem::exists(defaults)) {
       rex::cvar::LoadConfig(defaults);
     }
+    // Settings changed in the game's Options menu (Graphics (PC)) are saved to azura.toml.
+    azura::menu::SetPcOptionsConfigPath(paths.config_path);
   }
 
   // The runtime has mounted the game files and the game has not started: apply the menu changes

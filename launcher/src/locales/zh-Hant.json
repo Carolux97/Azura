@@ -104,15 +104,13 @@
     "advancedHelp": "變更其中任何一項設定，預設組合就會變為自訂。",
     "anisotropic": "非等向性過濾",
     "off": "關閉",
-    "antialiasing": "反鋸齒",
-    "fxaaExtreme": "FXAA（極致）",
     "upscaling": "影像縮放",
     "bilinear": "雙線性（原始）",
     "cas": "AMD CAS（銳利化）",
     "fsr": "AMD FSR 1",
     "textureMemory": "材質記憶體",
     "inGame": "遊戲內",
-    "inGameHelp": "影格率上限、動態模糊、反鋸齒、滑鼠靈敏度以及鍵盤和控制器按鍵配置，都可在遊玩時變更：請按 {key}。"
+    "inGameHelp": "垂直同步、反鋸齒、動態模糊與全螢幕位於遊戲的選項選單「視訊」中，滑鼠靈敏度位於「鍵盤與滑鼠」中。按鍵配置可在遊玩時變更：請按 {key}。"
   },
   "online": {
     "title": "多人遊戲",
