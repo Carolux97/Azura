@@ -18,6 +18,7 @@
 #include <rex/runtime.h>
 
 #include "coalesced.h"
+#include "pc_options.h"
 
 REXCVAR_DEFINE_BOOL(menu_remove_unused, true, "Azura/Menu",
                     "Remove main menu options that cannot work (event calendar, Marketplace)");
@@ -49,6 +50,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
   static const std::map<std::string, Texts> texts = {
       {"int", {"Quit Game", "Close Gears of War 3 and return to the desktop.", "(coming soon)"}},
       {"esn", {"Salir del juego", "Cierra Gears of War 3 y vuelve al escritorio.", "(próximamente)"}},
+      {"deu", {"Spiel beenden", "Beendet Gears of War 3 und kehrt zum Desktop zurück.", "(demnächst)"}},
+      {"ita", {"Esci dal gioco", "Chiudi Gears of War 3 e torna al desktop.", "(prossimamente)"}},
+      {"jpn", {"ゲームを終了", "Gears of War 3 を終了してデスクトップに戻ります。", "(近日公開)"}},
+      {"esm", {"Salir del juego", "Cierra Gears of War 3 y vuelve al escritorio.", "(próximamente)"}},
       {"fra", {"Quitter le jeu", "Fermer Gears of War 3 et revenir au bureau.", "(bientôt)"}},
       {"ptb", {"Sair do jogo", "Fecha o Gears of War 3 e volta para a área de trabalho.", "(em breve)"}},
       {"pol", {"Wyjdź z gry", "Zamknij Gears of War 3 i wróć do pulpitu.", "(wkrótce)"}},
@@ -232,13 +237,21 @@ int PatchMenus(Coalesced& coalesced) {
     const std::string name = BaseName(file.name);
     const bool ui_config = name == "xbox360-gearui.ini";
     const bool ui_texts = name.rfind("geargameui.", 0) == 0;
-    if (!ui_config && !ui_texts) continue;
-    const std::string language = ui_texts ? name.substr(name.find('.') + 1) : std::string();
+    const bool game_texts = name.rfind("geargame.", 0) == 0;
+    const bool engine_config = name == "xbox360-gearengine.ini";
+    if (!ui_config && !ui_texts && !game_texts && !engine_config) continue;
+    const std::string language = ui_texts || game_texts ? name.substr(name.find('.') + 1) : std::string();
     const auto texts = LocalizedTexts().find(language);
     for (auto& section : file.sections) {
       const std::string section_name = section.name.Ascii();
       if (ui_config && section_name == "GearGame.UIWidget_MainMenu") {
         quit_option = PatchMenuStructure(section);
+      } else if (game_texts && section_name == "UIScene_Options") {
+        PatchOptionsMenu(section, language);
+      } else if (game_texts && section_name == "GearProfileSettings") {
+        PatchValueNames(section, language);
+      } else if (engine_config && section_name == "SystemSettings") {
+        PatchSystemSettings(section);
       } else if (ui_texts && section_name == "MainMenu") {
         PatchMenuTexts(section, texts != LocalizedTexts().end() ? texts->second : LocalizedTexts().at("int"));
       }
