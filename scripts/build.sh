@@ -169,8 +169,20 @@ if [[ -n "${BUILT_BIN}" && -f "${BUILT_BIN}" ]]; then
   echo "==> Staging runtime to launcher app data: ${TARGET_RUNTIME_DIR}"
   mkdir -p "${TARGET_RUNTIME_DIR}"
   cp -rf "$(dirname "${BUILT_BIN}")"/* "${TARGET_RUNTIME_DIR}/"
-  cp -f "${SDK_DIR}/lib"/*.so "${TARGET_RUNTIME_DIR}/" 2>/dev/null || true
-  cp -f "${SDK_DIR}/lib"/*.so "$(dirname "${BUILT_BIN}")/" 2>/dev/null || true
+  if [[ "${PRESET}" == *"-sdk-source"* ]]; then
+    CONFIG_NAME="RelWithDebInfo"
+    case "${CONFIG}" in
+      debug) CONFIG_NAME="Debug" ;;
+      release) CONFIG_NAME="Release" ;;
+    esac
+    if [[ -d "${SDK_SRC}/out/${PLATFORM}/${CONFIG_NAME}" ]]; then
+      cp -f "${SDK_SRC}/out/${PLATFORM}/${CONFIG_NAME}"/*.so* "${TARGET_RUNTIME_DIR}/" 2>/dev/null || true
+      cp -f "${SDK_SRC}/out/${PLATFORM}/${CONFIG_NAME}"/*.so* "$(dirname "${BUILT_BIN}")/" 2>/dev/null || true
+    fi
+  else
+    cp -f "${SDK_DIR}/lib"/*.so "${TARGET_RUNTIME_DIR}/" 2>/dev/null || true
+    cp -f "${SDK_DIR}/lib"/*.so "$(dirname "${BUILT_BIN}")/" 2>/dev/null || true
+  fi
   chmod +x "${TARGET_RUNTIME_DIR}/azura" 2>/dev/null || true
   echo "==> Runtime successfully installed for the launcher."
 fi
