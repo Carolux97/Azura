@@ -40,8 +40,8 @@ comment saying what blocks it and who can unblock it. The label comes off once i
 - **Type**, from the card's type label: Feature → `feat/`, Bug → `fix/`, Performance → `perf/`,
   Tooling → `chore/`, Research → `research/`; documentation-only changes use `docs/`. When a card
   has several type labels, use the main one.
-- **Card number**: the number Trello shows in the card's URL (`trello.com/c/<id>/6-…` is card 6).
-  It does not change when the card is renamed, so every branch leads back to its card.
+- **Card number**: the number the Card Numbers Power-Up shows on the card. It does not change when
+  the card is renamed or moved, so every branch leads back to its card.
 - **Short description**: English, lowercase, words separated by hyphens, two to four words; no
   spaces, accents or capitals.
 - A small change without a card (a typo in the docs, for example) drops the number:
