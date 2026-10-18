@@ -155,14 +155,29 @@ fn spawn_game<E: GameEvents>(
     args: &[String],
     runtime_dir: &Path,
 ) -> std::io::Result<Child> {
-    let mut child = Command::new(executable)
+    let mut command = Command::new(executable);
+    command
         .args(args)
         .current_dir(runtime_dir)
         .env(LAUNCHER_ENV, "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+        .stderr(Stdio::piped());
+    // On Linux laptops with an NVIDIA GPU next to an integrated one, run the game on the NVIDIA
+    // one (PRIME render offload). Only when its Vulkan driver is installed, so other GPUs are left
+    // alone.
+    #[cfg(target_os = "linux")]
+    {
+        const NVIDIA_ICD: &str = "/usr/share/vulkan/icd.d/nvidia_icd.json";
+        if Path::new(NVIDIA_ICD).is_file() {
+            command
+                .env("__NV_PRIME_RENDER_OFFLOAD", "1")
+                .env("__GLX_VENDOR_LIBRARY_NAME", "nvidia")
+                .env("__VK_LAYER_NV_optimus", "NVIDIA_only")
+                .env("VK_DRIVER_FILES", NVIDIA_ICD);
+        }
+    }
+    let mut child = command.spawn()?;
     if let Some(stdout) = child.stdout.take() {
         relay_lines(events.clone(), "stdout", stdout);
     }
