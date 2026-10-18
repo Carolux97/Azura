@@ -544,6 +544,16 @@ void PatchValueNames(CoalescedSection& section, const std::string& language) {
 
 void PatchSystemSettings(CoalescedSection& section) {
   SetKey(section, "MotionBlur", REXCVAR_GET(motion_blur) ? "True" : "False");
+  SetKey(section, "AmbientOcclusion", "False");
+  SetKey(section, "Bloom", "False");
+  SetKey(section, "DepthOfField", "False");
+  SetKey(section, "DynamicShadows", "False");
+  SetKey(section, "LightEnvironmentShadows", "False");
+  SetKey(section, "bAllowWholeSceneDominantShadows", "False");
+  SetKey(section, "bEnableForegroundShadowsOnWorld", "False");
+  SetKey(section, "bEnableForegroundSelfShadowing", "False");
+  SetKey(section, "LensFlares", "False");
+  SetKey(section, "FogVolumes", "False");
 }
 
 }  // namespace azura::menu
