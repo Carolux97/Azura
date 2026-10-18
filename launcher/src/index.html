@@ -49,6 +49,7 @@
         <li><button class="nav-item is-active" data-view="play" data-i18n="nav.play"></button></li>
         <li><button class="nav-item" data-view="install" data-i18n="nav.install"></button></li>
         <li><button class="nav-item" data-view="graphics" data-i18n="nav.graphics"></button></li>
+        <li><button class="nav-item" data-view="saves" data-i18n="nav.saves"></button></li>
         <li>
           <button class="nav-item" data-view="online">
             <span data-i18n="nav.online"></span>
@@ -197,6 +198,77 @@
               <span data-i18n="graphics.renderResolution"></span>
               <select id="resolution-scale"></select>
             </label>
+          </div>
+        </div>
+      </section>
+
+      <!-- SAVES -->
+      <section class="view" data-view="saves" aria-labelledby="saves-title">
+        <h1 id="saves-title" class="view-title" data-i18n="saves.title"></h1>
+
+        <div class="panel">
+          <div class="panel-head-row">
+            <div>
+              <h2 class="panel-title" data-i18n="saves.statusTitle"></h2>
+              <p class="help" data-i18n="saves.statusHelp"></p>
+            </div>
+            <div class="status-badge" id="save-status-badge" data-state="ok">
+              <span class="dot"></span>
+              <span id="save-status-text"></span>
+            </div>
+          </div>
+
+          <div class="save-metrics">
+            <div class="metric-card">
+              <span class="metric-label" data-i18n="saves.checkpoints"></span>
+              <strong class="metric-value" id="save-checkpoints-count">0</strong>
+            </div>
+            <div class="metric-card">
+              <span class="metric-label" data-i18n="saves.lastSaved"></span>
+              <strong class="metric-value" id="save-last-modified">—</strong>
+            </div>
+          </div>
+
+          <p class="save-detail-msg" id="save-detail-msg"></p>
+          <div class="path-row">
+            <input class="path" id="save-path" type="text" readonly>
+            <button class="btn" id="open-saves-dir" data-i18n="saves.openFolder"></button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2 class="panel-title" data-i18n="saves.actionsTitle"></h2>
+          <div class="save-actions-grid">
+            <div class="action-card">
+              <div class="action-card-info">
+                <strong data-i18n="saves.repair"></strong>
+                <p class="help" data-i18n="saves.repairHelp"></p>
+              </div>
+              <button class="btn btn-primary" id="btn-repair-saves" data-i18n="saves.repair"></button>
+            </div>
+
+            <div class="action-card">
+              <div class="action-card-info">
+                <strong data-i18n="saves.clean"></strong>
+                <p class="help" data-i18n="saves.cleanHelp"></p>
+              </div>
+              <button class="btn btn-danger" id="btn-reset-saves" data-i18n="saves.clean"></button>
+            </div>
+
+            <div class="action-card">
+              <div class="action-card-info">
+                <strong data-i18n="saves.backup"></strong>
+                <p class="help" data-i18n="saves.backupHelp"></p>
+              </div>
+              <button class="btn" id="btn-backup-saves" data-i18n="saves.backup"></button>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2 class="panel-title" data-i18n="saves.backupsTitle"></h2>
+          <div id="backups-list" class="backups-list">
+            <p class="help" data-i18n="saves.noBackups"></p>
           </div>
         </div>
       </section>

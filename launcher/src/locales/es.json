@@ -9,6 +9,7 @@
     "play": "Jugar",
     "install": "Instalación",
     "graphics": "Gráficos",
+    "saves": "Partidas",
     "online": "Multijugador",
     "soon": "Pronto"
   },
@@ -127,5 +128,32 @@
     "available": "Actualizar a {version}",
     "downloading": "Descargando actualización… {percent}",
     "failed": "No se pudo instalar la actualización. Inténtalo más tarde."
+  },
+  "saves": {
+    "title": "Gestor de Partidas Guardadas",
+    "statusTitle": "Estado del Guardado y Puntos de Control",
+    "statusHelp": "Revisa las partidas y permite repararlas para evitar el mensaje de 'puntos de guardado corruptos'. Antes de reparar o restablecer se hace una copia de seguridad.",
+    "checkpoints": "Puntos de control detectados",
+    "path": "Ubicación en el sistema",
+    "lastSaved": "Última modificación",
+    "actionsTitle": "Mantenimiento y Reparación",
+    "repair": "Reparar Guardado",
+    "repairHelp": "Elimina cabeceras fantasma e incompletas para que el juego nunca muestre el aviso de datos corruptos al iniciar.",
+    "clean": "Restablecer y Nueva Partida Limpia",
+    "cleanHelp": "Crea una copia de seguridad y limpia los puntos de control para iniciar una campaña totalmente desde cero.",
+    "backup": "Crear Copia de Seguridad",
+    "backupHelp": "Guarda un respaldo completo de tu campaña y perfil actual.",
+    "openFolder": "Abrir Carpeta de Partidas",
+    "backupsTitle": "Copias de Seguridad Disponibles",
+    "noBackups": "No hay copias de seguridad guardadas todavía.",
+    "restore": "Restaurar",
+    "stateOk": "Partidas válidas e intactas",
+    "stateCorrupted": "Cabeceras corruptas / huérfanas detectadas",
+    "stateEmpty": "Sin partidas guardadas (listo para nueva partida)",
+    "repairedToast": "Puntos de guardado reparados con éxito",
+    "resetToast": "Partidas restablecidas. Se creó una copia de seguridad.",
+    "backupToast": "Copia de seguridad creada correctamente",
+    "restoreToast": "Partida restaurada con éxito"
   }
 }
+

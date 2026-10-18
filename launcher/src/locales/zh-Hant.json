@@ -10,7 +10,8 @@
     "install": "安裝",
     "graphics": "圖形",
     "online": "多人遊戲",
-    "soon": "即將推出"
+    "soon": "即將推出",
+    "saves": "遊戲存檔"
   },
   "rail": {
     "language": "語言",
@@ -127,5 +128,31 @@
     "available": "更新至 {version}",
     "downloading": "正在下載更新… {percent}",
     "failed": "無法安裝更新，請稍後再試。"
+  },
+  "saves": {
+    "title": "Saved Games Manager",
+    "statusTitle": "Save & Checkpoints Status",
+    "statusHelp": "Checks your saved games and lets you repair them to prevent 'corrupted save points' errors. A backup is made before repairing or resetting.",
+    "checkpoints": "Detected Checkpoints",
+    "path": "Storage Path",
+    "lastSaved": "Last Modified",
+    "actionsTitle": "Maintenance & Repair",
+    "repair": "Repair Saves",
+    "repairHelp": "Removes orphan and incomplete checkpoint headers to prevent game warnings on startup.",
+    "clean": "Reset & Start Clean Campaign",
+    "cleanHelp": "Creates a backup and wipes corrupted checkpoints to start the campaign completely fresh.",
+    "backup": "Create Backup",
+    "backupHelp": "Creates a full backup copy of your current profile and campaign progress.",
+    "openFolder": "Open Saves Folder",
+    "backupsTitle": "Available Backups",
+    "noBackups": "No backups created yet.",
+    "restore": "Restore",
+    "stateOk": "Saves valid and intact",
+    "stateCorrupted": "Corrupted or orphaned headers detected",
+    "stateEmpty": "No active saves (ready for a clean game)",
+    "repairedToast": "Saves successfully repaired",
+    "resetToast": "Saves reset. Automatic backup created.",
+    "backupToast": "Backup successfully created",
+    "restoreToast": "Save restored successfully"
   }
 }
