@@ -14,8 +14,10 @@
             "cacheVariables": {
                 "CMAKE_C_COMPILER": "clang",
                 "CMAKE_CXX_COMPILER": "clang++",
-                "CMAKE_C_FLAGS": "-march=x86-64",
-                "CMAKE_CXX_FLAGS": "-march=x86-64",
+                "CMAKE_C_FLAGS": "-march=x86-64-v3",
+                "CMAKE_CXX_FLAGS": "-march=x86-64-v3",
+                "CMAKE_SHARED_LINKER_FLAGS": "-L${sourceDir}/../sdk/compat/lib",
+                "CMAKE_EXE_LINKER_FLAGS": "-L${sourceDir}/../sdk/compat/lib",
                 "CMAKE_CONFIGURATION_TYPES": "Debug;Release;RelWithDebInfo",
                 "CMAKE_DEFAULT_BUILD_TYPE": "RelWithDebInfo",
                 "CMAKE_PREFIX_PATH": "${sourceDir}/../sdk/rexglue-0.10.0-linux-amd64/linux-amd64"
@@ -75,6 +77,17 @@
             "binaryDir": "${sourceDir}/out/build/mac-arm64-sdk-source",
             "cacheVariables": {
                 "REXSDK_DIR": "${sourceDir}/../sdk/rexglue-0.10.0-src"
+            }
+        },
+        {
+            "name": "linux-amd64-sdk-source",
+            "displayName": "Linux x86_64, ReXGlue SDK built from source",
+            "description": "Builds the SDK from sdk/rexglue-0.10.0-src as part of the runtime, so its code can be traced and patched. Uses its own build folder.",
+            "inherits": "linux-amd64",
+            "binaryDir": "${sourceDir}/out/build/linux-amd64-sdk-source",
+            "cacheVariables": {
+                "REXSDK_DIR": "${sourceDir}/../sdk/rexglue-0.10.0-src",
+                "SDL_X11_XSCRNSAVER": "OFF"
             }
         }
     ],
@@ -137,6 +150,21 @@
         {
             "name": "mac-arm64-sdk-source-release",
             "configurePreset": "mac-arm64-sdk-source",
+            "configuration": "Release"
+        },
+        {
+            "name": "linux-amd64-sdk-source-debug",
+            "configurePreset": "linux-amd64-sdk-source",
+            "configuration": "Debug"
+        },
+        {
+            "name": "linux-amd64-sdk-source-relwithdebinfo",
+            "configurePreset": "linux-amd64-sdk-source",
+            "configuration": "RelWithDebInfo"
+        },
+        {
+            "name": "linux-amd64-sdk-source-release",
+            "configurePreset": "linux-amd64-sdk-source",
             "configuration": "Release"
         }
     ]

@@ -7,6 +7,14 @@ set -euo pipefail
 # Soluciona la pantalla negra de WebKitGTK en Linux con GPUs NVIDIA / Intel / Wayland
 export WEBKIT_DISABLE_DMABUF_RENDERER=1
 
+# Forzar GPU dedicada NVIDIA en portatiles híbridos (PRIME Offload para 60 FPS y shaders Vulkan correctos)
+export __NV_PRIME_RENDER_OFFLOAD=1
+export __GLX_VENDOR_LIBRARY_NAME=nvidia
+export __VK_LAYER_NV_optimus=NVIDIA_only
+if [ -f "/usr/share/vulkan/icd.d/nvidia_icd.json" ]; then
+  export VK_DRIVER_FILES="/usr/share/vulkan/icd.d/nvidia_icd.json"
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LAUNCHER_DIR="${ROOT}/launcher"
 
