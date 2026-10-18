@@ -125,6 +125,15 @@ add_custom_command(TARGET azura POST_BUILD
             ${CMAKE_CURRENT_SOURCE_DIR}/assets/azura-icon.icns
             $<TARGET_FILE_DIR:azura>/assets/azura-icon.icns
     COMMENT "Installing azura.default.toml, gamecontrollerdb.txt and assets beside the executable")
+if(APPLE)
+    add_custom_command(TARGET azura POST_BUILD
+        COMMAND osascript -l JavaScript -e
+                "ObjC.import('AppKit');
+                 var img = $.NSImage.alloc.initWithContentsOfFile('$<TARGET_FILE_DIR:azura>/assets/azura-icon.png');
+                 if (img) $.NSWorkspace.sharedWorkspace.setIconForFileOptions(img, '$<TARGET_FILE:azura>', 0);"
+        COMMENT "Setting macOS icon on the runtime executable"
+        VERBATIM)
+endif()
 
 # Review tool for the button prompt designs: renders every glyph into a PNG without running the
 # game. Not part of the normal build: cmake --build --preset <preset> --target azura_glyph_sheet

@@ -61,6 +61,10 @@ class AzuraApp : public rex::ReXApp {
   // and route Quit Game to a normal window close (OnClosing shuts the title down).
   void OnPreLaunchModule() override {
     REXLOG_INFO("[Azura] Active gamertag / user_name: '{}'", REXCVAR_GET(user_name));
+#if defined(__APPLE__)
+    // Again now that the window exists, so it gets the icon too (see platform_mac.mm).
+    AutoConfigureMacAppIcon();
+#endif
     azura::menu::InstallMenuPatches(runtime());
     azura::script::SetQuitHandler([this] {
       app_context().CallInUIThread([this] {
