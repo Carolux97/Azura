@@ -157,3 +157,48 @@ export const onUpdateProgress = (listener) => {
 
 /** Version of the running launcher, from its bundle; `fallback` in a browser. */
 export const getAppVersion = async (fallback) => (isNativeApp ? tauri.app.getVersion() : fallback);
+
+/** Checks the status of saved games and corruptions. */
+export const getSaveStatus = async () => {
+  if (isNativeApp) return tauri.core.invoke("get_save_status");
+  return {
+    hasSaves: false,
+    checkpointCount: 0,
+    isCorrupted: false,
+    status: "empty",
+    message: "Modo simulación en navegador",
+    savePath: "~/.local/share/azura/B13EBABEBABEBABE/4D5308AB",
+    lastSaved: null,
+    backups: [],
+  };
+};
+
+/** Repairs orphan/corrupted save headers to prevent the corrupt save dialog. */
+export const repairSaves = async () => {
+  if (isNativeApp) return tauri.core.invoke("repair_saves");
+  return "Reparación simulada completada.";
+};
+
+/** Clears all saves to start fresh, with an automatic backup first. */
+export const resetSaves = async () => {
+  if (isNativeApp) return tauri.core.invoke("reset_saves");
+  return "Guardado restablecido con éxito (simulado).";
+};
+
+/** Creates a backup of the current saves. */
+export const createSaveBackup = async (label) => {
+  if (isNativeApp) return tauri.core.invoke("create_save_backup", { label });
+  return { id: "backup_simulado", date: "Ahora", sizeBytes: 1024 };
+};
+
+/** Restores a selected backup. */
+export const restoreSaveBackup = async (backupId) => {
+  if (isNativeApp) return tauri.core.invoke("restore_save_backup", { backupId });
+  return "Copia restaurada con éxito (simulado).";
+};
+
+/** Opens the save directory in the file manager. */
+export const openSavesFolder = async () => {
+  if (isNativeApp) return tauri.core.invoke("open_saves_folder");
+};
+

@@ -27,7 +27,7 @@ id = "spain"
 name = "España"
 media_id = "6EF14DF9"
 xex_sha256 = "a3ee80eb8fdf8200bf00d6c4d61854d98e77afaad61cf9767d2d84b3073dbd83"
-manifest = "runtime/azura_58122AD6.toml"
+manifest = "runtime/azura_6EF14DF9.toml"
 
 # To add another edition, hash its default.xex (`shasum -a 256 default.xex`) and compare it with
 # the World one (`cmp -l`). If every difference is in the header and the AES key matches, add an

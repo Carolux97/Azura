@@ -76,7 +76,12 @@ export const matchPreset = (settings, currentPreset) => {
 };
 
 /** Render size that a resolution scale produces, for display ("2560 × 1440"). */
-export const renderSize = (scale) => ({
-  width: BASE_RENDER_SIZE.width * scale,
-  height: BASE_RENDER_SIZE.height * scale,
-});
+export const renderSize = (scale) => {
+  if (scale === "1080p" || scale === 1.5 || scale === "1.5") {
+    return { width: 1920, height: 1080 };
+  }
+  return {
+    width: BASE_RENDER_SIZE.width * Number(scale),
+    height: BASE_RENDER_SIZE.height * Number(scale),
+  };
+};

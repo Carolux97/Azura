@@ -12,8 +12,11 @@
 #include <memory>
 
 #include <rex/cvar.h>
+#include <rex/platform/exceptions.h>
 #include <rex/rex_app.h>
 #include <rex/system/flags.h>
+
+REXCVAR_DECLARE(std::string, user_name);
 
 #include "menu/menu_patches.h"
 #include "prompts/button_prompts.h"
@@ -30,6 +33,7 @@ class AzuraApp : public rex::ReXApp {
   // Factory used by REX_DEFINE_APP. "azura" is the application name: it names the user data
   // folder, the log files and the config file (azura.toml).
   static std::unique_ptr<rex::ui::WindowedApp> Create(rex::ui::WindowedAppContext& ctx) {
+    rex::initialize_seh();
 #if defined(__APPLE__)
     AutoConfigureMacAppIcon();
     // MoltenVK warns "Metal does not support disabling primitive restart" for nearly every
@@ -100,6 +104,9 @@ class AzuraApp : public rex::ReXApp {
       rex::cvar::SetFlagByName("hid_mappings_file", controller_db.string());
       REXLOG_INFO("Configured hid_mappings_file to: {}", controller_db.string());
     }
+    rex::cvar::SetFlagByName("protect_zero", "false");
+    rex::cvar::SetFlagByName("writable_executable_memory", "true");
+    rex::cvar::SetFlagByName("protect_on_release", "false");
     return paths;
   }
 

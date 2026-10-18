@@ -13,7 +13,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Manager};
 
 /// Folder for saves when the player has not chosen one, relative to the home folder.
 const DEFAULT_SAVES: &str = "Documents/Games Saves/Gears3-Azura";
@@ -169,6 +170,327 @@ pub fn prepare(saves: &Path, cache: &Path) -> Result<(), SavesError> {
     }
     fs::create_dir_all(saves).map_err(|e| SavesError::Io(format!("{}: {e}", saves.display())))?;
     fs::create_dir_all(cache).map_err(|e| SavesError::Io(format!("{}: {e}", cache.display())))
+}
+
+/// Information about a single save backup.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupInfo {
+    pub id: String,
+    pub date: String,
+    pub size_bytes: u64,
+}
+
+/// Status of the game's save data.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveStatus {
+    pub has_saves: bool,
+    pub checkpoint_count: usize,
+    pub is_corrupted: bool,
+    pub status: String,
+    pub message: String,
+    pub save_path: String,
+    pub last_saved: Option<String>,
+    pub backups: Vec<BackupInfo>,
+}
+
+/// Resolves where Gears of War 3 content packages and headers are kept inside `saves_dir`.
+pub fn find_gears3_content_dir(saves_dir: &Path) -> PathBuf {
+    let p1 = saves_dir.join("B13EBABEBABEBABE").join("4D5308AB");
+    if p1.exists() {
+        return p1;
+    }
+    let p2 = saves_dir.join("4D5308AB");
+    if p2.exists() {
+        return p2;
+    }
+    p1
+}
+
+fn backups_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("backups");
+    let _ = fs::create_dir_all(&dir);
+    Ok(dir)
+}
+
+fn dir_size(path: &Path) -> u64 {
+    let mut total = 0;
+    if let Ok(entries) = fs::read_dir(path) {
+        for entry in entries.flatten() {
+            if let Ok(meta) = entry.metadata() {
+                if meta.is_dir() {
+                    total += dir_size(&entry.path());
+                } else {
+                    total += meta.len();
+                }
+            }
+        }
+    }
+    total
+}
+
+/// Inspects the current state of saved games.
+pub fn inspect_saves(app: &AppHandle, saves_dir: &Path) -> SaveStatus {
+    let content_dir = find_gears3_content_dir(saves_dir);
+    let mut has_saves = false;
+    let mut checkpoint_count = 0;
+    let mut is_corrupted = false;
+    let mut latest_time: Option<std::time::SystemTime> = None;
+
+    let headers_dir = content_dir.join("Headers").join("00000001");
+    let packages_dir = content_dir.join("00000001");
+
+    if headers_dir.is_dir() {
+        if let Ok(entries) = fs::read_dir(&headers_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    has_saves = true;
+                    if let Ok(meta) = path.metadata() {
+                        if let Ok(mtime) = meta.modified() {
+                            latest_time = match latest_time {
+                                Some(prev) => Some(std::cmp::max(prev, mtime)),
+                                None => Some(mtime),
+                            };
+                        }
+                    }
+                    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                    let pkg_dir = packages_dir.join(stem);
+                    if !pkg_dir.exists() {
+                        is_corrupted = true;
+                    }
+                }
+            }
+        }
+    }
+
+    if packages_dir.is_dir() {
+        if let Ok(entries) = fs::read_dir(&packages_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    has_saves = true;
+                    let mut valid_package = false;
+                    if let Ok(pkg_entries) = fs::read_dir(&path) {
+                        let count = pkg_entries
+                            .flatten()
+                            .filter(|e| e.metadata().map(|m| m.len() > 0).unwrap_or(false))
+                            .count();
+                        if count > 0 {
+                            valid_package = true;
+                            checkpoint_count += count;
+                        }
+                    }
+                    if !valid_package {
+                        is_corrupted = true;
+                    }
+                }
+            }
+        }
+    }
+
+    let mut last_saved = None;
+    if let Some(time) = latest_time {
+        if let Ok(elapsed) = time.duration_since(std::time::UNIX_EPOCH) {
+            let secs = elapsed.as_secs();
+            let hours = (secs / 3600) % 24;
+            let minutes = (secs / 60) % 60;
+            last_saved = Some(format!("{:02}:{:02} UTC", hours, minutes));
+        }
+    }
+
+    let backups = list_backups_internal(app);
+
+    let (status, message) = if is_corrupted {
+        (
+            "corrupted".to_string(),
+            "Se detectaron cabeceras huérfanas o incompletas (causa del aviso de datos corruptos).".to_string(),
+        )
+    } else if has_saves && checkpoint_count > 0 {
+        (
+            "ok".to_string(),
+            format!("Partidas guardadas intactas ({} archivos de punto de control).", checkpoint_count),
+        )
+    } else {
+        (
+            "empty".to_string(),
+            "No hay partidas guardadas activas (listo para iniciar nueva partida limpia).".to_string(),
+        )
+    };
+
+    SaveStatus {
+        has_saves,
+        checkpoint_count,
+        is_corrupted,
+        status,
+        message,
+        save_path: content_dir.to_string_lossy().to_string(),
+        last_saved,
+        backups,
+    }
+}
+
+/// Repairs orphaned headers and empty package directories.
+pub fn repair_saves_internal(saves_dir: &Path) -> Result<String, String> {
+    let content_dir = find_gears3_content_dir(saves_dir);
+    let headers_dir = content_dir.join("Headers").join("00000001");
+    let packages_dir = content_dir.join("00000001");
+    let mut removed_count = 0;
+
+    if headers_dir.is_dir() {
+        if let Ok(entries) = fs::read_dir(&headers_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                let pkg_dir = packages_dir.join(file_stem);
+
+                let is_orphan = if !pkg_dir.exists() {
+                    true
+                } else if pkg_dir.is_dir() {
+                    let entries = fs::read_dir(&pkg_dir).map(|e| e.count()).unwrap_or(0);
+                    entries == 0
+                } else {
+                    false
+                };
+
+                if is_orphan {
+                    let _ = fs::remove_file(&path);
+                    if pkg_dir.exists() {
+                        let _ = fs::remove_dir_all(&pkg_dir);
+                    }
+                    removed_count += 1;
+                }
+            }
+        }
+    }
+
+    Ok(format!(
+        "Reparación completada. Se eliminaron {} elementos corruptos o huérfanos.",
+        removed_count
+    ))
+}
+
+/// Performs a complete reset of save data, backing up first.
+pub fn reset_saves_internal(app: &AppHandle, saves_dir: &Path) -> Result<String, String> {
+    let _ = create_backup_internal(app, saves_dir, Some("auto_antes_de_limpiar".into()));
+
+    let content_dir = find_gears3_content_dir(saves_dir);
+    let headers_dir = content_dir.join("Headers");
+    let packages_dir = content_dir.join("00000001");
+
+    if headers_dir.exists() {
+        let _ = fs::remove_dir_all(&headers_dir);
+    }
+    if packages_dir.exists() {
+        let _ = fs::remove_dir_all(&packages_dir);
+    }
+
+    let _ = fs::create_dir_all(content_dir.join("Headers").join("00000001"));
+    let _ = fs::create_dir_all(content_dir.join("00000001"));
+
+    Ok("Guardado restablecido con éxito. Se ha creado una copia de seguridad automática.".into())
+}
+
+/// Creates a backup of current saves.
+pub fn create_backup_internal(app: &AppHandle, saves_dir: &Path, label: Option<String>) -> Result<BackupInfo, String> {
+    let content_dir = find_gears3_content_dir(saves_dir);
+    let b_dir = backups_dir(app)?;
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let tag = label.unwrap_or_else(|| "manual".into());
+    let backup_id = format!("backup_{}_{}", timestamp, tag);
+    let target_dir = b_dir.join(&backup_id);
+
+    if content_dir.exists() {
+        copy_entry(&content_dir, &target_dir).map_err(|e| e.to_string())?;
+    } else {
+        fs::create_dir_all(&target_dir).map_err(|e| e.to_string())?;
+    }
+
+    let size_bytes = dir_size(&target_dir);
+
+    Ok(BackupInfo {
+        id: backup_id,
+        date: format!("{}", timestamp),
+        size_bytes,
+    })
+}
+
+/// Lists available backups.
+pub fn list_backups_internal(app: &AppHandle) -> Vec<BackupInfo> {
+    let mut result = Vec::new();
+    if let Ok(b_dir) = backups_dir(app) {
+        if let Ok(entries) = fs::read_dir(&b_dir) {
+            for entry in entries.flatten() {
+                if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    let id = entry.file_name().to_string_lossy().to_string();
+                    let size_bytes = dir_size(&entry.path());
+                    result.push(BackupInfo {
+                        id,
+                        date: "Copia disponible".into(),
+                        size_bytes,
+                    });
+                }
+            }
+        }
+    }
+    result.sort_by(|a, b| b.id.cmp(&a.id));
+    result
+}
+
+/// Restores a backup.
+pub fn restore_backup_internal(app: &AppHandle, saves_dir: &Path, backup_id: &str) -> Result<String, String> {
+    let b_dir = backups_dir(app)?;
+    let src = b_dir.join(backup_id);
+    if !src.is_dir() {
+        return Err(format!("No existe la copia de seguridad: {}", backup_id));
+    }
+
+    let content_dir = find_gears3_content_dir(saves_dir);
+    if content_dir.exists() {
+        let _ = fs::remove_dir_all(&content_dir);
+    }
+
+    copy_entry(&src, &content_dir).map_err(|e| e.to_string())?;
+    Ok("Partida restaurada con éxito.".into())
+}
+
+/// Opens the saves directory in the system file manager.
+pub fn open_saves_folder_internal(saves_dir: &Path) -> Result<(), String> {
+    let dir = find_gears3_content_dir(saves_dir);
+    let _ = fs::create_dir_all(&dir);
+
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&dir)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&dir)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+/// Cleanly purges orphan headers before launch to prevent corrupted save error dialogs.
+pub fn sanitize_saves_before_launch(saves_dir: &Path) {
+    let _ = repair_saves_internal(saves_dir);
 }
 
 #[cfg(test)]

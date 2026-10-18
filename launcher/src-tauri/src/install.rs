@@ -26,7 +26,13 @@ use crate::runtime::{executable_path, RUNTIME_EXECUTABLE};
 const BUILD_ENV: &str = "AZURA_RUNTIME_BUILD";
 
 /// Build folders of the project, relative to its root, in order of preference.
-const PROJECT_BUILDS: [&str; 2] = [
+const PROJECT_BUILDS: [&str; 8] = [
+    "runtime/out/build/linux-amd64/RelWithDebInfo",
+    "runtime/out/build/linux-amd64/Release",
+    "runtime/out/build/linux-amd64",
+    "runtime/out/build/linux-arm64/RelWithDebInfo",
+    "runtime/out/build/linux-arm64/Release",
+    "runtime/out/build/linux-arm64",
     "runtime/out/build/mac-arm64-sdk-source/RelWithDebInfo",
     "runtime/out/build/mac-arm64-sdk-source/Release",
 ];
@@ -40,7 +46,7 @@ const RUNTIME_ENTRIES: [&str; 6] = [
     "assets",
     "vulkan",
     // Libraries are matched by extension; this marks where they go in the copy order.
-    "*.dylib",
+    "libraries",
 ];
 
 /// State of the runtime, sent to the interface as JSON.
@@ -133,10 +139,10 @@ fn remove_entry(path: &Path) -> io::Result<()> {
 fn runtime_entries(build: &Path) -> io::Result<Vec<String>> {
     let mut names = Vec::new();
     for name in RUNTIME_ENTRIES {
-        if name == "*.dylib" {
+        if name == "libraries" {
             for entry in fs::read_dir(build)? {
                 let file = entry?.file_name().to_string_lossy().into_owned();
-                if file.ends_with(".dylib") {
+                if file.ends_with(".dylib") || file.ends_with(".so") || file.contains(".so.") {
                     names.push(file);
                 }
             }
