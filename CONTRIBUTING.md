@@ -8,9 +8,8 @@ Trello board is in English.
 ## Workflow
 
 1. **Card.** Every piece of work starts as a card on the Trello board, in the format below.
-2. **Branch.** Create a branch from an up-to-date `main`, named after the kind of change:
-   `feat/…`, `fix/…`, `perf/…`, `chore/…` or `docs/…` (for example `fix/wasd-glyph`). One card, one
-   branch.
+2. **Branch.** Create a branch from an up-to-date `main`, named as described in
+   [Branches](#branches). One card, one branch.
 3. **Pull request.** Open a pull request to `main`. GitHub fills its description from
    [.github/pull_request_template.md](.github/pull_request_template.md); link the card there and the
    pull request in the card's Notes.
@@ -32,6 +31,22 @@ The board's lists follow that flow:
 
 A card that cannot move forward keeps its list and gets the **Blocked** label, together with a
 comment saying what blocks it and who can unblock it. The label comes off once it is unblocked.
+
+## Branches
+
+`type/card-number-short-description`, for example `fix/6-wasd-glyph`, `perf/1-guest-fences` or
+`chore/11-launcher-ci`.
+
+- **Type**, from the card's type label: Feature → `feat/`, Bug → `fix/`, Performance → `perf/`,
+  Tooling → `chore/`, Research → `research/`; documentation-only changes use `docs/`. When a card
+  has several type labels, use the main one.
+- **Card number**: the number Trello shows in the card's URL (`trello.com/c/<id>/6-…` is card 6).
+  It does not change when the card is renamed, so every branch leads back to its card.
+- **Short description**: English, lowercase, words separated by hyphens, two to four words; no
+  spaces, accents or capitals.
+- A small change without a card (a typo in the docs, for example) drops the number:
+  `docs/fix-readme-typo`. This is the exception.
+- Branches are short-lived: delete them once their pull request is merged.
 
 ## Trello cards
 
@@ -77,6 +92,18 @@ platform labels.
 |          | Launcher    | pink   | The Tauri launcher (`launcher/`)                      |
 |          | Build       | lime   | Build scripts, CMake, SDK patches (`scripts/`, `patches/`) |
 | Status   | Blocked     | dark red | Cannot move forward; the card's comments say why    |
+
+### Priority, effort and members
+
+- **Priority**: Highest (blocks other work or breaks `main`), High (next to do), Medium (important
+  but can wait), Low (when there is time), Lowest (only if time is left over), Not sure (not
+  enough information to decide).
+- **Effort**, in Fibonacci points that measure complexity and uncertainty, not hours: 1 a small,
+  clear change; 2-3 a contained change in a known place; 5 several pieces or some research; 8 large
+  or uncertain; 13 too large, split the card.
+- Every card in Ready has a priority and an effort.
+- **Member**: one per card, the person who will do it. A card whose owner is not decided has no
+  member.
 
 ## Commits
 
