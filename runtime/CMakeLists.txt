@@ -24,6 +24,7 @@ set(AZURA_SOURCES
     src/hooks.cpp
     src/script_hooks.cpp
     src/class_dump.cpp
+    src/render_queue.cpp
     src/menu/coalesced.cpp
     src/menu/menu_patches.cpp
     src/menu/pc_options.cpp
