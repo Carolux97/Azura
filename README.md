@@ -68,3 +68,10 @@ Project skeleton. Nothing has been recompiled or run yet.
 
 Gears of War is a trademark of Microsoft. This project is not affiliated with or endorsed by
 Microsoft, Epic Games or The Coalition.
+
+## License
+
+Gears3-Azura's own code is released under the [BSD 3-Clause License](LICENSE). The third-party
+code it builds on, and the licenses that apply to it, are listed in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The license covers this project's code only:
+Gears of War, its code and its data belong to their owners and are not part of this repository.
