@@ -210,15 +210,19 @@ enum WatchedName {
   kReturnToMain,             // UIScene_Options.Callback_ReturnToMain: back to the categories
   kResetAcceptAlias,         // button alias of the Defaults message box's Accept button
   kGenericAcceptAlias,       // button alias of the game's plain Accept button
+  kBuildCampaignURL,         // GearMenuGame: builds travel URL for campaign
+  kServerTravel,             // WorldInfo: travels to a new level
+  kProcessServerTravel,      // GameInfo: processes server travel URL
   kWatchedNameCount,
 };
 constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "HandleMenuSelection",   "PopulateOptionsList",    "GetOptionValueAt",
     "OnConfirm_ResetDefaults", "FilterButtonInput",    "Callback_VideoOptions",
     "CloseVideoOptionsScene", "Callback_MenuOptionSelected", "Callback_ReturnToMain",
-    "ResetAccept",           "GenericAccept"};
+    "ResetAccept",           "GenericAccept",
+    "BuildCampaignURL",      "ServerTravel",           "ProcessServerTravel"};
 
-std::atomic<int32_t> g_names[kWatchedNameCount] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
+std::atomic<int32_t> g_names[kWatchedNameCount] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
 std::atomic<int> g_names_missing{kWatchedNameCount};
 std::atomic<uint32_t> g_names_scanned{0};
 std::atomic<uint32_t> g_calls{0};
@@ -792,6 +796,21 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     ScanNewNames(base);
   }
   const uint32_t function = LoadU32(base, ctx.r4.u32 + kFrameNode);
+  if (Is(base, function, kBuildCampaignURL)) {
+    const uint32_t result = ctx.r5.u32;
+    __imp__sub_822DF9E0(ctx, base);
+    if (result) {
+      PatchTravelURL(base, result);
+    }
+    return;
+  }
+  if (Is(base, function, kServerTravel) || Is(base, function, kProcessServerTravel)) {
+    const uint32_t locals = LoadU32(base, ctx.r4.u32 + kFrameLocals);
+    const int32_t url_offset = ParamOffset(base, function, "URL");
+    if (url_offset >= 0) {
+      PatchTravelURL(base, locals + static_cast<uint32_t>(url_offset));
+    }
+  }
   const int quit_option = azura::menu::MainMenuQuitOption();
   if (quit_option >= 0 && Is(base, function, kHandleMenuSelection) && IsQuitSelection(base, ctx.r4.u32, quit_option)) {
     RequestQuit();
