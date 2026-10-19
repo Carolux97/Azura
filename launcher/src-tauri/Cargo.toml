@@ -3,6 +3,7 @@ name = "azura-launcher"
 version = "0.1.0"
 description = "Launcher for the Gears3-Azura native macOS port"
 authors = ["Gears3-Azura contributors"]
+license = "BSD-3-Clause"
 edition = "2024"
 rust-version = "1.90"
 
