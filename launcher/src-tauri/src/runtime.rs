@@ -11,7 +11,8 @@
 //!
 //! While the game runs, every line it prints is sent to the interface as a `game-output` event,
 //! and its end as a `game-exit` event, so the interface can show a live log and explain a failed
-//! start.
+//! start. The end is only reported once the game's last lines have been sent, so the log never
+//! shows output after the game has ended.
 //!
 //! Some settings only apply when the game starts, and the game offers to restart when they change.
 //! The runtime is started with `AZURA_LAUNCHER=1`, which tells it to leave the restart to the
@@ -23,8 +24,9 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -140,12 +142,48 @@ impl GameEvents for AppHandle {
 }
 
 /// Reads `source` line by line on its own thread and sends each line to `events`.
-fn relay_lines<E: GameEvents>(events: E, stream: &'static str, source: impl Read + Send + 'static) {
+/// When `source` ends (the game closed it, normally by exiting), sends on `done`.
+fn relay_lines<E: GameEvents>(
+    events: E,
+    stream: &'static str,
+    source: impl Read + Send + 'static,
+    done: mpsc::Sender<()>,
+) {
     thread::spawn(move || {
         for line in BufReader::new(source).lines().map_while(Result::ok) {
             events.output(OutputLine { stream, line });
         }
+        let _ = done.send(());
     });
+}
+
+/// Longest wait, once the game has exited, for its last output lines to be sent. Its output ends
+/// as soon as it exits, unless a process it started keeps the output open; the end is then
+/// reported anyway after this delay.
+const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// A started game: its process and the threads relaying its output.
+struct RunningGame {
+    child: Child,
+    /// Receives one message per output relay that has finished.
+    relays_done: mpsc::Receiver<()>,
+    relays: usize,
+}
+
+impl RunningGame {
+    /// Waits for the game to exit, then for its output relays to send its last lines (up to
+    /// OUTPUT_DRAIN_TIMEOUT), and returns how it ended.
+    fn wait(&mut self) -> ExitInfo {
+        let exit = exit_info(&mut self.child);
+        let deadline = Instant::now() + OUTPUT_DRAIN_TIMEOUT;
+        for _ in 0..self.relays {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if self.relays_done.recv_timeout(left).is_err() {
+                break;
+            }
+        }
+        exit
+    }
 }
 
 /// Starts the runtime with `args` from `runtime_dir`, relaying its output.
@@ -154,7 +192,7 @@ fn spawn_game<E: GameEvents>(
     executable: &Path,
     args: &[String],
     runtime_dir: &Path,
-) -> std::io::Result<Child> {
+) -> std::io::Result<RunningGame> {
     let mut command = Command::new(executable);
     command
         .args(args)
@@ -178,13 +216,17 @@ fn spawn_game<E: GameEvents>(
         }
     }
     let mut child = command.spawn()?;
+    let (done, relays_done) = mpsc::channel();
+    let mut relays = 0;
     if let Some(stdout) = child.stdout.take() {
-        relay_lines(events.clone(), "stdout", stdout);
+        relay_lines(events.clone(), "stdout", stdout, done.clone());
+        relays += 1;
     }
     if let Some(stderr) = child.stderr.take() {
-        relay_lines(events.clone(), "stderr", stderr);
+        relay_lines(events.clone(), "stderr", stderr, done);
+        relays += 1;
     }
-    Ok(child)
+    Ok(RunningGame { child, relays_done, relays })
 }
 
 /// How a process waited on with `child.wait()` ended.
@@ -195,23 +237,23 @@ fn exit_info(child: &mut Child) -> ExitInfo {
     }
 }
 
-/// Waits for the game started as `child` to end, and starts it again with the same command for as
-/// long as it asks to be. Returns how the last run ended.
+/// Waits for the started `game` to end, and starts it again with the same command for as long as
+/// it asks to be. Returns how the last run ended.
 fn watch_game<E: GameEvents>(
     events: &E,
-    mut child: Child,
+    mut game: RunningGame,
     executable: &Path,
     args: &[String],
     runtime_dir: &Path,
 ) -> ExitInfo {
     loop {
-        let exit = exit_info(&mut child);
+        let exit = game.wait();
         if !asks_for_restart(&exit) {
             return exit;
         }
         events.restart();
         match spawn_game(events, executable, args, runtime_dir) {
-            Ok(next) => child = next,
+            Ok(next) => game = next,
             Err(error) => {
                 let line = format!("Cannot restart the game: {error}");
                 events.output(OutputLine { stream: "stderr", line });
@@ -246,8 +288,8 @@ impl GameProcess {
 
         let args = folder_arguments(folders);
         let runtime_dir = runtime_dir.to_path_buf();
-        let child = match spawn_game(&events, &executable, &args, &runtime_dir) {
-            Ok(child) => child,
+        let game = match spawn_game(&events, &executable, &args, &runtime_dir) {
+            Ok(game) => game,
             Err(error) => {
                 self.running.store(false, Ordering::SeqCst);
                 return Err(LaunchError::StartFailed(error.to_string()));
@@ -257,7 +299,7 @@ impl GameProcess {
         // The slot stays claimed while the game restarts, so Play cannot start a second game.
         let running = Arc::clone(&self.running);
         thread::spawn(move || {
-            let exit = watch_game(&events, child, &executable, &args, &runtime_dir);
+            let exit = watch_game(&events, game, &executable, &args, &runtime_dir);
             running.store(false, Ordering::SeqCst);
             events.exit(exit);
         });
@@ -289,12 +331,14 @@ mod tests {
         );
     }
 
-    /// Everything a launch sent, in order.
+    /// Everything a launch sent, in order. `line_delay` slows down the handling of each output
+    /// line, like a busy interface, so the output relays fall behind the game's exit.
     #[derive(Clone, Default)]
-    struct Recorder(Arc<std::sync::Mutex<Vec<String>>>);
+    struct Recorder(Arc<std::sync::Mutex<Vec<String>>>, Duration);
 
     impl GameEvents for Recorder {
         fn output(&self, line: OutputLine) {
+            thread::sleep(self.1);
             self.0.lock().unwrap().push(format!("{}: {}", line.stream, line.line));
         }
 
@@ -316,7 +360,8 @@ mod tests {
                 }
                 thread::sleep(std::time::Duration::from_millis(10));
             }
-            // The output relays may still be on their last lines.
+            // Keep listening a little: an output line arriving after the exit event would be
+            // recorded after it, which the tests check against.
             thread::sleep(std::time::Duration::from_millis(100));
             self.0.lock().unwrap().clone()
         }
@@ -358,6 +403,28 @@ mod tests {
         assert!(position("stdout: first 1") < position("restart"), "{events:?}");
         assert!(position("restart") < position("stdout: second 1"), "{events:?}");
         assert!(!process.is_running());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reports_the_end_after_the_last_output_line() {
+        let runtime = TempFolder::new("runtime-drain");
+        // The game prints its lines and exits at once, while each line takes 2 ms to handle: the
+        // output relay is still sending them (about 0.4 s) when the process is already gone.
+        fake_runtime(
+            &runtime,
+            "i=1; while [ $i -le 200 ]; do echo \"line $i\"; i=$((i+1)); done; exit 0",
+        );
+        let folders =
+            LaunchFolders { runtime: &runtime, game: None, saves: &runtime, cache: &runtime };
+        let process = GameProcess::default();
+        let recorder = Recorder(Default::default(), Duration::from_millis(2));
+        process.launch(recorder.clone(), &folders).unwrap();
+
+        let events = recorder.until_exit();
+        assert_eq!(events.len(), 201, "every line and then the exit: {events:?}");
+        assert_eq!(events[199], "stdout: line 200");
+        assert_eq!(events.last().map(String::as_str), Some("exit Some(0)"));
     }
 
     #[cfg(unix)]
