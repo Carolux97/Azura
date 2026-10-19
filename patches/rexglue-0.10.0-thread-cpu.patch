@@ -1,0 +1,210 @@
+diff --git a/src/core/perf/counter.cpp b/src/core/perf/counter.cpp
+index 536009e..bb23daf 100644
+--- a/src/core/perf/counter.cpp
++++ b/src/core/perf/counter.cpp
+@@ -18,9 +18,21 @@
+ #include <atomic>
+ #include <cstdio>
+ #include <cstring>
++#include <filesystem>
++#include <fstream>
++#include <string>
++#include <unordered_map>
++#include <vector>
++
++#if defined(__APPLE__)
++#include <mach/mach.h>
++#endif
+ 
+ REXCVAR_DEFINE_STRING(perf_log_csv, "", "Perf",
+                       "Path to write per-frame CSV log (empty = disabled)");
++REXCVAR_DEFINE_BOOL(perf_log_threads, false, "Perf",
++                    "With perf_log_csv, also write the CPU time each thread used in every frame "
++                    "to <name>.threads.csv beside it (macOS and Linux)");
+ 
+ namespace rex::perf {
+ 
+@@ -80,6 +92,140 @@ std::FILE* g_csv_file = nullptr;
+ std::string g_csv_path;
+ int g_csv_frame_count = 0;
+ 
++// Per-thread CPU log (perf_log_threads): one row per thread and frame, with the CPU time the
++// thread used since the previous frame. Threads that used none in a frame have no row.
++std::FILE* g_threads_file = nullptr;
++// CPU time each thread had used at the previous frame, by system thread id. A thread seen for the
++// first time only sets its baseline, so its first row covers a whole frame.
++std::unordered_map<uint64_t, uint64_t> g_thread_cpu_ns;
++
++struct ThreadCpu {
++  uint64_t id;      // System thread id (Mach thread id on macOS, tid on Linux).
++  std::string name;  // Thread name, empty when the thread has none.
++  uint64_t cpu_ns;   // CPU time (user + system) used since the thread started.
++};
++
++// Reads the name and CPU time of every thread of this process. Returns false when the platform
++// has no way to read them, or reading fails.
++bool ReadThreadCpu(std::vector<ThreadCpu>& out) {
++  out.clear();
++#if defined(__APPLE__)
++  thread_act_array_t threads = nullptr;
++  mach_msg_type_number_t count = 0;
++  if (task_threads(mach_task_self(), &threads, &count) != KERN_SUCCESS) {
++    return false;
++  }
++  out.reserve(count);
++  for (mach_msg_type_number_t i = 0; i < count; ++i) {
++    thread_identifier_info_data_t ident;
++    mach_msg_type_number_t ident_count = THREAD_IDENTIFIER_INFO_COUNT;
++    thread_extended_info_data_t info;
++    mach_msg_type_number_t info_count = THREAD_EXTENDED_INFO_COUNT;
++    if (thread_info(threads[i], THREAD_IDENTIFIER_INFO, reinterpret_cast<thread_info_t>(&ident),
++                    &ident_count) == KERN_SUCCESS &&
++        thread_info(threads[i], THREAD_EXTENDED_INFO, reinterpret_cast<thread_info_t>(&info),
++                    &info_count) == KERN_SUCCESS) {
++      // pth_user_time and pth_system_time are in nanoseconds.
++      out.push_back({ident.thread_id, info.pth_name, info.pth_user_time + info.pth_system_time});
++    }
++    // task_threads() hands over a send right per thread and the array itself; release both.
++    mach_port_deallocate(mach_task_self(), threads[i]);
++  }
++  vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(threads),
++                count * sizeof(thread_act_t));
++  return true;
++#elif defined(__linux__)
++  // /proc/self/task/<tid>/schedstat starts with the time the thread spent on a CPU, in
++  // nanoseconds; utime and stime in stat count whole clock ticks (usually 10 ms), too coarse for
++  // a frame.
++  std::error_code ec;
++  for (const auto& entry : std::filesystem::directory_iterator("/proc/self/task", ec)) {
++    uint64_t cpu_ns = 0;
++    std::ifstream schedstat(entry.path() / "schedstat");
++    if (!(schedstat >> cpu_ns)) {
++      continue;  // The thread ended while it was being read.
++    }
++    std::string name;
++    std::ifstream comm(entry.path() / "comm");
++    std::getline(comm, name);
++    out.push_back({std::stoull(entry.path().filename().string()), std::move(name), cpu_ns});
++  }
++  return !ec;
++#else
++  return false;
++#endif
++}
++
++// Opens the per-thread CPU log beside the frame CSV: "perf.csv" gives "perf.threads.csv".
++void OpenThreadsCsv(const std::string& csv_path) {
++  std::filesystem::path path = rex::to_path(csv_path);
++  path.replace_extension();
++  path += ".threads.csv";
++  std::vector<ThreadCpu> threads;
++  if (!ReadThreadCpu(threads)) {
++    REXLOG_WARN("perf: per-thread CPU times are not available on this platform");
++    return;
++  }
++  g_threads_file = rex::filesystem::OpenFile(path, "w");
++  if (!g_threads_file) {
++    REXLOG_WARN("perf: failed to open per-thread CSV log: {}", path.string());
++    return;
++  }
++  std::fputs("frame,thread_id,name,cpu_us\n", g_threads_file);
++  g_thread_cpu_ns.clear();
++  for (const ThreadCpu& thread : threads) {
++    g_thread_cpu_ns[thread.id] = thread.cpu_ns;
++  }
++}
++
++// Writes the CPU time every thread used since the previous frame, as rows of the given frame
++// (the same 0-based row index as in the frame CSV).
++void WriteThreadsFrame(int frame) {
++  static std::vector<ThreadCpu> threads;
++  if (!ReadThreadCpu(threads)) {
++    return;
++  }
++  for (const ThreadCpu& thread : threads) {
++    auto [it, first_seen] = g_thread_cpu_ns.try_emplace(thread.id, thread.cpu_ns);
++    if (first_seen) {
++      continue;
++    }
++    const uint64_t used_ns = thread.cpu_ns - it->second;
++    it->second = thread.cpu_ns;
++    if (used_ns == 0) {
++      continue;
++    }
++    // Names are quoted, with any quote doubled, so commas in them do not split the row.
++    std::string name;
++    for (char c : thread.name) {
++      name += c;
++      if (c == '"') {
++        name += '"';
++      }
++    }
++    std::fprintf(g_threads_file, "%d,%llu,\"%s\",%llu\n", frame,
++                 static_cast<unsigned long long>(thread.id), name.c_str(),
++                 static_cast<unsigned long long>(used_ns / 1000));
++  }
++  // Threads that have ended are dropped so the map does not grow over a long session.
++  if (g_thread_cpu_ns.size() > threads.size()) {
++    std::unordered_map<uint64_t, uint64_t> alive;
++    for (const ThreadCpu& thread : threads) {
++      alive.emplace(thread.id, g_thread_cpu_ns[thread.id]);
++    }
++    g_thread_cpu_ns.swap(alive);
++  }
++}
++
++void CloseThreadsCsv() {
++  if (g_threads_file) {
++    std::fflush(g_threads_file);
++    std::fclose(g_threads_file);
++    g_threads_file = nullptr;
++  }
++  g_thread_cpu_ns.clear();
++}
++
+ }  // anonymous namespace
+ 
+ const char* CounterName(CounterId id) {
+@@ -131,6 +277,7 @@ void SetCsvLogPath(const std::string& path) {
+     std::fclose(g_csv_file);
+     g_csv_file = nullptr;
+   }
++  CloseThreadsCsv();
+   g_csv_path = path;
+   g_csv_frame_count = 0;
+ 
+@@ -151,6 +298,10 @@ void SetCsvLogPath(const std::string& path) {
+     std::fputs(kCounterNames[i], g_csv_file);
+   }
+   std::fputc('\n', g_csv_file);
++
++  if (REXCVAR_GET(perf_log_threads)) {
++    OpenThreadsCsv(path);
++  }
+ }
+ 
+ void WriteCsvFrame() {
+@@ -165,8 +316,15 @@ void WriteCsvFrame() {
+   }
+   std::fputc('\n', g_csv_file);
+ 
++  if (g_threads_file) {
++    WriteThreadsFrame(g_csv_frame_count);
++  }
++
+   if (++g_csv_frame_count % 60 == 0) {
+     std::fflush(g_csv_file);
++    if (g_threads_file) {
++      std::fflush(g_threads_file);
++    }
+   }
+ }
+ 
+@@ -176,6 +334,7 @@ void FlushCsv() {
+     std::fclose(g_csv_file);
+     g_csv_file = nullptr;
+   }
++  CloseThreadsCsv();
+   g_csv_path.clear();
+ }
+ 
