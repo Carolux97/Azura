@@ -1,0 +1,71 @@
+# Runs the launcher's tests (JavaScript and Rust) on macOS and Linux for every pull request to
+# main and every push to main. The runtime is not built here: it needs the game's default.xex,
+# which cannot be in the repository, so it stays a manual check in each pull request.
+
+name: Launcher tests
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# The workflow only reads the repository.
+permissions:
+  contents: read
+
+# A new push to the same branch or pull request cancels the run still in progress for it.
+concurrency:
+  group: launcher-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    strategy:
+      # Both platforms report their result even when the other one fails.
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: launcher
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      # The JavaScript tests use Node's own test runner and import nothing from npm, so no
+      # install step is needed. The "**" pattern in `npm test` needs Node 21 or later.
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: JavaScript tests
+        run: npm test
+
+      # Tauri links against the system's web view and GTK on Linux.
+      - name: Install the Linux libraries Tauri needs
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev libssl-dev build-essential
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Keeps the compiled dependencies between runs, which turns a cold build of several
+      # minutes into a much shorter one.
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: launcher/src-tauri
+
+      # --locked uses the versions in Cargo.lock, as a local build does, and fails if it is out
+      # of date instead of changing it.
+      - name: Rust tests
+        working-directory: launcher/src-tauri
+        run: cargo test --locked

@@ -16,6 +16,7 @@ Nothing here is game data: only names, offsets and identifiers needed to hook th
 - [Main menu](#main-menu)
 - [Options menu](#options-menu)
 - [Profile settings](#profile-settings)
+- [Render command queue](#render-command-queue)
 - [Pitfalls](#pitfalls)
 
 ## Engine basics
@@ -391,7 +392,7 @@ Implemented in `runtime/src/menu/pc_options.{h,cpp}` (data and texts) and `scrip
 
 | Position | Category | Change |
 | --- | --- | --- |
-| 1 | Video | A list: Calibrate brightness (opens the game's calibration screen), Full screen, Vsync, Anti-aliasing, Motion blur. Back and Defaults |
+| 1 | Video | A list: Calibrate brightness (opens the game's calibration screen), Full screen, Vsync, Anti-aliasing, Motion blur, Anisotropic filtering, Image scaling. Back and Defaults |
 | 5 | Keyboard and mouse | Replaces the storage location: Mouse sensitivity. Back and Defaults |
 
 How:
@@ -401,14 +402,17 @@ How:
   (category titles, button names) kept from the file.
 - **List rows borrow profile settings the game never uses**, the engine's racing game preferences:
   Movement Control 18 (calibration), Transmission 19 (vsync), Race Camera 20 (anti-aliasing), Brake
-  21 (motion blur), Accelerator 22 (full screen). Their definitions (`ProfileMappings[11]` to
-  `[15]`) get our value names. The calibration row's definition has two values, both named "Open",
+  21 (motion blur), Accelerator 22 (full screen); and two generic Xbox profile settings with three
+  values that Gears does not read (**inferred**): Controller Sensitivity 13 (anisotropic filtering:
+  off, 4x, 16x) and Voice Via Speakers 6 (image scaling: bilinear, AMD CAS, AMD FSR). Their
+  definitions (`ProfileMappings[2]`, `[3]` and `[11]` to `[15]`) get our value names. The calibration row's definition has two values, both named "Open",
   since an array cannot shrink. The slider uses ID 9105, which the profile does not have.
 - **Showing values:** while `PopulateOptionsList` is on one of our rows, every call it makes
   (entered through `CallFunction`) rewrites its locals `Slider_Value` / `OptionList_Index` with the
   real value, so the call that hands them to Flash reads ours.
 - **Saving values:** when `GetOptionValueAt(Index)` returns for one of our rows, the value is
-  applied to its cvar (`fullscreen`, `vsync`, `swap_post_effect`, `motion_blur`, `mnk_sensitivity`)
+  applied to its cvar (`fullscreen`, `vsync`, `swap_post_effect`, `motion_blur`,
+  `anisotropic_override`, `present_effect`, `mnk_sensitivity`)
   and written to `azura.toml`, leaving the rest of the file as it is. The menu also writes the
   borrowed profile settings, which is harmless.
 - **Defaults** resets our rows to the values in `azura.default.toml` (the SDK's default when a key
@@ -478,7 +482,36 @@ loaded until the video options are opened (**inferred**).
 - **Arrays in localized values never shrink**, and indexed keys past the end are ignored.
 - **The first launch with an empty shader cache looks frozen** while tens of thousands of pipelines
   are created. It is not a hang.
-- **A crash at `0x823F42E8` (`Call to invalid or unregistered function`)** has been seen while a
-  Bink video was playing (the intro logos, the intro movie, the attract movie after idling on the
-  title screen). The cause is not known; it does not depend on the menu changes (**inferred** from
-  three cases).
+- **Lock-free code written for the Xbox 360 can break on ARM64.** The Xenon cores run in order,
+  so the game publishes data between threads without barriers where it relies on that; ARM64
+  reorders memory accesses. See "Render command queue".
+
+## Render command queue
+
+Game threads enqueue render commands into the engine's ring buffer (`FRingBuffer`, guest
+`0x8343F018`: +0 start, +4 end, +8 write pointer, +16 read pointer). Each enqueue (inlined at about
+500 sites) reserves space with `sub_822B2140`, constructs the command (its vtable at +0) and moves
+the write pointer, with no barrier in between. The rendering thread (`sub_823F4238`) reads the
+write pointer, then each command's vtable, and calls its `Execute` (vtable +4), again with no
+barrier.
+
+On ARM64 the rendering thread could read a command before the write pointer that announced it, find
+no vtable yet and stop with `Call to invalid or unregistered function at guest address 0x00000000`
+(or `0x00000400`) `(called from 0x823F42E8)`. It happened mostly while a Bink movie played (intro
+logos, intro movie, the attract movie after idling on the title screen), the heaviest user of the
+queue: about once every ten runs (**inferred** from the day's logs).
+
+The fix is a `[[entrypoint.midasm_hook]]` in the manifest at `0x823F42D8` (the read of the vtable)
+calling `AzuraCheckRenderCommand` (`runtime/src/render_queue.cpp`): an acquire fence before the
+command is read, plus a safety net that waits for, and logs, a command whose vtable is not valid.
+With it, 26 unattended runs (logos every time, the attract movie once) neither crashed nor met an
+unfinished command (**verified**). The reordering was therefore on the reading side; the writing
+side would have shown unfinished commands despite the fence (**inferred**). If the warning
+`[Azura render] Command at ... had vtable ...` ever appears, the writing side reorders too, and the
+remedy is making every guest store a release store in the code generator (`REX_STORE_*`).
+
+Mid-function hooks: `[[entrypoint.midasm_hook]]` (under `entrypoint`, not at the top level, or the
+code generator ignores it) with `address`, `name` and `registers`; the hook is a C++ function
+`void Name(PPCRegister& r18, ...)` taking the listed registers, emitted before the instruction at
+`address` (after it with `after_instruction = true`). The guest memory base is
+`rex::system::kernel_state()->memory()->virtual_membase()`.

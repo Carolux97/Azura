@@ -55,6 +55,22 @@ void PcOptionStoreValue(int option, float value);
 // Puts the options of `category` back to their default values (the category's Defaults button).
 void PcOptionsResetDefaults(int category);
 
+// Some options (anti-aliasing, image scaling, motion blur) only take effect when the game starts.
+// Called when the player leaves `category` of the Options menu, once its values are saved: returns
+// true when a new value of one of those options is not in effect yet and the player has not been
+// asked about these values before, so the game can offer to restart.
+bool PcOptionsCategoryClosed(int category);
+
+// Keys of the restart message box texts in [MessageBoxStrings] of GearGameUI. Each is exactly as
+// long as the game's key it stands in for (ResetOptions_Title and ResetOptions_Message), since
+// the script hooks swap them in the bytecode of the Defaults message box (see script_hooks.cpp).
+constexpr const char* kRestartTitleKey = "AzuraRestart_Title";
+constexpr const char* kRestartMessageKey = "AzuraRestart_Message";
+
+// Adds the restart message box texts, in `language`, to a [MessageBoxStrings] section of a
+// GearGameUI localization file.
+void PatchMessageBoxTexts(CoalescedSection& section, const std::string& language);
+
 // Rewrites Video and puts Keyboard and mouse in place of the storage location, in a
 // [UIScene_Options] section of a GearGame localization file. New texts are in `language` (the file
 // extension: "esn", "int", ...); the game's own texts are kept from the file.
@@ -69,4 +85,3 @@ void PatchValueNames(CoalescedSection& section, const std::string& language);
 void PatchSystemSettings(CoalescedSection& section);
 
 }  // namespace azura::menu
-

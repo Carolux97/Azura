@@ -3,8 +3,7 @@
     "title": "Azura Launcher"
   },
   "a11y": {
-    "sections": "Разделы",
-    "quality": "Качество"
+    "sections": "Разделы"
   },
   "nav": {
     "play": "Играть",
@@ -87,30 +86,12 @@
   },
   "graphics": {
     "title": "Графика",
-    "startup": "Перед запуском",
-    "startupHelp": "Игра считывает эти настройки при запуске. Изменения вступят в силу при следующем запуске.",
-    "low": "Низкое",
-    "medium": "Среднее",
-    "high": "Высокое",
-    "auto": "Авто",
     "mode": "Режим",
     "windowed": "В окне",
     "fullscreen": "Полный экран",
-    "custom": "Пользовательское",
-    "autoResolved": "Авто выбирает «{preset}» на этом Mac",
     "renderResolution": "Разрешение рендеринга",
     "original": "оригинал",
-    "advanced": "Дополнительно",
-    "advancedHelp": "Если изменить любую из этих настроек, пресет станет пользовательским.",
-    "anisotropic": "Анизотропная фильтрация",
-    "off": "Выкл.",
-    "upscaling": "Масштабирование изображения",
-    "bilinear": "Билинейное (оригинал)",
-    "cas": "AMD CAS (резкость)",
-    "fsr": "AMD FSR 1",
-    "textureMemory": "Память текстур",
-    "inGame": "В игре",
-    "inGameHelp": "Вертикальная синхронизация, сглаживание, размытие в движении и полноэкранный режим находятся в меню «Настройки» игры, в разделе «Видео»; чувствительность мыши — в разделе «Клавиатура и мышь». Назначение клавиш меняется прямо в игре: нажмите {key}."
+    "resolutionAuto": "Автоматически ({size})"
   },
   "online": {
     "title": "Мультиплеер",
@@ -132,6 +113,7 @@
     "hide": "Скрыть",
     "starting": "Запуск игры…",
     "running": "Игра запущена.",
+    "restarting": "Перезапуск игры для применения новых настроек…",
     "exitOk": "Игра закрылась без ошибок.",
     "exitError": "Игра закрылась с ошибкой (код {code}).",
     "exitSignal": "Система остановила игру.",
@@ -150,7 +132,7 @@
   "saves": {
     "title": "Saved Games Manager",
     "statusTitle": "Save & Checkpoints Status",
-    "statusHelp": "Monitors and automatically repairs save files to prevent 'corrupted save points' errors.",
+    "statusHelp": "Checks your saved games and lets you repair them to prevent 'corrupted save points' errors. A backup is made before repairing or resetting.",
     "checkpoints": "Detected Checkpoints",
     "path": "Storage Path",
     "lastSaved": "Last Modified",

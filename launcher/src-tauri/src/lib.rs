@@ -93,7 +93,6 @@ async fn launch_game(
     let game = paths.load().map_err(LaunchError::StartFailed)?.game_folder.map(std::path::PathBuf::from);
     let saves = paths.saves_folder().map_err(LaunchError::SavesUnavailable)?;
     saves::prepare(&saves, &cache).map_err(|e| LaunchError::SavesUnavailable(format!("{e:?}")))?;
-    saves::sanitize_saves_before_launch(&saves);
     let folders = LaunchFolders { runtime: &runtime, game: game.as_deref(), saves: &saves, cache: &cache };
     process.launch(app, &folders)
 }
@@ -106,12 +105,12 @@ async fn get_save_status(app: tauri::AppHandle) -> Result<SaveStatus, String> {
     Ok(saves::inspect_saves(&app, &saves))
 }
 
-/// Repairs corrupt or orphaned checkpoint headers.
+/// Removes orphaned checkpoint headers, after backing up the saves.
 #[tauri::command]
 async fn repair_saves(app: tauri::AppHandle) -> Result<String, String> {
     let paths = settings_paths(&app)?;
     let saves = paths.saves_folder()?;
-    saves::repair_saves_internal(&saves)
+    saves::repair_saves_internal(&app, &saves)
 }
 
 /// Resets saved games so the player can start a clean campaign, backing up first.

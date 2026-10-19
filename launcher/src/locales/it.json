@@ -3,8 +3,7 @@
     "title": "Azura Launcher"
   },
   "a11y": {
-    "sections": "Sezioni",
-    "quality": "Qualità"
+    "sections": "Sezioni"
   },
   "nav": {
     "play": "Gioca",
@@ -87,30 +86,12 @@
   },
   "graphics": {
     "title": "Grafica",
-    "startup": "Prima di giocare",
-    "startupHelp": "Il gioco legge queste impostazioni all'avvio. Le modifiche si applicano dalla prossima partita.",
-    "low": "Bassa",
-    "medium": "Media",
-    "high": "Alta",
-    "auto": "Auto",
     "mode": "Modalità",
     "windowed": "Finestra",
     "fullscreen": "Schermo intero",
-    "custom": "Personalizzata",
-    "autoResolved": "Auto usa {preset} su questo Mac",
     "renderResolution": "Risoluzione di rendering",
     "original": "originale",
-    "advanced": "Avanzate",
-    "advancedHelp": "Se modifichi una di queste impostazioni, il preset diventa Personalizzata.",
-    "anisotropic": "Filtro anisotropico",
-    "off": "Disattivato",
-    "upscaling": "Ridimensionamento immagine",
-    "bilinear": "Bilineare (originale)",
-    "cas": "AMD CAS (nitidezza)",
-    "fsr": "AMD FSR 1",
-    "textureMemory": "Memoria texture",
-    "inGame": "Nel gioco",
-    "inGameHelp": "Sincronizzazione verticale, anti-aliasing, sfocatura di movimento e schermo intero sono nel menu Opzioni del gioco, in Video; la sensibilità del mouse è in Tastiera e mouse. I tasti si modificano durante il gioco: premi {key}."
+    "resolutionAuto": "Automatica ({size})"
   },
   "online": {
     "title": "Multigiocatore",
@@ -132,6 +113,7 @@
     "hide": "Nascondi",
     "starting": "Avvio del gioco…",
     "running": "Il gioco è in esecuzione.",
+    "restarting": "Riavvio del gioco per applicare le nuove impostazioni…",
     "exitOk": "Il gioco si è chiuso correttamente.",
     "exitError": "Il gioco si è chiuso con un errore (codice {code}).",
     "exitSignal": "Il sistema ha interrotto il gioco.",
@@ -150,7 +132,7 @@
   "saves": {
     "title": "Saved Games Manager",
     "statusTitle": "Save & Checkpoints Status",
-    "statusHelp": "Monitors and automatically repairs save files to prevent 'corrupted save points' errors.",
+    "statusHelp": "Checks your saved games and lets you repair them to prevent 'corrupted save points' errors. A backup is made before repairing or resetting.",
     "checkpoints": "Detected Checkpoints",
     "path": "Storage Path",
     "lastSaved": "Last Modified",

@@ -1,5 +1,24 @@
 #!/usr/bin/env bash
-# Builds the Gears3-Azura runtime on Linux or macOS, from default.xex to the executable.
+# Builds the Gears3-Azura runtime on macOS (Apple Silicon) or Linux (x86_64, ARM64), from default.xex
+# to the executable.
+#
+# Steps:
+#   1. check that the SDK and the game executable are where the project expects them;
+#   2. identify the executable by its SHA-256 in versions.toml, pick the manifest of that build and
+#      point runtime/azura_manifest.toml at it (the generated CMake re-runs codegen with that fixed
+#      name whenever an input changes, so the name must always lead to the right manifest);
+#   3. on a first build, run the prebuilt `rexglue codegen` once to write the generated CMake files;
+#   4. apply our patches (patches/rexglue-0.10.0*.patch) to the ReXGlue SDK source tree, which the
+#      runtime builds from (input changes the prebuilt SDK cannot carry), and, on macOS, build the
+#      patched MoltenVK;
+#   5. configure, build the patched code generator from source, regenerate the recompiled code with
+#      it when it changed (default.xex to C++ under runtime/generated/), and build the runtime.
+#
+# The prebuilt SDK of the platform is still used to bootstrap the generated CMake files and for the
+# Vulkan headers. Every platform builds from the patched SDK source: the patches carry fixes the
+# runtime needs everywhere, and the patched code generator emits the guest's memory fences.
+#
+# Usage: scripts/build.sh [debug|relwithdebinfo|release]   (default: relwithdebinfo)
 
 set -euo pipefail
 
@@ -8,35 +27,36 @@ readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly RUNTIME_DIR="${ROOT}/runtime"
 readonly XEX="${RUNTIME_DIR}/game/default.xex"
 readonly REGISTRY="${ROOT}/versions.toml"
+readonly SDK_SRC="${ROOT}/sdk/rexglue-0.10.0-src"
 
-export PKG_CONFIG_PATH="${ROOT}/sdk/compat/pkgconfig:${PKG_CONFIG_PATH:-}"
-
+# Prebuilt SDK and CMake preset for this machine (see runtime/CMakePresets.json).
 case "$(uname -s):$(uname -m)" in
-  Darwin:arm64)
-    readonly PLATFORM="mac-arm64"
-    readonly SDK_DIR="${ROOT}/sdk/rexglue-0.10.0-mac-arm64/mac-arm64"
-    readonly SDK_SRC="${ROOT}/sdk/rexglue-0.10.0-src"
-    readonly PRESET="mac-arm64-sdk-source"
-    ;;
-  Linux:x86_64|Linux:amd64)
-    readonly PLATFORM="linux-amd64"
-    readonly SDK_DIR="${ROOT}/sdk/rexglue-0.10.0-linux-amd64/linux-amd64"
-    readonly SDK_SRC="${ROOT}/sdk/rexglue-0.10.0-src"
-    readonly PRESET="linux-amd64-sdk-source"
-    ;;
-  Linux:aarch64|Linux:arm64)
-    readonly PLATFORM="linux-arm64"
-    readonly SDK_DIR="${ROOT}/sdk/rexglue-0.10.0-linux-arm64/linux-arm64"
-    readonly SDK_SRC="${ROOT}/sdk/rexglue-0.10.0-src"
-    readonly PRESET="linux-arm64"
-    ;;
+  Darwin:arm64) readonly PLATFORM="mac-arm64" ;;
+  Linux:x86_64|Linux:amd64) readonly PLATFORM="linux-amd64" ;;
+  Linux:aarch64|Linux:arm64) readonly PLATFORM="linux-arm64" ;;
   *)
     echo "Unsupported build platform: $(uname -s) $(uname -m)." >&2
     exit 1
     ;;
 esac
-
+readonly SDK_DIR="${ROOT}/sdk/rexglue-0.10.0-${PLATFORM}/${PLATFORM}"
 readonly REXGLUE="${SDK_DIR}/bin/rexglue"
+readonly PRESET="${PLATFORM}-sdk-source"
+
+# Optional pkg-config files for the build machine (on Linux, for libraries a distribution may
+# lack), in sdk/compat/pkgconfig when present.
+if [[ -d "${ROOT}/sdk/compat/pkgconfig" ]]; then
+  export PKG_CONFIG_PATH="${ROOT}/sdk/compat/pkgconfig:${PKG_CONFIG_PATH:-}"
+fi
+
+# SHA-256 of a file: macOS ships shasum, most Linux distributions sha256sum.
+sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d ' ' -f 1
+  else
+    shasum -a 256 "$1" | cut -d ' ' -f 1
+  fi
+}
 
 case "${CONFIG}" in
   debug|relwithdebinfo|release) ;;
@@ -47,7 +67,13 @@ case "${CONFIG}" in
 esac
 
 if [[ ! -x "${REXGLUE}" ]]; then
-  echo "ReXGlue SDK not found at ${SDK_DIR}. Check SDK folder setup." >&2
+  echo "ReXGlue SDK not found at ${SDK_DIR}. See the README for how to install it." >&2
+  exit 1
+fi
+
+if [[ ! -d "${SDK_SRC}/.git" && ! -f "${SDK_SRC}/.git" ]]; then
+  echo "ReXGlue SDK source not found at ${SDK_SRC}. Get it with:" >&2
+  echo "  git clone --recursive --branch v0.10.0 https://github.com/rexglue/rexglue-sdk.git ${SDK_SRC}" >&2
   exit 1
 fi
 
@@ -58,6 +84,7 @@ if [[ ! -f "${XEX}" ]]; then
 fi
 
 # Prints the manifest path of the [[versions]] entry whose xex_sha256 equals $1, or nothing.
+# versions.toml is our own file with one `key = "value"` per line, which this reader relies on.
 manifest_for_hash() {
   awk -v hash="$1" '
     /^\[\[versions\]\]/ { matched = 0; manifest = "" }
@@ -67,12 +94,7 @@ manifest_for_hash() {
   ' "${REGISTRY}"
 }
 
-if command -v sha256sum >/dev/null 2>&1; then
-  readonly XEX_HASH="$(sha256sum "${XEX}" | cut -d ' ' -f 1)"
-else
-  readonly XEX_HASH="$(shasum -a 256 "${XEX}" | cut -d ' ' -f 1)"
-fi
-
+readonly XEX_HASH="$(sha256 "${XEX}")"
 readonly MANIFEST_REL="$(manifest_for_hash "${XEX_HASH}")"
 if [[ -z "${MANIFEST_REL}" ]]; then
   echo "This default.xex (SHA-256 ${XEX_HASH}) is not a supported build." >&2
@@ -84,16 +106,19 @@ if [[ "$(dirname "${MANIFEST}")" != "${RUNTIME_DIR}" ]]; then
   echo "Manifest ${MANIFEST_REL} must be in runtime/, where its relative paths resolve." >&2
   exit 1
 fi
+# Relative link, so the checkout can move without breaking it.
+ln -sfn "$(basename "${MANIFEST}")" "${RUNTIME_DIR}/azura_manifest.toml"
 
-ln -sf "$(basename "${MANIFEST_REL}")" "${RUNTIME_DIR}/azura_manifest.toml"
-
-# The CMake project needs runtime/generated/rexglue.cmake, which codegen writes.
+# The CMake project needs runtime/generated/rexglue.cmake, which codegen writes. On a first build
+# the prebuilt code generator writes it; the code the game runs is then regenerated by the patched
+# generator built from source (see the codegen step after configuring).
 if [[ ! -f "${RUNTIME_DIR}/generated/rexglue.cmake" ]]; then
   echo "==> Bootstrapping the generated CMake files with the prebuilt code generator"
   (cd "${RUNTIME_DIR}" && "${REXGLUE}" codegen azura_manifest.toml)
 fi
 
-# Apply patches to SDK source if present (e.g. on macOS)
+# Applies a patch to a git checkout unless it is already applied. Stops when it applies neither
+# way, which means the checkout has other changes in the same lines.
 apply_patch() {
   local dir="$1" patch="$2"
   if git -C "${dir}" apply --reverse --check "${patch}" 2>/dev/null; then
@@ -107,89 +132,61 @@ apply_patch() {
   git -C "${dir}" apply "${patch}"
 }
 
-if [[ -d "${SDK_SRC}/.git" || -f "${SDK_SRC}/.git" ]]; then
-  apply_patch "${SDK_SRC}" "${ROOT}/patches/rexglue-0.10.0.patch"
-  apply_patch "${SDK_SRC}/thirdparty/utfcpp" "${ROOT}/patches/rexglue-0.10.0-utfcpp.patch"
-fi
+apply_patch "${SDK_SRC}" "${ROOT}/patches/rexglue-0.10.0.patch"
+apply_patch "${SDK_SRC}" "${ROOT}/patches/rexglue-0.10.0-exit-code.patch"
+apply_patch "${SDK_SRC}/thirdparty/utfcpp" "${ROOT}/patches/rexglue-0.10.0-utfcpp.patch"
 
-if [[ "$(uname -s)" == "Darwin" && -x "${ROOT}/scripts/build_moltenvk.sh" ]]; then
+# On macOS, ensure the patched MoltenVK dylib is built and installed in the SDK before
+# configuring/building.
+if [[ "${PLATFORM}" == mac-* ]]; then
   "${ROOT}/scripts/build_moltenvk.sh"
 fi
 
+# CMake reads CMakePresets.json from the current folder, so both steps run from runtime/.
 echo "==> Configuring"
 (cd "${RUNTIME_DIR}" && cmake --preset "${PRESET}")
 
-if [[ "${PLATFORM}" == "mac-arm64" && (-d "${SDK_SRC}/.git" || -f "${SDK_SRC}/.git") ]]; then
-  echo "==> Building the code generator"
-  (cd "${RUNTIME_DIR}" && cmake --build --preset "${PRESET}-${CONFIG}" --target rexglue)
-  readonly CODEGEN_STAMP="${RUNTIME_DIR}/generated/default/codegen.build.stamp"
-  readonly GENERATOR="$(find "${SDK_SRC}/out" -name 'rexglue*' -type f -perm -u+x -newer "${CODEGEN_STAMP}" 2>/dev/null | head -n 1)"
-  if [[ ! -f "${CODEGEN_STAMP}" || -n "${GENERATOR}" ]]; then
-    echo "==> Code generator changed: regenerating the recompiled code"
-    rm -f "${CODEGEN_STAMP}"
-  fi
+# The recompiled code must come from the patched generator (it emits real memory fences for the
+# guest's sync/lwsync; the prebuilt one drops them, which breaks the game's lock-free queues on
+# ARM64). CMake re-runs codegen only when its inputs change, so the stamp is dropped whenever the
+# generator is newer than the code it wrote.
+echo "==> Building the code generator"
+(cd "${RUNTIME_DIR}" && cmake --build --preset "${PRESET}-${CONFIG}" --target rexglue)
+readonly CODEGEN_STAMP="${RUNTIME_DIR}/generated/default/codegen.build.stamp"
+readonly GENERATOR="$(find "${SDK_SRC}/out" -name 'rexglue*' -type f -perm -u+x -newer "${CODEGEN_STAMP}" 2>/dev/null | head -n 1)"
+if [[ ! -f "${CODEGEN_STAMP}" || -n "${GENERATOR}" ]]; then
+  echo "==> Code generator changed: regenerating the recompiled code"
+  rm -f "${CODEGEN_STAMP}"
 fi
 
-echo "==> Ensuring recompiled code is up to date"
-(cd "${RUNTIME_DIR}" && cmake --build --preset "${PRESET}-${CONFIG}" --target azura_codegen)
-
-# Apply community engine fixes (Ambient Occlusion & Occlusion Query fixes)
-if [[ -f "${RUNTIME_DIR}/scripts/patch_game_code.py" && -d "${RUNTIME_DIR}/generated/default" ]]; then
-  echo "==> Applying engine fixes (Ambient Occlusion & Occlusion Query fixes)"
+# Linux only: community fixes applied to the recompiled code (see runtime/scripts/patch_game_code.py).
+# The generated code exists once codegen has run, which the build target below triggers first.
+if [[ "${PLATFORM}" == linux-* ]]; then
+  echo "==> Ensuring the recompiled code is up to date"
+  (cd "${RUNTIME_DIR}" && cmake --build --preset "${PRESET}-${CONFIG}" --target azura_codegen)
+  echo "==> Applying engine fixes to the recompiled code"
   python3 "${RUNTIME_DIR}/scripts/patch_game_code.py" "${RUNTIME_DIR}/generated/default"
 fi
 
 echo "==> Building (${CONFIG})"
-(cd "${RUNTIME_DIR}" && cmake --build --preset "${PRESET}-${CONFIG}" --target azura)
+(cd "${RUNTIME_DIR}" && cmake --build --preset "${PRESET}-${CONFIG}")
 
-if [[ "$(uname -s)" == "Darwin" ]]; then
-  CONFIG_DIR="RelWithDebInfo"
-  case "${CONFIG}" in
-    debug) CONFIG_DIR="Debug" ;;
-    release) CONFIG_DIR="Release" ;;
-  esac
+CONFIG_DIR="RelWithDebInfo"
+case "${CONFIG}" in
+  debug) CONFIG_DIR="Debug" ;;
+  release) CONFIG_DIR="Release" ;;
+esac
+
+# On macOS, verify the staged MoltenVK is not the unpatched SDK original.
+if [[ "${PLATFORM}" == mac-* ]]; then
   readonly STAGED_MVK="${RUNTIME_DIR}/out/build/${PRESET}/${CONFIG_DIR}/vulkan/lib/libMoltenVK.dylib"
-  if [[ -f "${STAGED_MVK}" ]]; then
-    readonly UNPATCHED_MVK_HASH="$(awk '/^\[moltenvk\]/{s=1;next} /^\[/{s=0} s && /^unpatched_sha256[[:space:]]*=/{v=$0;sub(/^[^"]*"/,"",v);sub(/".*$/,"",v);print v;exit}' "${REGISTRY}")"
-    readonly STAGED_MVK_HASH="$(shasum -a 256 "${STAGED_MVK}" | cut -d ' ' -f 1)"
-    if [[ "${STAGED_MVK_HASH}" == "${UNPATCHED_MVK_HASH}" ]]; then
-      echo "Error: staged ${STAGED_MVK} matches unpatched MoltenVK (${UNPATCHED_MVK_HASH})!" >&2
-      exit 1
-    fi
+  readonly UNPATCHED_MVK_HASH="$(awk '/^\[moltenvk\]/{s=1;next} /^\[/{s=0} s && /^unpatched_sha256[[:space:]]*=/{v=$0;sub(/^[^"]*"/,"",v);sub(/".*$/,"",v);print v;exit}' "${REGISTRY}")"
+  readonly STAGED_MVK_HASH="$(sha256 "${STAGED_MVK}")"
+  if [[ "${STAGED_MVK_HASH}" == "${UNPATCHED_MVK_HASH}" ]]; then
+    echo "Error: staged ${STAGED_MVK} matches unpatched MoltenVK (${UNPATCHED_MVK_HASH})!" >&2
+    exit 1
   fi
 fi
 
-# Stage runtime to launcher app data
-if [[ "$(uname -s)" == "Darwin" ]]; then
-  readonly APP_DATA_DIR="${HOME}/Library/Application Support/com.gears3azura.launcher"
-else
-  readonly APP_DATA_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}/com.gears3azura.launcher"
-fi
-readonly TARGET_RUNTIME_DIR="${APP_DATA_DIR}/runtime"
-
-BUILT_BIN="$(find "${RUNTIME_DIR}/out/build/${PRESET}" -name "azura" -type f 2>/dev/null | head -n 1 || true)"
-if [[ -n "${BUILT_BIN}" && -f "${BUILT_BIN}" ]]; then
-  echo "==> Staging runtime to launcher app data: ${TARGET_RUNTIME_DIR}"
-  mkdir -p "${TARGET_RUNTIME_DIR}"
-  cp -rf "$(dirname "${BUILT_BIN}")"/* "${TARGET_RUNTIME_DIR}/"
-  if [[ "${PRESET}" == *"-sdk-source"* ]]; then
-    CONFIG_NAME="RelWithDebInfo"
-    case "${CONFIG}" in
-      debug) CONFIG_NAME="Debug" ;;
-      release) CONFIG_NAME="Release" ;;
-    esac
-    if [[ -d "${SDK_SRC}/out/${PLATFORM}/${CONFIG_NAME}" ]]; then
-      cp -f "${SDK_SRC}/out/${PLATFORM}/${CONFIG_NAME}"/*.so* "${TARGET_RUNTIME_DIR}/" 2>/dev/null || true
-      cp -f "${SDK_SRC}/out/${PLATFORM}/${CONFIG_NAME}"/*.so* "$(dirname "${BUILT_BIN}")/" 2>/dev/null || true
-    fi
-  else
-    cp -f "${SDK_DIR}/lib"/*.so "${TARGET_RUNTIME_DIR}/" 2>/dev/null || true
-    cp -f "${SDK_DIR}/lib"/*.so "$(dirname "${BUILT_BIN}")/" 2>/dev/null || true
-  fi
-  chmod +x "${TARGET_RUNTIME_DIR}/azura" 2>/dev/null || true
-  echo "==> Runtime successfully installed for the launcher."
-fi
-
-echo "==> Done. Output: ${RUNTIME_DIR}/out/build/${PRESET}/"
-
+echo "==> Done. Output: ${RUNTIME_DIR}/out/build/${PRESET}/${CONFIG_DIR}/"
 

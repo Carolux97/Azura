@@ -26,6 +26,7 @@ set(AZURA_SOURCES
     src/class_dump.cpp
     src/render_queue.cpp
     src/perf_overlay.cpp
+    src/relaunch.cpp
     src/menu/coalesced.cpp
     src/menu/menu_patches.cpp
     src/menu/pc_options.cpp
@@ -86,10 +87,13 @@ endif()
 if(REXSDK_DIR AND TARGET imgui)
     target_include_directories(azura PRIVATE $<TARGET_PROPERTY:imgui,INTERFACE_INCLUDE_DIRECTORIES>)
 endif()
-if(REXSDK_DIR)
-    target_include_directories(azura PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sdk/compat/include")
+# Optional extra headers for the build machine (on Linux, the ALSA and PulseAudio headers a
+# distribution may lack), in sdk/compat/include when present; nothing in the repository creates it.
+set(AZURA_COMPAT_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/../sdk/compat/include")
+if(REXSDK_DIR AND EXISTS "${AZURA_COMPAT_INCLUDE}")
+    target_include_directories(azura PRIVATE "${AZURA_COMPAT_INCLUDE}")
     if(TARGET azura_recomp)
-        target_include_directories(azura_recomp PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sdk/compat/include")
+        target_include_directories(azura_recomp PRIVATE "${AZURA_COMPAT_INCLUDE}")
     endif()
 endif()
 
@@ -132,6 +136,15 @@ add_custom_command(TARGET azura POST_BUILD
             ${CMAKE_CURRENT_SOURCE_DIR}/assets/azura-icon.icns
             $<TARGET_FILE_DIR:azura>/assets/azura-icon.icns
     COMMENT "Installing azura.default.toml, gamecontrollerdb.txt and assets beside the executable")
+if(APPLE)
+    add_custom_command(TARGET azura POST_BUILD
+        COMMAND osascript -l JavaScript -e
+                "ObjC.import('AppKit');
+                 var img = $.NSImage.alloc.initWithContentsOfFile('$<TARGET_FILE_DIR:azura>/assets/azura-icon.png');
+                 if (img) $.NSWorkspace.sharedWorkspace.setIconForFileOptions(img, '$<TARGET_FILE:azura>', 0);"
+        COMMENT "Setting macOS icon on the runtime executable"
+        VERBATIM)
+endif()
 
 # Review tool for the button prompt designs: renders every glyph into a PNG without running the
 # game. Not part of the normal build: cmake --build --preset <preset> --target azura_glyph_sheet

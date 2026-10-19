@@ -91,6 +91,16 @@
                 "REXSDK_DIR": "${sourceDir}/../sdk/rexglue-0.10.0-src",
                 "SDL_X11_XSCRNSAVER": "OFF"
             }
+        },
+        {
+            "name": "linux-arm64-sdk-source",
+            "inherits": "linux-arm64",
+            "displayName": "Linux ARM64, ReXGlue SDK built from source",
+            "binaryDir": "${sourceDir}/out/build/linux-arm64-sdk-source",
+            "cacheVariables": {
+                "REXSDK_DIR": "${sourceDir}/../sdk/rexglue-0.10.0-src",
+                "SDL_X11_XSCRNSAVER": "OFF"
+            }
         }
     ],
     "buildPresets": [
@@ -167,6 +177,21 @@
         {
             "name": "linux-amd64-sdk-source-release",
             "configurePreset": "linux-amd64-sdk-source",
+            "configuration": "Release"
+        },
+        {
+            "name": "linux-arm64-sdk-source-debug",
+            "configurePreset": "linux-arm64-sdk-source",
+            "configuration": "Debug"
+        },
+        {
+            "name": "linux-arm64-sdk-source-relwithdebinfo",
+            "configurePreset": "linux-arm64-sdk-source",
+            "configuration": "RelWithDebInfo"
+        },
+        {
+            "name": "linux-arm64-sdk-source-release",
+            "configurePreset": "linux-arm64-sdk-source",
             "configuration": "Release"
         }
     ]

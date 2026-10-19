@@ -11,14 +11,22 @@
 //!
 //! While the game runs, every line it prints is sent to the interface as a `game-output` event,
 //! and its end as a `game-exit` event, so the interface can show a live log and explain a failed
-//! start.
+//! start. The end is only reported once the game's last lines have been sent, so the log never
+//! shows output after the game has ended.
+//!
+//! Some settings only apply when the game starts, and the game offers to restart when they change.
+//! The runtime is started with `AZURA_LAUNCHER=1`, which tells it to leave the restart to the
+//! launcher: it exits with `RESTART_EXIT_CODE`, and the launcher starts it again with the same
+//! command, sending a `game-restart` event instead of `game-exit`. The game stays a child of the
+//! launcher, so its output and its end keep being followed.
 
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -31,6 +39,16 @@ pub const OUTPUT_EVENT: &str = "game-output";
 
 /// Event sent once when the game process ends.
 pub const EXIT_EVENT: &str = "game-exit";
+
+/// Event sent when the game exits asking to be started again, right before it is.
+pub const RESTART_EVENT: &str = "game-restart";
+
+/// Environment variable that tells the runtime the launcher restarts it (`runtime/src/relaunch.h`).
+pub const LAUNCHER_ENV: &str = "AZURA_LAUNCHER";
+
+/// Exit code with which the runtime asks to be started again (`kRestartExitCode` in
+/// `runtime/src/relaunch.h`; EX_TEMPFAIL in sysexits.h).
+pub const RESTART_EXIT_CODE: i32 = 75;
 
 /// One line of output; `stream` is "stdout" or "stderr".
 #[derive(Debug, Clone, Serialize)]
@@ -96,13 +114,153 @@ pub fn folder_arguments(folders: &LaunchFolders) -> Vec<String> {
     args
 }
 
-/// Reads `source` line by line on its own thread and emits each line as a `game-output` event.
-fn relay_lines(app: AppHandle, stream: &'static str, source: impl Read + Send + 'static) {
+/// Whether a game that ended with `exit` asks to be started again.
+pub fn asks_for_restart(exit: &ExitInfo) -> bool {
+    exit.code == Some(RESTART_EXIT_CODE)
+}
+
+/// Where the game's output, restarts and end go: the interface (as events) in the app, a recorder
+/// in the tests.
+pub trait GameEvents: Clone + Send + 'static {
+    fn output(&self, line: OutputLine);
+    fn restart(&self);
+    fn exit(&self, exit: ExitInfo);
+}
+
+impl GameEvents for AppHandle {
+    fn output(&self, line: OutputLine) {
+        let _ = self.emit(OUTPUT_EVENT, line);
+    }
+
+    fn restart(&self) {
+        let _ = self.emit(RESTART_EVENT, ());
+    }
+
+    fn exit(&self, exit: ExitInfo) {
+        let _ = self.emit(EXIT_EVENT, exit);
+    }
+}
+
+/// Reads `source` line by line on its own thread and sends each line to `events`.
+/// When `source` ends (the game closed it, normally by exiting), sends on `done`.
+fn relay_lines<E: GameEvents>(
+    events: E,
+    stream: &'static str,
+    source: impl Read + Send + 'static,
+    done: mpsc::Sender<()>,
+) {
     thread::spawn(move || {
         for line in BufReader::new(source).lines().map_while(Result::ok) {
-            let _ = app.emit(OUTPUT_EVENT, OutputLine { stream, line });
+            events.output(OutputLine { stream, line });
         }
+        let _ = done.send(());
     });
+}
+
+/// Longest wait, once the game has exited, for its last output lines to be sent. Its output ends
+/// as soon as it exits, unless a process it started keeps the output open; the end is then
+/// reported anyway after this delay.
+const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// A started game: its process and the threads relaying its output.
+struct RunningGame {
+    child: Child,
+    /// Receives one message per output relay that has finished.
+    relays_done: mpsc::Receiver<()>,
+    relays: usize,
+}
+
+impl RunningGame {
+    /// Waits for the game to exit, then for its output relays to send its last lines (up to
+    /// OUTPUT_DRAIN_TIMEOUT), and returns how it ended.
+    fn wait(&mut self) -> ExitInfo {
+        let exit = exit_info(&mut self.child);
+        let deadline = Instant::now() + OUTPUT_DRAIN_TIMEOUT;
+        for _ in 0..self.relays {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if self.relays_done.recv_timeout(left).is_err() {
+                break;
+            }
+        }
+        exit
+    }
+}
+
+/// Starts the runtime with `args` from `runtime_dir`, relaying its output.
+fn spawn_game<E: GameEvents>(
+    events: &E,
+    executable: &Path,
+    args: &[String],
+    runtime_dir: &Path,
+) -> std::io::Result<RunningGame> {
+    let mut command = Command::new(executable);
+    command
+        .args(args)
+        .current_dir(runtime_dir)
+        .env(LAUNCHER_ENV, "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    // On Linux laptops with an NVIDIA GPU next to an integrated one, run the game on the NVIDIA
+    // one (PRIME render offload). Only when its Vulkan driver is installed, so other GPUs are left
+    // alone.
+    #[cfg(target_os = "linux")]
+    {
+        const NVIDIA_ICD: &str = "/usr/share/vulkan/icd.d/nvidia_icd.json";
+        if Path::new(NVIDIA_ICD).is_file() {
+            command
+                .env("__NV_PRIME_RENDER_OFFLOAD", "1")
+                .env("__GLX_VENDOR_LIBRARY_NAME", "nvidia")
+                .env("__VK_LAYER_NV_optimus", "NVIDIA_only")
+                .env("VK_DRIVER_FILES", NVIDIA_ICD);
+        }
+    }
+    let mut child = command.spawn()?;
+    let (done, relays_done) = mpsc::channel();
+    let mut relays = 0;
+    if let Some(stdout) = child.stdout.take() {
+        relay_lines(events.clone(), "stdout", stdout, done.clone());
+        relays += 1;
+    }
+    if let Some(stderr) = child.stderr.take() {
+        relay_lines(events.clone(), "stderr", stderr, done);
+        relays += 1;
+    }
+    Ok(RunningGame { child, relays_done, relays })
+}
+
+/// How a process waited on with `child.wait()` ended.
+fn exit_info(child: &mut Child) -> ExitInfo {
+    match child.wait() {
+        Ok(status) => ExitInfo { code: status.code(), success: status.success() },
+        Err(_) => ExitInfo { code: None, success: false },
+    }
+}
+
+/// Waits for the started `game` to end, and starts it again with the same command for as long as
+/// it asks to be. Returns how the last run ended.
+fn watch_game<E: GameEvents>(
+    events: &E,
+    mut game: RunningGame,
+    executable: &Path,
+    args: &[String],
+    runtime_dir: &Path,
+) -> ExitInfo {
+    loop {
+        let exit = game.wait();
+        if !asks_for_restart(&exit) {
+            return exit;
+        }
+        events.restart();
+        match spawn_game(events, executable, args, runtime_dir) {
+            Ok(next) => game = next,
+            Err(error) => {
+                let line = format!("Cannot restart the game: {error}");
+                events.output(OutputLine { stream: "stderr", line });
+                return ExitInfo { code: None, success: false };
+            }
+        }
+    }
 }
 
 impl GameProcess {
@@ -112,8 +270,12 @@ impl GameProcess {
     }
 
     /// Starts the runtime from its folder, so it finds `azura.toml` and writes its logs there.
-    /// Returns once the process has started; output and exit arrive later as events.
-    pub fn launch(&self, app: AppHandle, folders: &LaunchFolders) -> Result<(), LaunchError> {
+    /// Returns once the process has started; output, restarts and exit arrive later as events.
+    pub fn launch<E: GameEvents>(
+        &self,
+        events: E,
+        folders: &LaunchFolders,
+    ) -> Result<(), LaunchError> {
         let runtime_dir = folders.runtime;
         let executable = executable_path(runtime_dir);
         if !executable.is_file() {
@@ -124,49 +286,22 @@ impl GameProcess {
             return Err(LaunchError::AlreadyRunning);
         }
 
-        let mut cmd = Command::new(&executable);
-        cmd.args(folder_arguments(folders))
-            .current_dir(runtime_dir)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        #[cfg(target_os = "linux")]
-        {
-            if std::path::Path::new("/dev/nvidiactl").exists()
-                && std::path::Path::new("/usr/share/vulkan/icd.d/nvidia_icd.json").is_file()
-            {
-                cmd.env("__NV_PRIME_RENDER_OFFLOAD", "1");
-                cmd.env("__GLX_VENDOR_LIBRARY_NAME", "nvidia");
-                cmd.env("__VK_LAYER_NV_optimus", "NVIDIA_only");
-                cmd.env("VK_DRIVER_FILES", "/usr/share/vulkan/icd.d/nvidia_icd.json");
-            }
-        }
-
-        let spawned = cmd.spawn();
-        let mut child = match spawned {
-            Ok(child) => child,
+        let args = folder_arguments(folders);
+        let runtime_dir = runtime_dir.to_path_buf();
+        let game = match spawn_game(&events, &executable, &args, &runtime_dir) {
+            Ok(game) => game,
             Err(error) => {
                 self.running.store(false, Ordering::SeqCst);
                 return Err(LaunchError::StartFailed(error.to_string()));
             }
         };
 
-        if let Some(stdout) = child.stdout.take() {
-            relay_lines(app.clone(), "stdout", stdout);
-        }
-        if let Some(stderr) = child.stderr.take() {
-            relay_lines(app.clone(), "stderr", stderr);
-        }
-
+        // The slot stays claimed while the game restarts, so Play cannot start a second game.
         let running = Arc::clone(&self.running);
         thread::spawn(move || {
-            let exit = match child.wait() {
-                Ok(status) => ExitInfo { code: status.code(), success: status.success() },
-                Err(_) => ExitInfo { code: None, success: false },
-            };
+            let exit = watch_game(&events, game, &executable, &args, &runtime_dir);
             running.store(false, Ordering::SeqCst);
-            let _ = app.emit(EXIT_EVENT, exit);
+            events.exit(exit);
         });
         Ok(())
     }
@@ -194,6 +329,130 @@ mod tests {
                 "--cache_root=/tmp/cache"
             ]
         );
+    }
+
+    /// Everything a launch sent, in order. `line_delay` slows down the handling of each output
+    /// line, like a busy interface, so the output relays fall behind the game's exit.
+    #[derive(Clone, Default)]
+    struct Recorder(Arc<std::sync::Mutex<Vec<String>>>, Duration);
+
+    impl GameEvents for Recorder {
+        fn output(&self, line: OutputLine) {
+            thread::sleep(self.1);
+            self.0.lock().unwrap().push(format!("{}: {}", line.stream, line.line));
+        }
+
+        fn restart(&self) {
+            self.0.lock().unwrap().push("restart".into());
+        }
+
+        fn exit(&self, exit: ExitInfo) {
+            self.0.lock().unwrap().push(format!("exit {:?}", exit.code));
+        }
+    }
+
+    impl Recorder {
+        /// Waits up to five seconds for the `exit` event, then returns everything recorded.
+        fn until_exit(&self) -> Vec<String> {
+            for _ in 0..500 {
+                if self.0.lock().unwrap().iter().any(|event| event.starts_with("exit")) {
+                    break;
+                }
+                thread::sleep(std::time::Duration::from_millis(10));
+            }
+            // Keep listening a little: an output line arriving after the exit event would be
+            // recorded after it, which the tests check against.
+            thread::sleep(std::time::Duration::from_millis(100));
+            self.0.lock().unwrap().clone()
+        }
+    }
+
+    /// Writes a stand-in runtime: a shell script run as `azura` from `runtime`.
+    #[cfg(unix)]
+    fn fake_runtime(runtime: &Path, script: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        let executable = executable_path(runtime);
+        std::fs::write(&executable, format!("#!/bin/sh\n{script}\n")).unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn starts_the_game_again_while_it_asks_for_a_restart() {
+        let runtime = TempFolder::new("runtime-restart");
+        // The first run asks for a restart, the second one ends normally. Each prints the variable
+        // that tells it the launcher restarts it.
+        fake_runtime(
+            &runtime,
+            &format!(
+                "if [ -f started ]; then echo \"second $AZURA_LAUNCHER\"; exit 0; fi\n\
+                 touch started; echo \"first $AZURA_LAUNCHER\"; exit {RESTART_EXIT_CODE}"
+            ),
+        );
+        let folders =
+            LaunchFolders { runtime: &runtime, game: None, saves: &runtime, cache: &runtime };
+        let process = GameProcess::default();
+        let recorder = Recorder::default();
+        process.launch(recorder.clone(), &folders).unwrap();
+
+        let events = recorder.until_exit();
+        let position = |event: &str| events.iter().position(|e| e == event);
+        assert_eq!(events.iter().filter(|e| *e == "restart").count(), 1, "{events:?}");
+        assert_eq!(events.iter().filter(|e| e.starts_with("exit")).count(), 1, "{events:?}");
+        assert_eq!(events.last().map(String::as_str), Some("exit Some(0)"), "{events:?}");
+        assert!(position("stdout: first 1") < position("restart"), "{events:?}");
+        assert!(position("restart") < position("stdout: second 1"), "{events:?}");
+        assert!(!process.is_running());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reports_the_end_after_the_last_output_line() {
+        let runtime = TempFolder::new("runtime-drain");
+        // The game prints its lines and exits at once, while each line takes 2 ms to handle: the
+        // output relay is still sending them when the process is already gone. 50 lines keep that
+        // lag (about 0.1 s, several times more on slow CI runners) well under OUTPUT_DRAIN_TIMEOUT.
+        fake_runtime(
+            &runtime,
+            "i=1; while [ $i -le 50 ]; do echo \"line $i\"; i=$((i+1)); done; exit 0",
+        );
+        let folders =
+            LaunchFolders { runtime: &runtime, game: None, saves: &runtime, cache: &runtime };
+        let process = GameProcess::default();
+        let recorder = Recorder(Default::default(), Duration::from_millis(2));
+        process.launch(recorder.clone(), &folders).unwrap();
+
+        let events = recorder.until_exit();
+        assert_eq!(events.len(), 51, "every line and then the exit: {events:?}");
+        assert_eq!(events[49], "stdout: line 50");
+        assert_eq!(events.last().map(String::as_str), Some("exit Some(0)"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reports_any_other_exit_without_restarting() {
+        let runtime = TempFolder::new("runtime-exit");
+        fake_runtime(&runtime, "echo crashed >&2; exit 3");
+        let folders =
+            LaunchFolders { runtime: &runtime, game: None, saves: &runtime, cache: &runtime };
+        let process = GameProcess::default();
+        let recorder = Recorder::default();
+        process.launch(recorder.clone(), &folders).unwrap();
+
+        let events = recorder.until_exit();
+        assert!(!events.contains(&"restart".to_string()), "{events:?}");
+        assert!(events.contains(&"stderr: crashed".to_string()), "{events:?}");
+        assert!(events.contains(&"exit Some(3)".to_string()), "{events:?}");
+        assert!(!process.is_running());
+    }
+
+    #[test]
+    fn only_the_restart_exit_code_asks_for_a_restart() {
+        let exit = |code| ExitInfo { code, success: code == Some(0) };
+        assert!(asks_for_restart(&exit(Some(RESTART_EXIT_CODE))));
+        assert!(!asks_for_restart(&exit(Some(0))));
+        assert!(!asks_for_restart(&exit(Some(1))));
+        assert!(!asks_for_restart(&exit(None)));
     }
 
     #[test]

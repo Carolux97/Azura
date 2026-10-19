@@ -335,38 +335,48 @@ pub fn inspect_saves(app: &AppHandle, saves_dir: &Path) -> SaveStatus {
     }
 }
 
-/// Repairs orphaned headers and empty package directories.
-pub fn repair_saves_internal(saves_dir: &Path) -> Result<String, String> {
+/// Headers in `headers_dir` whose content package in `packages_dir` is missing or empty, each with
+/// the package folder (which may not exist).
+fn orphaned_headers(headers_dir: &Path, packages_dir: &Path) -> Vec<(PathBuf, PathBuf)> {
+    let mut orphans = Vec::new();
+    let Ok(entries) = fs::read_dir(headers_dir) else {
+        return orphans;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        let pkg_dir = packages_dir.join(file_stem);
+        let is_orphan = if !pkg_dir.exists() {
+            true
+        } else if pkg_dir.is_dir() {
+            fs::read_dir(&pkg_dir).map(|e| e.count()).unwrap_or(0) == 0
+        } else {
+            false
+        };
+        if is_orphan {
+            orphans.push((path, pkg_dir));
+        }
+    }
+    orphans
+}
+
+/// Removes orphaned headers and their empty package folders. Only runs when the player asks for
+/// it, and backs the saves up first: nothing is deleted if the backup fails.
+pub fn repair_saves_internal(app: &AppHandle, saves_dir: &Path) -> Result<String, String> {
     let content_dir = find_gears3_content_dir(saves_dir);
     let headers_dir = content_dir.join("Headers").join("00000001");
     let packages_dir = content_dir.join("00000001");
+    let orphans = orphaned_headers(&headers_dir, &packages_dir);
+    if !orphans.is_empty() {
+        create_backup_internal(app, saves_dir, Some("auto_before_repair".into()))?;
+    }
     let mut removed_count = 0;
-
-    if headers_dir.is_dir() {
-        if let Ok(entries) = fs::read_dir(&headers_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                let pkg_dir = packages_dir.join(file_stem);
-
-                let is_orphan = if !pkg_dir.exists() {
-                    true
-                } else if pkg_dir.is_dir() {
-                    let entries = fs::read_dir(&pkg_dir).map(|e| e.count()).unwrap_or(0);
-                    entries == 0
-                } else {
-                    false
-                };
-
-                if is_orphan {
-                    let _ = fs::remove_file(&path);
-                    if pkg_dir.exists() {
-                        let _ = fs::remove_dir_all(&pkg_dir);
-                    }
-                    removed_count += 1;
-                }
-            }
+    for (header, pkg_dir) in orphans {
+        let _ = fs::remove_file(&header);
+        if pkg_dir.exists() {
+            let _ = fs::remove_dir_all(&pkg_dir);
         }
+        removed_count += 1;
     }
 
     Ok(format!(
@@ -377,7 +387,8 @@ pub fn repair_saves_internal(saves_dir: &Path) -> Result<String, String> {
 
 /// Performs a complete reset of save data, backing up first.
 pub fn reset_saves_internal(app: &AppHandle, saves_dir: &Path) -> Result<String, String> {
-    let _ = create_backup_internal(app, saves_dir, Some("auto_antes_de_limpiar".into()));
+    // Nothing is deleted if the backup fails.
+    create_backup_internal(app, saves_dir, Some("auto_before_reset".into()))?;
 
     let content_dir = find_gears3_content_dir(saves_dir);
     let headers_dir = content_dir.join("Headers");
@@ -455,12 +466,25 @@ pub fn restore_backup_internal(app: &AppHandle, saves_dir: &Path, backup_id: &st
         return Err(format!("No existe la copia de seguridad: {}", backup_id));
     }
 
+    // The backup is copied beside the current saves first, and only swapped in once the copy is
+    // complete, so a failed copy leaves the current saves as they were.
     let content_dir = find_gears3_content_dir(saves_dir);
-    if content_dir.exists() {
-        let _ = fs::remove_dir_all(&content_dir);
+    let restoring = content_dir.with_extension("restoring");
+    let previous = content_dir.with_extension("previous");
+    let _ = fs::remove_dir_all(&restoring);
+    let _ = fs::remove_dir_all(&previous);
+    if let Err(error) = copy_entry(&src, &restoring) {
+        let _ = fs::remove_dir_all(&restoring);
+        return Err(error.to_string());
     }
-
-    copy_entry(&src, &content_dir).map_err(|e| e.to_string())?;
+    if content_dir.exists() {
+        fs::rename(&content_dir, &previous).map_err(|e| e.to_string())?;
+    }
+    if let Err(error) = fs::rename(&restoring, &content_dir) {
+        let _ = fs::rename(&previous, &content_dir);
+        return Err(error.to_string());
+    }
+    let _ = fs::remove_dir_all(&previous);
     Ok("Partida restaurada con éxito.".into())
 }
 
@@ -486,11 +510,6 @@ pub fn open_saves_folder_internal(saves_dir: &Path) -> Result<(), String> {
     }
 
     Ok(())
-}
-
-/// Cleanly purges orphan headers before launch to prevent corrupted save error dialogs.
-pub fn sanitize_saves_before_launch(saves_dir: &Path) {
-    let _ = repair_saves_internal(saves_dir);
 }
 
 #[cfg(test)]
@@ -535,7 +554,7 @@ mod tests {
 
     #[test]
     fn refuses_a_folder_inside_the_other() {
-        let from = TempFolder::new("nested");
+        let from = TempFolder::new("saves-nested");
         fake_user_data(&from);
         assert_eq!(move_saves(&from, &from.join("inner"), false), Err(SavesError::NestedFolders));
         assert_eq!(move_saves(&from, &from, false).unwrap(), 0);

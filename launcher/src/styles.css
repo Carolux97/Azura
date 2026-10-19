@@ -499,69 +499,11 @@ input[type="range"] { width: 100%; accent-color: var(--imulsion); }
 .toggle input:checked + .toggle-ui::after { transform: translateX(20px); background: var(--imulsion); box-shadow: 0 0 8px var(--imulsion-glow); }
 .toggle input:focus-visible + .toggle-ui { outline: 2px solid var(--imulsion); outline-offset: 2px; }
 
-.segmented { display: inline-flex; border: 1px solid var(--steel-line); }
-.segmented button {
-  padding: 8px 20px;
-  background: none;
-  border: 0;
-  border-right: 1px solid var(--steel-line);
-  font-family: var(--font-ui);
-  font-weight: 600;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--text-dim);
-  cursor: pointer;
-}
-.segmented button:last-child { border-right: 0; }
-.segmented button[aria-checked="true"] { background: var(--imulsion); color: #1a1206; }
-/* "Custom" is a state, not a choice: it shows as selected but outlined, and cannot be clicked. */
-.segmented button[data-preset="custom"] { cursor: default; }
-.segmented button[data-preset="custom"][aria-checked="true"] {
-  background: rgba(255, 184, 28, 0.12);
-  color: var(--imulsion);
-  box-shadow: inset 0 0 0 1px var(--imulsion);
-}
-
-.preset-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin: 8px 0 18px; }
-.preset-note { font-size: 14px; color: var(--text-dim); }
-
-/* ---------- Advanced block ---------- */
-
-.advanced { margin-top: 20px; border-top: 1px solid var(--steel-line); padding-top: 14px; }
-.advanced summary {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  list-style: none;
-  font-family: var(--font-ui);
-  font-weight: 600;
-  font-size: 14px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--text-dim);
-}
-.advanced summary::-webkit-details-marker { display: none; }
-/* Chevron drawn with borders; it turns to point down when the block is open. */
-.advanced summary::before {
-  content: "";
-  width: 7px;
-  height: 7px;
-  border-right: 2px solid currentColor;
-  border-bottom: 2px solid currentColor;
-  transform: rotate(-45deg);
-  transition: transform 0.15s;
-}
-.advanced[open] summary::before { transform: rotate(45deg); }
-.advanced summary:hover, .advanced[open] summary { color: var(--imulsion); }
-.advanced .help { margin-top: 12px; }
-
 /* ---------- Language selector and notes ---------- */
 
 .rail-language { margin-bottom: 10px; }
 .rail-language select { padding: 6px 8px; font-size: 13px; }
 
-.panel-note { border-color: rgba(255, 184, 28, 0.35); }
 
 /* ---------- Game log ---------- */
 

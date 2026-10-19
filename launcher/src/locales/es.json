@@ -3,8 +3,7 @@
     "title": "Azura Launcher"
   },
   "a11y": {
-    "sections": "Secciones",
-    "quality": "Calidad"
+    "sections": "Secciones"
   },
   "nav": {
     "play": "Jugar",
@@ -87,30 +86,12 @@
   },
   "graphics": {
     "title": "Gráficos",
-    "startup": "Antes de jugar",
-    "startupHelp": "El juego lee estos ajustes al arrancar. Los cambios se aplican la próxima vez que juegues.",
-    "low": "Baja",
-    "medium": "Media",
-    "high": "Alta",
-    "auto": "Auto",
     "mode": "Modo",
     "windowed": "Ventana",
     "fullscreen": "Pantalla completa",
-    "custom": "Personalizado",
-    "autoResolved": "Auto usa {preset} en este Mac",
     "renderResolution": "Resolución de renderizado",
     "original": "original",
-    "advanced": "Avanzado",
-    "advancedHelp": "Si cambias cualquiera de estos ajustes, el preset pasa a Personalizado.",
-    "anisotropic": "Filtrado anisotrópico",
-    "off": "Desactivado",
-    "upscaling": "Escalado de imagen",
-    "bilinear": "Bilineal (original)",
-    "cas": "AMD CAS (nitidez)",
-    "fsr": "AMD FSR 1",
-    "textureMemory": "Memoria de texturas",
-    "inGame": "Dentro del juego",
-    "inGameHelp": "La sincronización vertical, el antialiasing, el desenfoque de movimiento y la pantalla completa están en el menú Opciones del juego, en Vídeo; la sensibilidad del ratón, en Teclado y ratón. La asignación de teclas se cambia mientras juegas: pulsa {key}."
+    "resolutionAuto": "Automática ({size})"
   },
   "online": {
     "title": "Multijugador",
@@ -132,6 +113,7 @@
     "hide": "Ocultar",
     "starting": "Iniciando el juego…",
     "running": "El juego está en marcha.",
+    "restarting": "Reiniciando el juego para aplicar los nuevos ajustes…",
     "exitOk": "El juego se cerró correctamente.",
     "exitError": "El juego se cerró con un error (código {code}).",
     "exitSignal": "El sistema detuvo el juego.",
@@ -150,7 +132,7 @@
   "saves": {
     "title": "Gestor de Partidas Guardadas",
     "statusTitle": "Estado del Guardado y Puntos de Control",
-    "statusHelp": "Supervisa y repara automáticamente las partidas para evitar el mensaje de 'puntos de guardado corruptos'.",
+    "statusHelp": "Revisa las partidas y permite repararlas para evitar el mensaje de 'puntos de guardado corruptos'. Antes de reparar o restablecer se hace una copia de seguridad.",
     "checkpoints": "Puntos de control detectados",
     "path": "Ubicación en el sistema",
     "lastSaved": "Última modificación",

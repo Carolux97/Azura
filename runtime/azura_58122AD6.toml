@@ -17,6 +17,12 @@ file_path = "game/default.xex"
 out_directory_path = "generated/default"
 includes = []
 
+# The guest's non-volatile registers (r14-r31) are C++ local variables of each recompiled function
+# instead of fields of the shared context, so the compiler can keep them in host registers. The
+# calls to the guest's register save and restore helpers (__savegprlr_N, __restgprlr_N) are then
+# left out: the locals already preserve the values.
+non_volatile_as_local = true
+
 # Jump tables that detection under-counts. Bink's video decoder dispatches through an 11-entry
 # table whose index is computed as (bits & 3) + 7, so detection only finds entries 0-3 and the
 # generated switch traps on the rest. Labels read from the table in game memory (0x82FDCF1C).
@@ -64,7 +70,6 @@ labels = [0x82FDCF48, 0x82FDCF64, 0x82FDD0E4, 0x82FDD264, 0x82FDD3E4, 0x82FDD564
 0x82E10418 = {}
 0x82C0AE40 = {}
 0x82B8C670 = {}
-
 0x82DF5C28 = {}
 0x82E59CE8 = {}
 0x82E5BB58 = {}

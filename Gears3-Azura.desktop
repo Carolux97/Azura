@@ -1,9 +1,0 @@
-[Desktop Entry]
-Version=1.0
-Type=Application
-Name=Gears of War 3 (Azura Launcher)
-Comment=Launcher nativo para Gears of War 3 en Linux
-Exec=/run/media/kabu/externo/github/Gears3-Azura/iniciar-linux.sh
-Icon=/run/media/kabu/externo/github/Gears3-Azura/launcher/src-tauri/icons/icon.png
-Terminal=false
-Categories=Game;
