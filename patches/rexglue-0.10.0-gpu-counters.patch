@@ -1,8 +1,8 @@
 diff --git a/include/rex/perf/counter.h b/include/rex/perf/counter.h
-index b3947e0..d3cd83f 100644
+index b3947e0..b5d7747 100644
 --- a/include/rex/perf/counter.h
 +++ b/include/rex/perf/counter.h
-@@ -49,6 +49,26 @@ enum class CounterId : uint16_t {
+@@ -49,6 +49,35 @@ enum class CounterId : uint16_t {
    kPipelineCacheHits,
    kPipelineCacheMisses,
  
@@ -26,14 +26,23 @@ index b3947e0..d3cd83f 100644
 +  kRenderPassEndsUpload,        // Guest memory uploads to the GPU
 +  kRenderPassEndsOther,         // Anything else (swap, end of submission, queries...)
 +
++  // Guest memory uploads to the host GPU (shared memory)
++  kUploads,                  // Upload batches (each ends the open render pass)
++  kUploadBytes,              // Bytes uploaded
++  kDrawsWithUploads,         // Guest draws that needed at least one upload
++  kDrawsWithSeveralUploads,  // Guest draws that needed more than one
++  kUploadsBeforeTextures,    // Uploads in a draw before its textures (index data and setup)
++  kUploadsForTextures,       // Uploads in a draw while its textures are requested
++  kUploadsAfterTextures,     // Uploads in a draw after its textures (vertex data and others)
++
    kCount  // sentinel -- must be last
  };
  
 diff --git a/src/core/perf/counter.cpp b/src/core/perf/counter.cpp
-index bb23daf..41acbf2 100644
+index bb23daf..4a44fae 100644
 --- a/src/core/perf/counter.cpp
 +++ b/src/core/perf/counter.cpp
-@@ -61,6 +61,23 @@ constexpr const char* kCounterNames[] = {
+@@ -61,6 +61,30 @@ constexpr const char* kCounterNames[] = {
      "texture_cache_misses",
      "pipeline_cache_hits",
      "pipeline_cache_misses",
@@ -54,10 +63,17 @@ index bb23daf..41acbf2 100644
 +    "pass_ends_texture_load",
 +    "pass_ends_upload",
 +    "pass_ends_other",
++    "uploads",
++    "upload_bytes",
++    "draws_with_uploads",
++    "draws_with_several_uploads",
++    "uploads_before_textures",
++    "uploads_for_textures",
++    "uploads_after_textures",
  };
  static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must match CounterId enum");
  
-@@ -84,6 +101,23 @@ constexpr bool kIsGauge[] = {
+@@ -84,6 +108,30 @@ constexpr bool kIsGauge[] = {
      false,  // kTextureCacheMisses
      false,  // kPipelineCacheHits
      false,  // kPipelineCacheMisses
@@ -78,6 +94,13 @@ index bb23daf..41acbf2 100644
 +    false,  // kRenderPassEndsTextureLoad
 +    false,  // kRenderPassEndsUpload
 +    false,  // kRenderPassEndsOther
++    false,  // kUploads
++    false,  // kUploadBytes
++    false,  // kDrawsWithUploads
++    false,  // kDrawsWithSeveralUploads
++    false,  // kUploadsBeforeTextures
++    false,  // kUploadsForTextures
++    false,  // kUploadsAfterTextures
  };
  static_assert(std::size(kIsGauge) == kNumCounters, "kIsGauge must match CounterId enum");
  
@@ -114,8 +137,31 @@ index 696ff48..24e4280 100644
  
    VkDescriptorSetLayout GetSingleTransientDescriptorLayout(
        SingleTransientDescriptorLayout transient_descriptor_layout) const {
+diff --git a/include/rex/graphics/vulkan/shared_memory.h b/include/rex/graphics/vulkan/shared_memory.h
+index 104bdad..d87f4ae 100644
+--- a/include/rex/graphics/vulkan/shared_memory.h
++++ b/include/rex/graphics/vulkan/shared_memory.h
+@@ -49,6 +49,9 @@ class VulkanSharedMemory : public SharedMemory {
+ 
+   VkBuffer buffer() const { return buffer_; }
+ 
++  // Upload batches recorded since the start, so a caller can tell how many a piece of work caused.
++  uint64_t upload_count() const { return upload_count_; }
++
+  protected:
+   bool AllocateSparseHostGpuMemoryRange(uint32_t offset_allocations,
+                                         uint32_t length_allocations) override;
+@@ -68,6 +71,8 @@ class VulkanSharedMemory : public SharedMemory {
+   std::vector<VkDeviceMemory> buffer_memory_;
+ 
+   Usage last_usage_;
++
++  uint64_t upload_count_ = 0;
+   std::pair<uint32_t, uint32_t> last_written_range_;
+ 
+   std::unique_ptr<ui::vulkan::VulkanUploadBufferPool> upload_buffer_pool_;
 diff --git a/src/graphics/vulkan/command_processor.cpp b/src/graphics/vulkan/command_processor.cpp
-index 001f36b..1f43461 100644
+index 001f36b..b4f658d 100644
 --- a/src/graphics/vulkan/command_processor.cpp
 +++ b/src/graphics/vulkan/command_processor.cpp
 @@ -11,6 +11,7 @@
@@ -209,16 +255,59 @@ index 001f36b..1f43461 100644
    if (current_render_pass_ == VK_NULL_HANDLE) {
      deferred_command_buffer_.CmdVkEndRendering();
    } else {
-@@ -4116,6 +4128,8 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t
+@@ -3594,6 +3606,12 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t
+   SCOPE_profile_cpu_f("gpu");
+ #endif  // XE_GPU_FINE_GRAINED_DRAW_SCOPES
+ 
++  // Upload batch count when the draw starts and when its textures are requested, to tell which
++  // part of the draw needed guest memory uploads (performance counters).
++  const uint64_t uploads_at_draw_start = shared_memory_->upload_count();
++  uint64_t uploads_before_textures = uploads_at_draw_start;
++  uint64_t uploads_after_textures = uploads_at_draw_start;
++
+   const RegisterFile& regs = *register_file_;
+   (void)index_buffer_info;
+   auto draw_fail = [&](const char* stage) {
+@@ -3835,7 +3853,9 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t
+   uint32_t used_texture_mask =
+       vertex_shader->GetUsedTextureMaskAfterTranslation() |
+       (pixel_shader != nullptr ? pixel_shader->GetUsedTextureMaskAfterTranslation() : 0);
++  uploads_before_textures = shared_memory_->upload_count();
+   texture_cache_->RequestTextures(used_texture_mask);
++  uploads_after_textures = shared_memory_->upload_count();
+ 
+   const VulkanPipelineCache::PipelineLayoutProvider* pipeline_layout_provider;
+   // Set up the render targets - this may perform dispatches and draws.
+@@ -4116,6 +4136,28 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t
        render_target_cache_->last_update_framebuffer());
  
    // Draw.
 +  PROFILE_DRAW_CALL();
 +  PROFILE_VERTICES(primitive_processing_result.host_draw_vertex_count);
++#ifdef REXGLUE_ENABLE_PERF_COUNTERS
++  {
++    const uint64_t uploads_at_draw = shared_memory_->upload_count();
++    const uint64_t draw_uploads = uploads_at_draw - uploads_at_draw_start;
++    if (draw_uploads) {
++      PERF_counter_inc(kDrawsWithUploads);
++      if (draw_uploads > 1) {
++        PERF_counter_inc(kDrawsWithSeveralUploads);
++      }
++      PERF_counter_add(kUploadsBeforeTextures,
++                       int64_t(uploads_before_textures - uploads_at_draw_start));
++      PERF_counter_add(kUploadsForTextures,
++                       int64_t(uploads_after_textures - uploads_before_textures));
++      PERF_counter_add(kUploadsAfterTextures, int64_t(uploads_at_draw - uploads_after_textures));
++    }
++  }
++#else
++  (void)uploads_before_textures;
++  (void)uploads_after_textures;
++#endif
    if (primitive_processing_result.index_buffer_type ==
            PrimitiveProcessor::ProcessedIndexBufferType::kNone ||
        shader_32bit_index_dma) {
-@@ -4173,6 +4187,7 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t
+@@ -4173,6 +4215,7 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t
        memexport_total_size += memexport_range.size_bytes;
      }
      if (memexport_total_size) {
@@ -226,7 +315,7 @@ index 001f36b..1f43461 100644
        if (REXCVAR_GET(readback_memexport_fast)) {
          IssueDraw_MemexportReadbackFastPath(memexport_total_size);
        } else {
-@@ -4389,6 +4404,7 @@ bool VulkanCommandProcessor::IssueCopy() {
+@@ -4389,6 +4432,7 @@ bool VulkanCommandProcessor::IssueCopy() {
    if (!BeginSubmission(true)) {
      return false;
    }
@@ -234,7 +323,7 @@ index 001f36b..1f43461 100644
  
    ReadbackResolveMode readback_mode = GetReadbackResolveMode(REXCVAR_GET(vulkan_readback_resolve));
    if (readback_mode == ReadbackResolveMode::kDisabled) {
-@@ -4579,7 +4595,7 @@ bool VulkanCommandProcessor::IssueCopy_ReadbackResolvePath() {
+@@ -4579,7 +4623,7 @@ bool VulkanCommandProcessor::IssueCopy_ReadbackResolvePath() {
      dfn.vkUpdateDescriptorSets(device, 2, descriptor_writes, 0, nullptr);
  
      texture_cache_->UseScaledResolveBufferForRead();
@@ -243,7 +332,7 @@ index 001f36b..1f43461 100644
  
      VkBufferMemoryBarrier pre_barrier = {};
      pre_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-@@ -4635,7 +4651,7 @@ bool VulkanCommandProcessor::IssueCopy_ReadbackResolvePath() {
+@@ -4635,7 +4679,7 @@ bool VulkanCommandProcessor::IssueCopy_ReadbackResolvePath() {
                                               readback.buffers[write_index], 1, &readback_region);
    } else {
      shared_memory_->Use(VulkanSharedMemory::Usage::kRead);
@@ -252,7 +341,7 @@ index 001f36b..1f43461 100644
  
      VkBufferCopy readback_region = {};
      readback_region.srcOffset = written_address;
-@@ -4970,9 +4986,18 @@ void VulkanCommandProcessor::CheckSubmissionFenceAndDeviceLoss(uint64_t await_su
+@@ -4970,9 +5014,18 @@ void VulkanCommandProcessor::CheckSubmissionFenceAndDeviceLoss(uint64_t await_su
      // defined by vkQueueSubmit additionally include in the first
      // synchronization scope all commands that occur earlier in submission
      // order."
@@ -271,7 +360,7 @@ index 001f36b..1f43461 100644
      if (wait_result == VK_SUCCESS) {
        fences_awaited += await_submission - submission_completed_;
      } else {
-@@ -5419,6 +5444,7 @@ bool VulkanCommandProcessor::EndSubmission(bool is_swap) {
+@@ -5419,6 +5472,7 @@ bool VulkanCommandProcessor::EndSubmission(bool is_swap) {
            vulkan_device->AcquireQueue(vulkan_device->queue_family_graphics_compute(), 0);
        submit_result = dfn.vkQueueSubmit(queue_acquisition.queue(), 1, &submit_info, fence);
      }
@@ -390,10 +479,24 @@ index 0298f06..f2a0028 100644
          MarkEdramBufferModified();
        }
 diff --git a/src/graphics/vulkan/shared_memory.cpp b/src/graphics/vulkan/shared_memory.cpp
-index 6788214..fd5a49a 100644
+index 6788214..25ac16e 100644
 --- a/src/graphics/vulkan/shared_memory.cpp
 +++ b/src/graphics/vulkan/shared_memory.cpp
-@@ -280,7 +280,7 @@ bool VulkanSharedMemory::UploadRanges(
+@@ -273,6 +273,13 @@ bool VulkanSharedMemory::UploadRanges(
+   if (upload_page_ranges.empty()) {
+     return true;
+   }
++  ++upload_count_;
++#ifdef REXGLUE_ENABLE_PERF_COUNTERS
++  PERF_counter_inc(kUploads);
++  for (const auto& upload_range : upload_page_ranges) {
++    PERF_counter_add(kUploadBytes, int64_t(upload_range.second) << page_size_log2());
++  }
++#endif
+   // upload_page_ranges are sorted, use them to determine the range for the
+   // ordering barrier.
+   Use(Usage::kTransferDestination,
+@@ -280,7 +287,7 @@ bool VulkanSharedMemory::UploadRanges(
                       (upload_page_ranges.back().first + upload_page_ranges.back().second -
                        upload_page_ranges.front().first)
                           << page_size_log2()));
