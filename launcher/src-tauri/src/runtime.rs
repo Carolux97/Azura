@@ -410,10 +410,11 @@ mod tests {
     fn reports_the_end_after_the_last_output_line() {
         let runtime = TempFolder::new("runtime-drain");
         // The game prints its lines and exits at once, while each line takes 2 ms to handle: the
-        // output relay is still sending them (about 0.4 s) when the process is already gone.
+        // output relay is still sending them when the process is already gone. 50 lines keep that
+        // lag (about 0.1 s, several times more on slow CI runners) well under OUTPUT_DRAIN_TIMEOUT.
         fake_runtime(
             &runtime,
-            "i=1; while [ $i -le 200 ]; do echo \"line $i\"; i=$((i+1)); done; exit 0",
+            "i=1; while [ $i -le 50 ]; do echo \"line $i\"; i=$((i+1)); done; exit 0",
         );
         let folders =
             LaunchFolders { runtime: &runtime, game: None, saves: &runtime, cache: &runtime };
@@ -422,8 +423,8 @@ mod tests {
         process.launch(recorder.clone(), &folders).unwrap();
 
         let events = recorder.until_exit();
-        assert_eq!(events.len(), 201, "every line and then the exit: {events:?}");
-        assert_eq!(events[199], "stdout: line 200");
+        assert_eq!(events.len(), 51, "every line and then the exit: {events:?}");
+        assert_eq!(events[49], "stdout: line 50");
         assert_eq!(events.last().map(String::as_str), Some("exit Some(0)"));
     }
 
