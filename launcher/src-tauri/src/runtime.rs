@@ -133,10 +133,12 @@ impl GameProcess {
 
         #[cfg(target_os = "linux")]
         {
-            cmd.env("__NV_PRIME_RENDER_OFFLOAD", "1");
-            cmd.env("__GLX_VENDOR_LIBRARY_NAME", "nvidia");
-            cmd.env("__VK_LAYER_NV_optimus", "NVIDIA_only");
-            if std::path::Path::new("/usr/share/vulkan/icd.d/nvidia_icd.json").is_file() {
+            if std::path::Path::new("/dev/nvidiactl").exists()
+                && std::path::Path::new("/usr/share/vulkan/icd.d/nvidia_icd.json").is_file()
+            {
+                cmd.env("__NV_PRIME_RENDER_OFFLOAD", "1");
+                cmd.env("__GLX_VENDOR_LIBRARY_NAME", "nvidia");
+                cmd.env("__VK_LAYER_NV_optimus", "NVIDIA_only");
                 cmd.env("VK_DRIVER_FILES", "/usr/share/vulkan/icd.d/nvidia_icd.json");
             }
         }

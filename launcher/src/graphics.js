@@ -15,9 +15,9 @@
 
 /** Values of each fixed preset. "auto" is not here: it resolves to one of these at launch. */
 export const PRESETS = {
-  low: { resolutionScale: 1, anisotropic: 2, upscaling: "bilinear", textureMemory: 384 },
-  medium: { resolutionScale: 1, anisotropic: 3, upscaling: "cas", textureMemory: 384 },
-  high: { resolutionScale: 2, anisotropic: 5, upscaling: "fsr", textureMemory: 768 },
+  low: { resolutionScale: 1, anisotropic: 3, upscaling: "cas", textureMemory: 512 },
+  medium: { resolutionScale: 1, anisotropic: 4, upscaling: "cas", textureMemory: 768 },
+  high: { resolutionScale: 2, anisotropic: 5, upscaling: "cas", textureMemory: 1024 },
 };
 
 /** Preset names in the order the selector shows them. "custom" is never chosen directly. */

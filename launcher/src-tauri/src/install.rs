@@ -26,7 +26,10 @@ use crate::runtime::{executable_path, RUNTIME_EXECUTABLE};
 const BUILD_ENV: &str = "AZURA_RUNTIME_BUILD";
 
 /// Build folders of the project, relative to its root, in order of preference.
-const PROJECT_BUILDS: [&str; 8] = [
+const PROJECT_BUILDS: [&str; 11] = [
+    "runtime/out/build/linux-amd64-sdk-source/RelWithDebInfo",
+    "runtime/out/build/linux-amd64-sdk-source/Release",
+    "runtime/out/build/linux-amd64-sdk-source",
     "runtime/out/build/linux-amd64/RelWithDebInfo",
     "runtime/out/build/linux-amd64/Release",
     "runtime/out/build/linux-amd64",

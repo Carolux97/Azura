@@ -514,8 +514,24 @@ constexpr const char* const kChapterMaps[31] = {
     "SP_Rooftop_P",           // 30: Acto 5, Cap 6
 };
 
-// Intercepts campaign travel URLs starting with GearGame_P and replaces GearGame_P with the
-// chapter's real persistent level map from kChapterMaps.
+static void StripListenParam(std::string& s) {
+  size_t pos = s.find("?listen");
+  if (pos != std::string::npos) {
+    if (pos + 7 < s.size() && s[pos + 7] == '?') {
+      s.replace(pos, 8, "?");
+    } else {
+      s.erase(pos, 7);
+    }
+    return;
+  }
+  pos = s.find("&listen");
+  if (pos != std::string::npos) {
+    s.erase(pos, 7);
+  }
+}
+
+// Intercepts campaign and menu travel URLs to prevent infinite socket/network stalls
+// and replaces GearGame_P with the chapter's real persistent level map from kChapterMaps.
 bool PatchTravelURL(uint8_t* base, uint32_t fstring_addr) {
   if (!fstring_addr) return false;
   const uint32_t data = LoadU32(base, fstring_addr);
@@ -559,21 +575,10 @@ bool PatchTravelURL(uint8_t* base, uint32_t fstring_addr) {
   size_t qpos = url.find('?');
   std::string new_url = std::string(real_map) + (qpos != std::string::npos ? url.substr(qpos) : "");
 
-  uint32_t new_count = static_cast<uint32_t>(new_url.size() + 1);
+  // Always strip ?listen for singleplayer campaign to prevent network driver socket blocks
+  StripListenParam(new_url);
 
-  // If the new URL doesn't fit in the buffer, first strip ?listen (multiplayer-only option)
-  if (new_count > max) {
-    size_t listen_pos = new_url.find("?listen");
-    if (listen_pos != std::string::npos) {
-      new_url.erase(listen_pos, 7);
-    } else {
-      listen_pos = new_url.find("&listen");
-      if (listen_pos != std::string::npos) {
-        new_url.erase(listen_pos, 7);
-      }
-    }
-    new_count = static_cast<uint32_t>(new_url.size() + 1);
-  }
+  uint32_t new_count = static_cast<uint32_t>(new_url.size() + 1);
 
   // If it still doesn't fit, strip package prefix "geargamecontent." from game class
   if (new_count > max) {
@@ -584,13 +589,35 @@ bool PatchTravelURL(uint8_t* base, uint32_t fstring_addr) {
     new_count = static_cast<uint32_t>(new_url.size() + 1);
   }
 
+  // If it still doesn't fit, strip redundant ?chapter=X
+  if (new_count > max) {
+    size_t ch_p = new_url.find("?chapter=");
+    if (ch_p == std::string::npos) ch_p = new_url.find("&chapter=");
+    if (ch_p != std::string::npos) {
+      size_t next_q = new_url.find_first_of("?&", ch_p + 1);
+      new_url.erase(ch_p, next_q == std::string::npos ? std::string::npos : next_q - ch_p);
+    }
+    new_count = static_cast<uint32_t>(new_url.size() + 1);
+  }
+
+  // If it still doesn't fit, strip ?loadcheckpoint=0
+  if (new_count > max) {
+    size_t lc_pos = new_url.find("?loadcheckpoint=0");
+    if (lc_pos == std::string::npos) lc_pos = new_url.find("&loadcheckpoint=0");
+    if (lc_pos != std::string::npos) {
+      new_url.erase(lc_pos, 17);
+    }
+    new_count = static_cast<uint32_t>(new_url.size() + 1);
+  }
+
+  // Final fallback: just the persistent map name to ensure it never loads empty GearGame_P
+  if (new_count > max) {
+    new_url = real_map;
+    new_count = static_cast<uint32_t>(new_url.size() + 1);
+  }
+
   REXLOG_INFO("[Azura campaign] Remapped campaign map for chapter {}: '{}' -> '{}' (buffer count={}, max={})",
               chapter, url, new_url, count, max);
-
-  if (new_count > max) {
-    REXLOG_ERROR("[Azura campaign] Cannot fit remapped map: new_count={} > max={}", new_count, max);
-    return false;
-  }
 
   for (size_t i = 0; i < new_url.size(); ++i) {
     base[data + i * 2] = 0;

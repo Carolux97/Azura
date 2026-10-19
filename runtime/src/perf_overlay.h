@@ -7,6 +7,9 @@
 
 namespace azura {
 
+void RecordGuestFrame();
+void GetGuestFrameStats(float& out_fps, float& out_frametime_ms, uint64_t& out_frame_count);
+
 class PerfOverlayDialog : public rex::ui::ImGuiDialog {
  public:
   explicit PerfOverlayDialog(rex::ui::ImGuiDrawer* drawer);

@@ -7,9 +7,20 @@
 #include <sstream>
 #include <imgui.h>
 
+#include <array>
+#include <cmath>
+#include <mutex>
+
 namespace azura {
 
 namespace {
+
+constexpr size_t kMaxFrameHistory = 120;
+std::array<std::chrono::steady_clock::time_point, kMaxFrameHistory> g_frame_timestamps{};
+size_t g_frame_head = 0;
+size_t g_frame_count = 0;
+uint64_t g_total_frames = 0;
+std::mutex g_frame_mutex;
 
 struct NvmlMemory {
   uint64_t total;
@@ -23,6 +34,64 @@ using NvmlDeviceGetMemoryInfoFn = int (*)(void*, NvmlMemory*);
 using NvmlShutdownFn = int (*)(void);
 
 }  // namespace
+
+void RecordGuestFrame() {
+  const auto now = std::chrono::steady_clock::now();
+  std::lock_guard<std::mutex> lock(g_frame_mutex);
+  g_frame_timestamps[g_frame_head] = now;
+  g_frame_head = (g_frame_head + 1) % kMaxFrameHistory;
+  if (g_frame_count < kMaxFrameHistory) {
+    g_frame_count++;
+  }
+  g_total_frames++;
+}
+
+void GetGuestFrameStats(float& out_fps, float& out_frametime_ms, uint64_t& out_frame_count) {
+  std::lock_guard<std::mutex> lock(g_frame_mutex);
+  out_frame_count = g_total_frames;
+  if (g_frame_count < 2) {
+    out_fps = 0.0f;
+    out_frametime_ms = 0.0f;
+    return;
+  }
+
+  const auto now = std::chrono::steady_clock::now();
+  const size_t last_idx = (g_frame_head + kMaxFrameHistory - 1) % kMaxFrameHistory;
+  const auto last_time = g_frame_timestamps[last_idx];
+
+  // If no frame has been presented for over 1.5 seconds, the game is paused or loading
+  if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_time).count() > 1500) {
+    out_fps = 0.0f;
+    out_frametime_ms = 0.0f;
+    return;
+  }
+
+  // Calculate moving average over the last ~500ms for stable and accurate reading
+  size_t frames_back = 0;
+  for (size_t i = 1; i < g_frame_count; ++i) {
+    size_t prev_idx = (g_frame_head + kMaxFrameHistory - 1 - i) % kMaxFrameHistory;
+    auto elapsed_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(last_time - g_frame_timestamps[prev_idx]).count();
+    frames_back = i;
+    if (elapsed_ms >= 500) {
+      break;
+    }
+  }
+
+  if (frames_back > 0) {
+    size_t oldest_idx = (g_frame_head + kMaxFrameHistory - 1 - frames_back) % kMaxFrameHistory;
+    int64_t us =
+        std::chrono::duration_cast<std::chrono::microseconds>(last_time - g_frame_timestamps[oldest_idx]).count();
+    if (us > 0) {
+      out_fps = static_cast<float>(frames_back) * 1000000.0f / static_cast<float>(us);
+      out_frametime_ms = 1000.0f / out_fps;
+      return;
+    }
+  }
+
+  out_fps = 0.0f;
+  out_frametime_ms = 0.0f;
+}
 
 PerfOverlayDialog::PerfOverlayDialog(rex::ui::ImGuiDrawer* drawer)
     : rex::ui::ImGuiDialog(drawer) {
@@ -138,22 +207,34 @@ void PerfOverlayDialog::OnDraw(ImGuiIO& io) {
                            ImGuiWindowFlags_NoNav;
 
   if (ImGui::Begin("##PerfOverlay", nullptr, flags)) {
-    const float fps = io.Framerate;
+    float guest_fps = 0.0f;
+    float guest_ms = 0.0f;
+    uint64_t guest_frame_count = 0;
+    GetGuestFrameStats(guest_fps, guest_ms, guest_frame_count);
+
+    // Exact game frames presented on screen
+    const bool has_guest = (guest_frame_count > 0 && guest_fps > 0.0f);
+    const float fps = has_guest ? guest_fps : io.Framerate;
     const float ms = fps > 0.0f ? 1000.0f / fps : 0.0f;
 
     // Color code FPS
     ImVec4 fps_color = ImVec4(0.2f, 0.9f, 0.2f, 1.0f);  // Green
-    if (fps < 30.0f) {
+    if (fps < 25.0f) {
       fps_color = ImVec4(1.0f, 0.25f, 0.25f, 1.0f);     // Red
-    } else if (fps < 55.0f) {
+    } else if (fps < 29.0f) {
       fps_color = ImVec4(1.0f, 0.85f, 0.2f, 1.0f);      // Yellow
     }
 
     ImGui::TextColored(ImVec4(0.4f, 0.7f, 1.0f, 1.0f), "Gears 3 [F6]");
     ImGui::SameLine();
-    ImGui::TextColored(fps_color, "%.0f FPS", fps);
+    ImGui::TextColored(fps_color, "%.1f FPS", fps);
     ImGui::SameLine();
     ImGui::TextDisabled("(%.1f ms)", ms);
+
+    if (has_guest && std::abs(io.Framerate - guest_fps) > 2.0f) {
+      ImGui::SameLine();
+      ImGui::TextDisabled("| GPU: %.0f", io.Framerate);
+    }
 
     ImGui::Separator();
 

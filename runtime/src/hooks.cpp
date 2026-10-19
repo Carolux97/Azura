@@ -2,9 +2,12 @@
 #include <rex/logging.h>
 #include <rex/system/flags.h>
 #include <utf8cpp/utf8.h>
+#include <dlfcn.h>
 #include <string>
 #include <string_view>
 #include <iterator>
+
+#include "perf_overlay.h"
 
 extern "C" void __imp__XGetLanguage(PPCContext& __restrict ctx, uint8_t* base) {
   (void)base;
@@ -43,7 +46,11 @@ extern "C" void __imp__XamGetLocale(PPCContext& __restrict ctx, uint8_t* base) {
 
 extern "C" void __imp__XGetGameRegion(PPCContext& __restrict ctx, uint8_t* base) {
   (void)base;
-  REXLOG_INFO("[Azura Hooks] XGetGameRegion() invoked -> returning Region mask 0x00000200");
+  static bool logged = false;
+  if (!logged) {
+    logged = true;
+    REXLOG_INFO("[Azura Hooks] XGetGameRegion() invoked -> returning Region mask 0x00000200");
+  }
   ctx.r3.u64 = 0x00000200;  // XEX_REGION_EUROPE
 }
 
@@ -52,6 +59,18 @@ extern "C" void __imp__XexCheckExecutablePrivilege(PPCContext& __restrict ctx, u
   uint32_t priv = ctx.r3.u32;
   REXLOG_INFO("[Azura Hooks] XexCheckExecutablePrivilege({}) -> granting privilege (1)", priv);
   ctx.r3.u64 = 1;
+}
+
+extern "C" void __imp__VdSwap(PPCContext& __restrict ctx, uint8_t* base) {
+  static void (*real_VdSwap)(PPCContext& __restrict, uint8_t*) = nullptr;
+  if (!real_VdSwap) {
+    real_VdSwap = reinterpret_cast<void (*)(PPCContext& __restrict, uint8_t*)>(
+        dlsym(RTLD_NEXT, "__imp__VdSwap"));
+  }
+  azura::RecordGuestFrame();
+  if (real_VdSwap) {
+    real_VdSwap(ctx, base);
+  }
 }
 
 // Strong symbol instantiations to override throwing implementations from librexruntime.so

@@ -43,6 +43,38 @@ PATCHES = [
         "old": "ctx.r11.u64 = REX_LOAD_U32(ctx.r10.u32 + 1040);",
         "new": "ctx.r11.u64 = 0; // Patch: Disable Ambient Occlusion (li r11, 0)",
     },
+    {
+        "name": "Disable Depth of Field",
+        "function": 0x82593DB8,
+        "address": 0x82593DC4,
+        "asm": "lwz r11,64(r11)",
+        "old": "ctx.r11.u64 = REX_LOAD_U32(ctx.r11.u32 + 64);",
+        "new": "ctx.r11.u64 = 0; // Patch: Disable Depth of Field (li r11, 0)",
+    },
+    {
+        "name": "16x Anisotropic Filtering",
+        "function": 0x82969558,
+        "address": 0x82969614,
+        "asm": "lwz r5,836(r30)",
+        "old": "ctx.r5.u64 = REX_LOAD_U32(ctx.r30.u32 + 836);",
+        "new": "ctx.r5.u64 = 16; // Patch: 16x Anisotropic Filtering (li r5, 16)",
+    },
+    {
+        "name": "Disable Motion Blur (Part 1)",
+        "function": 0x824305E8,
+        "address": 0x82430640,
+        "asm": "lwz r11,56(r10)",
+        "old": "ctx.r11.u64 = REX_LOAD_U32(ctx.r10.u32 + 56);",
+        "new": "ctx.r11.u64 = 0; // Patch: Disable Motion Blur (li r11, 0)",
+    },
+    {
+        "name": "Disable Motion Blur (Part 2)",
+        "function": 0x827A2B98,
+        "address": 0x827A2BCC,
+        "asm": "lwz r11,128(r10)",
+        "old": "ctx.r11.u64 = REX_LOAD_U32(ctx.r10.u32 + 128);",
+        "new": "ctx.r11.u64 = 0; // Patch: Disable Motion Blur (li r11, 0)",
+    },
 ]
 
 # Changes made by earlier versions of this script that must be undone.

@@ -379,7 +379,15 @@ impl SettingsPaths {
             }
         }
         set_or_remove(&mut runtime, KEY_ANISOTROPIC, graphics.anisotropic.map(value));
-        set_or_remove(&mut runtime, KEY_UPSCALING, graphics.upscaling.as_deref().map(value));
+        // ReXGlue on Linux without FidelityFX only allows "bilinear"
+        let safe_upscaling = graphics.upscaling.as_deref().map(|u| {
+            if u == "cas" || u == "fsr" || u == "fsr2" || u == "fsr3" {
+                "bilinear"
+            } else {
+                u
+            }
+        });
+        set_or_remove(&mut runtime, KEY_UPSCALING, safe_upscaling.map(value));
         set_or_remove(&mut runtime, KEY_TEXTURE_SOFT, graphics.texture_memory.map(value));
         // The hard limit is kept at twice the soft one, as in the SDK defaults (384 / 768 MB).
         set_or_remove(&mut runtime, KEY_TEXTURE_HARD, graphics.texture_memory.map(|mb| value(mb * 2)));
