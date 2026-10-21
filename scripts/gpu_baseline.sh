@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Records the per-frame performance counters of one play session and summarizes the GPU time.
 #
-#   scripts/gpu_baseline.sh start <label>   enable perf_log_csv in the installed azura.toml
+#   scripts/gpu_baseline.sh start <label> [setting=value ...]
+#                                            enable perf_log_csv in the installed azura.toml, and
+#                                            the given settings for this session only
+#                                            (e.g. shader_compiler=xsc)
 #   (play the route, quit the game)
 #   scripts/gpu_baseline.sh finish          restore azura.toml and print the summary
 #   scripts/gpu_baseline.sh summary <csv>   print the summary of a CSV recorded earlier
@@ -55,15 +58,32 @@ EOF
 
 case "${1:-}" in
   start)
-    label="${2:?usage: $0 start <label>}"
+    label="${2:?usage: $0 start <label> [setting=value ...]}"
     [[ -f "${CONFIG}" ]] || { echo "No ${CONFIG}: start the game once from the launcher first" >&2; exit 1; }
     mkdir -p "${OUT_DIR}"
     [[ -f "${BACKUP}" ]] && { echo "A session is already started; run '$0 finish' first" >&2; exit 1; }
     cp "${CONFIG}" "${BACKUP}"
     csv="${OUT_DIR}/${label}_$(date +%Y%m%d-%H%M%S).csv"
-    # A TOML key may appear only once: drop an earlier perf_log_csv (the backup keeps it).
-    grep -v '^[[:space:]]*perf_log_csv[[:space:]]*=' "${BACKUP}" > "${CONFIG}" || true
+    shift 2
+    # A TOML key may appear only once: drop the earlier values of the keys set here (the backup
+    # keeps them).
+    keys="perf_log_csv"
+    for setting in "$@"; do
+      keys="${keys}|${setting%%=*}"
+    done
+    grep -Ev "^[[:space:]]*(${keys})[[:space:]]*=" "${BACKUP}" > "${CONFIG}" || true
     printf '\nperf_log_csv = "%s"\n' "${csv}" >> "${CONFIG}"
+    for setting in "$@"; do
+      key="${setting%%=*}"
+      value="${setting#*=}"
+      # Numbers and booleans as they are, everything else as a string.
+      if [[ "${value}" =~ ^(true|false|-?[0-9]+(\.[0-9]+)?)$ ]]; then
+        printf '%s = %s\n' "${key}" "${value}" >> "${CONFIG}"
+      else
+        printf '%s = "%s"\n' "${key}" "${value}" >> "${CONFIG}"
+      fi
+      echo "For this session: ${key} = ${value}"
+    done
     echo "${csv}" > "${CURRENT}"
     echo "Recording to ${csv}"
     echo "Start the game from the launcher, play the route, quit, then run: $0 finish"

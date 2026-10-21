@@ -43,14 +43,15 @@ index da8e432..b8c8cbd 100644
    uint32_t primary_buffer_ptr_ = 0;
    uint32_t primary_buffer_size_ = 0;
 diff --git a/include/rex/graphics/flags.h b/include/rex/graphics/flags.h
-index 2cf24c4..9327584 100644
+index 2cf24c4..272c7e1 100644
 --- a/include/rex/graphics/flags.h
 +++ b/include/rex/graphics/flags.h
-@@ -72,6 +72,7 @@ REXCVAR_DECLARE(bool, use_fuzzy_alpha_epsilon);
+@@ -72,6 +72,8 @@ REXCVAR_DECLARE(bool, use_fuzzy_alpha_epsilon);
  
  // GPU Shader Translation
  REXCVAR_DECLARE(std::string, dump_shaders);
 +REXCVAR_DECLARE(std::string, shader_compiler);
++REXCVAR_DECLARE(bool, xsc_debug_color_range);
  REXCVAR_DECLARE(std::string, swap_post_effect);
  
  #if REX_HAS_VULKAN
@@ -138,6 +139,41 @@ index 373f8dd..1dd1620 100644
    static constexpr uint32_t kMaxOcclusionQueries = 8192;
    VkQueryPool occlusion_query_pool_ = VK_NULL_HANDLE;
    VkBuffer occlusion_query_readback_buffer_ = VK_NULL_HANDLE;
+diff --git a/include/rex/graphics/vulkan/pipeline_cache.h b/include/rex/graphics/vulkan/pipeline_cache.h
+index 7b938b9..92015bc 100644
+--- a/include/rex/graphics/vulkan/pipeline_cache.h
++++ b/include/rex/graphics/vulkan/pipeline_cache.h
+@@ -39,6 +39,10 @@
+ #include <rex/graphics/xenos.h>
+ #include <rex/ui/vulkan/api.h>
+ 
++namespace rex::graphics::xsc {
++class XscShaderTranslator;
++}  // namespace rex::graphics::xsc
++
+ namespace rex::graphics::vulkan {
+ 
+ class VulkanCommandProcessor;
+@@ -328,7 +332,8 @@ class VulkanPipelineCache {
+   VulkanShader* LoadShader(xenos::ShaderType shader_type, const uint32_t* host_address,
+                            uint32_t dword_count, uint64_t data_hash);
+ 
+-  // Can be called from multiple threads.
++  // Can be called from multiple threads. Pixel shaders go to xsc_translator_ first if it exists,
++  // and to `translator` if it does not support them.
+   bool TranslateAnalyzedShader(SpirvShaderTranslator& translator,
+                                VulkanShader::VulkanTranslation& translation);
+ 
+@@ -380,6 +385,9 @@ class VulkanPipelineCache {
+   string::StringBuffer ucode_disasm_buffer_;
+   // Reusable shader translator on the command processor thread.
+   std::unique_ptr<SpirvShaderTranslator> shader_translator_;
++  // The Xenos shader compiler for pixel shaders, if shader_compiler is xsc (and the host render
++  // target path is used), tried before shader_translator_.
++  std::unique_ptr<xsc::XscShaderTranslator> xsc_translator_;
+ 
+   struct LayoutUID {
+     size_t uid;
 diff --git a/include/rex/perf/counter.h b/include/rex/perf/counter.h
 index 83f0dff..e0a0c06 100644
 --- a/include/rex/perf/counter.h
@@ -245,26 +281,28 @@ index d3f26eb..92570e3 100644
      false,  // kCommandBufferStalls
      false,  // kVerticesProcessed
 diff --git a/src/graphics/CMakeLists.txt b/src/graphics/CMakeLists.txt
-index 0d8f8af..844f8ed 100644
+index 0d8f8af..fd75c83 100644
 --- a/src/graphics/CMakeLists.txt
 +++ b/src/graphics/CMakeLists.txt
-@@ -41,6 +41,15 @@ set(REXGPU_XENOS_SPIRV_SOURCES
+@@ -41,6 +41,17 @@ set(REXGPU_XENOS_SPIRV_SOURCES
      pipeline/shader/spirv_translator_rb.cpp
  )
  
-+# Xenos shader compiler (XSC): our own compiler from Xenos microcode, with an MSL emitter.
++# Xenos shader compiler (XSC): our own compiler from Xenos microcode, with MSL and SPIR-V
++# emitters, for the Metal and the Vulkan backends.
 +set(REXGPU_XENOS_XSC_SOURCES
 +    pipeline/shader/xsc/xsc_translator.cpp
 +    pipeline/shader/xsc/xsc_translator_alu.cpp
 +    pipeline/shader/xsc/xsc_translator_fetch.cpp
 +    pipeline/shader/xsc/xsc_translator_ps.cpp
 +    pipeline/shader/xsc/xsc_msl.cpp
++    pipeline/shader/xsc/xsc_spirv.cpp
 +)
 +
  # Vulkan backend
  set(REXGPU_XENOS_VULKAN_SOURCES
      vulkan/graphics_system.cpp
-@@ -54,6 +63,21 @@ set(REXGPU_XENOS_VULKAN_SOURCES
+@@ -54,6 +65,21 @@ set(REXGPU_XENOS_VULKAN_SOURCES
      vulkan/texture_cache.cpp
  )
  
@@ -286,24 +324,27 @@ index 0d8f8af..844f8ed 100644
  # D3D12 backend
  if(REXGLUE_USE_D3D12)
      # DXBC third-party dependency
-@@ -89,6 +113,16 @@ if(REXGLUE_USE_VULKAN)
-     list(APPEND REXGPU_XENOS_SOURCES ${REXGPU_XENOS_SPIRV_SOURCES} ${REXGPU_XENOS_VULKAN_SOURCES})
+@@ -86,7 +112,18 @@ if(REXGLUE_USE_D3D12)
  endif()
  
+ if(REXGLUE_USE_VULKAN)
+-    list(APPEND REXGPU_XENOS_SOURCES ${REXGPU_XENOS_SPIRV_SOURCES} ${REXGPU_XENOS_VULKAN_SOURCES})
++    list(APPEND REXGPU_XENOS_SOURCES ${REXGPU_XENOS_SPIRV_SOURCES} ${REXGPU_XENOS_VULKAN_SOURCES}
++         ${REXGPU_XENOS_XSC_SOURCES})
++endif()
++
 +if(REXGLUE_USE_METAL)
 +    if(NOT REXGLUE_USE_VULKAN)
-+        list(APPEND REXGPU_XENOS_SOURCES ${REXGPU_XENOS_SPIRV_SOURCES})
++        list(APPEND REXGPU_XENOS_SOURCES ${REXGPU_XENOS_SPIRV_SOURCES} ${REXGPU_XENOS_XSC_SOURCES})
 +    endif()
-+    list(APPEND REXGPU_XENOS_SOURCES ${REXGPU_XENOS_METAL_SOURCES} ${REXGPU_XENOS_XSC_SOURCES})
++    list(APPEND REXGPU_XENOS_SOURCES ${REXGPU_XENOS_METAL_SOURCES})
 +    set_source_files_properties(${REXGPU_XENOS_METAL_SOURCES} PROPERTIES
 +        COMPILE_OPTIONS "-fobjc-arc;-include;${CMAKE_CURRENT_SOURCE_DIR}/metal/metal_vulkan_headers.h"
 +        SKIP_PRECOMPILE_HEADERS ON)
-+endif()
-+
+ endif()
+ 
  if(REXGLUE_USE_D3D12)
-     list(APPEND REXGPU_XENOS_SOURCES
-         ${REXGPU_XENOS_DXBC_THIRDPARTY_SOURCES}
-@@ -151,6 +185,90 @@ if(REXGLUE_USE_VULKAN)
+@@ -151,6 +188,90 @@ if(REXGLUE_USE_VULKAN)
      )
  endif()
  
@@ -464,28 +505,34 @@ index a744375..92724c2 100644
    if (!count_remaining) {
      REXGPU_ERROR("{}: Packet too small, can't read VGT_DRAW_INITIATOR", opcode_name);
 diff --git a/src/graphics/flags.cpp b/src/graphics/flags.cpp
-index e2983a4..07cb396 100644
+index e2983a4..48e2850 100644
 --- a/src/graphics/flags.cpp
 +++ b/src/graphics/flags.cpp
-@@ -25,6 +25,12 @@ REXCVAR_DEFINE_BOOL(gamma_render_target_as_unorm16, true, "GPU",
+@@ -25,6 +25,18 @@ REXCVAR_DEFINE_BOOL(gamma_render_target_as_unorm16, true, "GPU",
                      "Use R16G16B16A16_UNORM for gamma render targets (more accurate than sRGB)")
      .lifecycle(rex::cvar::Lifecycle::kHotReload);
  REXCVAR_DEFINE_STRING(dump_shaders, "", "GPU", "Path to dump shaders to");
 +REXCVAR_DEFINE_STRING(shader_compiler, "translator", "GPU",
 +                      "Shader compiler: translator (the SPIR-V translator, through SPIRV-Cross on "
-+                      "Metal) or xsc (the Xenos shader compiler; pixel shaders on Metal so far, the "
-+                      "rest with the translator)")
++                      "Metal) or xsc (the Xenos shader compiler; pixel shaders on Metal and on "
++                      "Vulkan with host render targets so far, the rest with the translator)")
 +    .allowed({"translator", "xsc"})
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++REXCVAR_DEFINE_BOOL(xsc_debug_color_range, false, "GPU",
++                    "Debugging aid for shader_compiler = xsc on Metal: paint pixel shader color "
++                    "outputs magenta when NaN or infinite, and for a 7e3 render target cyan above "
++                    "31.875 and yellow below 0 (values the Xbox 360 render target could not "
++                    "hold, before they are clamped), and log the shaders that write them")
 +    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
  REXCVAR_DEFINE_BOOL(use_fuzzy_alpha_epsilon, false, "GPU",
                      "Use approximate compare for alpha test values to prevent "
                      "flickering on NVIDIA graphics cards");
 diff --git a/src/graphics/metal/metal_command_processor.h b/src/graphics/metal/metal_command_processor.h
 new file mode 100644
-index 0000000..c6fb6e4
+index 0000000..203e86c
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.h
-@@ -0,0 +1,282 @@
+@@ -0,0 +1,288 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.h
 + * @brief       Xenos command processing with Metal
@@ -722,6 +769,12 @@ index 0000000..c6fb6e4
 +  std::atomic<uint32_t> completion_handlers_in_flight_{0};
 +  bool device_lost_ = false;
 +
++  // xsc_debug_color_range: the per-shader counters of out-of-range pixel shader colors, written by
++  // the GPU and logged by the command processor every kXscDebugCounterLogFrames frames.
++  static constexpr uint64_t kXscDebugCounterLogFrames = 300;
++  void LogXscDebugCounters();
++  id<MTLBuffer> xsc_debug_counters_ = nil;
++
 +  // Frames.
 +  bool frame_open_ = false;
 +  uint64_t frame_current_ = 1;
@@ -770,10 +823,10 @@ index 0000000..c6fb6e4
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_command_processor.mm b/src/graphics/metal/metal_command_processor.mm
 new file mode 100644
-index 0000000..b4b9334
+index 0000000..f0747c2
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.mm
-@@ -0,0 +1,1858 @@
+@@ -0,0 +1,1919 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.mm
 + * @brief       Xenos command processing with Metal
@@ -1052,6 +1105,13 @@ index 0000000..b4b9334
 +    REXGPU_ERROR("Metal: failed to initialize the pipeline cache");
 +    return false;
 +  }
++  if (pipeline_cache_->xsc_translator() && REXCVAR_GET(xsc_debug_color_range)) {
++    size_t size = sizeof(uint32_t) * xsc::XscShaderTranslator::kDebugCountersPerShader *
++                  xsc::XscShaderTranslator::kDebugCounterMaxShaders;
++    xsc_debug_counters_ = [device_ newBufferWithLength:size options:MTLResourceStorageModeShared];
++    std::memset(xsc_debug_counters_.contents, 0, size);
++    xsc_debug_counters_.label = @"XSC debug counters";
++  }
 +
 +  texture_cache_ = MetalTextureCache::Create(*register_file_, *shared_memory_,
 +                                             draw_resolution_scale_x, draw_resolution_scale_y,
@@ -1157,6 +1217,7 @@ index 0000000..b4b9334
 +  compute_encoder_ = nil;
 +  blit_encoder_ = nil;
 +  queue_ = nil;
++  xsc_debug_counters_ = nil;
 +  device_ = nil;
 +}
 +
@@ -1389,6 +1450,10 @@ index 0000000..b4b9334
 +    frame_open_ = false;
 +    closed_frame_submissions_[(frame_current_++) % kMaxFramesInFlight] = submission_current_ - 1;
 +
++    if (xsc_debug_counters_ && frame_current_ % kXscDebugCounterLogFrames == 0) {
++      LogXscDebugCounters();
++    }
++
 +    if (cache_clear_requested_) {
 +      cache_clear_requested_ = false;
 +      AwaitSubmission(UINT64_MAX);
@@ -1398,6 +1463,46 @@ index 0000000..b4b9334
 +  }
 +
 +  return true;
++}
++
++void MetalCommandProcessor::LogXscDebugCounters() {
++  using Translator = xsc::XscShaderTranslator;
++  const std::vector<Translator::DebugCounterShader>& shaders =
++      pipeline_cache_->xsc_translator()->debug_counter_shaders();
++  // The GPU may still be adding to the counters: a debugging aid, the counts are approximate.
++  auto* counters = static_cast<uint32_t*>(xsc_debug_counters_.contents);
++  struct Entry {
++    size_t slot;
++    uint32_t out_of_range;
++  };
++  std::vector<Entry> entries;
++  for (size_t slot = 0; slot < shaders.size(); ++slot) {
++    const uint32_t* slot_counters = counters + slot * Translator::kDebugCountersPerShader;
++    uint32_t out_of_range = slot_counters[Translator::kDebugCounterNonFinite] +
++                            slot_counters[Translator::kDebugCounterAbove7e3] +
++                            slot_counters[Translator::kDebugCounterNegative7e3];
++    if (out_of_range) {
++      entries.push_back({slot, out_of_range});
++    }
++  }
++  std::sort(entries.begin(), entries.end(),
++            [](const Entry& a, const Entry& b) { return a.out_of_range > b.out_of_range; });
++  if (!entries.empty()) {
++    REXGPU_INFO("XSC color range: {} pixel shaders wrote out-of-range colors in the last {} frames",
++                entries.size(), kXscDebugCounterLogFrames);
++  }
++  for (size_t i = 0; i < std::min(entries.size(), size_t(16)); ++i) {
++    const uint32_t* slot_counters = counters + entries[i].slot * Translator::kDebugCountersPerShader;
++    const Translator::DebugCounterShader& shader = shaders[entries[i].slot];
++    REXGPU_INFO(
++        "XSC color range: ps {:016X} modification {:016X}: non-finite {}, above 31.875 {}, "
++        "negative {}, of {} pixels on 7e3 render targets",
++        shader.ucode_data_hash, shader.modification, slot_counters[Translator::kDebugCounterNonFinite],
++        slot_counters[Translator::kDebugCounterAbove7e3],
++        slot_counters[Translator::kDebugCounterNegative7e3],
++        slot_counters[Translator::kDebugCounter7e3]);
++  }
++  std::memset(counters, 0, xsc_debug_counters_.length);
 +}
 +
 +void MetalCommandProcessor::OnSubmissionCompletedByGpu(uint64_t submission) {
@@ -2270,6 +2375,11 @@ index 0000000..b4b9334
 +        UINT32_C(0x3F800000) + (color_exp_bias << 23);
 +    dirty |= system_constants_.color_exp_bias[i] != color_exp_bias_scale;
 +    system_constants_.color_exp_bias[i] = color_exp_bias_scale;
++    // Metal has no pixel shader interlock path; XSC pixel shaders read the render target formats
++    // to clamp the color to the range of a 7e3 render target.
++    uint32_t format_flags = RenderTargetCache::AddPSIColorFormatFlags(color_info.color_format);
++    dirty |= system_constants_.edram_rt_format_flags[i] != format_flags;
++    system_constants_.edram_rt_format_flags[i] = format_flags;
 +  }
 +
 +  if (dirty) {
@@ -2421,6 +2531,10 @@ index 0000000..b4b9334
 +                         length:sizeof(buffer_sizes)
 +                        atIndex:kMslBufferSizesIndex];
 +    }
++  }
++
++  if (xsc_debug_counters_ && pixel_translation && pixel_translation->is_xsc()) {
++    [encoder setFragmentBuffer:xsc_debug_counters_ offset:0 atIndex:kMetalBufferXscDebugCounters];
 +  }
 +
 +  // Textures and samplers.
@@ -2710,10 +2824,10 @@ index 0000000..e650748
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_pipeline_cache.h b/src/graphics/metal/metal_pipeline_cache.h
 new file mode 100644
-index 0000000..df809cb
+index 0000000..0590f78
 --- /dev/null
 +++ b/src/graphics/metal/metal_pipeline_cache.h
-@@ -0,0 +1,176 @@
+@@ -0,0 +1,180 @@
 +/**
 + * @file        graphics/metal/metal_pipeline_cache.h
 + * @brief       Guest shader translation and render pipeline states for the Metal backend
@@ -2755,6 +2869,8 @@ index 0000000..df809cb
 +// The five constant buffers follow, in SpirvShaderTranslator::ConstantBuffer order.
 +constexpr uint32_t kMetalBufferConstantsFirst = 1;
 +// SPIRV-Cross's buffer of runtime array sizes, when a shader needs it, is at kMslBufferSizesIndex.
++// The debug counters of XSC pixel shaders with xsc_debug_color_range.
++constexpr uint32_t kMetalBufferXscDebugCounters = 6;
 +
 +class MetalShader : public SpirvShader {
 + public:
@@ -2823,6 +2939,8 @@ index 0000000..df809cb
 +  void AnalyzeShaderUcode(Shader& shader) {
 +    shader.AnalyzeUcode(ucode_disasm_buffer_);
 +  }
++  // The Xenos shader compiler, or nullptr if shader_compiler is not xsc.
++  const xsc::XscShaderTranslator* xsc_translator() const { return xsc_translator_.get(); }
 +
 +  SpirvShaderTranslator::Modification GetCurrentVertexShaderModification(
 +      const Shader& shader, Shader::HostVertexShaderType host_vertex_shader_type,
@@ -2892,10 +3010,10 @@ index 0000000..df809cb
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_pipeline_cache.mm b/src/graphics/metal/metal_pipeline_cache.mm
 new file mode 100644
-index 0000000..9edd4b6
+index 0000000..423af4f
 --- /dev/null
 +++ b/src/graphics/metal/metal_pipeline_cache.mm
-@@ -0,0 +1,630 @@
+@@ -0,0 +1,636 @@
 +/**
 + * @file        graphics/metal/metal_pipeline_cache.mm
 + * @brief       Guest shader translation and render pipeline states for the Metal backend
@@ -3117,8 +3235,14 @@ index 0000000..9edd4b6
 +      features, true, true, false, render_target_cache_.draw_resolution_scale_x(),
 +      render_target_cache_.draw_resolution_scale_y());
 +  if (REXCVAR_GET(shader_compiler) == "xsc") {
-+    xsc_translator_ =
-+        std::make_unique<xsc::XscShaderTranslator>(xsc::XscShaderTranslator::Target::kMsl);
++    xsc_translator_ = std::make_unique<xsc::XscShaderTranslator>(
++        xsc::XscShaderTranslator::Target::kMsl, features, true,
++        render_target_cache_.draw_resolution_scale_x(),
++        render_target_cache_.draw_resolution_scale_y());
++    if (REXCVAR_GET(xsc_debug_color_range)) {
++      xsc_translator_->set_debug_color_range(true);
++      REXGPU_INFO("Metal: XSC paints out-of-range pixel shader colors (xsc_debug_color_range)");
++    }
 +    REXGPU_INFO("Metal: pixel shaders translated by the Xenos shader compiler (XSC)");
 +  }
 +  return true;
@@ -10889,7 +11013,7 @@ index ec756d3..6e16b00 100644
    if (backend == "any" || backend == "d3d12") {
      return new rex::graphics::d3d12::D3D12GraphicsSystem();
 diff --git a/src/graphics/vulkan/command_processor.cpp b/src/graphics/vulkan/command_processor.cpp
-index 34330f6..dbb2dbe 100644
+index 34330f6..b8816db 100644
 --- a/src/graphics/vulkan/command_processor.cpp
 +++ b/src/graphics/vulkan/command_processor.cpp
 @@ -1896,6 +1896,7 @@ bool VulkanCommandProcessor::SetupContext() {
@@ -11006,6 +11130,79 @@ index 34330f6..dbb2dbe 100644
      if (dfn.vkEndCommandBuffer(command_buffer.buffer) != VK_SUCCESS) {
        REXGPU_ERROR("Failed to end a Vulkan command buffer");
        return false;
+@@ -6386,6 +6464,13 @@ void VulkanCommandProcessor::UpdateSystemConstantValues(
+         UINT32_C(0x3F800000) + (color_exp_bias << 23);
+     dirty |= system_constants_.color_exp_bias[i] != color_exp_bias_scale;
+     system_constants_.color_exp_bias[i] = color_exp_bias_scale;
++    if (!edram_fragment_shader_interlock) {
++      // XSC pixel shaders read the render target formats to clamp the color to the range of a
++      // 7e3 render target.
++      uint32_t format_flags = RenderTargetCache::AddPSIColorFormatFlags(color_info.color_format);
++      dirty |= system_constants_.edram_rt_format_flags[i] != format_flags;
++      system_constants_.edram_rt_format_flags[i] = format_flags;
++    }
+     if (edram_fragment_shader_interlock) {
+       dirty |= system_constants_.edram_rt_keep_mask[i][0] != rt_keep_masks[i][0];
+       system_constants_.edram_rt_keep_mask[i][0] = rt_keep_masks[i][0];
+diff --git a/src/graphics/vulkan/pipeline_cache.cpp b/src/graphics/vulkan/pipeline_cache.cpp
+index 4e7ad78..2cd00e6 100644
+--- a/src/graphics/vulkan/pipeline_cache.cpp
++++ b/src/graphics/vulkan/pipeline_cache.cpp
+@@ -41,6 +41,8 @@
+ #include <rex/graphics/util/draw.h>
+ #include <rex/graphics/vulkan/command_processor.h>
+ #include <rex/graphics/vulkan/pipeline_cache.h>
++
++#include "../pipeline/shader/xsc/xsc_translator.h"
+ #include <rex/graphics/vulkan/shader.h>
+ #include <rex/graphics/xenos.h>
+ #include <rex/hash.h>
+@@ -297,6 +299,22 @@ bool VulkanPipelineCache::Initialize() {
+       render_target_cache_.msaa_2x_no_attachments_supported(), edram_fragment_shader_interlock,
+       render_target_cache_.draw_resolution_scale_x(),
+       render_target_cache_.draw_resolution_scale_y());
++  // XSC writes the pixel shader outputs to host render targets: the pixel shader interlock path,
++  // which does the render target logic in the shader, stays with the SPIR-V translator.
++  if (REXCVAR_GET(shader_compiler) == "xsc") {
++    if (edram_fragment_shader_interlock) {
++      REXGPU_INFO(
++          "Vulkan: shader_compiler = xsc is not used with the fragment shader interlock render "
++          "target path");
++    } else {
++      xsc_translator_ = std::make_unique<xsc::XscShaderTranslator>(
++          xsc::XscShaderTranslator::Target::kSpirv, SpirvShaderTranslator::Features(vulkan_device),
++          render_target_cache_.msaa_2x_attachments_supported(),
++          render_target_cache_.draw_resolution_scale_x(),
++          render_target_cache_.draw_resolution_scale_y());
++      REXGPU_INFO("Vulkan: pixel shaders translated by the Xenos shader compiler (XSC)");
++    }
++  }
+ 
+   if (edram_fragment_shader_interlock) {
+     std::vector<uint8_t> depth_only_fragment_shader_code =
+@@ -876,6 +894,7 @@ void VulkanPipelineCache::Shutdown() {
+   texture_binding_layouts_.clear();
+ 
+   // Shut down shader translation.
++  xsc_translator_.reset();
+   shader_translator_.reset();
+ }
+ 
+@@ -1244,9 +1263,12 @@ bool VulkanPipelineCache::TranslateAnalyzedShader(SpirvShaderTranslator& transla
+                                                   VulkanShader::VulkanTranslation& translation) {
+   VulkanShader& shader = static_cast<VulkanShader&>(translation.shader());
+ 
+-  // Perform translation.
++  // Perform translation, with XSC first for pixel shaders if enabled (what it does not support yet
++  // goes to the SPIR-V translator; both fill the same texture and sampler bindings).
+   // If this fails the shader will be marked as invalid and ignored later.
+-  if (!translator.TranslateAnalyzedShader(translation)) {
++  bool translated_by_xsc = xsc_translator_ && shader.type() == xenos::ShaderType::kPixel &&
++                           xsc_translator_->TranslateAnalyzedShader(translation);
++  if (!translated_by_xsc && !translator.TranslateAnalyzedShader(translation)) {
+     REXGPU_ERROR("Shader {:016X} translation failed; marking as ignored", shader.ucode_data_hash());
+     return false;
+   }
 diff --git a/src/ui/vulkan/vulkan_device.cpp b/src/ui/vulkan/vulkan_device.cpp
 index 8197bb4..7838036 100644
 --- a/src/ui/vulkan/vulkan_device.cpp

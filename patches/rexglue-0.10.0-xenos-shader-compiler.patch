@@ -1,9 +1,9 @@
 diff --git a/src/graphics/pipeline/shader/xsc/bench/xsc_bench.mm b/src/graphics/pipeline/shader/xsc/bench/xsc_bench.mm
 new file mode 100644
-index 0000000..34236b9
+index 0000000..8af04f5
 --- /dev/null
 +++ b/src/graphics/pipeline/shader/xsc/bench/xsc_bench.mm
-@@ -0,0 +1,924 @@
+@@ -0,0 +1,991 @@
 +/**
 + * @file        graphics/pipeline/shader/xsc/bench/xsc_bench.mm
 + * @brief       Offline bench for the Xenos shader compiler: translates the game's real shaders
@@ -18,8 +18,8 @@ index 0000000..34236b9
 + * modification). Usage:
 + *   xsc-bench <corpus> [--mode translate|compare|perf] [--filter <hash>] [--limit <n>]
 + *             [--seeds <n>] [--size <pixels>] [--translators <a>,<b>]
-+ * Translators: "spirv" (the SPIR-V translator and SPIRV-Cross, as the Metal backend does) and,
-+ * once it exists, "xsc".
++ * Translators: "spirv" (the SPIR-V translator and SPIRV-Cross, as the Metal backend does), "xsc"
++ * (XSC's MSL) and "xsc-spirv" (XSC's SPIR-V, converted by SPIRV-Cross like the first).
 + */
 +
 +#import <Foundation/Foundation.h>
@@ -40,6 +40,7 @@ index 0000000..34236b9
 +#include <string>
 +#include <vector>
 +
++#include <rex/graphics/pipeline/render_target/cache.h>
 +#include <rex/graphics/pipeline/shader/spirv.h>
 +#include <rex/graphics/pipeline/shader/spirv_translator.h>
 +#include <rex/graphics/xenos.h>
@@ -161,14 +162,27 @@ index 0000000..34236b9
 +}
 +
 +// The translator the Metal backend creates (MetalPipelineCache::Initialize).
-+std::unique_ptr<SpirvShaderTranslator> CreateSpirvTranslator() {
++// The features of the Metal backend's SPIR-V translator, also given to XSC for its SPIR-V.
++SpirvShaderTranslator::Features BenchSpirvFeatures() {
 +  SpirvShaderTranslator::Features features(true);
 +  features.cull_distance = false;
 +  features.fragment_shader_sample_interlock = false;
 +  features.signed_zero_inf_nan_preserve_float32 = false;
 +  features.denorm_flush_to_zero_float32 = false;
 +  features.rounding_mode_rte_float32 = false;
-+  return std::make_unique<SpirvShaderTranslator>(features, true, true, false, 1, 1);
++  return features;
++}
++
++// XSC_BENCH_RESOLUTION_SCALE: the draw resolution scale of every translator (1 by default), with
++// every texture marked as resolved at that scale.
++uint32_t BenchResolutionScale() {
++  const char* scale = std::getenv("XSC_BENCH_RESOLUTION_SCALE");
++  return scale ? std::max(std::atoi(scale), 1) : 1;
++}
++
++std::unique_ptr<SpirvShaderTranslator> CreateSpirvTranslator() {
++  return std::make_unique<SpirvShaderTranslator>(BenchSpirvFeatures(), true, true, false,
++                                                 BenchResolutionScale(), BenchResolutionScale());
 +}
 +
 +double MsSince(std::chrono::steady_clock::time_point start) {
@@ -177,6 +191,9 @@ index 0000000..34236b9
 +}
 +
 +bool g_fixed_derivatives = true;
++// XSC_BENCH_RT_7E3: every color target is a 7e3 one (XSC clamps to its range, and the reference
++// output of another translator is clamped the same way before the comparison).
++bool g_render_targets_7e3 = false;
 +
 +// Replaces dfdx and dfdy with fixed functions of the value (see Options::derivatives).
 +void FixDerivatives(std::string& source) {
@@ -223,8 +240,9 @@ index 0000000..34236b9
 +  return [library newFunctionWithName:@(translated.msl.entry_point.c_str())];
 +}
 +
-+// Translates the variant with the SPIR-V translator and SPIRV-Cross, as the Metal backend does.
-+Translated TranslateSpirv(id<MTLDevice> device, SpirvShaderTranslator& translator,
++// Translates the variant to SPIR-V (with the SPIR-V translator, or with XSC for "xsc-spirv") and
++// converts it with SPIRV-Cross, as the Metal backend does.
++Translated TranslateSpirv(id<MTLDevice> device, ShaderTranslator& translator,
 +                          const Variant& variant, const std::vector<uint32_t>& ucode) {
 +  Translated translated;
 +  auto start = std::chrono::steady_clock::now();
@@ -233,11 +251,19 @@ index 0000000..34236b9
 +  rex::string::StringBuffer disassembly;
 +  shader.AnalyzeUcode(disassembly);
 +  Shader::Translation* translation = shader.GetOrCreateTranslation(variant.modification);
++  auto* xsc_translator = dynamic_cast<xsc::XscShaderTranslator*>(&translator);
 +  if (!translator.TranslateAnalyzedShader(*translation) || !translation->is_valid()) {
-+    translated.error = "SPIR-V translation failed";
++    translated.error = xsc_translator && !xsc_translator->unsupported_reason().empty()
++                           ? "unsupported: " + xsc_translator->unsupported_reason()
++                           : "SPIR-V translation failed";
 +    return translated;
 +  }
 +  const std::vector<uint8_t>& spirv = translation->translated_binary();
++  // XSC_BENCH_DUMP_SPIRV: a folder for the SPIR-V modules of XSC (for spirv-val).
++  if (const char* dump = std::getenv("XSC_BENCH_DUMP_SPIRV"); dump && xsc_translator) {
++    std::ofstream(fs::path(dump) / (variant.name + ".spv"), std::ios::binary)
++        .write(reinterpret_cast<const char*>(spirv.data()), std::streamsize(spirv.size()));
++  }
 +  bool vertex = variant.type == xenos::ShaderType::kVertex;
 +  if (!rex::graphics::metal::SpirvToMsl(
 +          reinterpret_cast<const uint32_t*>(spirv.data()), spirv.size() / sizeof(uint32_t),
@@ -405,6 +431,15 @@ index 0000000..34236b9
 +    system.texture_swizzles[i] = 0x688 | (0x688 << 12);
 +  }
 +  system.ndc_scale[0] = system.ndc_scale[1] = system.ndc_scale[2] = 1.0f;
++  if (BenchResolutionScale() > 1) {
++    system.textures_resolution_scaled = UINT32_MAX;
++  }
++  if (g_render_targets_7e3) {
++    for (uint32_t& format_flags : system.edram_rt_format_flags) {
++      format_flags =
++          RenderTargetCache::AddPSIColorFormatFlags(xenos::ColorRenderTargetFormat::k_2_10_10_10_FLOAT);
++    }
++  }
 +  inputs.float_constants.resize(size_t(std::max(translated.float_constant_count, 1u)) * 4);
 +  for (float& value : inputs.float_constants) {
 +    value = unit_range ? random.Unit() : random.Value(specials);
@@ -630,6 +665,20 @@ index 0000000..34236b9
 +  return output;
 +}
 +
++// The color as a 7e3 render target holds it (what XSC pixel shaders clamp to): RGB in
++// [0, 31.875], alpha in [0, 1], NaN as 0. The marker of discarded pixels is kept.
++void ClampColorsTo7e3(Output& output) {
++  for (std::vector<float>& color : output.colors) {
++    for (size_t i = 0; i < color.size(); ++i) {
++      float& value = color[i];
++      if (value == -12345.0f) {
++        continue;
++      }
++      value = std::isnan(value) ? 0.0f : std::clamp(value, 0.0f, i % 4 == 3 ? 1.0f : 31.875f);
++    }
++  }
++}
++
 +// Bit-exact comparison; returns the number of mismatching values.
 +uint32_t CompareOutputs(const Output& a, const Output& b, uint32_t color_mask, bool depth,
 +                        std::string& first_mismatch) {
@@ -702,10 +751,14 @@ index 0000000..34236b9
 +
 +std::optional<Translated> Translate(const std::string& translator_name, id<MTLDevice> device,
 +                                    SpirvShaderTranslator& spirv_translator,
-+                                    xsc::XscShaderTranslator& xsc_translator, const Variant& variant,
-+                                    const std::vector<uint32_t>& ucode) {
++                                    xsc::XscShaderTranslator& xsc_translator,
++                                    xsc::XscShaderTranslator& xsc_spirv_translator,
++                                    const Variant& variant, const std::vector<uint32_t>& ucode) {
 +  if (translator_name == "spirv") {
 +    return TranslateSpirv(device, spirv_translator, variant, ucode);
++  }
++  if (translator_name == "xsc-spirv") {
++    return TranslateSpirv(device, xsc_spirv_translator, variant, ucode);
 +  }
 +  if (translator_name == "xsc") {
 +    return TranslateXsc(device, xsc_translator, variant, ucode);
@@ -753,6 +806,7 @@ index 0000000..34236b9
 +    }
 +
 +    g_fixed_derivatives = options.derivatives == "fixed" && options.mode == "compare";
++    g_render_targets_7e3 = std::getenv("XSC_BENCH_RT_7E3") != nullptr;
 +    id<MTLDevice> device = MTLCreateSystemDefaultDevice();
 +    id<MTLCommandQueue> queue = [device newCommandQueue];
 +    MTLCompileOptions* vertex_options = [MTLCompileOptions new];
@@ -762,7 +816,15 @@ index 0000000..34236b9
 +                                                           error:&error];
 +    id<MTLFunction> vertex_function = [vertex_library newFunctionWithName:@"bench_vertex"];
 +    auto spirv_translator = CreateSpirvTranslator();
-+    xsc::XscShaderTranslator xsc_translator(xsc::XscShaderTranslator::Target::kMsl);
++    xsc::XscShaderTranslator xsc_translator(xsc::XscShaderTranslator::Target::kMsl,
++                                            BenchSpirvFeatures(), true, BenchResolutionScale(),
++                                            BenchResolutionScale());
++    // XSC_BENCH_DEBUG_COLOR_RANGE: translate with the out-of-range color markers (to check that
++    // they compile; the comparison then differs wherever a marker is painted).
++    xsc_translator.set_debug_color_range(std::getenv("XSC_BENCH_DEBUG_COLOR_RANGE") != nullptr);
++    xsc::XscShaderTranslator xsc_spirv_translator(xsc::XscShaderTranslator::Target::kSpirv,
++                                                  BenchSpirvFeatures(), true,
++                                                  BenchResolutionScale(), BenchResolutionScale());
 +
 +    std::vector<Variant> variants = LoadVariants(options);
 +    std::printf("%zu variants, mode %s, translators", variants.size(), options.mode.c_str());
@@ -800,7 +862,8 @@ index 0000000..34236b9
 +      std::vector<Translated> translations;
 +      for (const std::string& name : options.translators) {
 +        std::optional<Translated> translated =
-+            Translate(name, device, *spirv_translator, xsc_translator, variant, ucode);
++            Translate(name, device, *spirv_translator, xsc_translator, xsc_spirv_translator,
++                      variant, ucode);
 +        if (!translated) {
 +          std::printf("unknown translator %s\n", name.c_str());
 +          return 1;
@@ -871,6 +934,10 @@ index 0000000..34236b9
 +          continue;
 +        }
 +        ++seeds_kept;
++        if (g_render_targets_7e3 && options.translators[0] == "spirv" && outputs[0].ok) {
++          // The reference translator does not clamp to the render target format.
++          ClampColorsTo7e3(outputs[0]);
++        }
 +        for (size_t i = 1; i < outputs.size(); ++i) {
 +          if (!outputs[0].ok || !outputs[i].ok) {
 +            continue;
@@ -930,7 +997,7 @@ index 0000000..34236b9
 +}
 diff --git a/src/graphics/pipeline/shader/xsc/xsc_builder.h b/src/graphics/pipeline/shader/xsc/xsc_builder.h
 new file mode 100644
-index 0000000..045de73
+index 0000000..5148592
 --- /dev/null
 +++ b/src/graphics/pipeline/shader/xsc/xsc_builder.h
 @@ -0,0 +1,381 @@
@@ -1222,7 +1289,7 @@ index 0000000..045de73
 +
 +  ValueId Emit(Instruction instruction) {
 +    bool has_result = instruction.op != Op::kStoreVariable && instruction.op != Op::kDemote &&
-+                      instruction.op != Op::kKill;
++                      instruction.op != Op::kKill && instruction.op != Op::kDebugCount;
 +    if (has_result) {
 +      instruction.result = NewValue(instruction.type);
 +      if (instruction.op == Op::kConstant) {
@@ -1317,10 +1384,10 @@ index 0000000..045de73
 +}  // namespace rex::graphics::xsc
 diff --git a/src/graphics/pipeline/shader/xsc/xsc_ir.h b/src/graphics/pipeline/shader/xsc/xsc_ir.h
 new file mode 100644
-index 0000000..dccbed8
+index 0000000..152ad56
 --- /dev/null
 +++ b/src/graphics/pipeline/shader/xsc/xsc_ir.h
-@@ -0,0 +1,301 @@
+@@ -0,0 +1,308 @@
 +/**
 + * @file        graphics/pipeline/shader/xsc/xsc_ir.h
 + * @brief       Intermediate representation of the Xenos shader compiler (XSC)
@@ -1494,6 +1561,10 @@ index 0000000..dccbed8
 +  kDemote,
 +  // Discards the fragment and stops it.
 +  kKill,
++
++  // Debugging aid: if operand 0 (bool) is true, increments the counter imm[0] of the shader's
++  // slot (Program::debug_counter_slot) in the debug counter buffer. No result.
++  kDebugCount,
 +};
 +
 +// How kTextureSample takes its level of detail.
@@ -1614,6 +1685,9 @@ index 0000000..dccbed8
 +  uint32_t sampler_count = 0;
 +  // float4 elements of the float constant buffer of the stage (at least 1).
 +  uint32_t float_constant_count = 1;
++  // The first counter of the shader in the debug counter buffer used by kDebugCount, or
++  // UINT32_MAX if the shader does not count.
++  uint32_t debug_counter_slot = UINT32_MAX;
 +
 +  std::vector<Variable> variables;  // VariableId is the index + 1.
 +  // Types of the values (ValueId is the index + 1).
@@ -1624,10 +1698,10 @@ index 0000000..dccbed8
 +}  // namespace rex::graphics::xsc
 diff --git a/src/graphics/pipeline/shader/xsc/xsc_msl.cpp b/src/graphics/pipeline/shader/xsc/xsc_msl.cpp
 new file mode 100644
-index 0000000..cc90580
+index 0000000..2c980a0
 --- /dev/null
 +++ b/src/graphics/pipeline/shader/xsc/xsc_msl.cpp
-@@ -0,0 +1,717 @@
+@@ -0,0 +1,730 @@
 +/**
 + * @file        graphics/pipeline/shader/xsc/xsc_msl.cpp
 + * @brief       MSL emitter of the Xenos shader compiler
@@ -1661,6 +1735,8 @@ index 0000000..cc90580
 +constexpr uint32_t kBufferFloatConstantsPixel = 3;
 +constexpr uint32_t kBufferBoolLoopConstants = 4;
 +constexpr uint32_t kBufferFetchConstants = 5;
++// The debug counters of kDebugCount (MetalCommandProcessor, xsc_debug_color_range).
++constexpr uint32_t kBufferDebugCounters = 6;
 +
 +const char* ScalarName(ScalarType scalar) {
 +  switch (scalar) {
@@ -1858,6 +1934,10 @@ index 0000000..cc90580
 +        fmt::format("constant uint4* xe_bool_loop [[buffer({})]]", kBufferBoolLoopConstants));
 +    parameters.push_back(
 +        fmt::format("constant uint4* xe_fetch [[buffer({})]]", kBufferFetchConstants));
++    if (program_.debug_counter_slot != UINT32_MAX) {
++      parameters.push_back(fmt::format("device atomic_uint* xe_debug_counters [[buffer({})]]",
++                                       kBufferDebugCounters));
++    }
 +    for (size_t i = 0; i < program_.textures.size(); ++i) {
 +      const char* type = "texture2d_array<float>";
 +      if (program_.textures[i].dimension == TextureDimension::k3D) {
@@ -2315,6 +2395,13 @@ index 0000000..cc90580
 +        Indent(depth);
 +        out_ += "discard_fragment();\n";
 +        return;
++      case Op::kDebugCount:
++        Indent(depth);
++        out_ += fmt::format(
++            "if ({}) {{ atomic_fetch_add_explicit(&xe_debug_counters[{}], 1u, "
++            "memory_order_relaxed); }}\n",
++            Value(operands[0]), program_.debug_counter_slot + instruction.imm[0]);
++        return;
 +      default:
 +        break;
 +    }
@@ -2371,12 +2458,1004 @@ index 0000000..271f880
 +std::string EmitMsl(const Program& program);
 +
 +}  // namespace rex::graphics::xsc
+diff --git a/src/graphics/pipeline/shader/xsc/xsc_spirv.cpp b/src/graphics/pipeline/shader/xsc/xsc_spirv.cpp
+new file mode 100644
+index 0000000..71b836f
+--- /dev/null
++++ b/src/graphics/pipeline/shader/xsc/xsc_spirv.cpp
+@@ -0,0 +1,945 @@
++/**
++ * @file        graphics/pipeline/shader/xsc/xsc_spirv.cpp
++ * @brief       SPIR-V emitter of the Xenos shader compiler
++ *
++ * @license     BSD 3-Clause License
++ *              See LICENSE file in the project root for full license text.
++ *
++ * Writes every IR operation as one SPIR-V instruction. The float arithmetic is decorated with
++ * NoContraction (unless SpirvOptions::no_contraction is off), which drivers honour per
++ * instruction, so the results follow the Xenos rules without the per-statement trick the MSL
++ * emitter needs. The structured IR maps directly to SPIR-V structured control flow: an if is a
++ * selection with OpPhi in its merge block, a loop has its own continue block, and a switch case
++ * falls through by branching to the next case.
++ *
++ * The interface matches the SPIR-V translator's pixel shaders (spirv_translator.cpp) on the
++ * Vulkan backend: the constant buffers are declared as arrays of 4-component vectors with the
++ * same layout, textures and samplers in the order of the shader's bindings, samplers after the
++ * textures in the same descriptor set.
++ */
++
++#include "xsc_spirv.h"
++
++#include <cstring>
++#include <memory>
++#include <string>
++#include <unordered_map>
++#include <utility>
++
++#include <SPIRV/GLSL.std.450.h>
++#include <fmt/format.h>
++
++#include <rex/assert.h>
++#include <rex/graphics/pipeline/shader/spirv_builder.h>
++#include <rex/graphics/pipeline/shader/spirv_translator.h>
++
++namespace rex::graphics::xsc {
++
++namespace {
++
++using SystemConstants = SpirvShaderTranslator::SystemConstants;
++static_assert(sizeof(SystemConstants) % (sizeof(uint32_t) * 4) == 0,
++              "The system constants are declared as an array of uint4");
++
++class SpirvEmitter {
++ public:
++  SpirvEmitter(const Program& program, const SpirvOptions& options)
++      : program_(program),
++        options_(options),
++        // The SPIR-V translator's generator magic number, with 2 as the tool's version to tell
++        // XSC modules apart.
++        builder_(options.spirv_version, (SpirvShaderTranslator::kSpirvMagicToolId << 16) | 2,
++                 nullptr) {
++    values_.resize(program.value_types.size() + 1, spv::NoResult);
++    constants_.resize(program.value_types.size() + 1, nullptr);
++    variables_.resize(program.variables.size() + 1, spv::NoResult);
++    CollectConstants(program.body);
++  }
++
++  std::vector<uint32_t> Emit() {
++    builder_.addCapability(spv::CapabilityShader);
++    bool float_controls = options_.signed_zero_inf_nan_preserve_float32 ||
++                          options_.denorm_flush_to_zero_float32 ||
++                          options_.rounding_mode_rte_float32;
++    if (float_controls && options_.spirv_version < spv::Spv_1_4) {
++      builder_.addExtension("SPV_KHR_float_controls");
++    }
++    glsl_std_450_ = builder_.import("GLSL.std.450");
++    builder_.setMemoryModel(spv::AddressingModelLogical, spv::MemoryModelGLSL450);
++    builder_.setSource(spv::SourceLanguageUnknown, 0);
++
++    DeclareInterface();
++
++    spv::Block* entry_block;
++    function_ = builder_.makeFunctionEntry(spv::NoPrecision, builder_.makeVoidType(), "main", {},
++                                           {}, &entry_block);
++    for (size_t i = 0; i < program_.variables.size(); ++i) {
++      const Variable& variable = program_.variables[i];
++      if (variable.storage != Storage::kFunction) {
++        continue;
++      }
++      spv::Id type = VariableType(variable);
++      spv::Id initializer = spv::NoResult;
++      if (variable.initializer != kNoValue) {
++        initializer = Value(variable.initializer);
++        if (variable.array_size) {
++          initializer = builder_.makeCompositeConstant(
++              type, std::vector<spv::Id>(variable.array_size, initializer));
++        }
++      }
++      variables_[i + 1] = builder_.createVariable(spv::NoPrecision, spv::StorageClassFunction,
++                                                  type, variable.name.c_str(), initializer);
++    }
++
++    WriteBody(program_.body);
++    builder_.leaveFunction();
++
++    spv::Instruction* entry_point =
++        builder_.addEntryPoint(spv::ExecutionModelFragment, function_, "main");
++    for (spv::Id interface_id : interface_) {
++      entry_point->addIdOperand(interface_id);
++    }
++    builder_.addExecutionMode(function_, spv::ExecutionModeOriginUpperLeft);
++    if (program_.fragment.early_fragment_tests) {
++      builder_.addExecutionMode(function_, spv::ExecutionModeEarlyFragmentTests);
++    }
++    if (program_.fragment.depth) {
++      builder_.addExecutionMode(function_, spv::ExecutionModeDepthReplacing);
++    }
++    if (options_.denorm_flush_to_zero_float32) {
++      builder_.addCapability(spv::CapabilityDenormFlushToZero);
++      builder_.addExecutionMode(function_, spv::ExecutionModeDenormFlushToZero, 32);
++    }
++    if (options_.signed_zero_inf_nan_preserve_float32) {
++      builder_.addCapability(spv::CapabilitySignedZeroInfNanPreserve);
++      builder_.addExecutionMode(function_, spv::ExecutionModeSignedZeroInfNanPreserve, 32);
++    }
++    if (options_.rounding_mode_rte_float32) {
++      builder_.addCapability(spv::CapabilityRoundingModeRTE);
++      builder_.addExecutionMode(function_, spv::ExecutionModeRoundingModeRTE, 32);
++    }
++
++    std::vector<unsigned int> words;
++    builder_.dump(words);
++    return std::vector<uint32_t>(words.begin(), words.end());
++  }
++
++ private:
++  void CollectConstants(const Body& body) {
++    for (const Node& node : body) {
++      if (node.kind == Node::Kind::kInstruction && node.instruction.op == Op::kConstant) {
++        constants_[node.instruction.result] = &node.instruction;
++      }
++      for (const Body& child : node.bodies) {
++        CollectConstants(child);
++      }
++      for (const SwitchCase& switch_case : node.cases) {
++        CollectConstants(switch_case.body);
++      }
++    }
++  }
++
++  // Types.
++
++  spv::Id ScalarTypeId(ScalarType scalar) {
++    switch (scalar) {
++      case ScalarType::kBool:
++        return builder_.makeBoolType();
++      case ScalarType::kInt:
++        return builder_.makeIntType(32);
++      case ScalarType::kUint:
++        return builder_.makeUintType(32);
++      case ScalarType::kFloat:
++        return builder_.makeFloatType(32);
++    }
++    return builder_.makeFloatType(32);
++  }
++  spv::Id TypeId(Type type) {
++    spv::Id scalar = ScalarTypeId(type.scalar);
++    return type.components == 1 ? scalar : builder_.makeVectorType(scalar, type.components);
++  }
++  spv::Id VariableType(const Variable& variable) {
++    spv::Id type = TypeId(variable.type);
++    if (variable.array_size) {
++      type = builder_.makeArrayType(type, builder_.makeUintConstant(variable.array_size), 0);
++    }
++    return type;
++  }
++  Type TypeOf(ValueId value) const { return program_.value_types[value - 1]; }
++
++  // Values.
++
++  spv::Id ScalarConstant(ScalarType scalar, uint32_t bits) {
++    switch (scalar) {
++      case ScalarType::kBool:
++        return builder_.makeBoolConstant(bits != 0);
++      case ScalarType::kInt:
++        return builder_.makeIntConstant(int32_t(bits));
++      case ScalarType::kUint:
++        return builder_.makeUintConstant(bits);
++      case ScalarType::kFloat: {
++        // makeFloatConstant deduplicates by the bits, so -0 and NaN payloads are kept.
++        float value;
++        std::memcpy(&value, &bits, sizeof(value));
++        return builder_.makeFloatConstant(value);
++      }
++    }
++    return spv::NoResult;
++  }
++
++  spv::Id Value(ValueId value) {
++    assert_true(value != kNoValue);
++    if (values_[value] != spv::NoResult) {
++      return values_[value];
++    }
++    const Instruction* constant = constants_[value];
++    assert_not_null(constant);
++    Type type = constant->type;
++    spv::Id id;
++    if (type.components == 1) {
++      id = ScalarConstant(type.scalar, constant->imm[0]);
++    } else {
++      std::vector<spv::Id> components;
++      for (uint32_t i = 0; i < type.components; ++i) {
++        components.push_back(ScalarConstant(type.scalar, constant->imm[i]));
++      }
++      id = builder_.makeCompositeConstant(TypeId(type), components);
++    }
++    values_[value] = id;
++    return id;
++  }
++
++  // Interface.
++
++  spv::Id CreateInterfaceVariable(spv::StorageClass storage_class, spv::Id type, const char* name) {
++    spv::Id variable = builder_.createVariable(spv::NoPrecision, storage_class, type, name);
++    // Before SPIR-V 1.4, the entry point lists only the inputs and the outputs.
++    if (storage_class == spv::StorageClassInput || storage_class == spv::StorageClassOutput ||
++        options_.spirv_version >= spv::Spv_1_4) {
++      interface_.push_back(variable);
++    }
++    return variable;
++  }
++
++  void DeclareInterface() {
++    const FragmentInterface& fragment = program_.fragment;
++    spv::Id type_float4 = TypeId(kFloat4);
++    for (size_t i = 0; i < fragment.interpolators.size(); ++i) {
++      uint32_t interpolator = fragment.interpolators[i];
++      spv::Id input = CreateInterfaceVariable(
++          spv::StorageClassInput, type_float4,
++          fmt::format("xe_in_interpolator_{}", interpolator).c_str());
++      builder_.addDecoration(input, spv::DecorationLocation, int(i));
++      if (fragment.interpolators_centroid & (UINT32_C(1) << interpolator)) {
++        builder_.addDecoration(input, spv::DecorationCentroid);
++      }
++      input_interpolators_.push_back(input);
++    }
++    if (fragment.point_coord) {
++      input_point_coordinates_ = CreateInterfaceVariable(spv::StorageClassInput, TypeId(kFloat2),
++                                                         "xe_in_point_coordinates");
++      builder_.addDecoration(input_point_coordinates_, spv::DecorationLocation,
++                             int(fragment.interpolators.size()));
++    }
++    if (fragment.frag_coord) {
++      input_frag_coord_ =
++          CreateInterfaceVariable(spv::StorageClassInput, type_float4, "gl_FragCoord");
++      builder_.addDecoration(input_frag_coord_, spv::DecorationBuiltIn, spv::BuiltInFragCoord);
++    }
++    if (fragment.front_facing) {
++      input_front_facing_ =
++          CreateInterfaceVariable(spv::StorageClassInput, TypeId(kBool), "gl_FrontFacing");
++      builder_.addDecoration(input_front_facing_, spv::DecorationBuiltIn,
++                             spv::BuiltInFrontFacing);
++    }
++
++    for (size_t i = 0; i < program_.variables.size(); ++i) {
++      const Variable& variable = program_.variables[i];
++      spv::Id output = spv::NoResult;
++      switch (variable.storage) {
++        case Storage::kFunction:
++          continue;
++        case Storage::kOutputColor:
++          output = CreateInterfaceVariable(
++              spv::StorageClassOutput, type_float4,
++              fmt::format("xe_out_fragment_data_{}", variable.location).c_str());
++          builder_.addDecoration(output, spv::DecorationLocation, int(variable.location));
++          // Invariant like the SPIR-V translator's outputs.
++          builder_.addDecoration(output, spv::DecorationInvariant);
++          break;
++        case Storage::kOutputDepth:
++          output = CreateInterfaceVariable(spv::StorageClassOutput, TypeId(kFloat), "gl_FragDepth");
++          builder_.addDecoration(output, spv::DecorationBuiltIn, spv::BuiltInFragDepth);
++          break;
++        case Storage::kOutputSampleMask:
++          output = CreateInterfaceVariable(
++              spv::StorageClassOutput,
++              builder_.makeArrayType(TypeId(kInt), builder_.makeUintConstant(1), 0),
++              "gl_SampleMask");
++          builder_.addDecoration(output, spv::DecorationBuiltIn, spv::BuiltInSampleMask);
++          // SampleMask depends on SampleRateShading in some SPIR-V revisions.
++          builder_.addCapability(spv::CapabilitySampleRateShading);
++          break;
++      }
++      variables_[i + 1] = output;
++    }
++
++    // Textures, then samplers, in the pixel shader's descriptor set.
++    for (size_t i = 0; i < program_.textures.size(); ++i) {
++      const TextureBindingInfo& texture = program_.textures[i];
++      spv::Dim dimension = spv::Dim2D;
++      bool arrayed = false;
++      const char* dimension_name = "2d";
++      switch (texture.dimension) {
++        case TextureDimension::k2DArray:
++          arrayed = true;
++          break;
++        case TextureDimension::k3D:
++          dimension = spv::Dim3D;
++          dimension_name = "3d";
++          break;
++        case TextureDimension::kCube:
++          dimension = spv::DimCube;
++          dimension_name = "cube";
++          break;
++      }
++      spv::Id image_type = builder_.makeImageType(TypeId(kFloat), dimension, false, arrayed, false,
++                                                  1, spv::ImageFormatUnknown);
++      spv::Id variable = CreateInterfaceVariable(
++          spv::StorageClassUniformConstant, image_type,
++          fmt::format("xe_texture{}_{}_{}", texture.fetch_constant, dimension_name,
++                      texture.is_signed ? 's' : 'u')
++              .c_str());
++      builder_.addDecoration(variable, spv::DecorationDescriptorSet,
++                             int(SpirvShaderTranslator::kDescriptorSetTexturesPixel));
++      builder_.addDecoration(variable, spv::DecorationBinding, int(i));
++      textures_.push_back({variable, image_type});
++    }
++    for (uint32_t i = 0; i < program_.sampler_count; ++i) {
++      spv::Id variable = CreateInterfaceVariable(spv::StorageClassUniformConstant,
++                                                 builder_.makeSamplerType(),
++                                                 fmt::format("xe_sampler{}", i).c_str());
++      builder_.addDecoration(variable, spv::DecorationDescriptorSet,
++                             int(SpirvShaderTranslator::kDescriptorSetTexturesPixel));
++      builder_.addDecoration(variable, spv::DecorationBinding,
++                             int(program_.textures.size() + i));
++      samplers_.push_back(variable);
++    }
++  }
++
++  // A uniform buffer of `count` 4-component vectors of `scalar` at the binding of the constant
++  // buffer, declared on first use.
++  spv::Id UniformBuffer(SpirvShaderTranslator::ConstantBuffer buffer, ScalarType scalar,
++                        uint32_t count, const char* name) {
++    spv::Id& variable = uniform_buffers_[buffer];
++    if (variable != spv::NoResult) {
++      return variable;
++    }
++    spv::Id array_type = builder_.makeArrayType(TypeId(Type(scalar, 4)),
++                                                builder_.makeUintConstant(count),
++                                                sizeof(uint32_t) * 4);
++    builder_.addDecoration(array_type, spv::DecorationArrayStride, sizeof(uint32_t) * 4);
++    spv::Id struct_type = builder_.makeStructType({array_type}, name);
++    builder_.addMemberName(struct_type, 0, "data");
++    builder_.addMemberDecoration(struct_type, 0, spv::DecorationOffset, 0);
++    builder_.addDecoration(struct_type, spv::DecorationBlock);
++    variable = CreateInterfaceVariable(spv::StorageClassUniform, struct_type,
++                                       fmt::format("{}_uniform", name).c_str());
++    builder_.addDecoration(variable, spv::DecorationDescriptorSet,
++                           int(SpirvShaderTranslator::kDescriptorSetConstants));
++    builder_.addDecoration(variable, spv::DecorationBinding, int(buffer));
++    return variable;
++  }
++
++  spv::Id LoadUniformWord(spv::Id buffer, uint32_t dword) {
++    spv::Id pointer = builder_.createAccessChain(
++        spv::StorageClassUniform, buffer,
++        {builder_.makeIntConstant(0), builder_.makeIntConstant(int(dword >> 2)),
++         builder_.makeIntConstant(int(dword & 3))});
++    return builder_.createLoad(pointer, spv::NoPrecision);
++  }
++
++  // Control flow.
++
++  spv::Block* NewBlock() { return new spv::Block(builder_.getUniqueId(), *function_); }
++  void EnterBlock(spv::Block* block) {
++    function_->addBlock(block);
++    builder_.setBuildPoint(block);
++  }
++  bool IsTerminated() const { return builder_.getBuildPoint()->isTerminated(); }
++
++  void WriteBody(const Body& body) {
++    for (const Node& node : body) {
++      // Nothing after a branch or a kill is reachable.
++      if (IsTerminated()) {
++        break;
++      }
++      WriteNode(node);
++    }
++  }
++
++  // Zero of a type, for the values that are never used: glslang's OpUndef would be placed in the
++  // current block, before the OpPhi instructions that must start it.
++  spv::Id Zero(Type type) {
++    spv::Id scalar = ScalarConstant(type.scalar, 0);
++    return type.components == 1
++               ? scalar
++               : builder_.makeCompositeConstant(TypeId(type),
++                                                std::vector<spv::Id>(type.components, scalar));
++  }
++
++  // The phi values of a merge block: for every predecessor, its value from `source_blocks` (pairs
++  // of the index in Phi::sources and the block it comes from), or an unused zero if it branched
++  // there otherwise (a break from a switch case before its end).
++  void WritePhis(const Node& node, spv::Block* merge,
++                 const std::vector<std::pair<size_t, spv::Block*>>& source_blocks) {
++    for (const Phi& phi : node.phis) {
++      spv::Id type = TypeId(phi.type);
++      const std::vector<spv::Block*>& predecessors = merge->getPredecessors();
++      if (predecessors.empty()) {
++        // An unreachable merge block.
++        values_[phi.result] = Zero(phi.type);
++        continue;
++      }
++      std::vector<spv::Id> operands;
++      for (spv::Block* predecessor : predecessors) {
++        spv::Id value = spv::NoResult;
++        for (const auto& [source_index, source_block] : source_blocks) {
++          if (source_block == predecessor) {
++            value = Value(phi.sources[source_index]);
++            break;
++          }
++        }
++        if (value == spv::NoResult) {
++          value = Zero(phi.type);
++        }
++        operands.push_back(value);
++        operands.push_back(predecessor->getId());
++      }
++      values_[phi.result] = builder_.createOp(spv::OpPhi, type, operands);
++    }
++  }
++
++  void WriteIf(const Node& node) {
++    spv::Block* then_block = NewBlock();
++    spv::Block* merge = NewBlock();
++    bool else_needed = !node.bodies[1].empty() || !node.phis.empty();
++    spv::Block* else_block = else_needed ? NewBlock() : merge;
++    builder_.createSelectionMerge(merge, spv::SelectionControlMaskNone);
++    builder_.createConditionalBranch(Value(node.condition), then_block, else_block);
++    std::vector<std::pair<size_t, spv::Block*>> source_blocks;
++    EnterBlock(then_block);
++    WriteBody(node.bodies[0]);
++    if (!IsTerminated()) {
++      source_blocks.emplace_back(0, builder_.getBuildPoint());
++      builder_.createBranch(merge);
++    }
++    if (else_needed) {
++      EnterBlock(else_block);
++      WriteBody(node.bodies[1]);
++      if (!IsTerminated()) {
++        source_blocks.emplace_back(1, builder_.getBuildPoint());
++        builder_.createBranch(merge);
++      }
++    }
++    EnterBlock(merge);
++    WritePhis(node, merge, source_blocks);
++  }
++
++  void WriteLoop(const Node& node) {
++    spv::Block* header = NewBlock();
++    spv::Block* body = NewBlock();
++    spv::Block* continue_block = NewBlock();
++    spv::Block* merge = NewBlock();
++    builder_.createBranch(header);
++    EnterBlock(header);
++    builder_.createLoopMerge(merge, continue_block, spv::LoopControlDontUnrollMask, {});
++    builder_.createBranch(body);
++    EnterBlock(body);
++    break_targets_.push_back(merge);
++    continue_targets_.push_back(continue_block);
++    WriteBody(node.bodies[0]);
++    if (!IsTerminated()) {
++      builder_.createBranch(continue_block);
++    }
++    continue_targets_.pop_back();
++    break_targets_.pop_back();
++    EnterBlock(continue_block);
++    builder_.createBranch(header);
++    EnterBlock(merge);
++  }
++
++  void WriteSwitch(const Node& node) {
++    spv::Block* header = builder_.getBuildPoint();
++    spv::Block* merge = NewBlock();
++    bool default_needed = !node.bodies[0].empty() || !node.phis.empty();
++    spv::Block* default_block = default_needed ? NewBlock() : merge;
++    std::vector<spv::Block*> case_blocks;
++    for (size_t i = 0; i < node.cases.size(); ++i) {
++      case_blocks.push_back(NewBlock());
++    }
++    builder_.createSelectionMerge(merge, spv::SelectionControlMaskNone);
++    auto switch_instruction = std::make_unique<spv::Instruction>(spv::OpSwitch);
++    switch_instruction->addIdOperand(Value(node.condition));
++    switch_instruction->addIdOperand(default_block->getId());
++    default_block->addPredecessor(header);
++    for (size_t i = 0; i < node.cases.size(); ++i) {
++      switch_instruction->addImmediateOperand(uint32_t(node.cases[i].literal));
++      switch_instruction->addIdOperand(case_blocks[i]->getId());
++      case_blocks[i]->addPredecessor(header);
++    }
++    header->addInstruction(std::move(switch_instruction));
++
++    std::vector<std::pair<size_t, spv::Block*>> source_blocks;
++    break_targets_.push_back(merge);
++    for (size_t i = 0; i < node.cases.size(); ++i) {
++      EnterBlock(case_blocks[i]);
++      WriteBody(node.cases[i].body);
++      if (IsTerminated()) {
++        continue;
++      }
++      if (node.cases[i].falls_through) {
++        // Into the next case, or into the default after the last one (both listed next in the
++        // OpSwitch targets as far as SPIR-V requires: the main switch has an empty default).
++        builder_.createBranch(i + 1 < node.cases.size() ? case_blocks[i + 1] : default_block);
++      } else {
++        source_blocks.emplace_back(i, builder_.getBuildPoint());
++        builder_.createBranch(merge);
++      }
++    }
++    if (default_needed) {
++      EnterBlock(default_block);
++      WriteBody(node.bodies[0]);
++      if (!IsTerminated()) {
++        source_blocks.emplace_back(node.cases.size(), builder_.getBuildPoint());
++        builder_.createBranch(merge);
++      }
++    }
++    break_targets_.pop_back();
++    EnterBlock(merge);
++    WritePhis(node, merge, source_blocks);
++  }
++
++  void WriteNode(const Node& node) {
++    switch (node.kind) {
++      case Node::Kind::kInstruction:
++        WriteInstruction(node.instruction);
++        break;
++      case Node::Kind::kIf:
++        WriteIf(node);
++        break;
++      case Node::Kind::kLoop:
++        WriteLoop(node);
++        break;
++      case Node::Kind::kSwitch:
++        WriteSwitch(node);
++        break;
++      case Node::Kind::kBreak:
++        assert_false(break_targets_.empty());
++        builder_.createBranch(break_targets_.back());
++        break;
++      case Node::Kind::kContinue:
++        assert_false(continue_targets_.empty());
++        builder_.createBranch(continue_targets_.back());
++        break;
++    }
++  }
++
++  // Instructions.
++
++  void Define(const Instruction& instruction, spv::Id id) { values_[instruction.result] = id; }
++
++  spv::Id Arithmetic(spv::Op op, const Instruction& instruction) {
++    spv::Id result = builder_.createBinOp(op, TypeId(instruction.type),
++                                          Value(instruction.operands[0]),
++                                          Value(instruction.operands[1]));
++    if (options_.no_contraction) {
++      builder_.addDecoration(result, spv::DecorationNoContraction);
++    }
++    return result;
++  }
++
++  spv::Id Builtin(GLSLstd450 function, const Instruction& instruction) {
++    std::vector<spv::Id> operands;
++    for (ValueId operand : instruction.operands) {
++      operands.push_back(Value(operand));
++    }
++    return builder_.createBuiltinCall(TypeId(instruction.type), glsl_std_450_, int(function),
++                                      operands);
++  }
++
++  // A scalar component of a value (the value itself if it is a scalar).
++  spv::Id Component(ValueId value, uint32_t component) {
++    Type type = TypeOf(value);
++    if (type.components == 1) {
++      return Value(value);
++    }
++    return builder_.createCompositeExtract(Value(value), ScalarTypeId(type.scalar), component);
++  }
++
++  spv::Id VariablePointer(const Instruction& instruction, ValueId dynamic_index) {
++    const Variable& variable = program_.variables[instruction.variable - 1];
++    spv::Id pointer = variables_[instruction.variable];
++    spv::StorageClass storage_class =
++        variable.storage == Storage::kFunction ? spv::StorageClassFunction : spv::StorageClassOutput;
++    if (variable.storage == Storage::kOutputSampleMask) {
++      return builder_.createAccessChain(storage_class, pointer, {builder_.makeIntConstant(0)});
++    }
++    if (variable.array_size) {
++      spv::Id index = dynamic_index != kNoValue ? Value(dynamic_index)
++                                                : builder_.makeIntConstant(int(instruction.imm[0]));
++      return builder_.createAccessChain(storage_class, pointer, {index});
++    }
++    return pointer;
++  }
++
++  void WriteInstruction(const Instruction& instruction) {
++    const std::vector<ValueId>& operands = instruction.operands;
++    spv::Id type = instruction.result != kNoValue ? TypeId(instruction.type) : spv::NoResult;
++    switch (instruction.op) {
++      case Op::kConstant:
++        // Created where used.
++        return;
++      case Op::kLoadVariable:
++        Define(instruction,
++               builder_.createLoad(VariablePointer(instruction, operands.empty() ? kNoValue
++                                                                                 : operands[0]),
++                                   spv::NoPrecision));
++        return;
++      case Op::kStoreVariable:
++        builder_.createStore(Value(operands[0]),
++                             VariablePointer(instruction, operands.size() > 1 ? operands[1]
++                                                                              : kNoValue));
++        return;
++      case Op::kLoadSystemConstantWord:
++        Define(instruction,
++               LoadUniformWord(UniformBuffer(SpirvShaderTranslator::kConstantBufferSystem,
++                                             ScalarType::kUint,
++                                             sizeof(SystemConstants) / (sizeof(uint32_t) * 4),
++                                             "XeSystemConstants"),
++                               instruction.imm[0]));
++        return;
++      case Op::kLoadBoolLoopConstantWord:
++        // 8 dwords of bool constants, then 32 loop constants.
++        Define(instruction,
++               LoadUniformWord(UniformBuffer(SpirvShaderTranslator::kConstantBufferBoolLoop,
++                                             ScalarType::kUint, (8 + 32) / 4,
++                                             "XeBoolLoopConstants"),
++                               instruction.imm[0]));
++        return;
++      case Op::kLoadFetchConstantWord:
++        Define(instruction,
++               LoadUniformWord(UniformBuffer(SpirvShaderTranslator::kConstantBufferFetch,
++                                             ScalarType::kUint, 32 * 6 / 4, "XeFetchConstants"),
++                               instruction.imm[0]));
++        return;
++      case Op::kLoadFloatConstant: {
++        spv::Id buffer =
++            UniformBuffer(SpirvShaderTranslator::kConstantBufferFloatPixel, ScalarType::kFloat,
++                          program_.float_constant_count, "XeFloatConstants");
++        spv::Id pointer = builder_.createAccessChain(
++            spv::StorageClassUniform, buffer, {builder_.makeIntConstant(0), Value(operands[0])});
++        Define(instruction, builder_.createLoad(pointer, spv::NoPrecision));
++      } return;
++      case Op::kLoadInterpolator:
++        Define(instruction,
++               builder_.createLoad(input_interpolators_[instruction.imm[0]], spv::NoPrecision));
++        return;
++      case Op::kLoadFragCoord:
++        Define(instruction, builder_.createLoad(input_frag_coord_, spv::NoPrecision));
++        return;
++      case Op::kLoadFrontFacing:
++        Define(instruction, builder_.createLoad(input_front_facing_, spv::NoPrecision));
++        return;
++      case Op::kLoadPointCoord:
++        Define(instruction, builder_.createLoad(input_point_coordinates_, spv::NoPrecision));
++        return;
++
++      case Op::kFAdd:
++        Define(instruction, Arithmetic(spv::OpFAdd, instruction));
++        return;
++      case Op::kFSub:
++        Define(instruction, Arithmetic(spv::OpFSub, instruction));
++        return;
++      case Op::kFMul:
++        Define(instruction, Arithmetic(spv::OpFMul, instruction));
++        return;
++      case Op::kFDiv:
++        Define(instruction, Arithmetic(spv::OpFDiv, instruction));
++        return;
++      case Op::kVectorTimesScalar:
++        Define(instruction,
++               Arithmetic(TypeOf(operands[0]).components == 1 ? spv::OpFMul
++                                                               : spv::OpVectorTimesScalar,
++                          instruction));
++        return;
++      case Op::kFNeg:
++        Define(instruction, builder_.createUnaryOp(spv::OpFNegate, type, Value(operands[0])));
++        return;
++      case Op::kFAbs:
++        Define(instruction, Builtin(GLSLstd450FAbs, instruction));
++        return;
++      case Op::kNMin:
++        Define(instruction, Builtin(GLSLstd450NMin, instruction));
++        return;
++      case Op::kNMax:
++        Define(instruction, Builtin(GLSLstd450NMax, instruction));
++        return;
++      case Op::kNClamp:
++        Define(instruction, Builtin(GLSLstd450NClamp, instruction));
++        return;
++      case Op::kFloor:
++        Define(instruction, Builtin(GLSLstd450Floor, instruction));
++        return;
++      case Op::kTrunc:
++        Define(instruction, Builtin(GLSLstd450Trunc, instruction));
++        return;
++      case Op::kFract:
++        Define(instruction, Builtin(GLSLstd450Fract, instruction));
++        return;
++      case Op::kExp2:
++        Define(instruction, Builtin(GLSLstd450Exp2, instruction));
++        return;
++      case Op::kLog2:
++        Define(instruction, Builtin(GLSLstd450Log2, instruction));
++        return;
++      case Op::kInverseSqrt:
++        Define(instruction, Builtin(GLSLstd450InverseSqrt, instruction));
++        return;
++      case Op::kSqrt:
++        Define(instruction, Builtin(GLSLstd450Sqrt, instruction));
++        return;
++      case Op::kSin:
++        Define(instruction, Builtin(GLSLstd450Sin, instruction));
++        return;
++      case Op::kCos:
++        Define(instruction, Builtin(GLSLstd450Cos, instruction));
++        return;
++      case Op::kLdexp:
++        Define(instruction, Builtin(GLSLstd450Ldexp, instruction));
++        return;
++
++      case Op::kFOrdEqual:
++      case Op::kFOrdNotEqual:
++      case Op::kFUnordNotEqual:
++      case Op::kFOrdLessThan:
++      case Op::kFOrdLessThanEqual:
++      case Op::kFOrdGreaterThan:
++      case Op::kFOrdGreaterThanEqual:
++      case Op::kIEqual:
++      case Op::kINotEqual:
++      case Op::kULessThan:
++      case Op::kUGreaterThanEqual:
++      case Op::kLogicalAnd:
++      case Op::kLogicalOr:
++      case Op::kIAdd:
++      case Op::kISub:
++      case Op::kShiftLeftLogical:
++      case Op::kShiftRightLogical:
++      case Op::kBitwiseAnd:
++      case Op::kBitwiseOr:
++      case Op::kBitwiseXor:
++      case Op::kUMod: {
++        static const std::unordered_map<Op, spv::Op> kBinaryOps = {
++            {Op::kFOrdEqual, spv::OpFOrdEqual},
++            {Op::kFOrdNotEqual, spv::OpFOrdNotEqual},
++            {Op::kFUnordNotEqual, spv::OpFUnordNotEqual},
++            {Op::kFOrdLessThan, spv::OpFOrdLessThan},
++            {Op::kFOrdLessThanEqual, spv::OpFOrdLessThanEqual},
++            {Op::kFOrdGreaterThan, spv::OpFOrdGreaterThan},
++            {Op::kFOrdGreaterThanEqual, spv::OpFOrdGreaterThanEqual},
++            {Op::kIEqual, spv::OpIEqual},
++            {Op::kINotEqual, spv::OpINotEqual},
++            {Op::kULessThan, spv::OpULessThan},
++            {Op::kUGreaterThanEqual, spv::OpUGreaterThanEqual},
++            {Op::kLogicalAnd, spv::OpLogicalAnd},
++            {Op::kLogicalOr, spv::OpLogicalOr},
++            {Op::kIAdd, spv::OpIAdd},
++            {Op::kISub, spv::OpISub},
++            {Op::kShiftLeftLogical, spv::OpShiftLeftLogical},
++            {Op::kShiftRightLogical, spv::OpShiftRightLogical},
++            {Op::kBitwiseAnd, spv::OpBitwiseAnd},
++            {Op::kBitwiseOr, spv::OpBitwiseOr},
++            {Op::kBitwiseXor, spv::OpBitwiseXor},
++            {Op::kUMod, spv::OpUMod},
++        };
++        Define(instruction, builder_.createBinOp(kBinaryOps.at(instruction.op), type,
++                                                 Value(operands[0]), Value(operands[1])));
++      } return;
++      case Op::kLogicalNot:
++        Define(instruction, builder_.createUnaryOp(spv::OpLogicalNot, type, Value(operands[0])));
++        return;
++      case Op::kAny:
++        // OpAny takes a vector.
++        Define(instruction, TypeOf(operands[0]).components == 1
++                                ? Value(operands[0])
++                                : builder_.createUnaryOp(spv::OpAny, type, Value(operands[0])));
++        return;
++      case Op::kSelect: {
++        spv::Id condition = Value(operands[0]);
++        // A scalar condition for a vector needs SPIR-V 1.4.
++        if (TypeOf(operands[0]).components != instruction.type.components &&
++            options_.spirv_version < spv::Spv_1_4) {
++          condition = builder_.createCompositeConstruct(
++              TypeId(kBool.WithComponents(instruction.type.components)),
++              std::vector<spv::Id>(instruction.type.components, condition));
++        }
++        Define(instruction, builder_.createTriOp(spv::OpSelect, type, condition, Value(operands[1]),
++                                                 Value(operands[2])));
++      } return;
++
++      case Op::kBitFieldUExtract:
++      case Op::kBitFieldSExtract:
++        Define(instruction,
++               builder_.createTriOp(instruction.op == Op::kBitFieldUExtract
++                                        ? spv::OpBitFieldUExtract
++                                        : spv::OpBitFieldSExtract,
++                                    type, Value(operands[0]), Value(operands[1]),
++                                    Value(operands[2])));
++        return;
++      case Op::kBitFieldInsert:
++        Define(instruction,
++               builder_.createQuadOp(spv::OpBitFieldInsert, type, Value(operands[0]),
++                                     Value(operands[1]), Value(operands[2]), Value(operands[3])));
++        return;
++      case Op::kUMin:
++        Define(instruction, Builtin(GLSLstd450UMin, instruction));
++        return;
++      case Op::kSMin:
++        Define(instruction, Builtin(GLSLstd450SMin, instruction));
++        return;
++      case Op::kSMax:
++        Define(instruction, Builtin(GLSLstd450SMax, instruction));
++        return;
++
++      case Op::kConvertFToS:
++        Define(instruction, builder_.createUnaryOp(spv::OpConvertFToS, type, Value(operands[0])));
++        return;
++      case Op::kConvertFToU:
++        Define(instruction, builder_.createUnaryOp(spv::OpConvertFToU, type, Value(operands[0])));
++        return;
++      case Op::kConvertSToF:
++        Define(instruction, builder_.createUnaryOp(spv::OpConvertSToF, type, Value(operands[0])));
++        return;
++      case Op::kConvertUToF:
++        Define(instruction, builder_.createUnaryOp(spv::OpConvertUToF, type, Value(operands[0])));
++        return;
++      case Op::kBitcast:
++        Define(instruction, builder_.createUnaryOp(spv::OpBitcast, type, Value(operands[0])));
++        return;
++
++      case Op::kConstruct: {
++        std::vector<spv::Id> constituents;
++        for (ValueId operand : operands) {
++          constituents.push_back(Value(operand));
++        }
++        Define(instruction, builder_.createCompositeConstruct(type, constituents));
++      } return;
++      case Op::kExtract:
++        Define(instruction, builder_.createCompositeExtract(Value(operands[0]), type,
++                                                            instruction.imm[0]));
++        return;
++      case Op::kShuffle: {
++        uint32_t first_components = TypeOf(operands[0]).components;
++        if (first_components > 1 && TypeOf(operands[1]).components > 1) {
++          spv::Instruction* shuffle = new spv::Instruction(builder_.getUniqueId(), type,
++                                                           spv::OpVectorShuffle);
++          shuffle->addIdOperand(Value(operands[0]));
++          shuffle->addIdOperand(Value(operands[1]));
++          for (uint32_t i = 0; i < instruction.type.components; ++i) {
++            shuffle->addImmediateOperand(instruction.imm[i]);
++          }
++          builder_.getBuildPoint()->addInstruction(std::unique_ptr<spv::Instruction>(shuffle));
++          Define(instruction, shuffle->getResultId());
++        } else {
++          // A scalar operand: gather the components.
++          std::vector<spv::Id> constituents;
++          for (uint32_t i = 0; i < instruction.type.components; ++i) {
++            uint32_t index = instruction.imm[i];
++            constituents.push_back(index < first_components
++                                       ? Component(operands[0], index)
++                                       : Component(operands[1], index - first_components));
++          }
++          Define(instruction, builder_.createCompositeConstruct(type, constituents));
++        }
++      } return;
++      case Op::kInsert:
++        Define(instruction, builder_.createCompositeInsert(Value(operands[1]), Value(operands[0]),
++                                                           type, instruction.imm[0]));
++        return;
++
++      case Op::kDpdxCoarse:
++      case Op::kDpdyCoarse:
++        builder_.addCapability(spv::CapabilityDerivativeControl);
++        Define(instruction,
++               builder_.createUnaryOp(
++                   instruction.op == Op::kDpdxCoarse ? spv::OpDPdxCoarse : spv::OpDPdyCoarse, type,
++                   Value(operands[0])));
++        return;
++
++      case Op::kTextureSample: {
++        const auto& [texture_variable, image_type] = textures_[instruction.imm[0]];
++        spv::Id image = builder_.createLoad(texture_variable, spv::NoPrecision);
++        spv::Id sampler = builder_.createLoad(samplers_[instruction.imm[1]], spv::NoPrecision);
++        spv::Id sampled_image = builder_.createBinOp(
++            spv::OpSampledImage, builder_.makeSampledImageType(image_type), image, sampler);
++        std::vector<spv::IdImmediate> sample_operands = {{true, sampled_image},
++                                                         {true, Value(operands[0])}};
++        if (TextureSampleMode(instruction.imm[2]) == TextureSampleMode::kLod) {
++          sample_operands.push_back({false, spv::ImageOperandsLodMask});
++          sample_operands.push_back({true, Value(operands[1])});
++        } else {
++          sample_operands.push_back({false, spv::ImageOperandsGradMask});
++          sample_operands.push_back({true, Value(operands[1])});
++          sample_operands.push_back({true, Value(operands[2])});
++        }
++        Define(instruction, builder_.createOp(spv::OpImageSampleExplicitLod, type, sample_operands));
++      } return;
++
++      case Op::kDemote:
++        builder_.addExtension("SPV_EXT_demote_to_helper_invocation");
++        builder_.addCapability(spv::CapabilityDemoteToHelperInvocationEXT);
++        builder_.createNoResultOp(spv::OpDemoteToHelperInvocationEXT);
++        return;
++      case Op::kKill:
++        // Terminates the block; WriteBody skips what follows.
++        builder_.createNoResultOp(spv::OpKill);
++        return;
++      case Op::kDebugCount:
++        // The debug counters exist only on Metal.
++        return;
++    }
++    assert_unhandled_case(instruction.op);
++  }
++
++  const Program& program_;
++  const SpirvOptions& options_;
++  SpirvBuilder builder_;
++  spv::Id glsl_std_450_ = spv::NoResult;
++  spv::Function* function_ = nullptr;
++
++  std::vector<spv::Id> values_;
++  std::vector<const Instruction*> constants_;
++  std::vector<spv::Id> variables_;
++
++  std::vector<spv::Id> interface_;
++  std::vector<spv::Id> input_interpolators_;
++  spv::Id input_point_coordinates_ = spv::NoResult;
++  spv::Id input_frag_coord_ = spv::NoResult;
++  spv::Id input_front_facing_ = spv::NoResult;
++  std::unordered_map<uint32_t, spv::Id> uniform_buffers_;
++  // The variable and the image type of each texture.
++  std::vector<std::pair<spv::Id, spv::Id>> textures_;
++  std::vector<spv::Id> samplers_;
++
++  std::vector<spv::Block*> break_targets_;
++  std::vector<spv::Block*> continue_targets_;
++};
++
++}  // namespace
++
++std::vector<uint32_t> EmitSpirv(const Program& program, const SpirvOptions& options) {
++  return SpirvEmitter(program, options).Emit();
++}
++
++}  // namespace rex::graphics::xsc
+diff --git a/src/graphics/pipeline/shader/xsc/xsc_spirv.h b/src/graphics/pipeline/shader/xsc/xsc_spirv.h
+new file mode 100644
+index 0000000..cedc9eb
+--- /dev/null
++++ b/src/graphics/pipeline/shader/xsc/xsc_spirv.h
+@@ -0,0 +1,35 @@
++/**
++ * @file        graphics/pipeline/shader/xsc/xsc_spirv.h
++ * @brief       SPIR-V emitter of the Xenos shader compiler
++ *
++ * @license     BSD 3-Clause License
++ *              See LICENSE file in the project root for full license text.
++ */
++
++#pragma once
++
++#include <cstdint>
++#include <vector>
++
++#include "xsc_ir.h"
++
++namespace rex::graphics::xsc {
++
++struct SpirvOptions {
++  // The SPIR-V version of the module (SpirvShaderTranslator::Features::spirv_version).
++  unsigned int spirv_version = 0x10000;
++  // Float controls execution modes, as the SPIR-V translator requests them from the device.
++  bool signed_zero_inf_nan_preserve_float32 = false;
++  bool denorm_flush_to_zero_float32 = false;
++  bool rounding_mode_rte_float32 = false;
++  // Decorates the float arithmetic with NoContraction, so the driver cannot fuse a multiplication
++  // and an addition into one rounding (the Xenos rounds after each operation).
++  bool no_contraction = true;
++};
++
++// The SPIR-V module of a pixel shader, with the interface of the SPIR-V translator's shaders on
++// the Vulkan backend: the descriptor sets and bindings of SpirvShaderTranslator, the interpolators
++// at consecutive locations, and the entry point "main".
++std::vector<uint32_t> EmitSpirv(const Program& program, const SpirvOptions& options);
++
++}  // namespace rex::graphics::xsc
 diff --git a/src/graphics/pipeline/shader/xsc/xsc_translator.cpp b/src/graphics/pipeline/shader/xsc/xsc_translator.cpp
 new file mode 100644
-index 0000000..9c31ee6
+index 0000000..cc5c79a
 --- /dev/null
 +++ b/src/graphics/pipeline/shader/xsc/xsc_translator.cpp
-@@ -0,0 +1,825 @@
+@@ -0,0 +1,842 @@
 +/**
 + * @file        graphics/pipeline/shader/xsc/xsc_translator.cpp
 + * @brief       Xenos shader compiler: translation setup, control flow, operands and results
@@ -2401,6 +3480,7 @@ index 0000000..9c31ee6
 +#include <rex/math.h>
 +
 +#include "xsc_msl.h"
++#include "xsc_spirv.h"
 +
 +namespace rex::graphics::xsc {
 +
@@ -2520,6 +3600,12 @@ index 0000000..9c31ee6
 +  program_->is_pixel_shader = is_pixel_shader();
 +  program_->entry_point = GetEntryPointName(shader, current_translation().modification());
 +  program_->float_constant_count = std::max(shader.constant_register_map().float_count, 1u);
++  if (debug_color_range_ && is_pixel_shader() &&
++      debug_counter_shaders_.size() < kDebugCounterMaxShaders) {
++    program_->debug_counter_slot = uint32_t(debug_counter_shaders_.size()) * kDebugCountersPerShader;
++    debug_counter_shaders_.push_back(
++        {shader.ucode_data_hash(), current_translation().modification()});
++  }
 +
 +  // The Xenos state, initialized like the SPIR-V translator does for safety.
 +  var_predicate_ = b.CreateVariable(kBool, "xe_var_predicate", 0, Storage::kFunction, 0,
@@ -2602,9 +3688,19 @@ index 0000000..9c31ee6
 +  switch (target_) {
 +    case Target::kMsl:
 +      translated_source_ = EmitMsl(*program_);
-+      break;
++      return std::vector<uint8_t>(translated_source_.begin(), translated_source_.end());
++    case Target::kSpirv: {
++      SpirvOptions options;
++      options.spirv_version = features_.spirv_version;
++      options.signed_zero_inf_nan_preserve_float32 = features_.signed_zero_inf_nan_preserve_float32;
++      options.denorm_flush_to_zero_float32 = features_.denorm_flush_to_zero_float32;
++      options.rounding_mode_rte_float32 = features_.rounding_mode_rte_float32;
++      std::vector<uint32_t> words = EmitSpirv(*program_, options);
++      const uint8_t* bytes = reinterpret_cast<const uint8_t*>(words.data());
++      return std::vector<uint8_t>(bytes, bytes + sizeof(uint32_t) * words.size());
++    }
 +  }
-+  return std::vector<uint8_t>(translated_source_.begin(), translated_source_.end());
++  return {};
 +}
 +
 +void XscShaderTranslator::PostTranslation() {
@@ -3204,10 +4300,10 @@ index 0000000..9c31ee6
 +}  // namespace rex::graphics::xsc
 diff --git a/src/graphics/pipeline/shader/xsc/xsc_translator.h b/src/graphics/pipeline/shader/xsc/xsc_translator.h
 new file mode 100644
-index 0000000..3d92ab6
+index 0000000..6ff2cd7
 --- /dev/null
 +++ b/src/graphics/pipeline/shader/xsc/xsc_translator.h
-@@ -0,0 +1,203 @@
+@@ -0,0 +1,256 @@
 +/**
 + * @file        graphics/pipeline/shader/xsc/xsc_translator.h
 + * @brief       Xenos shader compiler (XSC): lowers Xenos microcode into the XSC IR and emits it
@@ -3249,9 +4345,51 @@ index 0000000..3d92ab6
 +  enum class Target {
 +    // Metal Shading Language source text.
 +    kMsl,
++    // A SPIR-V module for Vulkan.
++    kSpirv,
 +  };
 +
-+  explicit XscShaderTranslator(Target target) : target_(target) {}
++  // The same host configuration as the SPIR-V translator of the backend: the device features (the
++  // SPIR-V version and float controls, demote, the sample mask output for alpha to coverage),
++  // whether 2x MSAA is native (the host samples of alpha to coverage), and the draw resolution
++  // scale (the pixel position and the textures resolved at that scale).
++  XscShaderTranslator(Target target, const SpirvShaderTranslator::Features& features,
++                      bool native_2x_msaa_with_attachments, uint32_t draw_resolution_scale_x,
++                      uint32_t draw_resolution_scale_y)
++      : target_(target),
++        features_(features),
++        native_2x_msaa_with_attachments_(native_2x_msaa_with_attachments),
++        draw_resolution_scale_x_(draw_resolution_scale_x ? draw_resolution_scale_x : 1),
++        draw_resolution_scale_y_(draw_resolution_scale_y ? draw_resolution_scale_y : 1) {}
++
++  // Debugging aid: pixel shaders paint the color outputs that the guest render target could not
++  // hold magenta (NaN or infinity) or cyan (outside [0, 31.875] for a 7e3 render target), before
++  // the clamp to that range. Applies to the translations made afterwards.
++  void set_debug_color_range(bool enabled) { debug_color_range_ = enabled; }
++
++  // With debug_color_range, every pixel shader translation also counts its pixels on the GPU in
++  // kDebugCountersPerShader counters of a buffer (bound at Metal buffer index 6), in a slot of its
++  // own: the counter index of the first is the slot index times kDebugCountersPerShader.
++  enum DebugCounter : uint32_t {
++    // Any color component NaN or infinite.
++    kDebugCounterNonFinite,
++    // A 7e3 render target with RGB above 31.875.
++    kDebugCounterAbove7e3,
++    // A 7e3 render target with negative RGB.
++    kDebugCounterNegative7e3,
++    // Any pixel written to a 7e3 render target.
++    kDebugCounter7e3,
++    kDebugCountersPerShader,
++  };
++  static constexpr uint32_t kDebugCounterMaxShaders = 4096;
++  struct DebugCounterShader {
++    uint64_t ucode_data_hash;
++    uint64_t modification;
++  };
++  // The shader of each debug counter slot, in slot order.
++  const std::vector<DebugCounterShader>& debug_counter_shaders() const {
++    return debug_counter_shaders_;
++  }
 +
 +  // The name of the entry point of a translation: the shader type, the ucode hash, the
 +  // modification, and for pixel shaders e (early depth and stencil tests), k (kill
@@ -3305,6 +4443,11 @@ index 0000000..3d92ab6
 +  // Fragment shader prologue and epilogue.
 +  void StartFragmentShaderInMain();
 +  void CompleteFragmentShaderInMain();
++  // Whether the color target is a 7e3 one (k_2_10_10_10_FLOAT), from
++  // SystemConstants::edram_rt_format_flags.
++  ValueId IsColorTarget7e3(uint32_t color_target_index);
++  // The color with the debug_color_range markers applied.
++  ValueId PaintColorOutOfRange(ValueId color, ValueId is_7e3);
 +
 +  // Control flow.
 +  void UpdateExecConditionals(ParsedExecInstruction::Type type, uint32_t bool_constant_index,
@@ -3367,6 +4510,12 @@ index 0000000..3d92ab6
 +  ValueId LoadSystemConstantFloat(size_t offset_bytes);
 +
 +  Target target_;
++  SpirvShaderTranslator::Features features_;
++  bool native_2x_msaa_with_attachments_;
++  uint32_t draw_resolution_scale_x_;
++  uint32_t draw_resolution_scale_y_;
++  bool debug_color_range_ = false;
++  std::vector<DebugCounterShader> debug_counter_shaders_;
 +  std::string unsupported_reason_;
 +
 +  std::unique_ptr<Program> program_;
@@ -3413,10 +4562,10 @@ index 0000000..3d92ab6
 +}  // namespace rex::graphics::xsc
 diff --git a/src/graphics/pipeline/shader/xsc/xsc_translator_alu.cpp b/src/graphics/pipeline/shader/xsc/xsc_translator_alu.cpp
 new file mode 100644
-index 0000000..ce7170b
+index 0000000..bc45626
 --- /dev/null
 +++ b/src/graphics/pipeline/shader/xsc/xsc_translator_alu.cpp
-@@ -0,0 +1,844 @@
+@@ -0,0 +1,849 @@
 +/**
 + * @file        graphics/pipeline/shader/xsc/xsc_translator_alu.cpp
 + * @brief       Xenos shader compiler: ALU instructions
@@ -3441,9 +4590,14 @@ index 0000000..ce7170b
 +namespace rex::graphics::xsc {
 +
 +void XscShaderTranslator::KillPixel(ValueId condition) {
-+  // Demote to a helper invocation: the pixel is discarded, derivatives keep working.
++  // Demote to a helper invocation: the pixel is discarded, derivatives keep working. Without
++  // demote (some Vulkan devices), the pixel stops like with the SPIR-V translator.
 +  Builder::If kill_if(*builder_, condition);
-+  builder_->EmitVoid(Op::kDemote);
++  if (target_ == Target::kSpirv && !features_.demote_to_helper_invocation) {
++    builder_->Kill();
++  } else {
++    builder_->EmitVoid(Op::kDemote);
++  }
 +  kill_if.End();
 +}
 +
@@ -4263,10 +5417,10 @@ index 0000000..ce7170b
 +}  // namespace rex::graphics::xsc
 diff --git a/src/graphics/pipeline/shader/xsc/xsc_translator_fetch.cpp b/src/graphics/pipeline/shader/xsc/xsc_translator_fetch.cpp
 new file mode 100644
-index 0000000..178cb5d
+index 0000000..edb59b7
 --- /dev/null
 +++ b/src/graphics/pipeline/shader/xsc/xsc_translator_fetch.cpp
-@@ -0,0 +1,831 @@
+@@ -0,0 +1,880 @@
 +/**
 + * @file        graphics/pipeline/shader/xsc/xsc_translator_fetch.cpp
 + * @brief       Xenos shader compiler: texture fetch instructions
@@ -4370,6 +5524,10 @@ index 0000000..178cb5d
 +void XscShaderTranslator::ProcessTextureFetchInstruction(
 +    const ParsedTextureFetchInstruction& instr) {
 +  Builder& b = *builder_;
++  if (instr.opcode == ucode::FetchOpcode::kTextureFetch && !features_.image_view_format_swizzle) {
++    // The SPIR-V translator swizzles the results in the shader without view format swizzles.
++    Unsupported("texture swizzles without view format swizzles");
++  }
 +  UpdateInstructionPredication(instr.is_predicated, instr.predicate_condition);
 +
 +  // The instructions setting the register LOD and gradients.
@@ -4664,9 +5822,46 @@ index 0000000..178cb5d
 +      rex::bit_scan_forward(coordinates_needed_components, &coordinate_component_index);
 +      coordinates[coordinate_component_index] = coordinates_operand;
 +    }
-+    // Draw resolution scaling is not used by the backends XSC targets yet (Metal runs at 1x).
++    // Textures resolved from render targets drawn at the draw resolution scale: the fetch constant
++    // has the guest size, so unnormalized coordinates and sizes for the weights, and the offsets,
++    // are scaled like in the SPIR-V translator.
++    ValueId texture_resolution_scaled = kNoValue;
++    uint32_t revert_resolution_scale_axes =
++        uint32_t(draw_resolution_scale_x_ > 1) | (uint32_t(draw_resolution_scale_y_ > 1) << 1);
++    const float texture_resolution_scale[] = {float(draw_resolution_scale_x_),
++                                              float(draw_resolution_scale_y_)};
++    if (revert_resolution_scale_axes) {
++      texture_resolution_scaled = b.Compare(
++          Op::kINotEqual,
++          b.Binary(Op::kBitwiseAnd,
++                   LoadSystemConstantWord(offsetof(SystemConstants, textures_resolution_scaled)),
++                   b.ConstUint(UINT32_C(1) << fetch_constant_index)),
++          b.ConstUint(0));
++    }
 +
 +    if (weights) {
++      uint32_t resolution_scaled_result_components =
++          used_result_nonzero_components & revert_resolution_scale_axes;
++      uint32_t resolution_scaled_coord_components =
++          instr.attributes.unnormalized_coordinates ? resolution_scaled_result_components : 0b000;
++      uint32_t resolution_scaled_size_components =
++          size_needed_components & resolution_scaled_result_components;
++      if (texture_resolution_scaled != kNoValue &&
++          (resolution_scaled_coord_components || resolution_scaled_size_components)) {
++        for (uint32_t i = 0; i < 2; ++i) {
++          ValueId scale = b.ConstFloat(texture_resolution_scale[i]);
++          if (resolution_scaled_coord_components & (UINT32_C(1) << i)) {
++            coordinates[i] = b.Select(texture_resolution_scaled,
++                                      b.Binary(Op::kFMul, coordinates[i], scale), coordinates[i]);
++          }
++          if (resolution_scaled_size_components & (UINT32_C(1) << i)) {
++            assert_true(size[i] != kNoValue);
++            size[i] = b.Select(texture_resolution_scaled, b.Binary(Op::kFMul, size[i], scale),
++                               size[i]);
++          }
++        }
++      }
++
 +      uint32_t coordinates_remaining_components = coordinates_needed_components;
 +      uint32_t coordinate_component_index;
 +      while (rex::bit_scan_forward(coordinates_remaining_components, &coordinate_component_index)) {
@@ -4691,6 +5886,14 @@ index 0000000..178cb5d
 +        ValueId& coordinate = coordinates[i];
 +        ValueId component_offset =
 +            offset_values[i] ? b.ConstFloat(offset_values[i]) : kNoValue;
++        if (component_offset != kNoValue && texture_resolution_scaled != kNoValue &&
++            (revert_resolution_scale_axes & (UINT32_C(1) << i))) {
++          component_offset = b.Select(
++              texture_resolution_scaled,
++              b.Binary(Op::kFMul, component_offset,
++                       b.ConstFloat(1.0f / texture_resolution_scale[i])),
++              component_offset);
++        }
 +        ValueId size_component = size[i];
 +        if (instr.attributes.unnormalized_coordinates) {
 +          if (component_offset != kNoValue) {
@@ -5100,10 +6303,10 @@ index 0000000..178cb5d
 +}  // namespace rex::graphics::xsc
 diff --git a/src/graphics/pipeline/shader/xsc/xsc_translator_ps.cpp b/src/graphics/pipeline/shader/xsc/xsc_translator_ps.cpp
 new file mode 100644
-index 0000000..be5b94a
+index 0000000..4549386
 --- /dev/null
 +++ b/src/graphics/pipeline/shader/xsc/xsc_translator_ps.cpp
-@@ -0,0 +1,364 @@
+@@ -0,0 +1,432 @@
 +/**
 + * @file        graphics/pipeline/shader/xsc/xsc_translator_ps.cpp
 + * @brief       Xenos shader compiler: pixel shader prologue and epilogue, gamma conversions
@@ -5116,6 +6319,8 @@ index 0000000..be5b94a
 + * copied to registers, the pixel parameters, then the alpha test, alpha to coverage, the color
 + * exponent bias and the Xenos piecewise linear gamma for render targets with gamma.
 + */
++
++#include <limits>
 +
 +#include <rex/assert.h>
 +#include <rex/math.h>
@@ -5156,9 +6361,8 @@ index 0000000..be5b94a
 +  fragment.front_facing = param_gen_needed && !modification.pixel.param_gen_point;
 +  fragment.color_targets = shader.writes_color_targets();
 +  fragment.depth = shader.writes_depth();
-+  // Features(true) of the Metal backend include sample rate shading, so the coverage output for
-+  // alpha to coverage exists when it is possible.
-+  fragment.sample_mask = alpha_to_coverage_possible;
++  // The coverage output for alpha to coverage needs sample rate shading (always on Metal).
++  fragment.sample_mask = alpha_to_coverage_possible && features_.sample_rate_shading;
 +
 +  for (uint32_t i = 0; i < 4; ++i) {
 +    if (fragment.color_targets & (1u << i)) {
@@ -5201,7 +6405,7 @@ index 0000000..be5b94a
 +    ValueId const_sign_bit = b.ConstUint(UINT32_C(1) << 31);
 +    // X: pixel X .0 in the magnitude, back-facing in the sign bit.
 +    ValueId param_gen_x = b.Unary(Op::kFloor, b.Extract(frag_coord_, 0));
-+    uint32_t param_gen_scale_x = 1u << modification.pixel.sample_space_x_log2;
++    uint32_t param_gen_scale_x = draw_resolution_scale_x_ << modification.pixel.sample_space_x_log2;
 +    if (param_gen_scale_x > 1) {
 +      param_gen_x =
 +          b.Binary(Op::kFMul, param_gen_x, b.ConstFloat(1.0f / float(param_gen_scale_x)));
@@ -5221,7 +6425,7 @@ index 0000000..be5b94a
 +    }
 +    // Y: pixel Y .0 in the magnitude, point in the sign bit.
 +    ValueId param_gen_y = b.Unary(Op::kFloor, b.Extract(frag_coord_, 1));
-+    uint32_t param_gen_scale_y = 1u << modification.pixel.sample_space_y_log2;
++    uint32_t param_gen_scale_y = draw_resolution_scale_y_ << modification.pixel.sample_space_y_log2;
 +    if (param_gen_scale_y > 1) {
 +      param_gen_y =
 +          b.Binary(Op::kFMul, param_gen_y, b.ConstFloat(1.0f / float(param_gen_scale_y)));
@@ -5362,9 +6566,12 @@ index 0000000..be5b94a
 +        ValueId const_uint_0 = b.ConstUint(0);
 +        Builder::Switch msaa_switch(b, msaa_samples);
 +        msaa_switch.BeginCase(int32_t(xenos::MsaaSamples::k2X));
-+        // Guest top and bottom to host samples 1 and 0 (native 2x MSAA with attachments).
-+        ValueId mask_2x = apply_sample(const_uint_0, 1, 0.5f, 1.0f / 8.0f);
-+        mask_2x = apply_sample(mask_2x, 0, 1.0f, 1.0f / 8.0f);
++        // Guest top and bottom to host samples 1 and 0 with native 2x MSAA, to 0 and 3 in the 4x
++        // fallback.
++        uint32_t host_sample_top = native_2x_msaa_with_attachments_ ? 1 : 0;
++        uint32_t host_sample_bottom = native_2x_msaa_with_attachments_ ? 0 : 3;
++        ValueId mask_2x = apply_sample(const_uint_0, host_sample_top, 0.5f, 1.0f / 8.0f);
++        mask_2x = apply_sample(mask_2x, host_sample_bottom, 1.0f, 1.0f / 8.0f);
 +        msaa_switch.BeginCase(int32_t(xenos::MsaaSamples::k4X));
 +        // Guest TL, BL, TR, BR to host TL, TR, BL, BR.
 +        ValueId mask_4x = apply_sample(const_uint_0, 0, 0.75f, 1.0f / 16.0f);
@@ -5385,8 +6592,9 @@ index 0000000..be5b94a
 +    }
 +  }
 +
-+  // The exponent bias after the alpha tests (which need the unbiased alpha), and the gamma
-+  // conversion (done after blending on the Xbox 360, here before, like the D3D12 backend).
++  // The exponent bias after the alpha tests (which need the unbiased alpha), the gamma conversion
++  // (done after blending on the Xbox 360, here before, like the D3D12 backend), and the clamp to
++  // the range of a 7e3 render target.
 +  uint32_t color_targets_remaining = color_targets_written;
 +  uint32_t color_target_index;
 +  while (rex::bit_scan_forward(color_targets_remaining, &color_target_index)) {
@@ -5407,8 +6615,71 @@ index 0000000..be5b94a
 +    if_gamma.End();
 +    color_rgb = if_gamma.MergePhi(color_rgb_gamma, color_rgb);
 +    color = b.Emit(Op::kShuffle, kFloat4, {color_rgb, color}, {0, 1, 2, 3 + 3});
++    ValueId is_7e3 = IsColorTarget7e3(color_target_index);
++    if (debug_color_range_) {
++      color = PaintColorOutOfRange(color, is_7e3);
++    }
++    // The Xbox 360 converts the color to the 7e3 format (RGB in [0, 31.875], NaN as 0, and a
++    // fixed-point alpha) before blending, but the host render target is float16 and would keep
++    // negative and larger values, which later passes such as bloom turn into bright flashes. Only
++    // the source color can be clamped here: the host blending result is not.
++    color = b.Select(is_7e3,
++                     b.Emit(Op::kNClamp, kFloat4,
++                            {color, b.ConstFloat(0.0f, 4),
++                             b.ConstFloats({31.875f, 31.875f, 31.875f, 1.0f})}),
++                     color);
 +    b.Store(var_color_[color_target_index], color);
 +  }
++}
++
++ValueId XscShaderTranslator::IsColorTarget7e3(uint32_t color_target_index) {
++  Builder& b = *builder_;
++  ValueId format = b.Emit(
++      Op::kBitFieldUExtract, kUint,
++      {LoadSystemConstantWord(offsetof(SystemConstants, edram_rt_format_flags) +
++                              sizeof(uint32_t) * color_target_index),
++       b.ConstUint(0), b.ConstUint(xenos::kColorRenderTargetFormatBits)});
++  return b.Emit(
++      Op::kLogicalOr, kBool,
++      {b.Compare(Op::kIEqual, format,
++                 b.ConstUint(uint32_t(xenos::ColorRenderTargetFormat::k_2_10_10_10_FLOAT))),
++       b.Compare(Op::kIEqual, format,
++                 b.ConstUint(uint32_t(
++                     xenos::ColorRenderTargetFormat::k_2_10_10_10_FLOAT_AS_16_16_16_16)))});
++}
++
++ValueId XscShaderTranslator::PaintColorOutOfRange(ValueId color, ValueId is_7e3) {
++  Builder& b = *builder_;
++  // NaN (the only value not equal to itself) or infinity in any component.
++  ValueId is_nan = b.Emit(Op::kAny, kBool, {b.Compare(Op::kFUnordNotEqual, color, color)});
++  ValueId is_infinity =
++      b.Emit(Op::kAny, kBool,
++             {b.Compare(Op::kFOrdEqual, b.Unary(Op::kFAbs, color),
++                        b.Smear(b.ConstFloat(std::numeric_limits<float>::infinity()), 4))});
++  ValueId is_non_finite = b.Emit(Op::kLogicalOr, kBool, {is_nan, is_infinity});
++  // A 7e3 render target holds RGB in [0, 31.875] on the Xbox 360 but is a float16 one on the host,
++  // which keeps negative and larger values.
++  ValueId color_rgb = b.Swizzle(color, {0, 1, 2});
++  ValueId is_above_7e3 = b.Emit(
++      Op::kLogicalAnd, kBool,
++      {is_7e3, b.Emit(Op::kAny, kBool,
++                      {b.Compare(Op::kFOrdGreaterThan, color_rgb, b.ConstFloat(31.875f, 3))})});
++  ValueId is_negative_7e3 = b.Emit(
++      Op::kLogicalAnd, kBool,
++      {is_7e3, b.Emit(Op::kAny, kBool,
++                      {b.Compare(Op::kFOrdLessThan, color_rgb, b.ConstFloat(0.0f, 3))})});
++  // Per-shader pixel counts for the log of MetalCommandProcessor (kDebugCounter* order).
++  if (program_->debug_counter_slot != UINT32_MAX) {
++    b.EmitVoid(Op::kDebugCount, {is_non_finite}, {kDebugCounterNonFinite});
++    b.EmitVoid(Op::kDebugCount, {is_above_7e3}, {kDebugCounterAbove7e3});
++    b.EmitVoid(Op::kDebugCount, {is_negative_7e3}, {kDebugCounterNegative7e3});
++    b.EmitVoid(Op::kDebugCount, {is_7e3}, {kDebugCounter7e3});
++  }
++  // Magenta for NaN or infinity, cyan above the 7e3 range, yellow below it.
++  return b.Select(
++      is_non_finite, b.ConstFloats({1.0f, 0.0f, 1.0f, 1.0f}),
++      b.Select(is_above_7e3, b.ConstFloats({0.0f, 1.0f, 1.0f, 1.0f}),
++               b.Select(is_negative_7e3, b.ConstFloats({1.0f, 1.0f, 0.0f, 1.0f}), color)));
 +}
 +
 +ValueId XscShaderTranslator::PWLGammaToLinear(ValueId gamma, bool gamma_pre_saturated) {
