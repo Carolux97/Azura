@@ -637,19 +637,33 @@ constexpr const char* const kChapterMaps[31] = {
     "SP_Rooftop_P",           // 30: Acto 5, Cap 6
 };
 
+// Several chapters are sections of the same persistent map; duplicate entries are intentional.
 static void StripListenParam(std::string& s) {
-  size_t pos = s.find("?listen");
-  if (pos != std::string::npos) {
-    if (pos + 7 < s.size() && s[pos + 7] == '?') {
-      s.replace(pos, 8, "?");
-    } else {
-      s.erase(pos, 7);
+  std::string lower = s;
+  for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+  size_t pos = 0;
+  while ((pos = lower.find("listen", pos)) != std::string::npos) {
+    if (pos == 0 || (s[pos - 1] != '?' && s[pos - 1] != '&')) {
+      pos += 6;
+      continue;
     }
-    return;
-  }
-  pos = s.find("&listen");
-  if (pos != std::string::npos) {
-    s.erase(pos, 7);
+
+    const size_t after = pos + 6;
+    if (after < s.size() && s[after] != '?' && s[after] != '&' && s[after] != '#') {
+      pos = after;
+      continue;
+    }
+
+    const size_t start = pos - 1;
+    if (s[start] == '?' && after < s.size() && (s[after] == '?' || s[after] == '&')) {
+      s.replace(start, after - start + 1, "?");
+      lower.replace(start, after - start + 1, "?");
+    } else {
+      s.erase(start, after - start);
+      lower.erase(start, after - start);
+    }
+    pos = start;
   }
 }
 
@@ -661,6 +675,26 @@ bool PatchTravelURL(uint8_t* base, uint32_t fstring_addr) {
   const uint32_t count = LoadU32(base, fstring_addr + 4);
   const uint32_t max = LoadU32(base, fstring_addr + 8);
   if (!data || count <= 1) return false;
+  if (max == 0 || count > max) {
+    REXLOG_WARN("[Azura travel] Invalid FString capacity (count={}, max={}); URL left unchanged", count, max);
+    return false;
+  }
+
+  auto write_url = [&](const std::string& value) {
+    if (value.size() >= max) {
+      REXLOG_WARN("[Azura travel] Rewritten URL needs {} TCHARs, but capacity is {}; URL left unchanged",
+                  value.size() + 1, max);
+      return false;
+    }
+    for (size_t i = 0; i < value.size(); ++i) {
+      base[data + i * 2] = 0;
+      base[data + i * 2 + 1] = static_cast<uint8_t>(value[i]);
+    }
+    base[data + value.size() * 2] = 0;
+    base[data + value.size() * 2 + 1] = 0;
+    StoreU32(base, fstring_addr + 4, static_cast<uint32_t>(value.size() + 1));
+    return true;
+  };
 
   std::string url;
   url.reserve(count);
@@ -698,7 +732,7 @@ bool PatchTravelURL(uint8_t* base, uint32_t fstring_addr) {
   size_t qpos = url.find('?');
   std::string new_url = std::string(real_map) + (qpos != std::string::npos ? url.substr(qpos) : "");
 
-  // Always strip ?listen for singleplayer campaign to prevent network driver socket blocks
+  // This hook has no verified single-player/co-op discriminator; stripping listen may affect co-op.
   StripListenParam(new_url);
 
   uint32_t new_count = static_cast<uint32_t>(new_url.size() + 1);
@@ -739,18 +773,16 @@ bool PatchTravelURL(uint8_t* base, uint32_t fstring_addr) {
     new_count = static_cast<uint32_t>(new_url.size() + 1);
   }
 
+  if (new_count > max) {
+    REXLOG_WARN("[Azura campaign] Rewritten URL for chapter {} needs {} TCHARs, but capacity is {}; URL left unchanged",
+                chapter, new_count, max);
+    return false;
+  }
+
   REXLOG_INFO("[Azura campaign] Remapped campaign map for chapter {}: '{}' -> '{}' (buffer count={}, max={})",
               chapter, url, new_url, count, max);
 
-  for (size_t i = 0; i < new_url.size(); ++i) {
-    base[data + i * 2] = 0;
-    base[data + i * 2 + 1] = static_cast<uint8_t>(new_url[i]);
-  }
-  base[data + new_url.size() * 2] = 0;
-  base[data + new_url.size() * 2 + 1] = 0;
-
-  StoreU32(base, fstring_addr + 4, new_count);
-  return true;
+  return write_url(new_url);
 }
 
 }  // namespace
