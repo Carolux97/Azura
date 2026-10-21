@@ -58,11 +58,40 @@ index b246319..d57e36f 100644
    // Updates ownership_ranges_, adds the transfers needed for the ownership
    // change to transfers_append_out if it's not null.
    void ChangeOwnership(RenderTargetKey dest, uint32_t start_tiles_base_relative,
+diff --git a/include/rex/graphics/vulkan/command_processor.h b/include/rex/graphics/vulkan/command_processor.h
+index 373f8dd..1dd1620 100644
+--- a/include/rex/graphics/vulkan/command_processor.h
++++ b/include/rex/graphics/vulkan/command_processor.h
+@@ -445,6 +445,11 @@ class VulkanCommandProcessor : public CommandProcessor {
+   void DestroyScratchBuffer();
+   bool InitializeOcclusionQueryResources();
+   void ShutdownOcclusionQueryResources();
++
++  // host_gpu_time_us: a pair of timestamps around each submission, read when it completes.
++  void InitializeGpuTimeQueries();
++  void ShutdownGpuTimeQueries();
++  void AccountGpuTimeOfCompletedSubmissions(uint64_t first_submission, uint64_t last_submission);
+   bool BeginGuestOcclusionQuery(uint32_t sample_count_address);
+   bool EndGuestOcclusionQuery(uint32_t sample_count_address);
+   bool AcquireOcclusionQueryIndex(uint32_t& host_index_out);
+@@ -738,6 +743,12 @@ class VulkanCommandProcessor : public CommandProcessor {
+   uint64_t scratch_buffer_last_usage_submission_ = 0;
+   bool scratch_buffer_used_ = false;
+ 
++  // Timestamp slots for host_gpu_time_us, two per submission, indexed by the submission number
++  // modulo the slot count (far more than the submissions that can be in flight).
++  static constexpr uint32_t kGpuTimeQuerySubmissionSlots = 1024;
++  VkQueryPool gpu_time_query_pool_ = VK_NULL_HANDLE;
++  uint64_t gpu_time_last_end_ticks_ = 0;
++
+   static constexpr uint32_t kMaxOcclusionQueries = 8192;
+   VkQueryPool occlusion_query_pool_ = VK_NULL_HANDLE;
+   VkBuffer occlusion_query_readback_buffer_ = VK_NULL_HANDLE;
 diff --git a/include/rex/perf/counter.h b/include/rex/perf/counter.h
-index 83f0dff..b01af41 100644
+index 83f0dff..e0a0c06 100644
 --- a/include/rex/perf/counter.h
 +++ b/include/rex/perf/counter.h
-@@ -24,6 +24,22 @@ enum class CounterId : uint16_t {
+@@ -24,6 +24,26 @@ enum class CounterId : uint16_t {
    kFrameTimeUs,
    kFps,
  
@@ -82,14 +111,53 @@ index 83f0dff..b01af41 100644
 +  kHostDrawsShaderKill,   // Pixel shader with kill instructions
 +  kHostDrawsBlended,      // Blending on a written color target
 +
++  // GPU busy time of the guest submissions that completed during the frame, overlaps counted
++  // once (Metal: command buffer GPU start and end times; Vulkan: timestamp queries)
++  kHostGpuTimeUs,
++
    // GPU
    kDrawCalls,
    kCommandBufferStalls,
+diff --git a/include/rex/ui/vulkan/device.h b/include/rex/ui/vulkan/device.h
+index 947817f..23e4d04 100644
+--- a/include/rex/ui/vulkan/device.h
++++ b/include/rex/ui/vulkan/device.h
+@@ -93,6 +93,10 @@ class VulkanDevice {
+     VkDeviceSize optimalBufferCopyOffsetAlignment = 1;
+     VkDeviceSize optimalBufferCopyRowPitchAlignment = 1;
+     VkDeviceSize nonCoherentAtomSize = 256;
++    // Nanoseconds per timestamp tick, and the valid bits of the timestamps written on the graphics
++    // and compute queue (0 if it does not support timestamps).
++    float timestampPeriod = 1.0f;
++    uint32_t timestampValidBitsGraphicsCompute = 0;
+ 
+     bool robustBufferAccess = false;
+     bool fullDrawIndexUint32 = false;
+diff --git a/include/rex/ui/vulkan/functions/device_1_0.inc b/include/rex/ui/vulkan/functions/device_1_0.inc
+index aa55a4a..c8bb914 100644
+--- a/include/rex/ui/vulkan/functions/device_1_0.inc
++++ b/include/rex/ui/vulkan/functions/device_1_0.inc
+@@ -32,6 +32,7 @@ XE_UI_VULKAN_FUNCTION(vkCmdSetStencilCompareMask)
+ XE_UI_VULKAN_FUNCTION(vkCmdSetStencilReference)
+ XE_UI_VULKAN_FUNCTION(vkCmdSetStencilWriteMask)
+ XE_UI_VULKAN_FUNCTION(vkCmdSetViewport)
++XE_UI_VULKAN_FUNCTION(vkCmdWriteTimestamp)
+ XE_UI_VULKAN_FUNCTION(vkCreateBuffer)
+ XE_UI_VULKAN_FUNCTION(vkCreateBufferView)
+ XE_UI_VULKAN_FUNCTION(vkCreateCommandPool)
+@@ -72,6 +73,7 @@ XE_UI_VULKAN_FUNCTION(vkGetBufferMemoryRequirements)
+ XE_UI_VULKAN_FUNCTION(vkGetDeviceQueue)
+ XE_UI_VULKAN_FUNCTION(vkGetFenceStatus)
+ XE_UI_VULKAN_FUNCTION(vkGetImageMemoryRequirements)
++XE_UI_VULKAN_FUNCTION(vkGetQueryPoolResults)
+ XE_UI_VULKAN_FUNCTION(vkInvalidateMappedMemoryRanges)
+ XE_UI_VULKAN_FUNCTION(vkMapMemory)
+ XE_UI_VULKAN_FUNCTION(vkResetCommandPool)
 diff --git a/src/core/perf/counter.cpp b/src/core/perf/counter.cpp
-index d3f26eb..5641237 100644
+index d3f26eb..92570e3 100644
 --- a/src/core/perf/counter.cpp
 +++ b/src/core/perf/counter.cpp
-@@ -46,6 +46,16 @@ std::array<std::atomic<int64_t>, kNumCounters> g_snapshot{};
+@@ -46,6 +46,17 @@ std::array<std::atomic<int64_t>, kNumCounters> g_snapshot{};
  constexpr const char* kCounterNames[] = {
      "frame_time_us",
      "fps",
@@ -103,10 +171,11 @@ index d3f26eb..5641237 100644
 +    "host_draws_alpha_tested",
 +    "host_draws_shader_kill",
 +    "host_draws_blended",
++    "host_gpu_time_us",
      "draw_calls",
      "command_buffer_stalls",
      "vertices_processed",
-@@ -94,6 +104,16 @@ static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must matc
+@@ -94,6 +105,17 @@ static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must matc
  constexpr bool kIsGauge[] = {
      false,  // kFrameTimeUs       (set each frame)
      false,  // kFps               (set each frame)
@@ -120,11 +189,12 @@ index d3f26eb..5641237 100644
 +    false,  // kHostDrawsAlphaTested
 +    false,  // kHostDrawsShaderKill
 +    false,  // kHostDrawsBlended
++    false,  // kHostGpuTimeUs
      false,  // kDrawCalls
      false,  // kCommandBufferStalls
      false,  // kVerticesProcessed
 diff --git a/src/graphics/CMakeLists.txt b/src/graphics/CMakeLists.txt
-index 0d8f8af..ae491ad 100644
+index 0d8f8af..d11f041 100644
 --- a/src/graphics/CMakeLists.txt
 +++ b/src/graphics/CMakeLists.txt
 @@ -54,6 +54,21 @@ set(REXGPU_XENOS_VULKAN_SOURCES
@@ -166,7 +236,7 @@ index 0d8f8af..ae491ad 100644
  if(REXGLUE_USE_D3D12)
      list(APPEND REXGPU_XENOS_SOURCES
          ${REXGPU_XENOS_DXBC_THIRDPARTY_SOURCES}
-@@ -151,6 +176,56 @@ if(REXGLUE_USE_VULKAN)
+@@ -151,6 +176,89 @@ if(REXGLUE_USE_VULKAN)
      )
  endif()
  
@@ -218,6 +288,39 @@ index 0d8f8af..ae491ad 100644
 +    if(NOT REXGLUE_USE_VULKAN)
 +        target_link_libraries(rexgpu-xenos PRIVATE glslang::SPIRV)
 +    endif()
++
++    # Offline bench of the Xenos shader compiler (xsc/bench/xsc_bench.mm): translates the game's
++    # dumped shaders with each translator and compares them on the Metal device. Built on demand
++    # (cmake --build ... --target xsc-bench), not with the plugin.
++    set(XSC_BENCH_SOURCES
++        flags.cpp
++        pipeline/shader/shader.cpp
++        format/ucode.cpp
++        pipeline/shader/translator.cpp
++        pipeline/shader/translator_disasm.cpp
++        util/draw.cpp
++        register_file.cpp
++        registers.cpp
++        ${REXGPU_XENOS_SPIRV_SOURCES}
++        metal/metal_spirv.mm
++        pipeline/shader/xsc/bench/xsc_bench.mm
++    )
++    add_executable(xsc-bench EXCLUDE_FROM_ALL ${XSC_BENCH_SOURCES})
++    set_source_files_properties(pipeline/shader/xsc/bench/xsc_bench.mm
++        PROPERTIES
++        COMPILE_OPTIONS "-fobjc-arc;-include;${CMAKE_CURRENT_SOURCE_DIR}/metal/metal_vulkan_headers.h")
++    target_compile_definitions(xsc-bench PRIVATE REX_HAS_METAL=1)
++    target_link_libraries(xsc-bench PRIVATE
++        rexruntime
++        xxHash::xxhash
++        Vulkan::Headers
++        glslang::SPIRV
++        spirv-cross-msl
++        spirv-cross-glsl
++        spirv-cross-core
++        "-framework Metal"
++        "-framework Foundation"
++    )
 +endif()
 +
  if(REXGLUE_USE_D3D12)
@@ -582,10 +685,10 @@ index 0000000..c6fb6e4
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_command_processor.mm b/src/graphics/metal/metal_command_processor.mm
 new file mode 100644
-index 0000000..8964fc7
+index 0000000..b4b9334
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.mm
-@@ -0,0 +1,1840 @@
+@@ -0,0 +1,1858 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.mm
 + * @brief       Xenos command processing with Metal
@@ -600,6 +703,7 @@ index 0000000..8964fc7
 +#include <chrono>
 +#include <cstring>
 +#include <functional>
++#include <mutex>
 +#include <utility>
 +
 +#include <rex/assert.h>
@@ -703,6 +807,20 @@ index 0000000..8964fc7
 +  dest.write(half4(result, 1.0h), pixel);
 +}
 +)MSL";
++
++// Adds the GPU time of a completed command buffer to the host_gpu_time_us counter, counting the
++// part that overlaps the previous completed command buffers once. Called from Metal's completion
++// handler threads.
++void AccountGpuTime(CFTimeInterval start, CFTimeInterval end) {
++  static std::mutex mutex;
++  static CFTimeInterval last_end = 0;
++  std::lock_guard<std::mutex> lock(mutex);
++  start = std::max(start, last_end);
++  if (end > start) {
++    PERF_counter_add(kHostGpuTimeUs, int64_t((end - start) * 1e6));
++  }
++  last_end = std::max(last_end, end);
++}
 +
 +NSString* GetEncoderLabel(rex::perf::CounterId reason) {
 +  switch (reason) {
@@ -1169,6 +1287,9 @@ index 0000000..8964fc7
 +        completion_handlers_in_flight_.fetch_sub(1, std::memory_order_release);
 +      }];
 +    }
++    [command_buffer_ addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
++      AccountGpuTime(buffer.GPUStartTime, buffer.GPUEndTime);
++    }];
 +    [command_buffer_ commit];
 +    PERF_counter_inc(kHostSubmissions);
 +    submissions_in_flight_.emplace_back(submission_current_, command_buffer_);
@@ -10629,3 +10750,143 @@ index ec756d3..6e16b00 100644
  #if REX_HAS_D3D12
    if (backend == "any" || backend == "d3d12") {
      return new rex::graphics::d3d12::D3D12GraphicsSystem();
+diff --git a/src/graphics/vulkan/command_processor.cpp b/src/graphics/vulkan/command_processor.cpp
+index 34330f6..dbb2dbe 100644
+--- a/src/graphics/vulkan/command_processor.cpp
++++ b/src/graphics/vulkan/command_processor.cpp
+@@ -1896,6 +1896,7 @@ bool VulkanCommandProcessor::SetupContext() {
+   }
+ 
+   occlusion_query_resources_available_ = InitializeOcclusionQueryResources();
++  InitializeGpuTimeQueries();
+ 
+   // Just not to expose uninitialized memory.
+   std::memset(&system_constants_, 0, sizeof(system_constants_));
+@@ -1907,6 +1908,7 @@ void VulkanCommandProcessor::ShutdownContext() {
+   AwaitAllQueueOperationsCompletion();
+   InvalidateAllVertexBufferResidency();
+   ShutdownOcclusionQueryResources();
++  ShutdownGpuTimeQueries();
+ 
+   const ui::vulkan::VulkanDevice* const vulkan_device = GetVulkanDevice();
+   const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
+@@ -4847,6 +4849,68 @@ void VulkanCommandProcessor::EvictOldReadbackBuffers(
+   }
+ }
+ 
++void VulkanCommandProcessor::InitializeGpuTimeQueries() {
++  gpu_time_query_pool_ = VK_NULL_HANDLE;
++  gpu_time_last_end_ticks_ = 0;
++  const ui::vulkan::VulkanDevice* vulkan_device = GetVulkanDevice();
++  if (!vulkan_device->properties().timestampValidBitsGraphicsCompute) {
++    REXGPU_INFO("VulkanCommandProcessor: the queue has no timestamps, host_gpu_time_us stays 0");
++    return;
++  }
++  const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
++  VkQueryPoolCreateInfo pool_info = {};
++  pool_info.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
++  pool_info.queryType = VK_QUERY_TYPE_TIMESTAMP;
++  pool_info.queryCount = kGpuTimeQuerySubmissionSlots * 2;
++  if (dfn.vkCreateQueryPool(vulkan_device->device(), &pool_info, nullptr,
++                            &gpu_time_query_pool_) != VK_SUCCESS) {
++    REXGPU_WARN("VulkanCommandProcessor: failed to create the GPU time query pool");
++    gpu_time_query_pool_ = VK_NULL_HANDLE;
++  }
++}
++
++void VulkanCommandProcessor::ShutdownGpuTimeQueries() {
++  if (gpu_time_query_pool_ != VK_NULL_HANDLE) {
++    const ui::vulkan::VulkanDevice* vulkan_device = GetVulkanDevice();
++    vulkan_device->functions().vkDestroyQueryPool(vulkan_device->device(), gpu_time_query_pool_,
++                                                  nullptr);
++    gpu_time_query_pool_ = VK_NULL_HANDLE;
++  }
++}
++
++void VulkanCommandProcessor::AccountGpuTimeOfCompletedSubmissions(uint64_t first_submission,
++                                                                  uint64_t last_submission) {
++  if (gpu_time_query_pool_ == VK_NULL_HANDLE) {
++    return;
++  }
++  const ui::vulkan::VulkanDevice* vulkan_device = GetVulkanDevice();
++  const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
++  uint32_t valid_bits = vulkan_device->properties().timestampValidBitsGraphicsCompute;
++  uint64_t mask = valid_bits >= 64 ? ~uint64_t(0) : (uint64_t(1) << valid_bits) - 1;
++  double period_us = double(vulkan_device->properties().timestampPeriod) * 0.001;
++  for (uint64_t submission = first_submission; submission <= last_submission; ++submission) {
++    uint32_t first_query = uint32_t(submission % kGpuTimeQuerySubmissionSlots) * 2;
++    uint64_t timestamps[2];
++    // The submission's fence has signalled, so the results are available without waiting.
++    if (dfn.vkGetQueryPoolResults(vulkan_device->device(), gpu_time_query_pool_, first_query, 2,
++                                  sizeof(timestamps), timestamps, sizeof(uint64_t),
++                                  VK_QUERY_RESULT_64_BIT) != VK_SUCCESS) {
++      continue;
++    }
++    uint64_t start = timestamps[0] & mask;
++    uint64_t end = timestamps[1] & mask;
++    if (end < start) {
++      continue;
++    }
++    // Count the part overlapping the previous submissions once.
++    start = std::max(start, gpu_time_last_end_ticks_);
++    if (end > start) {
++      PERF_counter_add(kHostGpuTimeUs, int64_t(double(end - start) * period_us));
++    }
++    gpu_time_last_end_ticks_ = std::max(gpu_time_last_end_ticks_, end);
++  }
++}
++
+ bool VulkanCommandProcessor::InitializeOcclusionQueryResources() {
+   active_occlusion_query_ = {};
+   occlusion_query_cursor_ = 0;
+@@ -5140,6 +5204,8 @@ void VulkanCommandProcessor::CheckSubmissionFenceAndDeviceLoss(uint64_t await_su
+                       submissions_in_flight_fences_awaited_end);
+   submissions_in_flight_fences_.erase(submissions_in_flight_fences_.cbegin(),
+                                       submissions_in_flight_fences_awaited_end);
++  AccountGpuTimeOfCompletedSubmissions(submission_completed_ + 1,
++                                       submission_completed_ + fences_awaited);
+   submission_completed_ += fences_awaited;
+ 
+   // Reclaim semaphores.
+@@ -5512,7 +5578,19 @@ bool VulkanCommandProcessor::EndSubmission(bool is_swap) {
+       REXGPU_ERROR("Failed to begin a Vulkan command buffer");
+       return false;
+     }
++    uint32_t gpu_time_first_query =
++        uint32_t(GetCurrentSubmission() % kGpuTimeQuerySubmissionSlots) * 2;
++    if (gpu_time_query_pool_ != VK_NULL_HANDLE) {
++      dfn.vkCmdResetQueryPool(command_buffer.buffer, gpu_time_query_pool_, gpu_time_first_query,
++                              2);
++      dfn.vkCmdWriteTimestamp(command_buffer.buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
++                              gpu_time_query_pool_, gpu_time_first_query);
++    }
+     deferred_command_buffer_.Execute(command_buffer.buffer);
++    if (gpu_time_query_pool_ != VK_NULL_HANDLE) {
++      dfn.vkCmdWriteTimestamp(command_buffer.buffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
++                              gpu_time_query_pool_, gpu_time_first_query + 1);
++    }
+     if (dfn.vkEndCommandBuffer(command_buffer.buffer) != VK_SUCCESS) {
+       REXGPU_ERROR("Failed to end a Vulkan command buffer");
+       return false;
+diff --git a/src/ui/vulkan/vulkan_device.cpp b/src/ui/vulkan/vulkan_device.cpp
+index 8197bb4..7838036 100644
+--- a/src/ui/vulkan/vulkan_device.cpp
++++ b/src/ui/vulkan/vulkan_device.cpp
+@@ -478,6 +478,9 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
+     device->queue_family_sparse_binding_ = first_queue_family_sparse_binding;
+   }
+ 
++  device->properties_.timestampValidBitsGraphicsCompute =
++      queue_families[device->queue_family_graphics_compute_].timestampValidBits;
++
+   device->queue_families_[device->queue_family_graphics_compute_].queues.resize(std::max(
+       size_t(1), device->queue_families_[device->queue_family_graphics_compute_].queues.size()));
+   if (device->queue_family_sparse_binding_ != UINT32_MAX) {
+@@ -625,6 +628,7 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
+   XE_UI_VULKAN_LIMIT(optimalBufferCopyOffsetAlignment)
+   XE_UI_VULKAN_LIMIT(optimalBufferCopyRowPitchAlignment)
+   XE_UI_VULKAN_LIMIT(nonCoherentAtomSize)
++  XE_UI_VULKAN_LIMIT(timestampPeriod)
+ 
+   if (with_gpu_emulation) {
+     XE_UI_VULKAN_FEATURE(robustBufferAccess)

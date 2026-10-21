@@ -1,0 +1,797 @@
+diff --git a/src/graphics/pipeline/shader/xsc/bench/xsc_bench.mm b/src/graphics/pipeline/shader/xsc/bench/xsc_bench.mm
+new file mode 100644
+index 0000000..671feee
+--- /dev/null
++++ b/src/graphics/pipeline/shader/xsc/bench/xsc_bench.mm
+@@ -0,0 +1,791 @@
++/**
++ * @file        graphics/pipeline/shader/xsc/bench/xsc_bench.mm
++ * @brief       Offline bench for the Xenos shader compiler: translates the game's real shaders
++ *              with each translator, compiles them with Metal, draws them with the same generated
++ *              inputs and compares the outputs
++ *
++ * @license     BSD 3-Clause License
++ *              See LICENSE file in the project root for full license text.
++ *
++ * Input: a corpus folder with ucode/ (dumped with dump_shaders) and msl/ (dumped with
++ * metal_shader_dump_path, whose file names give the variants the game used: shader hash and
++ * modification). Usage:
++ *   xsc-bench <corpus> [--mode translate|compare|perf] [--filter <hash>] [--limit <n>]
++ *             [--seeds <n>] [--size <pixels>] [--translators <a>,<b>]
++ * Translators: "spirv" (the SPIR-V translator and SPIRV-Cross, as the Metal backend does) and,
++ * once it exists, "xsc".
++ */
++
++#import <Foundation/Foundation.h>
++#import <Metal/Metal.h>
++
++#include <algorithm>
++#include <chrono>
++#include <cmath>
++#include <cstdio>
++#include <cstring>
++#include <filesystem>
++#include <fstream>
++#include <map>
++#include <memory>
++#include <optional>
++#include <regex>
++#include <string>
++#include <vector>
++
++#include <rex/graphics/pipeline/shader/spirv.h>
++#include <rex/graphics/pipeline/shader/spirv_translator.h>
++#include <rex/graphics/xenos.h>
++#include <rex/string/buffer.h>
++
++#include "../../../../metal/metal_spirv.h"
++
++namespace fs = std::filesystem;
++using namespace rex::graphics;
++using rex::graphics::metal::MslBinding;
++using rex::graphics::metal::MslShader;
++using rex::graphics::metal::MslStage;
++
++namespace {
++
++// The Metal backend's argument table indices (metal_pipeline_cache.h).
++constexpr uint32_t kBufferSharedMemory = 0;
++constexpr uint32_t kBufferConstantsFirst = 1;
++constexpr uint32_t kBufferSizes = rex::graphics::metal::kMslBufferSizesIndex;
++
++struct Variant {
++  xenos::ShaderType type;
++  uint64_t hash;
++  uint64_t modification;
++  std::string name;  // The MSL dump file name without the extension.
++};
++
++// One translation of a variant: the MSL and the shader's resource bindings.
++struct Translated {
++  bool ok = false;
++  std::string error;
++  MslShader msl;
++  std::vector<SpirvShader::TextureBinding> textures;
++  std::vector<SpirvShader::SamplerBinding> samplers;
++  uint32_t float_constant_count = 0;
++  uint32_t writes_color_targets = 0;
++  bool writes_depth = false;
++  double translate_ms = 0;
++  double compile_ms = 0;
++  id<MTLFunction> function = nil;
++};
++
++struct Options {
++  fs::path corpus;
++  std::string mode = "translate";
++  std::string filter;
++  size_t limit = SIZE_MAX;
++  uint32_t seeds = 4;
++  uint32_t size = 32;
++  std::vector<std::string> translators = {"spirv"};
++};
++
++std::vector<uint32_t> ReadUcode(const fs::path& path) {
++  std::ifstream file(path, std::ios::binary);
++  std::vector<char> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
++  std::vector<uint32_t> dwords(bytes.size() / sizeof(uint32_t));
++  std::memcpy(dwords.data(), bytes.data(), dwords.size() * sizeof(uint32_t));
++  return dwords;
++}
++
++std::vector<Variant> LoadVariants(const Options& options) {
++  std::vector<Variant> variants;
++  std::regex name_regex("^(ps|vs)_([0-9a-f]{16})_([0-9a-f]{16})(_[a-z]+)?(_norast)?$");
++  for (const auto& entry : fs::directory_iterator(options.corpus / "msl")) {
++    std::string stem = entry.path().stem().string();
++    std::smatch match;
++    if (entry.path().extension() != ".metal" || !std::regex_match(stem, match, name_regex)) {
++      continue;
++    }
++    if (match[5].matched) {
++      // The variant without rasterization of a vertex shader shares the translation.
++      continue;
++    }
++    if (!options.filter.empty() && match[2].str().find(options.filter) == std::string::npos) {
++      continue;
++    }
++    Variant variant;
++    variant.type = match[1] == "ps" ? xenos::ShaderType::kPixel : xenos::ShaderType::kVertex;
++    variant.hash = std::stoull(match[2].str(), nullptr, 16);
++    variant.modification = std::stoull(match[3].str(), nullptr, 16);
++    variant.name = stem;
++    variants.push_back(variant);
++  }
++  std::sort(variants.begin(), variants.end(),
++            [](const Variant& a, const Variant& b) { return a.name < b.name; });
++  if (variants.size() > options.limit) {
++    variants.resize(options.limit);
++  }
++  return variants;
++}
++
++// The same as GetGuestShaderBindings in metal_pipeline_cache.mm.
++std::vector<MslBinding> GetGuestShaderBindings(const SpirvShader& shader) {
++  std::vector<MslBinding> bindings;
++  bindings.push_back({SpirvShaderTranslator::kDescriptorSetSharedMemoryAndEdram, 0,
++                      MslBinding::Kind::kBuffer, kBufferSharedMemory});
++  for (uint32_t i = 0; i < SpirvShaderTranslator::kConstantBufferCount; ++i) {
++    bindings.push_back({SpirvShaderTranslator::kDescriptorSetConstants, i,
++                        MslBinding::Kind::kBuffer, kBufferConstantsFirst + i});
++  }
++  uint32_t texture_set = shader.type() == xenos::ShaderType::kVertex
++                             ? SpirvShaderTranslator::kDescriptorSetTexturesVertex
++                             : SpirvShaderTranslator::kDescriptorSetTexturesPixel;
++  uint32_t texture_count = uint32_t(shader.GetTextureBindingsAfterTranslation().size());
++  uint32_t sampler_count = uint32_t(shader.GetSamplerBindingsAfterTranslation().size());
++  for (uint32_t i = 0; i < texture_count; ++i) {
++    bindings.push_back({texture_set, i, MslBinding::Kind::kTexture, i});
++  }
++  for (uint32_t i = 0; i < sampler_count; ++i) {
++    bindings.push_back({texture_set, texture_count + i, MslBinding::Kind::kSampler, i});
++  }
++  return bindings;
++}
++
++// The translator the Metal backend creates (MetalPipelineCache::Initialize).
++std::unique_ptr<SpirvShaderTranslator> CreateSpirvTranslator() {
++  SpirvShaderTranslator::Features features(true);
++  features.cull_distance = false;
++  features.fragment_shader_sample_interlock = false;
++  features.signed_zero_inf_nan_preserve_float32 = false;
++  features.denorm_flush_to_zero_float32 = false;
++  features.rounding_mode_rte_float32 = false;
++  return std::make_unique<SpirvShaderTranslator>(features, true, true, false, 1, 1);
++}
++
++double MsSince(std::chrono::steady_clock::time_point start) {
++  return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
++      .count();
++}
++
++id<MTLFunction> CompileFunction(id<MTLDevice> device, Translated& translated) {
++  auto start = std::chrono::steady_clock::now();
++  MTLCompileOptions* options = [MTLCompileOptions new];
++  options.languageVersion = MTLLanguageVersion3_0;
++  options.mathMode = MTLMathModeSafe;
++  NSError* error = nil;
++  id<MTLLibrary> library = [device newLibraryWithSource:@(translated.msl.source.c_str())
++                                                options:options
++                                                  error:&error];
++  translated.compile_ms = MsSince(start);
++  if (!library) {
++    translated.error = error ? error.localizedDescription.UTF8String : "MSL compilation failed";
++    return nil;
++  }
++  return [library newFunctionWithName:@(translated.msl.entry_point.c_str())];
++}
++
++// Translates the variant with the SPIR-V translator and SPIRV-Cross, as the Metal backend does.
++Translated TranslateSpirv(id<MTLDevice> device, SpirvShaderTranslator& translator,
++                          const Variant& variant, const std::vector<uint32_t>& ucode) {
++  Translated translated;
++  auto start = std::chrono::steady_clock::now();
++  // dump_shaders writes the ucode in host byte order.
++  SpirvShader shader(variant.type, variant.hash, ucode.data(), ucode.size(), std::endian::native);
++  rex::string::StringBuffer disassembly;
++  shader.AnalyzeUcode(disassembly);
++  Shader::Translation* translation = shader.GetOrCreateTranslation(variant.modification);
++  if (!translator.TranslateAnalyzedShader(*translation) || !translation->is_valid()) {
++    translated.error = "SPIR-V translation failed";
++    return translated;
++  }
++  const std::vector<uint8_t>& spirv = translation->translated_binary();
++  bool vertex = variant.type == xenos::ShaderType::kVertex;
++  if (!rex::graphics::metal::SpirvToMsl(
++          reinterpret_cast<const uint32_t*>(spirv.data()), spirv.size() / sizeof(uint32_t),
++          vertex ? MslStage::kVertex : MslStage::kFragment, GetGuestShaderBindings(shader),
++          translated.msl, false, variant.name)) {
++    translated.error = "SPIRV-Cross conversion failed";
++    return translated;
++  }
++  translated.translate_ms = MsSince(start);
++  translated.textures = shader.GetTextureBindingsAfterTranslation();
++  translated.samplers = shader.GetSamplerBindingsAfterTranslation();
++  translated.float_constant_count = shader.constant_register_map().float_count;
++  translated.writes_color_targets = shader.writes_color_targets();
++  translated.writes_depth = shader.writes_depth();
++  translated.function = CompileFunction(device, translated);
++  translated.ok = translated.function != nil;
++  return translated;
++}
++
++// Deterministic values from a seed, so both translators see the same inputs.
++struct Random {
++  uint64_t state;
++  explicit Random(uint64_t seed) : state(seed * 0x9E3779B97F4A7C15ull + 1) {}
++  uint32_t Next() {
++    state ^= state << 13;
++    state ^= state >> 7;
++    state ^= state << 17;
++    return uint32_t(state >> 32);
++  }
++  float Unit() { return float(Next() >> 8) / float(1 << 24); }
++  // Mostly ordinary values, with the special ones the Xenos rules are about.
++  float Value(bool specials) {
++    uint32_t kind = Next() % 16;
++    if (kind == 0) {
++      return 0.0f;
++    }
++    if (kind == 1) {
++      return 1.0f;
++    }
++    if (specials && kind == 2) {
++      return INFINITY;
++    }
++    if (specials && kind == 3) {
++      return -0.0f;
++    }
++    if (specials && kind == 4) {
++      return NAN;
++    }
++    return Unit() * 4.0f - 2.0f;
++  }
++};
++
++// The inputs of one draw.
++struct DrawInputs {
++  SpirvShaderTranslator::SystemConstants system = {};
++  std::vector<float> float_constants;
++  uint32_t bool_loop[8 + 32] = {};
++  xenos::xe_gpu_texture_fetch_t fetch[32] = {};
++  std::vector<id<MTLTexture>> textures;
++  std::vector<id<MTLSamplerState>> samplers;
++  float interpolator_scale[16][4];
++  float interpolator_bias[16][4];
++};
++
++id<MTLTexture> CreateTexture(id<MTLDevice> device, xenos::FetchOpDimension dimension,
++                             bool is_signed, Random& random) {
++  MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
++  descriptor.pixelFormat = MTLPixelFormatRGBA16Float;
++  descriptor.width = 16;
++  descriptor.height = 16;
++  descriptor.mipmapLevelCount = 5;
++  descriptor.usage = MTLTextureUsageShaderRead;
++  descriptor.storageMode = MTLStorageModeShared;
++  uint32_t slices = 1;
++  switch (dimension) {
++    case xenos::FetchOpDimension::k3DOrStacked:
++      descriptor.textureType = MTLTextureType3D;
++      descriptor.depth = 16;
++      break;
++    case xenos::FetchOpDimension::kCube:
++      descriptor.textureType = MTLTextureTypeCube;
++      slices = 6;
++      break;
++    default:
++      descriptor.textureType = MTLTextureType2DArray;
++      descriptor.arrayLength = 4;
++      slices = 4;
++  }
++  id<MTLTexture> texture = [device newTextureWithDescriptor:descriptor];
++  for (uint32_t level = 0; level < descriptor.mipmapLevelCount; ++level) {
++    uint32_t extent = std::max(16u >> level, 1u);
++    uint32_t depth = descriptor.textureType == MTLTextureType3D ? extent : 1;
++    std::vector<__fp16> texels(size_t(extent) * extent * depth * 4);
++    for (uint32_t slice = 0; slice < slices; ++slice) {
++      for (__fp16& texel : texels) {
++        float value = random.Unit();
++        texel = __fp16(is_signed ? value * 2.0f - 1.0f : value);
++      }
++      [texture replaceRegion:MTLRegionMake3D(0, 0, 0, extent, extent, depth)
++                 mipmapLevel:level
++                       slice:slice
++                   withBytes:texels.data()
++                 bytesPerRow:extent * 4 * sizeof(__fp16)
++               bytesPerImage:extent * extent * 4 * sizeof(__fp16)];
++    }
++  }
++  return texture;
++}
++
++DrawInputs GenerateInputs(id<MTLDevice> device, const Translated& translated, uint32_t seed) {
++  DrawInputs inputs;
++  Random random(seed);
++  bool specials = (seed % 2) == 1;
++  // Every other pair of seeds keeps interpolators and constants in [0, 1], like texture
++  // coordinates and colors, which kill conditions written for real data often need.
++  bool unit_range = (seed / 2) % 2 == 1;
++  auto& system = inputs.system;
++  // Output gamma, the alpha test function (pass if less / equal / greater) and the exponent bias.
++  system.flags = (random.Next() % 2 ? SpirvShaderTranslator::kSysFlag_ConvertColor0ToGamma : 0) |
++                 (random.Next() % 4 == 0 ? 0 : (random.Next() % 8)) *
++                     SpirvShaderTranslator::kSysFlag_AlphaPassIfLess;
++  if (!specials) {
++    // Even seeds always pass the alpha test and have no special values, so that most pixels are
++    // compared; odd seeds exercise the alpha test functions and the special values.
++    system.flags |= SpirvShaderTranslator::kSysFlag_AlphaPassIfLess |
++                    SpirvShaderTranslator::kSysFlag_AlphaPassIfEqual |
++                    SpirvShaderTranslator::kSysFlag_AlphaPassIfGreater;
++  }
++  system.alpha_test_reference = random.Unit();
++  for (uint32_t i = 0; i < 4; ++i) {
++    system.color_exp_bias[i] = random.Next() % 2 ? 1.0f : std::ldexp(1.0f, int(random.Next() % 5) - 2);
++  }
++  for (uint32_t& signs : system.texture_swizzled_signs) {
++    signs = random.Next();
++  }
++  for (uint32_t i = 0; i < 16; ++i) {
++    // Identity swizzles, as the backend uses with view format swizzles.
++    system.texture_swizzles[i] = 0x688 | (0x688 << 12);
++  }
++  system.ndc_scale[0] = system.ndc_scale[1] = system.ndc_scale[2] = 1.0f;
++  inputs.float_constants.resize(size_t(std::max(translated.float_constant_count, 1u)) * 4);
++  for (float& value : inputs.float_constants) {
++    value = unit_range ? random.Unit() : random.Value(specials);
++  }
++  for (uint32_t i = 0; i < 8; ++i) {
++    inputs.bool_loop[i] = random.Next();
++  }
++  for (uint32_t i = 0; i < 32; ++i) {
++    // Count 0-4, start 0-3, step 1.
++    inputs.bool_loop[8 + i] = (random.Next() % 5) | ((random.Next() % 4) << 8) | (1 << 16);
++  }
++  for (uint32_t i = 0; i < 32; ++i) {
++    xenos::xe_gpu_texture_fetch_t& fetch = inputs.fetch[i];
++    fetch.type = xenos::FetchConstantType::kTexture;
++    fetch.format = xenos::TextureFormat::k_8_8_8_8;
++    fetch.size_2d.width = 15;
++    fetch.size_2d.height = 15;
++    fetch.size_2d.stack_depth = 3;
++    fetch.swizzle = 0x688;
++    fetch.exp_adjust = random.Next() % 4 == 0 ? int32_t(random.Next() % 3) - 1 : 0;
++    fetch.mag_filter = xenos::TextureFilter::kLinear;
++    fetch.min_filter = xenos::TextureFilter::kLinear;
++    fetch.mip_filter = xenos::TextureFilter::kLinear;
++    fetch.mip_max_level = 4;
++    fetch.lod_bias = int32_t(random.Next() % 32) - 16;
++    fetch.dimension = xenos::DataDimension::k2DOrStacked;
++    fetch.stacked = random.Next() % 2;
++  }
++  for (const SpirvShader::TextureBinding& binding : translated.textures) {
++    if (binding.dimension == xenos::FetchOpDimension::k3DOrStacked) {
++      inputs.fetch[binding.fetch_constant].dimension = xenos::DataDimension::k3D;
++      inputs.fetch[binding.fetch_constant].stacked = 0;
++    } else if (binding.dimension == xenos::FetchOpDimension::kCube) {
++      inputs.fetch[binding.fetch_constant].dimension = xenos::DataDimension::kCube;
++      inputs.fetch[binding.fetch_constant].stacked = 0;
++    }
++    inputs.textures.push_back(
++        CreateTexture(device, xenos::FetchOpDimension(binding.dimension), binding.is_signed, random));
++  }
++  for (size_t i = 0; i < translated.samplers.size(); ++i) {
++    MTLSamplerDescriptor* descriptor = [MTLSamplerDescriptor new];
++    descriptor.minFilter = MTLSamplerMinMagFilterLinear;
++    descriptor.magFilter = MTLSamplerMinMagFilterLinear;
++    descriptor.mipFilter = MTLSamplerMipFilterLinear;
++    descriptor.sAddressMode = MTLSamplerAddressModeRepeat;
++    descriptor.tAddressMode = MTLSamplerAddressModeRepeat;
++    descriptor.rAddressMode = MTLSamplerAddressModeRepeat;
++    inputs.samplers.push_back([device newSamplerStateWithDescriptor:descriptor]);
++  }
++  for (uint32_t i = 0; i < 16; ++i) {
++    for (uint32_t j = 0; j < 4; ++j) {
++      inputs.interpolator_scale[i][j] = unit_range ? random.Unit() : random.Unit() * 4.0f - 2.0f;
++      inputs.interpolator_bias[i][j] = unit_range ? random.Unit() * 0.5f : random.Value(false);
++    }
++  }
++  return inputs;
++}
++
++// The vertex function feeding the pixel shaders under test: a triangle covering the target, with
++// all 16 interpolators varying over it.
++const char* kVertexSource = R"MSL(
++#include <metal_stdlib>
++using namespace metal;
++struct Interpolators { float4 v[32]; };
++struct Out {
++  float4 position [[position]];
++  float4 i0 [[user(locn0)]]; float4 i1 [[user(locn1)]]; float4 i2 [[user(locn2)]];
++  float4 i3 [[user(locn3)]]; float4 i4 [[user(locn4)]]; float4 i5 [[user(locn5)]];
++  float4 i6 [[user(locn6)]]; float4 i7 [[user(locn7)]]; float4 i8 [[user(locn8)]];
++  float4 i9 [[user(locn9)]]; float4 i10 [[user(locn10)]]; float4 i11 [[user(locn11)]];
++  float4 i12 [[user(locn12)]]; float4 i13 [[user(locn13)]]; float4 i14 [[user(locn14)]];
++  float4 i15 [[user(locn15)]];
++};
++vertex Out bench_vertex(uint id [[vertex_id]], constant Interpolators& in [[buffer(0)]]) {
++  float2 uv = float2(float((id << 1) & 2), float(id & 2));
++  Out out;
++  out.position = float4(uv * 2.0 - 1.0, 0.5, 1.0);
++  float t = uv.x * 0.37 + uv.y * 0.61;
++#define XE_I(n) out.i##n = in.v[n] * t + in.v[16 + n] * uv.y;
++  XE_I(0) XE_I(1) XE_I(2) XE_I(3) XE_I(4) XE_I(5) XE_I(6) XE_I(7)
++  XE_I(8) XE_I(9) XE_I(10) XE_I(11) XE_I(12) XE_I(13) XE_I(14) XE_I(15)
++  return out;
++}
++)MSL";
++
++struct Output {
++  bool ok = false;
++  std::string error;
++  std::vector<float> colors[4];
++  std::vector<float> depth;
++  double gpu_ms = 0;
++};
++
++// Draws a pixel shader into float render targets (all four color targets and depth) with the
++// inputs, repeating the draw for the perf mode.
++Output DrawPixelShader(id<MTLDevice> device, id<MTLCommandQueue> queue,
++                       id<MTLFunction> vertex_function, const Translated& translated,
++                       const DrawInputs& inputs, uint32_t size, uint32_t repeats) {
++  Output output;
++  MTLRenderPipelineDescriptor* descriptor = [MTLRenderPipelineDescriptor new];
++  descriptor.vertexFunction = vertex_function;
++  descriptor.fragmentFunction = translated.function;
++  for (uint32_t i = 0; i < 4; ++i) {
++    descriptor.colorAttachments[i].pixelFormat = MTLPixelFormatRGBA32Float;
++  }
++  descriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
++  NSError* error = nil;
++  id<MTLRenderPipelineState> pipeline = [device newRenderPipelineStateWithDescriptor:descriptor
++                                                                               error:&error];
++  if (!pipeline) {
++    output.error = error ? error.localizedDescription.UTF8String : "pipeline creation failed";
++    return output;
++  }
++  MTLDepthStencilDescriptor* depth_descriptor = [MTLDepthStencilDescriptor new];
++  depth_descriptor.depthCompareFunction = MTLCompareFunctionAlways;
++  depth_descriptor.depthWriteEnabled = YES;
++  id<MTLDepthStencilState> depth_state =
++      [device newDepthStencilStateWithDescriptor:depth_descriptor];
++
++  MTLTextureDescriptor* color_descriptor =
++      [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA32Float
++                                                         width:size
++                                                        height:size
++                                                     mipmapped:NO];
++  color_descriptor.usage = MTLTextureUsageRenderTarget;
++  color_descriptor.storageMode = MTLStorageModeShared;
++  id<MTLTexture> colors[4];
++  for (uint32_t i = 0; i < 4; ++i) {
++    colors[i] = [device newTextureWithDescriptor:color_descriptor];
++  }
++  MTLTextureDescriptor* depth_texture_descriptor =
++      [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float
++                                                         width:size
++                                                        height:size
++                                                     mipmapped:NO];
++  depth_texture_descriptor.usage = MTLTextureUsageRenderTarget;
++  depth_texture_descriptor.storageMode = MTLStorageModePrivate;
++  id<MTLTexture> depth = [device newTextureWithDescriptor:depth_texture_descriptor];
++  id<MTLBuffer> depth_readback = [device newBufferWithLength:size * size * sizeof(float)
++                                                     options:MTLResourceStorageModeShared];
++
++  id<MTLBuffer> shared_memory = [device newBufferWithLength:1 << 20
++                                                    options:MTLResourceStorageModeShared];
++  float interpolators[32][4];
++  std::memcpy(interpolators, inputs.interpolator_scale, sizeof(inputs.interpolator_scale));
++  std::memcpy(interpolators[16], inputs.interpolator_bias, sizeof(inputs.interpolator_bias));
++
++  id<MTLCommandBuffer> command_buffer = [queue commandBuffer];
++  for (uint32_t repeat = 0; repeat < repeats; ++repeat) {
++    MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
++    for (uint32_t i = 0; i < 4; ++i) {
++      pass.colorAttachments[i].texture = colors[i];
++      pass.colorAttachments[i].loadAction = MTLLoadActionClear;
++      // A value no shader computes by chance marks the pixels that were discarded.
++      pass.colorAttachments[i].clearColor = MTLClearColorMake(-12345.0, -12345.0, -12345.0, -12345.0);
++      pass.colorAttachments[i].storeAction = MTLStoreActionStore;
++    }
++    pass.depthAttachment.texture = depth;
++    pass.depthAttachment.loadAction = MTLLoadActionClear;
++    pass.depthAttachment.clearDepth = 0.25;
++    pass.depthAttachment.storeAction = MTLStoreActionStore;
++    id<MTLRenderCommandEncoder> encoder = [command_buffer renderCommandEncoderWithDescriptor:pass];
++    [encoder setRenderPipelineState:pipeline];
++    [encoder setDepthStencilState:depth_state];
++    [encoder setVertexBytes:interpolators length:sizeof(interpolators) atIndex:0];
++    [encoder setFragmentBuffer:shared_memory offset:0 atIndex:kBufferSharedMemory];
++    [encoder setFragmentBytes:&inputs.system
++                       length:sizeof(inputs.system)
++                      atIndex:kBufferConstantsFirst + SpirvShaderTranslator::kConstantBufferSystem];
++    [encoder setFragmentBytes:inputs.float_constants.data()
++                       length:inputs.float_constants.size() * sizeof(float)
++                      atIndex:kBufferConstantsFirst +
++                              SpirvShaderTranslator::kConstantBufferFloatPixel];
++    [encoder setFragmentBytes:inputs.bool_loop
++                       length:sizeof(inputs.bool_loop)
++                      atIndex:kBufferConstantsFirst + SpirvShaderTranslator::kConstantBufferBoolLoop];
++    [encoder setFragmentBytes:inputs.fetch
++                       length:sizeof(inputs.fetch)
++                      atIndex:kBufferConstantsFirst + SpirvShaderTranslator::kConstantBufferFetch];
++    if (translated.msl.needs_buffer_sizes) {
++      uint32_t sizes[32] = {};
++      sizes[kBufferSharedMemory] = uint32_t(shared_memory.length);
++      [encoder setFragmentBytes:sizes length:sizeof(sizes) atIndex:kBufferSizes];
++    }
++    for (size_t i = 0; i < inputs.textures.size(); ++i) {
++      [encoder setFragmentTexture:inputs.textures[i] atIndex:i];
++    }
++    for (size_t i = 0; i < inputs.samplers.size(); ++i) {
++      [encoder setFragmentSamplerState:inputs.samplers[i] atIndex:i];
++    }
++    [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
++    [encoder endEncoding];
++  }
++  id<MTLBlitCommandEncoder> blit = [command_buffer blitCommandEncoder];
++  [blit copyFromTexture:depth
++                   sourceSlice:0
++                   sourceLevel:0
++                  sourceOrigin:MTLOriginMake(0, 0, 0)
++                    sourceSize:MTLSizeMake(size, size, 1)
++                      toBuffer:depth_readback
++             destinationOffset:0
++        destinationBytesPerRow:size * sizeof(float)
++      destinationBytesPerImage:size * size * sizeof(float)];
++  [blit endEncoding];
++  [command_buffer commit];
++  [command_buffer waitUntilCompleted];
++  if (command_buffer.status != MTLCommandBufferStatusCompleted) {
++    output.error = command_buffer.error ? command_buffer.error.localizedDescription.UTF8String
++                                        : "the command buffer failed";
++    return output;
++  }
++  output.gpu_ms = (command_buffer.GPUEndTime - command_buffer.GPUStartTime) * 1000.0 / repeats;
++  for (uint32_t i = 0; i < 4; ++i) {
++    output.colors[i].resize(size_t(size) * size * 4);
++    [colors[i] getBytes:output.colors[i].data()
++            bytesPerRow:size * 4 * sizeof(float)
++             fromRegion:MTLRegionMake2D(0, 0, size, size)
++            mipmapLevel:0];
++  }
++  output.depth.resize(size_t(size) * size);
++  std::memcpy(output.depth.data(), depth_readback.contents, output.depth.size() * sizeof(float));
++  output.ok = true;
++  return output;
++}
++
++// Bit-exact comparison (NaNs of any payload are equal); returns the mismatching values.
++uint32_t CompareOutputs(const Output& a, const Output& b, uint32_t color_mask, bool depth,
++                        std::string& first_mismatch) {
++  uint32_t mismatches = 0;
++  auto same = [](float x, float y) {
++    uint32_t xb, yb;
++    std::memcpy(&xb, &x, 4);
++    std::memcpy(&yb, &y, 4);
++    return xb == yb || (std::isnan(x) && std::isnan(y));
++  };
++  for (uint32_t rt = 0; rt < 4; ++rt) {
++    if (!(color_mask & (1u << rt))) {
++      continue;
++    }
++    for (size_t i = 0; i < a.colors[rt].size(); ++i) {
++      if (!same(a.colors[rt][i], b.colors[rt][i])) {
++        if (!mismatches++) {
++          first_mismatch = fmt::format("color {} pixel {} component {}: {} vs {}", rt, i / 4, i % 4,
++                                       a.colors[rt][i], b.colors[rt][i]);
++        }
++      }
++    }
++  }
++  if (depth) {
++    for (size_t i = 0; i < a.depth.size(); ++i) {
++      if (!same(a.depth[i], b.depth[i]) && !mismatches++) {
++        first_mismatch = fmt::format("depth pixel {}: {} vs {}", i, a.depth[i], b.depth[i]);
++      }
++    }
++  }
++  return mismatches;
++}
++
++std::optional<Translated> Translate(const std::string& translator_name, id<MTLDevice> device,
++                                    SpirvShaderTranslator& spirv_translator, const Variant& variant,
++                                    const std::vector<uint32_t>& ucode) {
++  if (translator_name == "spirv") {
++    return TranslateSpirv(device, spirv_translator, variant, ucode);
++  }
++  return std::nullopt;
++}
++
++}  // namespace
++
++int main(int argc, char** argv) {
++  @autoreleasepool {
++    Options options;
++    for (int i = 1; i < argc; ++i) {
++      std::string arg = argv[i];
++      auto value = [&]() -> std::string { return i + 1 < argc ? argv[++i] : ""; };
++      if (arg == "--mode") {
++        options.mode = value();
++      } else if (arg == "--filter") {
++        options.filter = value();
++      } else if (arg == "--limit") {
++        options.limit = std::stoull(value());
++      } else if (arg == "--seeds") {
++        options.seeds = uint32_t(std::stoul(value()));
++      } else if (arg == "--size") {
++        options.size = uint32_t(std::stoul(value()));
++      } else if (arg == "--translators") {
++        options.translators.clear();
++        std::string list = value();
++        for (size_t start = 0; start <= list.size();) {
++          size_t end = list.find(',', start);
++          options.translators.push_back(list.substr(start, end - start));
++          start = end == std::string::npos ? list.size() + 1 : end + 1;
++        }
++      } else {
++        options.corpus = arg;
++      }
++    }
++    if (options.corpus.empty()) {
++      std::fprintf(stderr,
++                   "usage: xsc-bench <corpus> [--mode translate|compare|perf] [--filter <hash>]"
++                   " [--limit <n>] [--seeds <n>] [--size <pixels>] [--translators a,b]\n");
++      return 1;
++    }
++
++    id<MTLDevice> device = MTLCreateSystemDefaultDevice();
++    id<MTLCommandQueue> queue = [device newCommandQueue];
++    MTLCompileOptions* vertex_options = [MTLCompileOptions new];
++    NSError* error = nil;
++    id<MTLLibrary> vertex_library = [device newLibraryWithSource:@(kVertexSource)
++                                                         options:vertex_options
++                                                           error:&error];
++    id<MTLFunction> vertex_function = [vertex_library newFunctionWithName:@"bench_vertex"];
++    auto spirv_translator = CreateSpirvTranslator();
++
++    std::vector<Variant> variants = LoadVariants(options);
++    std::printf("%zu variants, mode %s, translators", variants.size(), options.mode.c_str());
++    for (const std::string& name : options.translators) {
++      std::printf(" %s", name.c_str());
++    }
++    std::printf("\n");
++
++    struct Totals {
++      uint32_t translated = 0, failed = 0, drawn = 0, compared = 0, mismatched = 0;
++      double translate_ms = 0, compile_ms = 0, gpu_ms = 0;
++      // Draws by the share of the written color values that are not discarded and not NaN, to
++      // know how much the comparisons cover: none, under half, at least half.
++      uint32_t coverage[3] = {};
++    };
++    std::map<std::string, Totals> totals;
++    std::map<uint64_t, std::vector<uint32_t>> ucode_cache;
++    size_t index = 0;
++    for (const Variant& variant : variants) {
++      ++index;
++      if (index % 50 == 0) {
++        std::fprintf(stderr, "\r%zu / %zu", index, variants.size());
++      }
++      auto& ucode = ucode_cache[variant.hash];
++      if (ucode.empty()) {
++        fs::path path = options.corpus / "ucode" /
++                        fmt::format("shader_{:016X}.ucode.bin.{}", variant.hash,
++                                    variant.type == xenos::ShaderType::kVertex ? "vert" : "frag");
++        ucode = ReadUcode(path);
++        if (ucode.empty()) {
++          std::printf("%s: no ucode at %s\n", variant.name.c_str(), path.string().c_str());
++          continue;
++        }
++      }
++      std::vector<Translated> translations;
++      for (const std::string& name : options.translators) {
++        std::optional<Translated> translated =
++            Translate(name, device, *spirv_translator, variant, ucode);
++        if (!translated) {
++          std::printf("unknown translator %s\n", name.c_str());
++          return 1;
++        }
++        Totals& t = totals[name];
++        if (translated->ok) {
++          ++t.translated;
++          t.translate_ms += translated->translate_ms;
++          t.compile_ms += translated->compile_ms;
++        } else {
++          ++t.failed;
++          std::printf("%s [%s]: %s\n", variant.name.c_str(), name.c_str(),
++                      translated->error.c_str());
++        }
++        translations.push_back(std::move(*translated));
++      }
++      if (options.mode == "translate" || variant.type != xenos::ShaderType::kPixel) {
++        continue;
++      }
++      // Draw every translation with the same inputs and compare each with the first. Seeds whose
++      // inputs make the first translation write no color value (kill instructions and the alpha
++      // test can discard every pixel) are skipped, up to 8 tries per kept seed.
++      uint32_t seeds_wanted = options.mode == "perf" ? 1 : options.seeds;
++      uint32_t seeds_kept = 0;
++      for (uint32_t seed = 0; seeds_kept < seeds_wanted && seed < seeds_wanted * 8; ++seed) {
++        bool last_try = seed + 1 >= seeds_wanted * 8;
++        std::vector<Output> outputs;
++        for (size_t i = 0; i < translations.size(); ++i) {
++          if (!translations[i].ok) {
++            outputs.emplace_back();
++            continue;
++          }
++          DrawInputs inputs = GenerateInputs(device, translations[0].ok ? translations[0]
++                                                                        : translations[i],
++                                             uint32_t(variant.hash) ^ (seed * 7919));
++          Output output = DrawPixelShader(
++              device, queue, vertex_function, translations[i], inputs,
++              options.mode == "perf" ? 512 : options.size, options.mode == "perf" ? 20 : 1);
++          if (!output.ok) {
++            std::printf("%s [%s] seed %u: %s\n", variant.name.c_str(),
++                        options.translators[i].c_str(), seed, output.error.c_str());
++            outputs.push_back(std::move(output));
++            continue;
++          }
++          size_t written = 0, total = 0;
++          for (uint32_t rt = 0; rt < 4; ++rt) {
++            if (!(translations[i].writes_color_targets & (1u << rt))) {
++              continue;
++            }
++            for (float value : output.colors[rt]) {
++              ++total;
++              written += value != -12345.0f && !std::isnan(value);
++            }
++          }
++          if (i == 0 && total && !written && !last_try && options.mode != "perf") {
++            // Try other inputs.
++            break;
++          }
++          Totals& t = totals[options.translators[i]];
++          ++t.drawn;
++          t.gpu_ms += output.gpu_ms;
++          if (total) {
++            ++t.coverage[!written ? 0 : (written * 2 < total ? 1 : 2)];
++          }
++          outputs.push_back(std::move(output));
++        }
++        if (outputs.size() != translations.size()) {
++          continue;
++        }
++        ++seeds_kept;
++        for (size_t i = 1; i < outputs.size(); ++i) {
++          if (!outputs[0].ok || !outputs[i].ok) {
++            continue;
++          }
++          Totals& t = totals[options.translators[i]];
++          ++t.compared;
++          std::string first_mismatch;
++          uint32_t mismatches =
++              CompareOutputs(outputs[0], outputs[i], translations[0].writes_color_targets,
++                             translations[0].writes_depth, first_mismatch);
++          if (mismatches) {
++            ++t.mismatched;
++            std::printf("%s seed %u: %s differs from %s in %u values, first %s\n",
++                        variant.name.c_str(), seed, options.translators[i].c_str(),
++                        options.translators[0].c_str(), mismatches, first_mismatch.c_str());
++          }
++        }
++      }
++    }
++    std::fprintf(stderr, "\n");
++    for (const std::string& name : options.translators) {
++      const Totals& t = totals[name];
++      std::printf(
++          "%-6s translated %u, failed %u, translation %.1f ms, Metal compilation %.1f ms, drawn %u,"
++          " compared %u, mismatched %u, GPU %.3f ms\n"
++          "       draws with no / under half / at least half of the color values written: %u / %u /"
++          " %u\n",
++          name.c_str(), t.translated, t.failed, t.translate_ms, t.compile_ms, t.drawn, t.compared,
++          t.mismatched, t.gpu_ms, t.coverage[0], t.coverage[1], t.coverage[2]);
++    }
++  }
++  return 0;
++}
