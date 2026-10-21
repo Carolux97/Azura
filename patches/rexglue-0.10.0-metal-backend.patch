@@ -16,6 +16,75 @@ index 9b3cdf5..504176d 100644
  if(NOT REXGLUE_USE_D3D12 AND NOT REXGLUE_USE_VULKAN)
      message(FATAL_ERROR "At least one graphics backend must be enabled (REXGLUE_USE_D3D12 or REXGLUE_USE_VULKAN)")
  endif()
+diff --git a/include/rex/graphics/command_processor.h b/include/rex/graphics/command_processor.h
+index da8e432..b8c8cbd 100644
+--- a/include/rex/graphics/command_processor.h
++++ b/include/rex/graphics/command_processor.h
+@@ -169,6 +169,12 @@ class CommandProcessor {
+   virtual void PrepareForWait();
+   virtual void ReturnFromWait();
+ 
++  // Writes the value of a fence the guest asked for (EVENT_WRITE_SHD) to guest memory, already
++  // swapped to the guest's endianness. The guest takes the value as the GPU being done with
++  // everything before the fence; backends whose GPU runs behind the command processor can delay
++  // the write until it actually is. Writes immediately by default.
++  virtual void WriteGuestFence(uint32_t address, uint32_t value);
++
+   uint32_t ExecutePrimaryBuffer(uint32_t start_index, uint32_t end_index);
+   virtual void OnPrimaryBufferEnd() {}
+   void ExecuteIndirectBuffer(uint32_t ptr, uint32_t length);
+@@ -244,6 +250,8 @@ class CommandProcessor {
+   std::vector<uint32_t> me_bin_;
+ 
+   uint32_t counter_ = 0;
++  // Guest draws since the last fence the guest asked for (performance counters).
++  uint32_t draws_since_guest_fence_ = 0;
+ 
+   uint32_t primary_buffer_ptr_ = 0;
+   uint32_t primary_buffer_size_ = 0;
+diff --git a/include/rex/perf/counter.h b/include/rex/perf/counter.h
+index 83f0dff..c8b07cf 100644
+--- a/include/rex/perf/counter.h
++++ b/include/rex/perf/counter.h
+@@ -24,6 +24,12 @@ enum class CounterId : uint16_t {
+   kFrameTimeUs,
+   kFps,
+ 
++  // Signals from the command processor to the guest that GPU work is done
++  kGuestFences,             // EVENT_WRITE_SHD fence writes
++  kGuestFencesAfterDraws,   // Of those, fences with guest draws since the previous fence
++  kGuestMemWrites,          // MEM_WRITE, COND_WRITE (when written) and REG_TO_MEM writes
++  kGuestWaits,              // WAIT_REG_MEM packets (the command processor waiting on the guest)
++
+   // GPU
+   kDrawCalls,
+   kCommandBufferStalls,
+diff --git a/src/core/perf/counter.cpp b/src/core/perf/counter.cpp
+index d3f26eb..954f4a4 100644
+--- a/src/core/perf/counter.cpp
++++ b/src/core/perf/counter.cpp
+@@ -46,6 +46,10 @@ std::array<std::atomic<int64_t>, kNumCounters> g_snapshot{};
+ constexpr const char* kCounterNames[] = {
+     "frame_time_us",
+     "fps",
++    "guest_fences",
++    "guest_fences_after_draws",
++    "guest_mem_writes",
++    "guest_waits",
+     "draw_calls",
+     "command_buffer_stalls",
+     "vertices_processed",
+@@ -94,6 +98,10 @@ static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must matc
+ constexpr bool kIsGauge[] = {
+     false,  // kFrameTimeUs       (set each frame)
+     false,  // kFps               (set each frame)
++    false,  // kGuestFences
++    false,  // kGuestFencesAfterDraws
++    false,  // kGuestMemWrites
++    false,  // kGuestWaits
+     false,  // kDrawCalls
+     false,  // kCommandBufferStalls
+     false,  // kVerticesProcessed
 diff --git a/src/graphics/CMakeLists.txt b/src/graphics/CMakeLists.txt
 index 0d8f8af..ae491ad 100644
 --- a/src/graphics/CMakeLists.txt
@@ -116,12 +185,81 @@ index 0d8f8af..ae491ad 100644
  if(REXGLUE_USE_D3D12)
      target_link_libraries(rexgpu-xenos PRIVATE
          d3d12
+diff --git a/src/graphics/command_processor.cpp b/src/graphics/command_processor.cpp
+index a744375..92724c2 100644
+--- a/src/graphics/command_processor.cpp
++++ b/src/graphics/command_processor.cpp
+@@ -612,6 +612,10 @@ void CommandProcessor::PrepareForWait() {}
+ 
+ void CommandProcessor::ReturnFromWait() {}
+ 
++void CommandProcessor::WriteGuestFence(uint32_t address, uint32_t value) {
++  memory::store(memory_->TranslatePhysical(address), value);
++}
++
+ uint32_t CommandProcessor::ExecutePrimaryBuffer(uint32_t read_index, uint32_t write_index) {
+   SCOPE_profile_cpu_f("gpu");
+ 
+@@ -988,6 +992,7 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
+   uint32_t wait = reader->ReadAndSwap<uint32_t>();
+ 
+   bool is_memory = (wait_info & 0x10) != 0;
++  PERF_counter_inc(kGuestWaits);
+ 
+   bool matched = false;
+   do {
+@@ -1095,6 +1100,7 @@ bool CommandProcessor::ExecutePacketType3_REG_TO_MEM(memory::RingBuffer* reader,
+   mem_addr &= ~0x3;
+   reg_val = GpuSwap(reg_val, endianness);
+   memory::store(memory_->TranslatePhysical(mem_addr), reg_val);
++  PERF_counter_inc(kGuestMemWrites);
+ 
+   return true;
+ }
+@@ -1111,6 +1117,7 @@ bool CommandProcessor::ExecutePacketType3_MEM_WRITE(memory::RingBuffer* reader,
+     memory::store(memory_->TranslatePhysical(addr), write_data);
+     write_addr += 4;
+   }
++  PERF_counter_inc(kGuestMemWrites);
+ 
+   return true;
+ }
+@@ -1170,6 +1177,7 @@ bool CommandProcessor::ExecutePacketType3_COND_WRITE(memory::RingBuffer* reader,
+       write_reg_addr &= ~0x3;
+       write_data = GpuSwap(write_data, endianness);
+       memory::store(memory_->TranslatePhysical(write_reg_addr), write_data);
++      PERF_counter_inc(kGuestMemWrites);
+     } else {
+       // Register.
+       WriteRegister(write_reg_addr, write_data);
+@@ -1214,7 +1222,12 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_SHD(memory::RingBuffer* re
+   auto endianness = static_cast<xenos::Endian>(address & 0x3);
+   address &= ~0x3;
+   data_value = GpuSwap(data_value, endianness);
+-  memory::store(memory_->TranslatePhysical(address), data_value);
++  WriteGuestFence(address, data_value);
++  PERF_counter_inc(kGuestFences);
++  if (draws_since_guest_fence_) {
++    PERF_counter_inc(kGuestFencesAfterDraws);
++    draws_since_guest_fence_ = 0;
++  }
+   return true;
+ }
+ 
+@@ -1291,6 +1304,7 @@ bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32
+   // when true, render conditionally based on query result
+   // uint32_t viz_use = viz_query_condition & 0x100;
+ 
++  ++draws_since_guest_fence_;
+   assert_not_zero(count_remaining);
+   if (!count_remaining) {
+     REXGPU_ERROR("{}: Packet too small, can't read VGT_DRAW_INITIATOR", opcode_name);
 diff --git a/src/graphics/metal/metal_command_processor.h b/src/graphics/metal/metal_command_processor.h
 new file mode 100644
-index 0000000..d2064a8
+index 0000000..d119293
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.h
-@@ -0,0 +1,247 @@
+@@ -0,0 +1,274 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.h
 + * @brief       Xenos command processing with Metal
@@ -137,6 +275,7 @@ index 0000000..d2064a8
 +#include <cstdint>
 +#include <deque>
 +#include <memory>
++#include <mutex>
 +#include <vector>
 +
 +#include <rex/graphics/command_processor.h>
@@ -218,6 +357,9 @@ index 0000000..d2064a8
 +  void OnGammaRamp256EntryTableValueWritten() override {}
 +  void OnGammaRampPWLValueWritten() override {}
 +
++  void PrepareForWait() override;
++  void WriteGuestFence(uint32_t address, uint32_t value) override;
++
 +  Shader* LoadShader(xenos::ShaderType shader_type, uint32_t guest_address,
 +                     const uint32_t* host_address, uint32_t dword_count) override;
 +
@@ -281,7 +423,17 @@ index 0000000..d2064a8
 +    size_t current_page_ = SIZE_MAX;
 +  };
 +
++  // A guest fence write waiting for its submission to complete on the GPU.
++  struct PendingGuestFence {
++    uint64_t submission;
++    uint32_t address;
++    uint32_t value;
++  };
++
 +  bool BeginSubmission(bool is_guest_command);
++  // Called from Metal's completion thread: writes the guest fences of the submissions up to this
++  // one.
++  void OnSubmissionCompletedByGpu(uint64_t submission);
 +  bool EndSubmission(bool is_swap);
 +  // Waits until the submission (or the latest one if it's the current or a future one) completes.
 +  void AwaitSubmission(uint64_t submission);
@@ -329,6 +481,19 @@ index 0000000..d2064a8
 +  // Submissions are numbered from 1: the open one, or the next one if none is open.
 +  uint64_t submission_current_ = 1;
 +  uint64_t submission_completed_ = 0;
++  // Whether the open submission has any GPU work encoded.
++  bool submission_has_work_ = false;
++
++  // Guest fences written when the GPU is done (metal_gpu_accurate_fences): the command processor
++  // runs ahead of the GPU, and the guest reuses memory once it sees a fence, so a fence written
++  // early lets the guest change memory the GPU still reads or will still write.
++  bool accurate_fences_ = true;
++  std::mutex guest_fence_mutex_;
++  // Guarded by guest_fence_mutex_.
++  std::deque<PendingGuestFence> pending_guest_fences_;
++  uint64_t submission_completed_by_gpu_ = 0;
++  // Completion handlers registered and not finished yet, awaited at shutdown.
++  std::atomic<uint32_t> completion_handlers_in_flight_{0};
 +  bool device_lost_ = false;
 +
 +  // Frames.
@@ -371,10 +536,10 @@ index 0000000..d2064a8
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_command_processor.mm b/src/graphics/metal/metal_command_processor.mm
 new file mode 100644
-index 0000000..386c060
+index 0000000..73c554e
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.mm
-@@ -0,0 +1,1583 @@
+@@ -0,0 +1,1646 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.mm
 + * @brief       Xenos command processing with Metal
@@ -401,11 +566,17 @@ index 0000000..386c060
 +#include <rex/logging.h>
 +#include <rex/math.h>
 +#include <rex/memory/utils.h>
++#include <rex/thread.h>
 +
 +#include "metal_graphics_system.h"
 +#include "metal_presenter.h"
 +#include "metal_provider.h"
 +#include "metal_spirv.h"
++
++REXCVAR_DEFINE_BOOL(metal_gpu_accurate_fences, true, "GPU/Metal",
++                    "Write the fences the game waits on when the GPU has finished the work before "
++                    "them, rather than when the command processor reads them")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 +
 +namespace rex::graphics::metal {
 +
@@ -504,6 +675,10 @@ index 0000000..386c060
 +  }
 +  device_ = provider->device();
 +  queue_ = provider->queue();
++  accurate_fences_ = REXCVAR_GET(metal_gpu_accurate_fences);
++  if (accurate_fences_) {
++    REXGPU_INFO("Metal: guest fences are written when the GPU finishes the work before them");
++  }
 +
 +  scratch_buffer_pool_ = std::make_unique<TransientBufferPool>(
 +      device_, MTLResourceStorageModePrivate, size_t(16) << 20, @"Scratch");
@@ -587,6 +762,10 @@ index 0000000..386c060
 +
 +void MetalCommandProcessor::ShutdownContext() {
 +  AwaitSubmission(UINT64_MAX);
++  // Completion handlers may still be finishing after the command buffers report completion.
++  while (completion_handlers_in_flight_.load(std::memory_order_acquire)) {
++    rex::thread::MaybeYield();
++  }
 +
 +  swap_apply_gamma_pwl_pipeline_ = nil;
 +  swap_apply_gamma_table_pipeline_ = nil;
@@ -784,6 +963,7 @@ index 0000000..386c060
 +      return false;
 +    }
 +    command_buffer_.label = @"Guest GPU";
++    submission_has_work_ = false;
 +    encoder_type_ = EncoderType::kNone;
 +    current_render_pass_ = MetalRenderPass();
 +    render_encoder_state_ = RenderEncoderState();
@@ -811,6 +991,14 @@ index 0000000..386c060
 +
 +  if (submission_open_) {
 +    EndEncoder(rex::perf::CounterId::kRenderPassEndsOther);
++    if (accurate_fences_) {
++      uint64_t submission = submission_current_;
++      completion_handlers_in_flight_.fetch_add(1, std::memory_order_relaxed);
++      [command_buffer_ addCompletedHandler:^(id<MTLCommandBuffer>) {
++        OnSubmissionCompletedByGpu(submission);
++        completion_handlers_in_flight_.fetch_sub(1, std::memory_order_release);
++      }];
++    }
 +    [command_buffer_ commit];
 +    PERF_counter_inc(kHostSubmissions);
 +    submissions_in_flight_.emplace_back(submission_current_, command_buffer_);
@@ -834,6 +1022,43 @@ index 0000000..386c060
 +  }
 +
 +  return true;
++}
++
++void MetalCommandProcessor::OnSubmissionCompletedByGpu(uint64_t submission) {
++  std::lock_guard<std::mutex> lock(guest_fence_mutex_);
++  submission_completed_by_gpu_ = std::max(submission_completed_by_gpu_, submission);
++  while (!pending_guest_fences_.empty() &&
++         pending_guest_fences_.front().submission <= submission_completed_by_gpu_) {
++    const PendingGuestFence& fence = pending_guest_fences_.front();
++    memory::store(memory_->TranslatePhysical(fence.address), fence.value);
++    pending_guest_fences_.pop_front();
++  }
++}
++
++void MetalCommandProcessor::WriteGuestFence(uint32_t address, uint32_t value) {
++  if (!accurate_fences_) {
++    CommandProcessor::WriteGuestFence(address, value);
++    return;
++  }
++  // Send the work before the fence to the GPU, so the fence doesn't wait for the rest of the
++  // frame, and write it when the last submission with that work completes.
++  if (submission_open_ && submission_has_work_) {
++    EndSubmission(false);
++  }
++  uint64_t submission = submission_current_ - 1;
++  std::lock_guard<std::mutex> lock(guest_fence_mutex_);
++  if (submission_completed_by_gpu_ >= submission) {
++    memory::store(memory_->TranslatePhysical(address), value);
++    return;
++  }
++  pending_guest_fences_.push_back({submission, address, value});
++}
++
++void MetalCommandProcessor::PrepareForWait() {
++  // The guest may be waiting for work that is still only encoded.
++  if (accurate_fences_ && submission_open_ && submission_has_work_) {
++    EndSubmission(false);
++  }
 +}
 +
 +void MetalCommandProcessor::EndEncoder(rex::perf::CounterId render_pass_end_reason) {
@@ -872,6 +1097,7 @@ index 0000000..386c060
 +  compute_encoder_ = [command_buffer_ computeCommandEncoder];
 +  compute_encoder_.label = GetEncoderLabel(end_reason);
 +  encoder_type_ = EncoderType::kCompute;
++  submission_has_work_ = true;
 +  return compute_encoder_;
 +}
 +
@@ -884,6 +1110,7 @@ index 0000000..386c060
 +  blit_encoder_ = [command_buffer_ blitCommandEncoder];
 +  blit_encoder_.label = GetEncoderLabel(end_reason);
 +  encoder_type_ = EncoderType::kBlit;
++  submission_has_work_ = true;
 +  return blit_encoder_;
 +}
 +
@@ -923,6 +1150,7 @@ index 0000000..386c060
 +  }
 +  render_encoder_ = [command_buffer_ renderCommandEncoderWithDescriptor:descriptor];
 +  encoder_type_ = EncoderType::kRender;
++  submission_has_work_ = true;
 +  current_render_pass_ = render_pass;
 +  render_encoder_state_ = RenderEncoderState();
 +  PERF_counter_inc(kHostRenderPasses);
@@ -7757,10 +7985,10 @@ index 0000000..52f996f
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_shared_memory.h b/src/graphics/metal/metal_shared_memory.h
 new file mode 100644
-index 0000000..ee2200b
+index 0000000..af8bb77
 --- /dev/null
 +++ b/src/graphics/metal/metal_shared_memory.h
-@@ -0,0 +1,40 @@
+@@ -0,0 +1,43 @@
 +/**
 + * @file        graphics/metal/metal_shared_memory.h
 + * @brief       Guest physical memory as a Metal buffer, without copies on unified memory
@@ -7789,7 +8017,9 @@ index 0000000..ee2200b
 +
 +  // The whole 512 MiB of guest physical memory. With unified memory the buffer is created over
 +  // the guest memory itself, so the GPU reads what the guest wrote and the guest sees what the
-+  // GPU wrote (resolves, memexport) with no upload or readback.
++  // GPU wrote (resolves, memexport) with no upload or readback. With metal_shared_memory_copy, it
++  // is a separate GPU buffer that guest memory is copied into when a range is requested, as in
++  // the Vulkan backend.
 +  id<MTLBuffer> buffer() const { return buffer_; }
 +
 + protected:
@@ -7798,15 +8028,16 @@ index 0000000..ee2200b
 + private:
 +  MetalCommandProcessor& command_processor_;
 +  id<MTLBuffer> buffer_ = nil;
++  bool copy_ = false;
 +};
 +
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_shared_memory.mm b/src/graphics/metal/metal_shared_memory.mm
 new file mode 100644
-index 0000000..4110302
+index 0000000..b09177b
 --- /dev/null
 +++ b/src/graphics/metal/metal_shared_memory.mm
-@@ -0,0 +1,64 @@
+@@ -0,0 +1,110 @@
 +/**
 + * @file        graphics/metal/metal_shared_memory.mm
 + * @brief       Guest physical memory as a Metal buffer, without copies on unified memory
@@ -7817,10 +8048,19 @@ index 0000000..4110302
 +
 +#include "metal_shared_memory.h"
 +
++#include <cstring>
++
++#include <rex/cvar.h>
 +#include <rex/logging.h>
++#include <rex/perf/counter.h>
 +#include <rex/system/xmemory.h>
 +
 +#include "metal_command_processor.h"
++
++REXCVAR_DEFINE_BOOL(metal_shared_memory_copy, false, "GPU/Metal",
++                    "Copy guest memory into a separate GPU buffer when it is used, as the Vulkan "
++                    "backend does, instead of the GPU reading the guest memory directly")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 +
 +namespace rex::graphics::metal {
 +
@@ -7836,6 +8076,17 @@ index 0000000..4110302
 +  if (!device.hasUnifiedMemory) {
 +    REXGPU_ERROR("Metal: the shared memory needs a GPU with unified memory");
 +    return false;
++  }
++  copy_ = REXCVAR_GET(metal_shared_memory_copy);
++  if (copy_) {
++    buffer_ = [device newBufferWithLength:kBufferSize options:MTLResourceStorageModePrivate];
++    if (!buffer_) {
++      REXGPU_ERROR("Metal: failed to create the shared memory buffer");
++      return false;
++    }
++    buffer_.label = @"Shared memory (copy)";
++    REXGPU_INFO("Metal: guest memory is copied into the GPU shared memory buffer");
++    return true;
 +  }
 +  void* guest_memory = memory().TranslatePhysical<void*>(0);
 +  if (!guest_memory || (reinterpret_cast<uintptr_t>(guest_memory) & (getpagesize() - 1))) {
@@ -7862,10 +8113,36 @@ index 0000000..4110302
 +
 +bool MetalSharedMemory::UploadRanges(
 +    const std::vector<std::pair<uint32_t, uint32_t>>& upload_page_ranges) {
-+  // Nothing to copy: the GPU reads the guest memory directly. Marking the pages valid keeps the
-+  // invalidation watches (texture cache, shaders) working as with an uploaded copy.
++  if (!copy_) {
++    // Nothing to copy: the GPU reads the guest memory directly. Marking the pages valid keeps the
++    // invalidation watches (texture cache, shaders) working as with an uploaded copy.
++    for (const std::pair<uint32_t, uint32_t>& range : upload_page_ranges) {
++      MakeRangeValid(range.first << page_size_log2(), range.second << page_size_log2(), false);
++    }
++    return true;
++  }
++  // Snapshot the guest memory now into upload memory, and copy it into the buffer in order with
++  // the rest of the GPU work.
++  const uint8_t* guest_memory = memory().TranslatePhysical<const uint8_t*>(0);
 +  for (const std::pair<uint32_t, uint32_t>& range : upload_page_ranges) {
-+    MakeRangeValid(range.first << page_size_log2(), range.second << page_size_log2(), false);
++    size_t start = size_t(range.first) << page_size_log2();
++    size_t length = size_t(range.second) << page_size_log2();
++    MetalCommandProcessor::UploadAllocation upload =
++        command_processor_.RequestUpload(length, 16);
++    if (!upload.mapping) {
++      return false;
++    }
++    std::memcpy(upload.mapping, guest_memory + start, length);
++    id<MTLBlitCommandEncoder> blit =
++        command_processor_.GetBlitEncoder(rex::perf::CounterId::kRenderPassEndsUpload);
++    [blit copyFromBuffer:upload.buffer
++             sourceOffset:upload.offset
++                 toBuffer:buffer_
++        destinationOffset:start
++                     size:length];
++    PERF_counter_inc(kUploads);
++    PERF_counter_add(kUploadBytes, int64_t(length));
++    MakeRangeValid(uint32_t(start), uint32_t(length), false);
 +  }
 +  return true;
 +}
@@ -9865,7 +10142,7 @@ index 0000000..b9bc2fb
 +
 +#undef CAMetalLayer
 diff --git a/src/graphics/plugin_main.cpp b/src/graphics/plugin_main.cpp
-index ec756d3..2bd1ee3 100644
+index ec756d3..6e16b00 100644
 --- a/src/graphics/plugin_main.cpp
 +++ b/src/graphics/plugin_main.cpp
 @@ -11,6 +11,7 @@
@@ -9886,12 +10163,12 @@ index ec756d3..2bd1ee3 100644
 +
 +REXCVAR_DEFINE_STRING(gpu_backend, "any", "GPU",
 +                      "Host graphics API for the GPU emulation: any, vulkan, metal or d3d12 "
-+                      "(any picks the first one compiled in: D3D12, then Vulkan, then Metal)")
++                      "(any picks the first one compiled in: Metal, then D3D12, then Vulkan)")
 +    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
  
  extern "C" REX_GPU_PLUGIN_EXPORT uint32_t rex_gpu_abi_version(void) {
    return rex::system::kGpuPluginAbiVersion;
-@@ -38,6 +47,14 @@ extern "C" REX_GPU_PLUGIN_EXPORT rex::system::IGraphicsSystem* rex_gpu_create(
+@@ -38,6 +47,15 @@ extern "C" REX_GPU_PLUGIN_EXPORT rex::system::IGraphicsSystem* rex_gpu_create(
    }
  
    std::string_view backend = info->backend ? info->backend : "any";
@@ -9899,7 +10176,8 @@ index ec756d3..2bd1ee3 100644
 +    backend = REXCVAR_GET(gpu_backend);
 +  }
 +#if REX_HAS_METAL
-+  if (backend == "metal") {
++  // Metal is only built on macOS, where it is the native API.
++  if (backend == "any" || backend == "metal") {
 +    return new rex::graphics::metal::MetalGraphicsSystem();
 +  }
 +#endif

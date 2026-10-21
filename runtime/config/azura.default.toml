@@ -8,9 +8,12 @@
 # Every key is a runtime setting (cvar) name.
 
 # ---------- Graphics ----------
-# GPU emulation plugin loaded at start-up. "xenos" translates the console GPU to Vulkan, which
-# runs on Metal through MoltenVK on macOS.
+# GPU emulation plugin loaded at start-up. "xenos" translates the console GPU to the host's
+# graphics API.
 gpu_plugin = "xenos"
+# Host graphics API: "any" picks Metal on macOS and Vulkan on Linux; "vulkan" uses Vulkan on
+# macOS too (through MoltenVK).
+gpu_backend = "any"
 
 # ---------- Display ----------
 fullscreen = false

@@ -150,3 +150,30 @@ at 30 FPS, so 33.3 ms is the floor.
   ~60 render target transfers per frame: the next target for render pass reduction.
 - Not yet in the Metal backend: FXAA, tessellation (domain shaders), resolution scaling,
   host occlusion queries and the Dear ImGui overlays.
+
+## 8. Guest fences written when the GPU is done
+
+With the shared memory over the guest memory, looking at one spot of the first rooms broke the
+whole picture (quadrants of misread render target data). It did not happen with Vulkan, nor
+with Metal copying guest memory into a separate buffer as Vulkan does
+(`metal_shared_memory_copy`, a diagnostic setting), so it was a race on guest memory.
+
+The cause: the command processor wrote the fences the guest waits on (EVENT_WRITE_SHD) as soon as
+it read them, while the GPU runs the frame later, up to a few frames behind. The guest then
+reused memory the GPU had not read or written yet. Measured at the campaign start: 14-28 fences
+per frame (68-70 in the heaviest scenes), half of them with draws since the previous one, and 0
+other memory writes.
+
+`metal_gpu_accurate_fences` (on by default) sends the work before each such fence to the GPU and
+writes the fence from the command buffer's completion handler. Results on the same route:
+
+| Gameplay | Fences when read | Fences when the GPU is done |
+|---|---|---|
+| Frame time median / p90 / p99 | 33.4 / 35.1 / 40.6 ms | 33.4 / 34.7 / 40.0 ms |
+| Submissions per frame | 1 | 8-35 |
+| Render passes per frame (median / p90) | 112 / 194 | 124 / 146 |
+| Command processor waiting for the GPU (p90 / p99) | 6.1 / 34.9 ms | 0 / 0 ms |
+
+The full-screen glitch and the black patches on Anya's face are gone, and every gameplay window
+stays at the 30 FPS cap, the heaviest scenes included. The white flashes in some effects remain
+and happen with Vulkan too.
