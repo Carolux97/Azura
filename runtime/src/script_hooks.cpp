@@ -214,6 +214,13 @@ enum WatchedName {
   kBuildCampaignURL,         // GearMenuGame: builds travel URL for campaign
   kServerTravel,             // WorldInfo: travels to a new level
   kProcessServerTravel,      // GameInfo: processes server travel URL
+  kPawnDied,
+  kShouldDeathCauseFailure,
+  kGetDeathGameOverReason,
+  kGameOverPlayer,
+  kClientGameOver,
+  kClientSetCinematicMode,
+  kMatineeCancelled,
   kWatchedNameCount,
 };
 constexpr const char* kWatchedNames[kWatchedNameCount] = {
@@ -221,9 +228,14 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "OnConfirm_ResetDefaults", "FilterButtonInput",    "Callback_VideoOptions",
     "CloseVideoOptionsScene", "Callback_MenuOptionSelected", "Callback_ReturnToMain",
     "ResetAccept",           "GenericAccept",
-    "BuildCampaignURL",      "ServerTravel",           "ProcessServerTravel"};
+    "BuildCampaignURL",      "ServerTravel",           "ProcessServerTravel",
+    "PawnDied",              "ShouldDeathCauseFailure", "GetDeathGameOverReason",
+    "GameOverPlayer",        "ClientGameOver",         "ClientSetCinematicMode",
+    "MatineeCancelled"};
 
-std::atomic<int32_t> g_names[kWatchedNameCount] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
+std::atomic<int32_t> g_names[kWatchedNameCount] = {
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1};
 std::atomic<int> g_names_missing{kWatchedNameCount};
 std::atomic<uint32_t> g_names_scanned{0};
 std::atomic<uint32_t> g_calls{0};
@@ -667,9 +679,31 @@ static void StripListenParam(std::string& s) {
   }
 }
 
+static bool StripUrlOption(std::string& url, const char* option) {
+  size_t pos = url.find_first_of("?&");
+  while (pos != std::string::npos) {
+    const size_t value_start = pos + 1;
+    const size_t end = url.find_first_of("?&#", value_start);
+    const size_t value_end = end == std::string::npos ? url.size() : end;
+    const size_t equals = url.find('=', value_start);
+    const size_t key_end = equals != std::string::npos && equals < value_end ? equals : value_end;
+    if (key_end - value_start == std::strlen(option) &&
+        std::equal(option, option + std::strlen(option), url.begin() + value_start,
+                    [](char a, char b) {
+                      return std::tolower(static_cast<unsigned char>(a)) ==
+                             std::tolower(static_cast<unsigned char>(b));
+                    })) {
+      url.erase(pos, value_end - pos);
+      return true;
+    }
+    pos = end == std::string::npos || url[end] == '#' ? std::string::npos : end;
+  }
+  return false;
+}
+
 // Intercepts campaign and menu travel URLs to prevent infinite socket/network stalls
 // and replaces GearGame_P with the chapter's real persistent level map from kChapterMaps.
-bool PatchTravelURL(uint8_t* base, uint32_t fstring_addr) {
+bool PatchTravelURL(uint8_t* base, uint32_t fstring_addr, bool strip_checkpoint_option = false) {
   if (!fstring_addr) return false;
   const uint32_t data = LoadU32(base, fstring_addr);
   const uint32_t count = LoadU32(base, fstring_addr + 4);
@@ -731,6 +765,10 @@ bool PatchTravelURL(uint8_t* base, uint32_t fstring_addr) {
   const char* real_map = kChapterMaps[chapter];
   size_t qpos = url.find('?');
   std::string new_url = std::string(real_map) + (qpos != std::string::npos ? url.substr(qpos) : "");
+
+  if (strip_checkpoint_option && StripUrlOption(new_url, "loadcheckpoint")) {
+    REXLOG_INFO("[Azura campaign] Removed loadcheckpoint option because BuildCampaignURL requested a fresh chapter start");
+  }
 
   // This hook has no verified single-player/co-op discriminator; stripping listen may affect co-op.
   StripListenParam(new_url);
@@ -829,11 +867,24 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     ScanNewNames(base);
   }
   const uint32_t function = LoadU32(base, ctx.r4.u32 + kFrameNode);
+  if (Is(base, function, kPawnDied) || Is(base, function, kShouldDeathCauseFailure) ||
+      Is(base, function, kGetDeathGameOverReason) || Is(base, function, kGameOverPlayer) ||
+      Is(base, function, kClientGameOver) || Is(base, function, kClientSetCinematicMode) ||
+      Is(base, function, kMatineeCancelled)) {
+    REXLOG_INFO("[Azura death trace] {}", DescribeCall(base, ctx.r4.u32));
+  }
   if (Is(base, function, kBuildCampaignURL)) {
     const uint32_t result = ctx.r5.u32;
+    const int32_t use_checkpoint_offset = ParamOffset(base, function, "bUseCheckpoint");
+    const uint32_t locals = LoadU32(base, ctx.r4.u32 + kFrameLocals);
+    const bool use_checkpoint =
+        use_checkpoint_offset >= 0 && LoadU32(base, locals + use_checkpoint_offset) != 0;
+    if (use_checkpoint_offset < 0) {
+      REXLOG_WARN("[Azura campaign] BuildCampaignURL has no bUseCheckpoint parameter; preserving checkpoint option");
+    }
     __imp__sub_822DF9E0(ctx, base);
     if (result) {
-      PatchTravelURL(base, result);
+      PatchTravelURL(base, result, use_checkpoint_offset >= 0 && !use_checkpoint);
     }
     return;
   }

@@ -134,8 +134,14 @@ example `./azura --script_trace=true`.
 | --- | --- |
 | `script_trace` | Logs the first call of every script function as `Class.Function` (`(event)` when it came through `ProcessEvent`: from Flash or native code). Slow. |
 | `script_trace_args` | With `script_trace`: comma-separated functions whose every call is logged with its parameter values. Only script functions (it hooks `ProcessInternal`). The values are those at the start of the call, so `ReturnValue` and out parameters are not the results. |
+| `[Azura death trace]` log entries | Always records calls to `PawnDied`, `ShouldDeathCauseFailure`, `GetDeathGameOverReason`, `GameOverPlayer`, `ClientGameOver`, `ClientSetCinematicMode` and `MatineeCancelled`, with their input parameters, to diagnose campaign deaths around cinematics. Out parameters, including `ReturnValue`, are their pre-call values, not results. |
 | `script_dump_classes` | Comma-separated classes logged once loaded: super class, functions with parameters, properties with offsets, structs and enums. An entry ending in `*` lists the class names with that prefix instead. For `UIScene_Options` and `GearProfileSettings` it also dumps their defaults (option categories and rows, setting definitions). It keeps looking for about ten minutes, so classes that load later can be caught by playing. |
 | `script_dump_code` | With `script_dump_classes`: also logs each function's locals with their offsets, a rough listing of its bytecode (variables, calls, constants and jumps in order) and, for short functions, the raw bytes. |
+
+`GearMenuGame.BuildCampaignURL` can append a bare `?loadcheckpoint` even when its
+`bUseCheckpoint` argument is false. `GearGame.InitGame` checks whether that option is present, so
+the bare flag still enables checkpoint loading. The travel hook now removes that option only for
+an explicit fresh chapter start; checkpoint launches keep it.
 
 Classes are found as the game uses them (the class of every script function that runs and of the
 object running it, plus their super classes) and in the object table. The dump runs on its own
