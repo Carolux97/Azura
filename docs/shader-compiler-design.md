@@ -1,0 +1,252 @@
+# Xenos shader compiler (XSC): design
+
+Card 35. Our own compiler from Xenos shader microcode to the host GPUs: one intermediate
+representation with the Xenos semantics and the optimizations, and one emitter per backend
+(MSL for Metal on macOS, SPIR-V for Vulkan on Linux and on macOS through MoltenVK). The compiler
+and each backend are designed together. This document is written before the code and updated
+as each phase is measured.
+
+## 1. Why
+
+The game's shaders are Xenos microcode: the Xbox 360 GPU's own shader machine code, produced by
+Microsoft's HLSL compiler. The SDK analyses the microcode and translates it with the Xenia SPIR-V
+translator (`spirv_translator*.cpp`, ~11,000 lines); on macOS SPIRV-Cross then turns that SPIR-V
+into MSL.
+
+Measured on a base M4 in the room with light shafts (card 29, docs/metal-backend-design.md):
+
+| Measurement | Value |
+|---|---|
+| Game GPU time per frame | ~17-20 ms (30 FPS cap; 60 FPS needs 16.7 ms for everything) |
+| Main scene pass (2_10_10_10_FLOAT color + D24FS8 depth) | ~5 ms |
+| Its counters: Fragment Shader Launch / Instruction Throughput / Control Flow / ALU limiters | 81 / 44 / 29 / 26% |
+| Its memory bandwidth (read / write) | 10 / 8 GB/s |
+| Share of shader time in the game's pixel shaders | ~60% (top 10 shaders ~33%, ~25 for half) |
+
+What the translated shaders look like (MSL dumped with `metal_shader_dump_path`):
+
+- Every one of the 479 game shaders dumped is full of SPIRV-Cross `[[clang::optnone]]` helpers
+  (`spvFMul`, `spvFAdd`, `spvFSub`), one per float add and multiply: the translator marks them
+  `NoContraction` so that multipass rendering computes the same values in different shaders, and
+  SPIRV-Cross can only keep that in MSL by forbidding optimization of each operation. The most
+  expensive shader calls them 41 times, a large one ~690 times.
+- State known per draw is decided at run time in every pixel: texture signedness (both an
+  unsigned and a signed view are bound and sampled under a branch, then a switch picks the
+  component conversion), output gamma, alpha test, color exponent bias.
+- The Xenos control flow is wrapped in a generic `for (;;)` loop, with a dispatch switch when
+  there are jumps or loops.
+
+None of that is needed by the game: it comes from going through SPIR-V and SPIRV-Cross with a
+translator written for every Vulkan driver at once. A compiler of our own can emit what each API
+compiles best.
+
+## 2. Where it plugs in
+
+```
+ucode ──► Shader::AnalyzeUcode (common, unchanged)          parsed instructions
+      ──► XscShaderTranslator : ShaderTranslator             builds the IR from the Process* calls
+      ──► IR passes                                          structurization, simplification
+      ──► emitter: MSL text (Metal) or SPIR-V words (Vulkan)
+      ──► Translation binary, then the backend's pipeline cache as today
+```
+
+The SDK already separates the analysis of the microcode (`translator.cpp`, `shader.cpp`: control
+flow, ALU and fetch instructions parsed into `Parsed*Instruction`, register and constant usage)
+from the emission (`ShaderTranslator` has one virtual `Process*` method per instruction kind,
+implemented by the DXBC and SPIR-V translators). XSC is a third implementation, so the analysis,
+the shader storage per ucode hash and the per-draw modifications are reused as they are.
+
+Code: `src/graphics/pipeline/shader/xsc/` in the SDK, namespace `rex::graphics::xsc`, as our own
+patch (`patches/rexglue-0.10.0-xenos-shader-compiler.patch`).
+
+- `xsc_ir.h/.cpp`: the IR.
+- `xsc_translator.h/.cpp`: `XscShaderTranslator`, which records the parsed instructions as IR and
+  calls the passes and the emitter in `CompleteTranslation`.
+- `xsc_passes.cpp`: IR passes.
+- `xsc_msl.cpp`: MSL emitter.
+- `xsc_spirv.cpp`: SPIR-V emitter (on the SDK's `SpirvBuilder`).
+
+## 3. Xenos semantics to keep
+
+The reference is the current SPIR-V translator: every rule below is in its code, and the
+offline bench (section 8) compares the two translators on the game's own shaders.
+
+- **ALU pairs.** An ALU instruction is a vector operation (4 components) and a scalar operation
+  issued together; both read their operands before either result is written. The scalar result
+  is also kept as the "previous scalar" (`ps`) operand of later instructions.
+- **Multiplication.** Shader Model 3 rules: `±0 × anything = +0`, also for infinity and NaN, in
+  `mul`, `mad`, the dot products and their scalar forms. Translated as a select on
+  `min(|a|, |b|) == 0`, except when both operands are the same register components (`x × x`), or
+  when one operand is a literal that is neither zero nor infinite (a pass decides it).
+- **Other special values.** `rcp`, `rsq`, `log` and their clamped forms (`rcpc`, `rcpf`, `rsqc`,
+  `rsqf`, `logc`) have defined results for zero and infinity; `max`/`min` and the comparisons
+  (`sge`, `sgt`, `seq`, `sne`, `cnd*`) have defined NaN behaviour; `frc`, `trunc`, `floor`.
+- **Predication and constants.** `p0` set by `setp*`, instructions and exec blocks predicated on
+  it; boolean and loop constants from the bool/loop constant buffer; `a0` (`mova`, `movas`,
+  rounding) and the loop register `aL` index float constants and registers.
+- **Control flow.** `exec` blocks (unconditional, on a boolean constant, predicated), `loop_start`
+  and `loop_end` with the loop constant's count, start and step, `jmp`, `call` and `return`
+  (conditional or predicated), `alloc` for exports.
+- **Fetch.** Vertex fetch: formats, endianness swaps, normalization, signed and integer forms,
+  the index rounding and the mini fetches. Texture fetch: dimensions (1D, 2D, 3D, stacked, cube
+  with the Xenos cube coordinates), offsets, LOD (computed, register, bias, the exponent
+  adjustment of the fetch constant), gradients, filters from the fetch constant or the
+  instruction, signedness per component (unsigned, signed, biased, gamma), resolution scaling,
+  and the getters (`getWeights`, `getGradients`, `getCubeMapFaceIndex`...).
+- **Exports.** Color with the exponent bias, the gamma conversion of render targets with gamma,
+  alpha test and alpha to coverage; depth (and the float24 conversion modes); interpolators,
+  position with the NDC scale and offset, point size, clip planes and vertex kill; memexport.
+- **Pixel position.** `param_gen` inputs (position, point coordinates, front facing) and the
+  sample-space position of the Metal backend (host pixel divided by the samples per guest pixel).
+
+## 4. The IR
+
+A structured register IR, close to the microcode but explicit:
+
+- **Values** are the Xenos storage: 64 temporary vec4 registers (`r0`-`r63`), `a0`, `aL`, `p0`,
+  the previous scalar, the exports. Temporaries become local variables of the host shader; the
+  host compilers (Metal's LLVM, the Vulkan drivers' NIR/ACO or NVIDIA's) do SSA, common
+  subexpressions and register allocation better than we would, as long as nothing stops them.
+- **Statements** are assignments `dest.mask = expression`, where expressions are trees of
+  operations with explicit Xenos semantics (`mul_ieee`, `mul_sm3`, `rcp_clamped`...), operand
+  reads (register, float constant absolute or relative to `a0`/`aL`, literal 0 and 1 from swizzles),
+  negation and absolute value, swizzles. The vector and scalar halves of an ALU instruction read
+  into temporaries first when they depend on each other's results, as the hardware does.
+- **Control flow** is a tree: `if` on a boolean constant or on `p0`, loops with the loop
+  constant's count, and `kill`. The microcode's control flow is structured by a pass: exec
+  blocks, predication and loops map to `if` and loops directly; jumps and calls that form
+  reducible regions become `if`s and inlined subroutines; anything left falls back to a dispatch
+  loop over labels (what the SPIR-V translator always does today).
+- **Texture and vertex fetches** are statements with their full set of parameters, so each
+  emitter writes the best sampling call for its API.
+
+## 5. Passes
+
+In the order they run; each one is kept only if the bench and a trace show it helps.
+
+1. Control flow structurization (section 4).
+2. Write-mask and dead code removal: components never read later are not computed.
+3. Literal folding: swizzled 0 and 1, `mul` by a literal 1 or 0, negations.
+4. Multiplication rule elision where an operand is a non-zero finite literal.
+5. Specialization (phase 4): per-draw state that is today read from the system constants in every
+   pixel becomes a function constant (Metal) or a specialization constant (Vulkan): texture
+   signedness per fetch, output gamma per render target, alpha test function, color exponent bias
+   when it is 1. The pipeline cache keys then include those values; the number of pipelines this
+   creates is measured before it is kept.
+
+## 6. Emitters
+
+Both emitters start with the exact interface of the current translator, so the backends and their
+pipeline caches take the new shaders without changes and the two translators can be compared draw
+by draw; the interface is changed afterwards, together with the backend, in phase 4.
+
+- **MSL (Metal).** Buffers 0 (shared memory) and 1-5 (system, vertex float, pixel float, bool and
+  loop, fetch constants) as `metal_pipeline_cache.mm` binds them; textures and samplers in the
+  order the shader's texture and sampler bindings list them; the same interpolator locations,
+  outputs and entry point names. Plain float operations (no `optnone`): with `MTLMathModeSafe` the
+  compiler may not reassociate them or change the signed zero and infinity behaviour, and it does
+  not contract a multiply and an add written as separate expressions into one fused operation
+  (to verify with the bench: the comparison has to be bit-exact against the current translator
+  for shaders without texture filtering differences).
+- **SPIR-V (Vulkan).** The descriptor sets, bindings, push constants and interface variables of
+  `SpirvShaderTranslator`, written with the SDK's `SpirvBuilder`. `NoContraction` is kept where
+  the multipass rule needs it (vertex positions and everything that feeds them) and dropped
+  elsewhere: Vulkan drivers take it as a hint without the cost it has through SPIRV-Cross, and
+  the pass that finds the position's dependencies is shared with the MSL emitter.
+
+## 7. Selection and fallback
+
+- `shader_compiler = "translator" | "xsc"` (default `translator` until phase 5), read by the
+  Metal and Vulkan pipeline caches.
+- The choice is made per shader (ucode hash) at its first translation and kept for all its
+  variants, because the texture and sampler bindings are stored per shader.
+- XSC reports what it does not support yet (an instruction, a fetch mode, a control flow shape)
+  as a non-fatal translation failure; that shader then uses the current translator. A log line
+  lists those shaders once, so coverage can be followed.
+- D3D12 keeps the DXBC translator.
+
+## 8. Validation without playing: the offline bench
+
+`xsc_bench` (macOS command-line tool built with the SDK, `src/graphics/pipeline/shader/xsc/
+bench/`), fed with the game's real shaders:
+
+- **Input.** The ucode the game uses, dumped once with `dump_shaders` (`shader_<hash>.ucode.bin.
+  frag/vert`), and the variants actually used (shader hash and modification), taken from the names
+  of the MSL dumped with `metal_shader_dump_path` (`ps_<hash>_<modification>_<flags>.metal`).
+- **translate.** Every variant through both translators: SPIR-V translator plus SPIRV-Cross, and
+  XSC to MSL and to SPIR-V (the latter through SPIRV-Cross too, plus the SPIR-V validator).
+  Reports translation and Metal compilation failures, unsupported features and compile times.
+- **compare.** Every pixel shader variant drawn into a small float render target with both
+  translations and the same inputs: interpolators, float, bool, loop and fetch constants and
+  textures generated from a fixed seed (with zeros, infinities and NaNs among the values on
+  purpose), several seeds per variant so that branches on constants take both ways. The outputs
+  must match bit for bit, or within a stated number of ULPs where a texture filter or a
+  transcendental function is involved; every mismatch is reported with the variant and the
+  pixel. Vertex shaders the same way in phase 3, drawing points with their outputs written to
+  float render targets.
+- **perf.** The same draw repeated many times per variant with GPU timestamps, as a first
+  comparison of the cost of each translation before a trace in the game.
+
+In the game: side by side window captures of the same scenes with each translator (menus, Bink
+intro, campaign, room with light shafts) and Metal System Traces.
+
+## 9. Measurement
+
+- **macOS.** perf_log_csv, Metal System Trace with the "Azura GPU Limiters" template (GPU counters
+  and shader profiler) in the room with light shafts, as in card 29. Baseline: section 1.
+- **Linux.** A new counter, `host_gpu_time_us`, with the GPU execution time of the submissions
+  that completed during the frame, in both backends (Metal: the command buffers' `GPUStartTime` and
+  `GPUEndTime`; Vulkan: timestamp queries at the start and end of each submission). With the
+  30 FPS cap the frame time hides the GPU cost; this counter does not, and it needs no vendor
+  tool. `scripts/linux_gpu_baseline.sh` and docs/linux-gpu-measurement.md tell Juan Llorca
+  Martínez how to record the same route.
+
+## 10. Phases
+
+0. This document, the bench, `host_gpu_time_us` and the baselines on macOS and Linux.
+1. IR and MSL emitter for pixel shaders, behind `shader_compiler`, falling back to the current
+   translator for what is not supported yet; the most expensive shaders first; bench and
+   captures.
+2. SPIR-V emitter for pixel shaders, checked with the bench and the Vulkan backend on macOS,
+   measured on Linux.
+3. Vertex shaders on both emitters, with positions computed exactly as the depth prepass and the
+   main pass need.
+4. Passes and backend co-design (specialization, constants laid out per shader, render target
+   formats), each measured on macOS and Linux.
+5. On by default on macOS and Linux when every shader of the game compiles with no visual
+   difference; the current translator stays behind the setting.
+
+## 11. Phase 0 results
+
+- **Corpus.** One play session on 21 October 2026, from the menus to well past the room with light
+  shafts: 956 pixel and 519 vertex shaders, 958 and 521 variants (with modifications) used. Kept
+  outside the repository (game data) in `~/Library/Application Support/com.gears3azura.launcher/
+  xsc_corpus/`.
+- **Bench.** `cmake --build --preset mac-arm64-sdk-source-relwithdebinfo --target xsc-bench` (from
+  `runtime/`), then `xsc-bench <corpus> --mode translate|compare|perf`. With the current
+  translator alone:
+  - all 1,479 variants translate and compile, with no failure;
+  - translation (SPIR-V and SPIRV-Cross) takes ~2.6 ms per variant, and Metal's compilation of
+    that MSL ~37 ms per variant (55 s for the corpus on the bench's first run; later runs hit
+    Metal's shader cache and take ~0.1 s);
+  - the comparison of the translator with itself, 4 kept seeds per pixel shader variant: 3,826
+    comparisons, 0 differences, so the draws are deterministic; only 13 draws per translator
+    write no color value (kill instructions discard every pixel for every seed tried), against
+    ~2,850 that write at least half of the values.
+- **macOS baseline** (perf_log_csv with `host_gpu_time_us`, same session, 9.1 minutes of
+  gameplay): GPU time per frame median 18.9 ms, p90 23.1 ms, p99 30.2 ms; the heaviest minutes
+  22-24 ms median. Frame time median 33.3 ms (the cap) and p99 104.6 ms: those hitches are not GPU
+  time; Metal compiling shaders while playing is one candidate (37 ms per variant above), to be
+  checked.
+- **Linux baseline.** Pending: docs/linux-gpu-measurement.md and `scripts/gpu_baseline.sh`, for
+  Juan Llorca Martínez.
+- **Patches.** `scripts/regen_sdk_patches.sh` regenerates the Metal backend patch and the shader
+  compiler patch from the working SDK tree, from a base rebuilt from the SDK commit.
+
+## 12. Risks
+
+- Visual differences in shaders the bench does not reach with random constants (branches the
+  game never takes in the bench, special texture formats): the in-game captures cover the main
+  scenes, and the per-shader fallback keeps the game working while something is missing.
+- Pipeline variant growth from specialization: measured in phase 4 before it is kept.
+- Divergence from the upstream SDK: everything is in our own patches, as with the Metal backend.
