@@ -40,7 +40,34 @@ scripts/gpu_baseline.sh finish
 
 This restores `azura.toml` and prints the summary.
 
-## 3. Send
+## 3. Sessions for the shader compiler (phase 2 on)
+
+XSC replaces the shader translator only on the host render target path (`fbo`), not on `fsi`, so
+both sessions of a comparison use `fbo`. Each one is a `start` / play / `finish` as above, on the
+same route, with the settings given after the label (they apply to that session only; `finish`
+puts the previous `azura.toml` back):
+
+```bash
+scripts/gpu_baseline.sh start linux-fbo-translator render_target_path_vulkan=fbo shader_compiler=translator
+# play the route, quit
+scripts/gpu_baseline.sh finish
+
+scripts/gpu_baseline.sh start linux-fbo-xsc render_target_path_vulkan=fbo shader_compiler=xsc
+# play the route, quit
+scripts/gpu_baseline.sh finish
+```
+
+While playing with `fbo`, also note whether bright white flashes appear on walls, in light
+reflections or when Jack cloaks. They happen on macOS (Metal and Vulkan, both on host render
+targets) and not with `fsi` on Linux, and these sessions tell whether `fbo` brings them on Linux
+too.
+
+With `shader_compiler=xsc` the log says `Vulkan: pixel shaders translated by the Xenos shader
+compiler (XSC)` at the start; a line `XSC: shader ... translated by the SPIR-V translator` names
+a pixel shader that XSC does not support yet (vertex shaders all go to the translator until
+phase 3).
+
+## 4. Send
 
 On the Trello card, or to Carolina Molina Elvira:
 
