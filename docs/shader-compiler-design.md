@@ -243,7 +243,46 @@ intro, campaign, room with light shafts) and Metal System Traces.
 - **Patches.** `scripts/regen_sdk_patches.sh` regenerates the Metal backend patch and the shader
   compiler patch from the working SDK tree, from a base rebuilt from the SDK commit.
 
-## 12. Risks
+## 12. Phase 1 results: pixel shaders to MSL
+
+- **Code.** `xsc_ir.h` and `xsc_builder.h` (the IR and its builder), `xsc_translator*.cpp` (the
+  lowering of the Xenos microcode: control flow, ALU, texture fetch, pixel prologue and
+  epilogue, ported from the SPIR-V translator rule by rule), `xsc_msl.cpp` (the MSL emitter).
+  The Metal pipeline cache uses it for pixel shaders with `shader_compiler = "xsc"`; vertex
+  shaders, memory export and float24 depth conversion go to the SPIR-V translator.
+- **Bit-exact with the SPIR-V translator.** The bench compares every pixel shader variant of the
+  corpus (958) drawn with both, 4 seeds each: 3,825 comparisons, no difference. Two things the
+  bench had to account for:
+  - SPIRV-Cross writes a multiplication as `fma(a, b, 0)`, which turns a -0 product into +0,
+    while the Xenos rules (and XSC) keep -0: +0 and -0 compare equal.
+  - Derivatives inside control flow that differs between the pixels of a 2x2 quad (a predicated
+    texture fetch with computed LOD, where the predicate differs per pixel) are undefined, on
+    Metal as on any GPU, and each compilation resolves them its own way: the compare mode
+    replaces `dfdx` and `dfdy` by a fixed function in both translations (`--derivatives fixed`,
+    the default); `--derivatives hardware` keeps the real ones.
+- **Contraction, measured.** With `MTLMathModeSafe`, the Metal compiler fuses `a * b + c` written
+  in one expression but not across statements, and `fma(a, b, 0)` stays exact. The MSL emitter
+  writes every operation as its own statement, so no `[[clang::optnone]]` is needed.
+- **Kill.** A Xenos kill keeps the pixel running for its neighbours' derivatives: XSC marks the
+  pixel and calls `discard_fragment()` at the end of the shader.
+- **Inherited rules to check later in the game** (kept as they are for parity, they look like
+  errors of the SPIR-V translator):
+  - linear filtering between the layers of a stacked texture computes
+    `layer1 + (layer1 - layer0) * f` instead of `layer0 + (layer1 - layer0) * f`;
+  - with register gradients on 2D textures, the horizontal and the vertical ones are swapped.
+- **Compile time.** Translation of the corpus 0.46 s against 4.2 s (SPIR-V translator and
+  SPIRV-Cross), Metal compilation of the generated MSL 44 s against 64 s.
+- **In the game** (base M4, the campaign start up to the room with light shafts, 22 October
+  2026): no visual difference noticed (the white flashes in some effects are older and also
+  happen with Vulkan), no shader fell back to the SPIR-V translator. GPU time per frame from
+  `host_gpu_time_us`, 3.1 minutes of gameplay: median 12.5 ms, p90 17.1 ms, p99 21.7 ms, against
+  18.9, 23.1 and 30.2 ms for the baseline (9.1 minutes, a longer route: the first minutes,
+  comparable, went from 17-20 ms to 12-15 ms). Metal System Trace with the shader profiler in the
+  room with light shafts: the main scene pass's fragment time 5.1 to 1.7 ms per frame, the most
+  expensive pixel shader 1.73 to 0.14 ms, large shaders 2 to 4 times cheaper, small ones the
+  same.
+
+## 13. Risks
 
 - Visual differences in shaders the bench does not reach with random constants (branches the
   game never takes in the bench, special texture formats): the in-game captures cover the main
