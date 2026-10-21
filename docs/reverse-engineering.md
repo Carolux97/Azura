@@ -409,7 +409,9 @@ How:
   since an array cannot shrink. The performance overlay and its two style toggles reuse the existing
   Full screen Off/On profile mapping; their values are stored independently by the menu hook. Both
   style toggles off means the existing full overlay, while FPS-only and Advanced select their
-  respective display modes. The slider uses ID 9105, which the profile does not have.
+  respective display modes. Advanced mode keeps up to 600 recent frame timestamps (about ten
+  seconds at 60 FPS) and reports the minimum FPS and average FPS across the slowest one percent of
+  frame intervals. The slider uses ID 9105, which the profile does not have.
 - **Showing values:** while `PopulateOptionsList` is on one of our rows, every call it makes
   (entered through `CallFunction`) rewrites its locals `Slider_Value` / `OptionList_Index` with the
   real value, so the call that hands them to Flash reads ours.
