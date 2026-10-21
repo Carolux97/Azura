@@ -623,7 +623,7 @@ input[type="range"] { width: 100%; accent-color: var(--imulsion); }
   border-color: var(--imulsion);
   color: var(--imulsion);
 }
-.btn-primary:hover {
+.btn.btn-primary:hover:not([disabled]) {
   background: var(--imulsion);
   color: #000;
 }
@@ -633,7 +633,7 @@ input[type="range"] { width: 100%; accent-color: var(--imulsion); }
   border-color: var(--crimson);
   color: #ff8888;
 }
-.btn-danger:hover {
+.btn.btn-danger:hover:not([disabled]) {
   background: var(--crimson);
   color: #fff;
 }
