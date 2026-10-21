@@ -180,3 +180,35 @@ writes the fence from the command buffer's completion handler. Results on the sa
 The full-screen glitch and the black patches on Anya's face are gone, and every gameplay window
 stays at the 30 FPS cap, the heaviest scenes included. The white flashes in some effects remain
 and happen with Vulkan too.
+
+## 9. Render target transfers: draws without clipping
+
+`log_render_target_transfers` logs, every 4096 transfers, the totals by reason (depth and color,
+other EDRAM base, pitch, format) and the source and destination pairs that copy the most tiles;
+the `render_target_transfers` and `render_target_transfer_tiles` counters go to perf_log_csv.
+
+In the room with light shafts, a Metal System Trace gave ~10 ms of GPU time per frame to
+transfers, as much as the game's draws. Almost half of the copied tiles were between render
+targets at different bases: the main depth buffer at tile 0 and a depth buffer at tile 1440 whose
+range wrapped around the end of the EDRAM over it, back and forth about 7 times per frame, and
+copies of 1024 tiles out of a 720-tile (1280x720) depth buffer. The game clears with draws, not
+with resolves (no resolve clears in a minute of gameplay), so turning transfers of cleared data
+into clears does not apply.
+
+The cause was the height estimated for draws without clipping and with the default 8192 scissor
+(screen-space quads such as clears): with nothing to clamp it, they claimed up to the whole EDRAM.
+`execute_unclipped_draw_vs_on_cpu` runs the vertex shader of those draws on the CPU to get their
+real extent (on by default in Xenia, off in the SDK), and azura.default.toml now turns it on.
+Same room, 15 s traces:
+
+| Light-shaft room | Before | With the setting |
+|---|---|---|
+| Game GPU time per frame | 26.4 ms | 20.5 ms |
+| Render target transfers (GPU) | 10.2 ms | 1.9 ms |
+| Transfers per frame (median / p90) | 95 / 181 | 32 / 35 |
+| Tiles copied per frame (median) | 66,700 | 8,600 |
+| Frame time p90 / p99 | 39.3 / 50.0 ms | 34.5 / 35.6 ms |
+
+The transfers left are almost all the 1280x720 region at tile 720 used in turn as 8_8_8_8 color,
+D24S8 depth and 2_10_10_10 (fixed and float) color, which the game does reinterpret. The CPU
+cost was ~0.3 ms more per frame on the GPU command thread (median). No new visual artefacts.
