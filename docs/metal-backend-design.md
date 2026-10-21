@@ -148,8 +148,11 @@ at 30 FPS, so 33.3 ms is the floor.
   flashes in some effects happen with both backends: open issues, not Metal regressions.
 - In the room with light shafts the command processor waits ~32 ms per frame for the GPU, with
   ~60 render target transfers per frame: the next target for render pass reduction.
-- Not yet in the Metal backend: FXAA, tessellation (domain shaders), resolution scaling,
-  host occlusion queries and the Dear ImGui overlays.
+- Not yet in the Metal backend: tessellation (domain shaders), resolution scaling, host
+  occlusion queries and the Dear ImGui overlays.
+- FXAA (the Antialiasing option of the game's Video menu) is a Metal shader written for Apple
+  GPUs (half precision colors, quality as a function constant) after the gamma ramp pass with
+  luma: ~0.18 ms more GPU time per frame at 1280x720 (0.32 vs 0.14 ms for the swap pass).
 
 ## 8. Guest fences written when the GPU is done
 
