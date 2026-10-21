@@ -14,6 +14,11 @@ gpu_plugin = "xenos"
 # Host graphics API: "any" picks Metal on macOS and Vulkan on Linux; "vulkan" uses Vulkan on
 # macOS too (through MoltenVK).
 gpu_backend = "any"
+# Run the vertex shader of screen-space draws without clipping (full-screen clears and passes)
+# on the CPU to find how much of the EDRAM they really use. Without it such draws claim up to the
+# whole EDRAM, and every render target in the way is copied out and back: in the campaign this
+# cut the GPU time of render target transfers from ~10 to ~2 ms per frame.
+execute_unclipped_draw_vs_on_cpu = true
 
 # ---------- Display ----------
 fullscreen = false

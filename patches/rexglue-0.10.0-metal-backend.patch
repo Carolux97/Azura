@@ -42,11 +42,27 @@ index da8e432..b8c8cbd 100644
  
    uint32_t primary_buffer_ptr_ = 0;
    uint32_t primary_buffer_size_ = 0;
+diff --git a/include/rex/graphics/pipeline/render_target/cache.h b/include/rex/graphics/pipeline/render_target/cache.h
+index b246319..d57e36f 100644
+--- a/include/rex/graphics/pipeline/render_target/cache.h
++++ b/include/rex/graphics/pipeline/render_target/cache.h
+@@ -666,6 +666,11 @@ class RenderTargetCache {
+   bool WouldOwnershipChangeRequireTransfers(RenderTargetKey dest,
+                                             uint32_t start_tiles_base_relative,
+                                             uint32_t length_tiles) const;
++  // Counts a transfer of tiles from source to dest for the performance counters and
++  // log_render_target_transfers. extends_last is true when the tiles were appended to the
++  // previous transfer instead of starting a new one.
++  void LogTransfer(RenderTargetKey source, RenderTargetKey dest, uint32_t tiles,
++                   bool extends_last);
+   // Updates ownership_ranges_, adds the transfers needed for the ownership
+   // change to transfers_append_out if it's not null.
+   void ChangeOwnership(RenderTargetKey dest, uint32_t start_tiles_base_relative,
 diff --git a/include/rex/perf/counter.h b/include/rex/perf/counter.h
-index 83f0dff..c8b07cf 100644
+index 83f0dff..d57ba20 100644
 --- a/include/rex/perf/counter.h
 +++ b/include/rex/perf/counter.h
-@@ -24,6 +24,12 @@ enum class CounterId : uint16_t {
+@@ -24,6 +24,16 @@ enum class CounterId : uint16_t {
    kFrameTimeUs,
    kFps,
  
@@ -56,14 +72,18 @@ index 83f0dff..c8b07cf 100644
 +  kGuestMemWrites,          // MEM_WRITE, COND_WRITE (when written) and REG_TO_MEM writes
 +  kGuestWaits,              // WAIT_REG_MEM packets (the command processor waiting on the guest)
 +
++  // EDRAM ownership transfers between host render targets (common render target cache)
++  kRenderTargetTransfers,      // Transfers (tile ranges copied from one render target to another)
++  kRenderTargetTransferTiles,  // EDRAM tiles they copy
++
    // GPU
    kDrawCalls,
    kCommandBufferStalls,
 diff --git a/src/core/perf/counter.cpp b/src/core/perf/counter.cpp
-index d3f26eb..954f4a4 100644
+index d3f26eb..2932566 100644
 --- a/src/core/perf/counter.cpp
 +++ b/src/core/perf/counter.cpp
-@@ -46,6 +46,10 @@ std::array<std::atomic<int64_t>, kNumCounters> g_snapshot{};
+@@ -46,6 +46,12 @@ std::array<std::atomic<int64_t>, kNumCounters> g_snapshot{};
  constexpr const char* kCounterNames[] = {
      "frame_time_us",
      "fps",
@@ -71,10 +91,12 @@ index d3f26eb..954f4a4 100644
 +    "guest_fences_after_draws",
 +    "guest_mem_writes",
 +    "guest_waits",
++    "render_target_transfers",
++    "render_target_transfer_tiles",
      "draw_calls",
      "command_buffer_stalls",
      "vertices_processed",
-@@ -94,6 +98,10 @@ static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must matc
+@@ -94,6 +100,12 @@ static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must matc
  constexpr bool kIsGauge[] = {
      false,  // kFrameTimeUs       (set each frame)
      false,  // kFps               (set each frame)
@@ -82,6 +104,8 @@ index d3f26eb..954f4a4 100644
 +    false,  // kGuestFencesAfterDraws
 +    false,  // kGuestMemWrites
 +    false,  // kGuestWaits
++    false,  // kRenderTargetTransfers
++    false,  // kRenderTargetTransferTiles
      false,  // kDrawCalls
      false,  // kCommandBufferStalls
      false,  // kVerticesProcessed
@@ -10294,6 +10318,144 @@ index 0000000..b9bc2fb
 +#include <rex/ui/vulkan/api.h>
 +
 +#undef CAMetalLayer
+diff --git a/src/graphics/pipeline/render_target/cache.cpp b/src/graphics/pipeline/render_target/cache.cpp
+index bd0019c..ca62abd 100644
+--- a/src/graphics/pipeline/render_target/cache.cpp
++++ b/src/graphics/pipeline/render_target/cache.cpp
+@@ -13,6 +13,8 @@
+ #include <cmath>
+ #include <cstring>
+ #include <iterator>
++#include <map>
++#include <string>
+ #include <tuple>
+ #include <unordered_set>
+ #include <utility>
+@@ -27,6 +29,7 @@
+ #include <rex/graphics/xenos.h>
+ #include <rex/logging.h>
+ #include <rex/math.h>
++#include <rex/perf/counter.h>
+ 
+ REXCVAR_DEFINE_BOOL(mrt_edram_used_range_clamp_to_min, true, "GPU",
+                     "Clamp MRT EDRAM used range to minimum");
+@@ -1254,6 +1257,99 @@ bool RenderTargetCache::WouldOwnershipChangeRequireTransfers(RenderTargetKey des
+   return false;
+ }
+ 
++REXCVAR_DEFINE_BOOL(log_render_target_transfers, false, "GPU",
++                    "Log which render target ownership transfers happen, by source and "
++                    "destination and why, every 4096 transfers (profiling)");
++
++namespace {
++
++// Why a range changes owner: what differs between the source and the destination keys.
++const char* GetTransferReason(uint32_t source_key, uint32_t dest_key) {
++  union Key {
++    uint32_t key;
++    struct {
++      uint32_t base_tiles : xenos::kEdramBaseTilesBits;
++      uint32_t pitch_tiles_at_32bpp : 8;
++      uint32_t msaa_samples : xenos::kMsaaSamplesBits;
++      uint32_t is_depth : 1;
++      uint32_t resource_format : xenos::kRenderTargetFormatBits;
++    };
++  };
++  Key source, dest;
++  source.key = source_key;
++  dest.key = dest_key;
++  if (source.is_depth != dest.is_depth) {
++    return "depth/color";
++  }
++  if (source.base_tiles != dest.base_tiles) {
++    return "other base";
++  }
++  if (source.pitch_tiles_at_32bpp != dest.pitch_tiles_at_32bpp) {
++    return "pitch";
++  }
++  if (source.msaa_samples != dest.msaa_samples) {
++    return "msaa";
++  }
++  return "format";
++}
++
++// Transfer statistics for log_render_target_transfers.
++struct TransferStats {
++  struct Pair {
++    uint32_t count = 0;
++    uint64_t tiles = 0;
++  };
++  std::map<std::pair<uint32_t, uint32_t>, Pair> pairs;  // (source, destination) keys
++  std::map<std::string, Pair> reasons;
++  uint32_t count = 0;
++};
++
++}  // namespace
++
++void RenderTargetCache::LogTransfer(RenderTargetKey source, RenderTargetKey dest, uint32_t tiles,
++                                    bool extends_last) {
++  if (!extends_last) {
++    PERF_counter_inc(kRenderTargetTransfers);
++  }
++  PERF_counter_add(kRenderTargetTransferTiles, int64_t(tiles));
++  if (!REXCVAR_GET(log_render_target_transfers)) {
++    return;
++  }
++  static TransferStats stats;
++  auto& pair = stats.pairs[{source.key, dest.key}];
++  pair.tiles += tiles;
++  auto& reason = stats.reasons[GetTransferReason(source.key, dest.key)];
++  reason.tiles += tiles;
++  if (extends_last) {
++    return;
++  }
++  ++pair.count;
++  ++reason.count;
++  if (++stats.count < 4096) {
++    return;
++  }
++  std::string reasons;
++  for (const auto& [name, totals] : stats.reasons) {
++    reasons += fmt::format("{}{} {} ({} tiles)", reasons.empty() ? "" : ", ", name, totals.count,
++                           totals.tiles);
++  }
++  REXGPU_INFO("Render target transfers: {} by reason: {}", stats.count, reasons);
++  std::vector<std::pair<std::pair<uint32_t, uint32_t>, TransferStats::Pair>> sorted(
++      stats.pairs.begin(), stats.pairs.end());
++  std::sort(sorted.begin(), sorted.end(),
++            [](const auto& a, const auto& b) { return a.second.tiles > b.second.tiles; });
++  for (size_t i = 0; i < std::min(sorted.size(), size_t(16)); ++i) {
++    RenderTargetKey source_key, dest_key;
++    source_key.key = sorted[i].first.first;
++    dest_key.key = sorted[i].first.second;
++    REXGPU_INFO("  {:5} x {:5} tiles avg ({:>11}): {} -> {}", sorted[i].second.count,
++                sorted[i].second.tiles / sorted[i].second.count,
++                GetTransferReason(source_key.key, dest_key.key), source_key.GetDebugName(),
++                dest_key.GetDebugName());
++  }
++  stats = TransferStats();
++}
++
+ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_tiles_base_relative,
+                                         uint32_t length_tiles,
+                                         std::vector<Transfer>* transfers_append_out,
+@@ -1335,6 +1431,8 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
+                      transfer_host_depth_source)) {
+               // Extend the last transfer if, for example, transferring color,
+               // but host depth is different.
++              LogTransfer(transfer_source, dest,
++                          transfer_end_tiles - transfers_append_out->back().end_tiles, true);
+               transfers_append_out->back().end_tiles = transfer_end_tiles;
+             } else {
+               auto transfer_source_rt_it = render_targets_.find(transfer_source);
+@@ -1353,6 +1451,7 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
+                       transfer_host_depth_source_rt_it != render_targets_.end()
+                           ? transfer_host_depth_source_rt_it->second
+                           : nullptr);
++                  LogTransfer(transfer_source, dest, transfer_end_tiles - it->first, false);
+                 }
+               }
+             }
 diff --git a/src/graphics/plugin_main.cpp b/src/graphics/plugin_main.cpp
 index ec756d3..6e16b00 100644
 --- a/src/graphics/plugin_main.cpp
