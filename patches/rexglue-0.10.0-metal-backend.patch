@@ -256,10 +256,10 @@ index a744375..92724c2 100644
      REXGPU_ERROR("{}: Packet too small, can't read VGT_DRAW_INITIATOR", opcode_name);
 diff --git a/src/graphics/metal/metal_command_processor.h b/src/graphics/metal/metal_command_processor.h
 new file mode 100644
-index 0000000..d119293
+index 0000000..c6fb6e4
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.h
-@@ -0,0 +1,274 @@
+@@ -0,0 +1,282 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.h
 + * @brief       Xenos command processing with Metal
@@ -531,15 +531,23 @@ index 0000000..d119293
 +  id<MTLComputePipelineState> swap_apply_gamma_table_pipeline_ = nil;
 +  id<MTLComputePipelineState> swap_apply_gamma_pwl_pipeline_ = nil;
 +  MTLSize swap_apply_gamma_threads_per_threadgroup_ = {16, 8, 1};
++  // FXAA: the gamma ramp pass also stores the luma in alpha (into swap_fxaa_source_), then the
++  // FXAA pass, written in MSL for Apple GPUs, filters it into the guest output.
++  id<MTLComputePipelineState> swap_apply_gamma_table_fxaa_luma_pipeline_ = nil;
++  id<MTLComputePipelineState> swap_apply_gamma_pwl_fxaa_luma_pipeline_ = nil;
++  id<MTLComputePipelineState> swap_fxaa_pipeline_ = nil;
++  id<MTLComputePipelineState> swap_fxaa_extreme_pipeline_ = nil;
++  id<MTLSamplerState> swap_fxaa_sampler_ = nil;
++  id<MTLTexture> swap_fxaa_source_ = nil;
 +};
 +
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_command_processor.mm b/src/graphics/metal/metal_command_processor.mm
 new file mode 100644
-index 0000000..73c554e
+index 0000000..fbd5247
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.mm
-@@ -0,0 +1,1646 @@
+@@ -0,0 +1,1791 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.mm
 + * @brief       Xenos command processing with Metal
@@ -583,7 +591,9 @@ index 0000000..73c554e
 +// The gamma ramp shaders of the Vulkan backend, converted to MSL at initialization.
 +namespace shaders {
 +#include "../shaders/vulkan_spirv/apply_gamma_pwl_cs.h"
++#include "../shaders/vulkan_spirv/apply_gamma_pwl_fxaa_luma_cs.h"
 +#include "../shaders/vulkan_spirv/apply_gamma_table_cs.h"
++#include "../shaders/vulkan_spirv/apply_gamma_table_fxaa_luma_cs.h"
 +}  // namespace shaders
 +
 +namespace {
@@ -594,6 +604,67 @@ index 0000000..73c554e
 +constexpr uint32_t kSwapTextureSource = 1;
 +constexpr uint32_t kSwapTextureDestination = 2;
 +constexpr uint32_t kSwapBufferConstants = 0;
++
++// FXAA 3.11 console-style filter over the gamma-corrected output, with the luma of each pixel in
++// alpha, with the constants of the Vulkan backend's FXAA so both look the same. Colors and lumas
++// are half precision, coordinates single precision (half is too coarse for 720p positions), and
++// the quality is a function constant, so each variant is compiled without the other's branches.
++NSString* const kSwapFxaaShaderSource = @R"MSL(
++#include <metal_stdlib>
++using namespace metal;
++constant bool kExtremeQuality [[function_constant(0)]];
++struct FxaaConstants {
++  uint2 size;
++  float2 size_inv;
++};
++kernel void swap_fxaa(uint2 pixel [[thread_position_in_grid]],
++                      constant FxaaConstants& constants [[buffer(0)]],
++                      texture2d<half> source [[texture(0)]],
++                      sampler source_sampler [[sampler(0)]],
++                      texture2d<half, access::write> dest [[texture(1)]]) {
++  if (any(pixel >= constants.size)) {
++    return;
++  }
++  const half edge_threshold = kExtremeQuality ? 0.063h : 0.166h;
++  const half edge_threshold_min = kExtremeQuality ? 0.0312h : 0.0833h;
++  const float span_max = kExtremeQuality ? 12.0 : 8.0;
++  const half dir_reduce_mul = 0.125h;
++  const half dir_reduce_min = 1.0h / 128.0h;
++  const half3 luma_weights = half3(0.299h, 0.587h, 0.114h);
++
++  float2 texel = constants.size_inv;
++  float2 uv = (float2(pixel) + 0.5) * texel;
++  half4 rgbm = source.sample(source_sampler, uv, level(0.0));
++  half luma_m = rgbm.a;
++  half luma_nw = source.sample(source_sampler, uv + float2(-texel.x, -texel.y), level(0.0)).a;
++  half luma_ne = source.sample(source_sampler, uv + float2(texel.x, -texel.y), level(0.0)).a;
++  half luma_sw = source.sample(source_sampler, uv + float2(-texel.x, texel.y), level(0.0)).a;
++  half luma_se = source.sample(source_sampler, uv + float2(texel.x, texel.y), level(0.0)).a;
++
++  half luma_min = min(luma_m, min(min(luma_nw, luma_ne), min(luma_sw, luma_se)));
++  half luma_max = max(luma_m, max(max(luma_nw, luma_ne), max(luma_sw, luma_se)));
++  half3 result = rgbm.rgb;
++  if (luma_max - luma_min >= max(edge_threshold_min, luma_max * edge_threshold)) {
++    float2 dir = float2(-((luma_nw + luma_ne) - (luma_sw + luma_se)),
++                        (luma_nw + luma_sw) - (luma_ne + luma_se));
++    float dir_reduce = float(max((luma_nw + luma_ne + luma_sw + luma_se) *
++                                     (0.25h * dir_reduce_mul),
++                                 dir_reduce_min));
++    float rcp_dir_min = 1.0 / (min(abs(dir.x), abs(dir.y)) + dir_reduce);
++    dir = clamp(dir * rcp_dir_min, float2(-span_max), float2(span_max)) * texel;
++    half3 rgb_a = 0.5h * (source.sample(source_sampler, uv + dir * (1.0 / 3.0 - 0.5),
++                                        level(0.0)).rgb +
++                          source.sample(source_sampler, uv + dir * (2.0 / 3.0 - 0.5),
++                                        level(0.0)).rgb);
++    half3 rgb_b = rgb_a * 0.5h +
++                  0.25h * (source.sample(source_sampler, uv + dir * -0.5, level(0.0)).rgb +
++                           source.sample(source_sampler, uv + dir * 0.5, level(0.0)).rgb);
++    half luma_b = dot(rgb_b, luma_weights);
++    result = (luma_b < luma_min || luma_b > luma_max) ? rgb_a : rgb_b;
++  }
++  dest.write(half4(result, 1.0h), pixel);
++}
++)MSL";
 +
 +NSString* GetEncoderLabel(rex::perf::CounterId reason) {
 +  switch (reason) {
@@ -757,6 +828,41 @@ index 0000000..73c554e
 +  }
 +  swap_apply_gamma_threads_per_threadgroup_ =
 +      MTLSizeMake(threadgroup_size[0], threadgroup_size[1], threadgroup_size[2]);
++
++  // FXAA. Without it the game still runs, presenting without the filter.
++  swap_apply_gamma_table_fxaa_luma_pipeline_ = CreateComputePipelineFromSpirv(
++      device_, shaders::apply_gamma_table_fxaa_luma_cs,
++      sizeof(shaders::apply_gamma_table_fxaa_luma_cs) / 4, bindings, "apply gamma table FXAA luma");
++  swap_apply_gamma_pwl_fxaa_luma_pipeline_ = CreateComputePipelineFromSpirv(
++      device_, shaders::apply_gamma_pwl_fxaa_luma_cs,
++      sizeof(shaders::apply_gamma_pwl_fxaa_luma_cs) / 4, bindings, "apply gamma PWL FXAA luma");
++  NSError* error = nil;
++  id<MTLLibrary> fxaa_library = [device_ newLibraryWithSource:kSwapFxaaShaderSource
++                                                      options:nil
++                                                        error:&error];
++  if (fxaa_library) {
++    for (bool extreme_quality : {false, true}) {
++      MTLFunctionConstantValues* constant_values = [MTLFunctionConstantValues new];
++      [constant_values setConstantValue:&extreme_quality type:MTLDataTypeBool atIndex:0];
++      id<MTLFunction> function = [fxaa_library newFunctionWithName:@"swap_fxaa"
++                                                    constantValues:constant_values
++                                                             error:&error];
++      id<MTLComputePipelineState> pipeline =
++          function ? [device_ newComputePipelineStateWithFunction:function error:&error] : nil;
++      (extreme_quality ? swap_fxaa_extreme_pipeline_ : swap_fxaa_pipeline_) = pipeline;
++    }
++  }
++  if (!swap_fxaa_pipeline_ || !swap_fxaa_extreme_pipeline_ ||
++      !swap_apply_gamma_table_fxaa_luma_pipeline_ || !swap_apply_gamma_pwl_fxaa_luma_pipeline_) {
++    REXGPU_ERROR("Metal: failed to create the FXAA pipelines: {}",
++                 error ? error.localizedDescription.UTF8String : "unknown error");
++  }
++  MTLSamplerDescriptor* sampler_descriptor = [MTLSamplerDescriptor new];
++  sampler_descriptor.minFilter = MTLSamplerMinMagFilterLinear;
++  sampler_descriptor.magFilter = MTLSamplerMinMagFilterLinear;
++  sampler_descriptor.sAddressMode = MTLSamplerAddressModeClampToEdge;
++  sampler_descriptor.tAddressMode = MTLSamplerAddressModeClampToEdge;
++  swap_fxaa_sampler_ = [device_ newSamplerStateWithDescriptor:sampler_descriptor];
 +  return true;
 +}
 +
@@ -767,6 +873,12 @@ index 0000000..73c554e
 +    rex::thread::MaybeYield();
 +  }
 +
++  swap_fxaa_source_ = nil;
++  swap_fxaa_sampler_ = nil;
++  swap_fxaa_extreme_pipeline_ = nil;
++  swap_fxaa_pipeline_ = nil;
++  swap_apply_gamma_pwl_fxaa_luma_pipeline_ = nil;
++  swap_apply_gamma_table_fxaa_luma_pipeline_ = nil;
 +  swap_apply_gamma_pwl_pipeline_ = nil;
 +  swap_apply_gamma_table_pipeline_ = nil;
 +
@@ -2112,18 +2224,12 @@ index 0000000..73c554e
 +  uint32_t display_width = std::max(uint32_t(1), uint32_t(video_mode.display_width));
 +  uint32_t display_height = std::max(uint32_t(1), uint32_t(video_mode.display_height));
 +
-+  if (GetActualSwapPostEffect() != SwapPostEffect::kNone) {
-+    static bool post_effect_logged = false;
-+    if (!post_effect_logged) {
-+      post_effect_logged = true;
-+      REXGPU_WARN("Metal: FXAA is not supported yet, presenting without it");
-+    }
-+  }
++  SwapPostEffect swap_post_effect = GetActualSwapPostEffect();
 +
 +  presenter->RefreshGuestOutput(
 +      guest_output_width, guest_output_height, display_width, display_height,
-+      [this, guest_output_width, guest_output_height, frontbuffer_format,
-+       swap_texture](ui::Presenter::GuestOutputRefreshContext& context) -> bool {
++      [this, guest_output_width, guest_output_height, frontbuffer_format, swap_texture,
++       swap_post_effect](ui::Presenter::GuestOutputRefreshContext& context) -> bool {
 +        auto& metal_context =
 +            static_cast<MetalPresenter::MetalGuestOutputRefreshContext&>(context);
 +
@@ -2133,7 +2239,38 @@ index 0000000..73c554e
 +        bool use_pwl_gamma_ramp =
 +            frontbuffer_format == xenos::TextureFormat::k_2_10_10_10 ||
 +            frontbuffer_format == xenos::TextureFormat::k_2_10_10_10_AS_16_16_16_16;
-+        context.SetIs8bpc(!use_pwl_gamma_ramp);
++
++        // FXAA goes through an intermediate texture with the luma in alpha.
++        id<MTLComputePipelineState> fxaa_pipeline =
++            swap_post_effect == SwapPostEffect::kFxaa          ? swap_fxaa_pipeline_
++            : swap_post_effect == SwapPostEffect::kFxaaExtreme ? swap_fxaa_extreme_pipeline_
++                                                               : nil;
++        id<MTLComputePipelineState> gamma_pipeline =
++            use_pwl_gamma_ramp ? swap_apply_gamma_pwl_pipeline_ : swap_apply_gamma_table_pipeline_;
++        if (fxaa_pipeline) {
++          id<MTLComputePipelineState> gamma_luma_pipeline =
++              use_pwl_gamma_ramp ? swap_apply_gamma_pwl_fxaa_luma_pipeline_
++                                 : swap_apply_gamma_table_fxaa_luma_pipeline_;
++          if (!swap_fxaa_source_ || swap_fxaa_source_.width != guest_output_width ||
++              swap_fxaa_source_.height != guest_output_height) {
++            MTLTextureDescriptor* descriptor = [MTLTextureDescriptor
++                texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
++                                             width:guest_output_width
++                                            height:guest_output_height
++                                         mipmapped:NO];
++            descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
++            descriptor.storageMode = MTLStorageModePrivate;
++            swap_fxaa_source_ = [device_ newTextureWithDescriptor:descriptor];
++            swap_fxaa_source_.label = @"FXAA source";
++          }
++          if (gamma_luma_pipeline && swap_fxaa_source_) {
++            gamma_pipeline = gamma_luma_pipeline;
++          } else {
++            fxaa_pipeline = nil;
++          }
++        }
++        // FXAA can result in more than 8 bits of precision.
++        context.SetIs8bpc(!use_pwl_gamma_ramp && !fxaa_pipeline);
 +
 +        // The ramp as a texel buffer in the upload memory of the submission.
 +        constexpr uint32_t kGammaRampSize256EntryTable = sizeof(uint32_t) * 256;
@@ -2165,17 +2302,33 @@ index 0000000..73c554e
 +        id<MTLComputeCommandEncoder> compute =
 +            GetComputeEncoder(rex::perf::CounterId::kRenderPassEndsOther);
 +        compute.label = @"Swap";
-+        [compute setComputePipelineState:use_pwl_gamma_ramp ? swap_apply_gamma_pwl_pipeline_
-+                                                             : swap_apply_gamma_table_pipeline_];
++        [compute setComputePipelineState:gamma_pipeline];
 +        [compute setTexture:ramp_texture atIndex:kSwapTextureRamp];
 +        [compute setTexture:swap_texture atIndex:kSwapTextureSource];
-+        [compute setTexture:metal_context.texture() atIndex:kSwapTextureDestination];
++        [compute setTexture:fxaa_pipeline ? swap_fxaa_source_ : metal_context.texture()
++                    atIndex:kSwapTextureDestination];
 +        uint32_t size[2] = {guest_output_width, guest_output_height};
 +        [compute setBytes:size length:sizeof(size) atIndex:kSwapBufferConstants];
-+        [compute dispatchThreadgroups:MTLSizeMake((guest_output_width + 15) / 16,
-+                                                  (guest_output_height + 7) / 8, 1)
++        MTLSize group_count = MTLSizeMake((guest_output_width + 15) / 16,
++                                          (guest_output_height + 7) / 8, 1);
++        [compute dispatchThreadgroups:group_count
 +                threadsPerThreadgroup:swap_apply_gamma_threads_per_threadgroup_];
 +        PERF_counter_inc(kHostDispatches);
++        if (fxaa_pipeline) {
++          struct {
++            uint32_t size[2];
++            float size_inv[2];
++          } fxaa_constants = {{guest_output_width, guest_output_height},
++                              {1.0f / float(guest_output_width),
++                               1.0f / float(guest_output_height)}};
++          [compute setComputePipelineState:fxaa_pipeline];
++          [compute setBytes:&fxaa_constants length:sizeof(fxaa_constants) atIndex:0];
++          [compute setTexture:swap_fxaa_source_ atIndex:0];
++          [compute setSamplerState:swap_fxaa_sampler_ atIndex:0];
++          [compute setTexture:metal_context.texture() atIndex:1];
++          [compute dispatchThreadgroups:group_count threadsPerThreadgroup:MTLSizeMake(16, 8, 1)];
++          PERF_counter_inc(kHostDispatches);
++        }
 +        // The presenter paints from another thread with its own command buffers on the same
 +        // queue: reserving the place of this one now makes them run after it.
 +        [command_buffer_ enqueue];
