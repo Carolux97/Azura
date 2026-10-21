@@ -1,0 +1,77 @@
+diff --git a/MoltenVK/MoltenVK/Commands/MVKCmdDebug.mm b/MoltenVK/MoltenVK/Commands/MVKCmdDebug.mm
+index 3cd7472..706f98c 100644
+--- a/MoltenVK/MoltenVK/Commands/MVKCmdDebug.mm
++++ b/MoltenVK/MoltenVK/Commands/MVKCmdDebug.mm
+@@ -46,6 +46,10 @@ void MVKCmdDebugMarkerBegin::encode(MVKCommandEncoder* cmdEncoder) {
+ 	if (mtlCmdEnc) {
+ 		[mtlCmdEnc pushDebugGroup: _markerName];
+ 	} else {
++		// Outside a render pass, the label names the encoders that follow: end an open compute or
++		// blit encoder so the work after the label gets an encoder of its own.
++		cmdEncoder->endCurrentMetalEncoding();
++		cmdEncoder->_debugMarkerLabel = _markerName;
+ 		[cmdEncoder->_mtlCmdBuffer pushDebugGroup: _markerName];
+ 	}
+ }
+@@ -63,6 +67,7 @@ void MVKCmdDebugMarkerEnd::encode(MVKCommandEncoder* cmdEncoder) {
+ 	if (mtlCmdEnc) {
+ 		[mtlCmdEnc popDebugGroup];
+ 	} else {
++		cmdEncoder->_debugMarkerLabel = nil;
+ 		[cmdEncoder->_mtlCmdBuffer popDebugGroup];
+ 	}
+ }
+diff --git a/MoltenVK/MoltenVK/Commands/MVKCommandBuffer.h b/MoltenVK/MoltenVK/Commands/MVKCommandBuffer.h
+index 2a6dcb8..f60639f 100644
+--- a/MoltenVK/MoltenVK/Commands/MVKCommandBuffer.h
++++ b/MoltenVK/MoltenVK/Commands/MVKCommandBuffer.h
+@@ -493,6 +493,18 @@ public:
+ 	/** The current Metal render encoder. */
+ 	id<MTLRenderCommandEncoder> _mtlRenderEncoder;
+ 
++	/**
++	 * Name of the Vulkan debug label begun last outside a render pass, or nil. The Metal encoders
++	 * that follow carry it in their labels, so GPU traces can attribute their time to it. Owned by
++	 * the debug marker command, which outlives the encoding.
++	 */
++	NSString* _debugMarkerLabel = nil;
++
++	/** Returns the label with the current debug marker label in front of it, if there is one. */
++	NSString* labelWithDebugMarker(NSString* label) {
++		return _debugMarkerLabel ? [NSString stringWithFormat: @"%@ | %@", _debugMarkerLabel, label] : label;
++	}
++
+ 	/** Tracks the state of command encoding. */
+ 	MVKCommandEncoderState _state;
+ 
+diff --git a/MoltenVK/MoltenVK/Commands/MVKCommandBuffer.mm b/MoltenVK/MoltenVK/Commands/MVKCommandBuffer.mm
+index 707c267..edea19e 100644
+--- a/MoltenVK/MoltenVK/Commands/MVKCommandBuffer.mm
++++ b/MoltenVK/MoltenVK/Commands/MVKCommandBuffer.mm
+@@ -829,7 +829,7 @@ void MVKCommandEncoder::beginMetalRenderPass(MVKCommandUse cmdUse) {
+ 
+     _mtlRenderEncoder = [_mtlCmdBuffer renderCommandEncoderWithDescriptor: mtlRPDesc];
+ 	retainIfImmediatelyEncoding(_mtlRenderEncoder);
+-	_cmdBuffer->setMetalObjectLabel(_mtlRenderEncoder, getMTLRenderCommandEncoderName(cmdUse));
++	_cmdBuffer->setMetalObjectLabel(_mtlRenderEncoder, labelWithDebugMarker(getMTLRenderCommandEncoderName(cmdUse)));
+ 	getState().beginGraphicsEncoding(getSampleCount());
+ 
+ 	encodeBarrierWaits(cmdUse);
+@@ -1098,7 +1098,7 @@ id<MTLComputeCommandEncoder> MVKCommandEncoder::getMTLComputeEncoder(MVKCommandU
+ 	if (_mtlComputeEncoderUse != cmdUse) {
+ 		needWaits = true;
+ 		_mtlComputeEncoderUse = cmdUse;
+-		_cmdBuffer->setMetalObjectLabel(_mtlComputeEncoder, mvkMTLComputeCommandEncoderLabel(cmdUse));
++		_cmdBuffer->setMetalObjectLabel(_mtlComputeEncoder, labelWithDebugMarker(mvkMTLComputeCommandEncoderLabel(cmdUse)));
+ 	}
+ 	if (needWaits) {
+ 		encodeBarrierWaits(cmdUse);
+@@ -1117,7 +1117,7 @@ id<MTLBlitCommandEncoder> MVKCommandEncoder::getMTLBlitEncoder(MVKCommandUse cmd
+     if (_mtlBlitEncoderUse != cmdUse) {
+ 		needWaits = true;
+         _mtlBlitEncoderUse = cmdUse;
+-		_cmdBuffer->setMetalObjectLabel(_mtlBlitEncoder, mvkMTLBlitCommandEncoderLabel(cmdUse));
++		_cmdBuffer->setMetalObjectLabel(_mtlBlitEncoder, labelWithDebugMarker(mvkMTLBlitCommandEncoderLabel(cmdUse)));
+     }
+ 	if (needWaits) {
+ 		encodeBarrierWaits(cmdUse);
