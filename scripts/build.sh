@@ -137,6 +137,8 @@ apply_patch "${SDK_SRC}" "${ROOT}/patches/rexglue-0.10.0-exit-code.patch"
 apply_patch "${SDK_SRC}" "${ROOT}/patches/rexglue-0.10.0-thread-cpu.patch"
 apply_patch "${SDK_SRC}" "${ROOT}/patches/rexglue-0.10.0-gpu-profiling.patch"
 apply_patch "${SDK_SRC}" "${ROOT}/patches/rexglue-0.10.0-present-pipeline.patch"
+apply_patch "${SDK_SRC}" "${ROOT}/patches/rexglue-0.10.0-edram-sample-space.patch"
+apply_patch "${SDK_SRC}" "${ROOT}/patches/rexglue-0.10.0-metal-backend.patch"
 apply_patch "${SDK_SRC}/thirdparty/utfcpp" "${ROOT}/patches/rexglue-0.10.0-utfcpp.patch"
 
 # On macOS, ensure the patched MoltenVK dylib is built and installed in the SDK before
