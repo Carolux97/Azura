@@ -59,10 +59,10 @@ index b246319..d57e36f 100644
    // change to transfers_append_out if it's not null.
    void ChangeOwnership(RenderTargetKey dest, uint32_t start_tiles_base_relative,
 diff --git a/include/rex/perf/counter.h b/include/rex/perf/counter.h
-index 83f0dff..d57ba20 100644
+index 83f0dff..b01af41 100644
 --- a/include/rex/perf/counter.h
 +++ b/include/rex/perf/counter.h
-@@ -24,6 +24,16 @@ enum class CounterId : uint16_t {
+@@ -24,6 +24,22 @@ enum class CounterId : uint16_t {
    kFrameTimeUs,
    kFps,
  
@@ -76,14 +76,20 @@ index 83f0dff..d57ba20 100644
 +  kRenderTargetTransfers,      // Transfers (tile ranges copied from one render target to another)
 +  kRenderTargetTransferTiles,  // EDRAM tiles they copy
 +
++  // Host draws by what limits hidden surface removal on tile-based GPUs (Metal backend)
++  kHostDrawsEarlyDepth,   // Pixel shader with early depth and stencil tests
++  kHostDrawsAlphaTested,  // Coverage from alpha (alpha test or alpha to coverage), may discard
++  kHostDrawsShaderKill,   // Pixel shader with kill instructions
++  kHostDrawsBlended,      // Blending on a written color target
++
    // GPU
    kDrawCalls,
    kCommandBufferStalls,
 diff --git a/src/core/perf/counter.cpp b/src/core/perf/counter.cpp
-index d3f26eb..2932566 100644
+index d3f26eb..5641237 100644
 --- a/src/core/perf/counter.cpp
 +++ b/src/core/perf/counter.cpp
-@@ -46,6 +46,12 @@ std::array<std::atomic<int64_t>, kNumCounters> g_snapshot{};
+@@ -46,6 +46,16 @@ std::array<std::atomic<int64_t>, kNumCounters> g_snapshot{};
  constexpr const char* kCounterNames[] = {
      "frame_time_us",
      "fps",
@@ -93,10 +99,14 @@ index d3f26eb..2932566 100644
 +    "guest_waits",
 +    "render_target_transfers",
 +    "render_target_transfer_tiles",
++    "host_draws_early_depth",
++    "host_draws_alpha_tested",
++    "host_draws_shader_kill",
++    "host_draws_blended",
      "draw_calls",
      "command_buffer_stalls",
      "vertices_processed",
-@@ -94,6 +100,12 @@ static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must matc
+@@ -94,6 +104,16 @@ static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must matc
  constexpr bool kIsGauge[] = {
      false,  // kFrameTimeUs       (set each frame)
      false,  // kFps               (set each frame)
@@ -106,6 +116,10 @@ index d3f26eb..2932566 100644
 +    false,  // kGuestWaits
 +    false,  // kRenderTargetTransfers
 +    false,  // kRenderTargetTransferTiles
++    false,  // kHostDrawsEarlyDepth
++    false,  // kHostDrawsAlphaTested
++    false,  // kHostDrawsShaderKill
++    false,  // kHostDrawsBlended
      false,  // kDrawCalls
      false,  // kCommandBufferStalls
      false,  // kVerticesProcessed
@@ -568,10 +582,10 @@ index 0000000..c6fb6e4
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_command_processor.mm b/src/graphics/metal/metal_command_processor.mm
 new file mode 100644
-index 0000000..fbd5247
+index 0000000..8964fc7
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.mm
-@@ -0,0 +1,1791 @@
+@@ -0,0 +1,1840 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.mm
 + * @brief       Xenos command processing with Metal
@@ -701,6 +715,26 @@ index 0000000..fbd5247
 +    default:
 +      return @"Other";
 +  }
++}
++
++// Label of a pass of guest draws for GPU captures and traces: the render targets it draws to, by
++// the names of their textures (the render target keys), so the cost of each pass of the game's
++// frame can be told apart.
++NSString* GetGuestDrawsLabel(const MetalRenderPass& render_pass) {
++  NSMutableString* label = [NSMutableString stringWithString:@"Guest draws:"];
++  auto append = [label](id<MTLTexture> texture) {
++    id<MTLTexture> named = texture.parentTexture ? texture.parentTexture : texture;
++    [label appendFormat:@" [%@]", named.label ? named.label : @"?"];
++  };
++  for (id<MTLTexture> color : render_pass.color) {
++    if (color) {
++      append(color);
++    }
++  }
++  if (render_pass.depth_stencil) {
++    append(render_pass.depth_stencil);
++  }
++  return label;
 +}
 +
 +}  // namespace
@@ -1518,7 +1552,7 @@ index 0000000..fbd5247
 +  id<MTLRenderCommandEncoder> encoder =
 +      BeginRenderPass(render_pass, rex::perf::CounterId::kRenderPassEndsTargetChange);
 +  if (encoder.label == nil) {
-+    encoder.label = @"Guest draws";
++    encoder.label = GetGuestDrawsLabel(render_pass);
 +  }
 +
 +  // Viewport, scissor and the rest of the dynamic state, in host pixels: with sample-space render
@@ -1584,6 +1618,35 @@ index 0000000..fbd5247
 +  PROFILE_DRAW_CALL();
 +  PROFILE_VERTICES(primitive_processing_result.host_draw_vertex_count);
 +  PERF_counter_inc(kHostDraws);
++  if (pixel_shader) {
++    if (pixel_shader_modification.pixel.depth_stencil_mode ==
++        SpirvShaderTranslator::Modification::DepthStencilMode::kEarlyHint) {
++      PERF_counter_inc(kHostDrawsEarlyDepth);
++    }
++    if ((normalized_color_mask & 0b1111) &&
++        draw_util::DoesCoverageDependOnAlpha(regs.Get<reg::RB_COLORCONTROL>())) {
++      PERF_counter_inc(kHostDrawsAlphaTested);
++    }
++    if (pixel_shader->kills_pixels()) {
++      PERF_counter_inc(kHostDrawsShaderKill);
++    }
++    for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
++      if (!((normalized_color_mask >> (4 * i)) & 0b1111)) {
++        continue;
++      }
++      auto blend_control =
++          regs.Get<reg::RB_BLENDCONTROL>(reg::RB_BLENDCONTROL::rt_register_indices[i]);
++      if (blend_control.color_srcblend != xenos::BlendFactor::kOne ||
++          blend_control.color_destblend != xenos::BlendFactor::kZero ||
++          blend_control.color_comb_fcn != xenos::BlendOp::kAdd ||
++          blend_control.alpha_srcblend != xenos::BlendFactor::kOne ||
++          blend_control.alpha_destblend != xenos::BlendFactor::kZero ||
++          blend_control.alpha_comb_fcn != xenos::BlendOp::kAdd) {
++        PERF_counter_inc(kHostDrawsBlended);
++        break;
++      }
++    }
++  }
 +  if (primitive_processing_result.index_buffer_type ==
 +      PrimitiveProcessor::ProcessedIndexBufferType::kNone) {
 +    [encoder drawPrimitives:draw_state.primitive_type
@@ -2616,10 +2679,10 @@ index 0000000..2aeec57
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_pipeline_cache.mm b/src/graphics/metal/metal_pipeline_cache.mm
 new file mode 100644
-index 0000000..8b0efc0
+index 0000000..f1296a0
 --- /dev/null
 +++ b/src/graphics/metal/metal_pipeline_cache.mm
-@@ -0,0 +1,585 @@
+@@ -0,0 +1,606 @@
 +/**
 + * @file        graphics/metal/metal_pipeline_cache.mm
 + * @brief       Guest shader translation and render pipeline states for the Metal backend
@@ -2770,8 +2833,29 @@ index 0000000..8b0efc0
 +                                 stage == MslStage::kVertex ? "vertex shader" : "pixel shader",
 +                                 metal_shader.ucode_data_hash(), modification(),
 +                                 variant ? " without rasterization" : "");
++  // Named by the guest shader and its modification, as in the Metal traces and GPU captures. Pixel
++  // shaders also carry what affects hidden surface removal: e (early depth and stencil tests),
++  // k (kill instructions), z (depth written by the shader).
++  std::string flags;
++  if (stage == MslStage::kFragment) {
++    if (SpirvShaderTranslator::Modification(modification()).pixel.depth_stencil_mode ==
++        SpirvShaderTranslator::Modification::DepthStencilMode::kEarlyHint) {
++      flags += 'e';
++    }
++    if (metal_shader.kills_pixels()) {
++      flags += 'k';
++    }
++    if (metal_shader.writes_depth()) {
++      flags += 'z';
++    }
++  }
++  std::string entry_point_name =
++      fmt::format("{}_{:016x}_{:016x}{}{}{}", stage == MslStage::kVertex ? "vs" : "ps",
++                  metal_shader.ucode_data_hash(), modification(), flags.empty() ? "" : "_", flags,
++                  variant ? "_norast" : "");
 +  if (!SpirvToMsl(reinterpret_cast<const uint32_t*>(spirv.data()), spirv.size() / sizeof(uint32_t),
-+                  stage, GetGuestShaderBindings(metal_shader), msl, variant != 0)) {
++                  stage, GetGuestShaderBindings(metal_shader), msl, variant != 0,
++                  entry_point_name)) {
 +    REXGPU_ERROR("Metal: failed to convert the {} to MSL", name);
 +    functions_failed_[variant] = true;
 +    return nil;
@@ -4399,10 +4483,10 @@ index 0000000..e975405
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_render_target_cache.mm b/src/graphics/metal/metal_render_target_cache.mm
 new file mode 100644
-index 0000000..52f996f
+index 0000000..d3ff0ca
 --- /dev/null
 +++ b/src/graphics/metal/metal_render_target_cache.mm
-@@ -0,0 +1,3757 @@
+@@ -0,0 +1,3758 @@
 +/**
 + * @file        graphics/metal/metal_render_target_cache.mm
 + * @brief       EDRAM emulation with sample-space host render targets for the Metal backend
@@ -7587,7 +7671,8 @@ index 0000000..52f996f
 +  id<MTLFunction> function = nil;
 +  MslShader msl;
 +  if (SpirvToMsl(reinterpret_cast<const uint32_t*>(shader_code.data()), shader_code.size(),
-+                 MslStage::kFragment, bindings, msl)) {
++                 MslStage::kFragment, bindings, msl, false,
++                 fmt::format("transfer_{:08x}", key.key))) {
 +    function = CompileMslFunction(command_processor_.device(), msl, name.c_str());
 +  }
 +  if (!function) {
@@ -8327,10 +8412,10 @@ index 0000000..b09177b
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_spirv.h b/src/graphics/metal/metal_spirv.h
 new file mode 100644
-index 0000000..7c53f9d
+index 0000000..10c6138
 --- /dev/null
 +++ b/src/graphics/metal/metal_spirv.h
-@@ -0,0 +1,71 @@
+@@ -0,0 +1,72 @@
 +/**
 + * @file        graphics/metal/metal_spirv.h
 + * @brief       SPIR-V to Metal Shading Language conversion for the Metal backend
@@ -8385,10 +8470,11 @@ index 0000000..7c53f9d
 +
 +// Converts SPIR-V to MSL. Returns false and logs the reason on failure. A vertex function for a
 +// pipeline without rasterization (only memory export side effects) must return void in Metal,
-+// which disable_rasterization produces.
++// which disable_rasterization produces. A non-empty entry_point_name replaces SPIRV-Cross's
++// "main0", so GPU captures and the shader profiler of Metal traces tell the functions apart.
 +bool SpirvToMsl(const uint32_t* words, size_t word_count, MslStage stage,
 +                const std::vector<MslBinding>& bindings, MslShader& shader_out,
-+                bool disable_rasterization = false);
++                bool disable_rasterization = false, const std::string& entry_point_name = {});
 +
 +#ifdef __OBJC__
 +// Compiles MSL source and returns the function named entry_point, or nil (logging the error).
@@ -8404,10 +8490,10 @@ index 0000000..7c53f9d
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_spirv.mm b/src/graphics/metal/metal_spirv.mm
 new file mode 100644
-index 0000000..3f426ed
+index 0000000..be82093
 --- /dev/null
 +++ b/src/graphics/metal/metal_spirv.mm
-@@ -0,0 +1,161 @@
+@@ -0,0 +1,205 @@
 +/**
 + * @file        graphics/metal/metal_spirv.mm
 + * @brief       SPIR-V to Metal Shading Language conversion for the Metal backend
@@ -8422,11 +8508,46 @@ index 0000000..3f426ed
 +// pulls the SPIR-V headers of glslang or SPIRV-Tools.
 +#include <spirv_msl.hpp>
 +
++#include <cctype>
++#include <filesystem>
++#include <fstream>
++
++#include <rex/cvar.h>
 +#include <rex/logging.h>
++
++REXCVAR_DEFINE_STRING(metal_shader_dump_path, "", "GPU",
++                      "Folder to write the MSL source of every shader the Metal backend compiles "
++                      "to, one file per function (profiling and debugging)");
 +
 +namespace rex::graphics::metal {
 +
 +namespace {
++
++// A Metal function name from a debug name: letters, digits and underscores only.
++std::string GetFunctionName(const char* prefix, const char* debug_name) {
++  std::string name = prefix;
++  for (const char* c = debug_name; c && *c; ++c) {
++    name += std::isalnum(static_cast<unsigned char>(*c)) ? *c : '_';
++  }
++  return name;
++}
++
++// Writes the MSL source to metal_shader_dump_path, if it is set, as <entry point>.metal.
++void DumpMsl(const MslShader& shader) {
++  std::string dump_path = REXCVAR_GET(metal_shader_dump_path);
++  if (dump_path.empty()) {
++    return;
++  }
++  std::error_code error;
++  std::filesystem::create_directories(dump_path, error);
++  std::filesystem::path file_path =
++      std::filesystem::path(dump_path) / (shader.entry_point + ".metal");
++  if (std::filesystem::exists(file_path, error)) {
++    return;
++  }
++  std::ofstream file(file_path);
++  file << shader.source;
++}
 +
 +spv::ExecutionModel GetExecutionModel(MslStage stage) {
 +  switch (stage) {
@@ -8444,7 +8565,7 @@ index 0000000..3f426ed
 +
 +bool SpirvToMsl(const uint32_t* words, size_t word_count, MslStage stage,
 +                const std::vector<MslBinding>& bindings, MslShader& shader_out,
-+                bool disable_rasterization) {
++                bool disable_rasterization, const std::string& entry_point_name) {
 +  try {
 +    SPIRV_CROSS_NAMESPACE::CompilerMSL compiler(words, word_count);
 +
@@ -8470,6 +8591,13 @@ index 0000000..3f426ed
 +    compiler.set_common_options(common_options);
 +
 +    spv::ExecutionModel model = GetExecutionModel(stage);
++    if (!entry_point_name.empty()) {
++      auto original_entry_points = compiler.get_entry_points_and_stages();
++      if (!original_entry_points.empty()) {
++        compiler.rename_entry_point(original_entry_points[0].name, entry_point_name,
++                                    original_entry_points[0].execution_model);
++      }
++    }
 +    for (const MslBinding& binding : bindings) {
 +      SPIRV_CROSS_NAMESPACE::MSLResourceBinding resource_binding;
 +      resource_binding.stage = model;
@@ -8520,6 +8648,7 @@ index 0000000..3f426ed
 +
 +id<MTLFunction> CompileMslFunction(id<MTLDevice> device, const MslShader& shader,
 +                                   const char* debug_name) {
++  DumpMsl(shader);
 +  MTLCompileOptions* options = [MTLCompileOptions new];
 +  options.languageVersion = MTLLanguageVersion3_0;
 +  options.mathMode = MTLMathModeSafe;
@@ -8547,7 +8676,8 @@ index 0000000..3f426ed
 +    const std::vector<MslBinding>& bindings, const char* debug_name,
 +    std::array<uint32_t, 3>* threadgroup_size_out) {
 +  MslShader shader;
-+  if (!SpirvToMsl(words, word_count, MslStage::kCompute, bindings, shader)) {
++  if (!SpirvToMsl(words, word_count, MslStage::kCompute, bindings, shader, false,
++                  GetFunctionName("cs_", debug_name))) {
 +    return nil;
 +  }
 +  id<MTLFunction> function = CompileMslFunction(device, shader, debug_name);
