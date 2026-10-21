@@ -42,6 +42,18 @@ index da8e432..b8c8cbd 100644
  
    uint32_t primary_buffer_ptr_ = 0;
    uint32_t primary_buffer_size_ = 0;
+diff --git a/include/rex/graphics/flags.h b/include/rex/graphics/flags.h
+index 2cf24c4..9327584 100644
+--- a/include/rex/graphics/flags.h
++++ b/include/rex/graphics/flags.h
+@@ -72,6 +72,7 @@ REXCVAR_DECLARE(bool, use_fuzzy_alpha_epsilon);
+ 
+ // GPU Shader Translation
+ REXCVAR_DECLARE(std::string, dump_shaders);
++REXCVAR_DECLARE(std::string, shader_compiler);
+ REXCVAR_DECLARE(std::string, swap_post_effect);
+ 
+ #if REX_HAS_VULKAN
 diff --git a/include/rex/graphics/pipeline/render_target/cache.h b/include/rex/graphics/pipeline/render_target/cache.h
 index b246319..d57e36f 100644
 --- a/include/rex/graphics/pipeline/render_target/cache.h
@@ -58,6 +70,45 @@ index b246319..d57e36f 100644
    // Updates ownership_ranges_, adds the transfers needed for the ownership
    // change to transfers_append_out if it's not null.
    void ChangeOwnership(RenderTargetKey dest, uint32_t start_tiles_base_relative,
+diff --git a/include/rex/graphics/pipeline/shader/spirv.h b/include/rex/graphics/pipeline/shader/spirv.h
+index dd90ef7..6169777 100644
+--- a/include/rex/graphics/pipeline/shader/spirv.h
++++ b/include/rex/graphics/pipeline/shader/spirv.h
+@@ -19,6 +19,10 @@
+ 
+ namespace rex::graphics {
+ 
++namespace xsc {
++class XscShaderTranslator;
++}  // namespace xsc
++
+ class SpirvShader : public Shader {
+  public:
+   class SpirvTranslation : public Translation {
+@@ -63,6 +67,9 @@ class SpirvShader : public Shader {
+ 
+  private:
+   friend class SpirvShaderTranslator;
++  // The Xenos shader compiler fills the same bindings, so the backends bind its shaders the same
++  // way.
++  friend class xsc::XscShaderTranslator;
+ 
+   std::atomic_flag bindings_setup_entered_ = ATOMIC_FLAG_INIT;
+   std::vector<TextureBinding> texture_bindings_;
+diff --git a/include/rex/graphics/pipeline/shader/translator.h b/include/rex/graphics/pipeline/shader/translator.h
+index 340ced5..67eafaa 100644
+--- a/include/rex/graphics/pipeline/shader/translator.h
++++ b/include/rex/graphics/pipeline/shader/translator.h
+@@ -66,6 +66,9 @@ class ShaderTranslator {
+ 
+   // Emits a translation error that will be passed back in the result.
+   virtual void EmitTranslationError(const char* message, bool is_fatal = true);
++  // Records a translation error in the result without logging it, for translators that report
++  // the cause themselves (such as a shader feature a translator does not support yet).
++  void RecordTranslationError(const char* message, bool is_fatal = true);
+ 
+   // Handles the start of translation.
+   // At this point the vertex and texture bindings have been gathered.
 diff --git a/include/rex/graphics/vulkan/command_processor.h b/include/rex/graphics/vulkan/command_processor.h
 index 373f8dd..1dd1620 100644
 --- a/include/rex/graphics/vulkan/command_processor.h
@@ -194,10 +245,26 @@ index d3f26eb..92570e3 100644
      false,  // kCommandBufferStalls
      false,  // kVerticesProcessed
 diff --git a/src/graphics/CMakeLists.txt b/src/graphics/CMakeLists.txt
-index 0d8f8af..d11f041 100644
+index 0d8f8af..844f8ed 100644
 --- a/src/graphics/CMakeLists.txt
 +++ b/src/graphics/CMakeLists.txt
-@@ -54,6 +54,21 @@ set(REXGPU_XENOS_VULKAN_SOURCES
+@@ -41,6 +41,15 @@ set(REXGPU_XENOS_SPIRV_SOURCES
+     pipeline/shader/spirv_translator_rb.cpp
+ )
+ 
++# Xenos shader compiler (XSC): our own compiler from Xenos microcode, with an MSL emitter.
++set(REXGPU_XENOS_XSC_SOURCES
++    pipeline/shader/xsc/xsc_translator.cpp
++    pipeline/shader/xsc/xsc_translator_alu.cpp
++    pipeline/shader/xsc/xsc_translator_fetch.cpp
++    pipeline/shader/xsc/xsc_translator_ps.cpp
++    pipeline/shader/xsc/xsc_msl.cpp
++)
++
+ # Vulkan backend
+ set(REXGPU_XENOS_VULKAN_SOURCES
+     vulkan/graphics_system.cpp
+@@ -54,6 +63,21 @@ set(REXGPU_XENOS_VULKAN_SOURCES
      vulkan/texture_cache.cpp
  )
  
@@ -219,7 +286,7 @@ index 0d8f8af..d11f041 100644
  # D3D12 backend
  if(REXGLUE_USE_D3D12)
      # DXBC third-party dependency
-@@ -89,6 +104,16 @@ if(REXGLUE_USE_VULKAN)
+@@ -89,6 +113,16 @@ if(REXGLUE_USE_VULKAN)
      list(APPEND REXGPU_XENOS_SOURCES ${REXGPU_XENOS_SPIRV_SOURCES} ${REXGPU_XENOS_VULKAN_SOURCES})
  endif()
  
@@ -227,7 +294,7 @@ index 0d8f8af..d11f041 100644
 +    if(NOT REXGLUE_USE_VULKAN)
 +        list(APPEND REXGPU_XENOS_SOURCES ${REXGPU_XENOS_SPIRV_SOURCES})
 +    endif()
-+    list(APPEND REXGPU_XENOS_SOURCES ${REXGPU_XENOS_METAL_SOURCES})
++    list(APPEND REXGPU_XENOS_SOURCES ${REXGPU_XENOS_METAL_SOURCES} ${REXGPU_XENOS_XSC_SOURCES})
 +    set_source_files_properties(${REXGPU_XENOS_METAL_SOURCES} PROPERTIES
 +        COMPILE_OPTIONS "-fobjc-arc;-include;${CMAKE_CURRENT_SOURCE_DIR}/metal/metal_vulkan_headers.h"
 +        SKIP_PRECOMPILE_HEADERS ON)
@@ -236,7 +303,7 @@ index 0d8f8af..d11f041 100644
  if(REXGLUE_USE_D3D12)
      list(APPEND REXGPU_XENOS_SOURCES
          ${REXGPU_XENOS_DXBC_THIRDPARTY_SOURCES}
-@@ -151,6 +176,89 @@ if(REXGLUE_USE_VULKAN)
+@@ -151,6 +185,90 @@ if(REXGLUE_USE_VULKAN)
      )
  endif()
  
@@ -302,6 +369,7 @@ index 0d8f8af..d11f041 100644
 +        register_file.cpp
 +        registers.cpp
 +        ${REXGPU_XENOS_SPIRV_SOURCES}
++        ${REXGPU_XENOS_XSC_SOURCES}
 +        metal/metal_spirv.mm
 +        pipeline/shader/xsc/bench/xsc_bench.mm
 +    )
@@ -395,6 +463,23 @@ index a744375..92724c2 100644
    assert_not_zero(count_remaining);
    if (!count_remaining) {
      REXGPU_ERROR("{}: Packet too small, can't read VGT_DRAW_INITIATOR", opcode_name);
+diff --git a/src/graphics/flags.cpp b/src/graphics/flags.cpp
+index e2983a4..07cb396 100644
+--- a/src/graphics/flags.cpp
++++ b/src/graphics/flags.cpp
+@@ -25,6 +25,12 @@ REXCVAR_DEFINE_BOOL(gamma_render_target_as_unorm16, true, "GPU",
+                     "Use R16G16B16A16_UNORM for gamma render targets (more accurate than sRGB)")
+     .lifecycle(rex::cvar::Lifecycle::kHotReload);
+ REXCVAR_DEFINE_STRING(dump_shaders, "", "GPU", "Path to dump shaders to");
++REXCVAR_DEFINE_STRING(shader_compiler, "translator", "GPU",
++                      "Shader compiler: translator (the SPIR-V translator, through SPIRV-Cross on "
++                      "Metal) or xsc (the Xenos shader compiler; pixel shaders on Metal so far, the "
++                      "rest with the translator)")
++    .allowed({"translator", "xsc"})
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+ REXCVAR_DEFINE_BOOL(use_fuzzy_alpha_epsilon, false, "GPU",
+                     "Use approximate compare for alpha test values to prevent "
+                     "flickering on NVIDIA graphics cards");
 diff --git a/src/graphics/metal/metal_command_processor.h b/src/graphics/metal/metal_command_processor.h
 new file mode 100644
 index 0000000..c6fb6e4
@@ -2625,10 +2710,10 @@ index 0000000..e650748
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_pipeline_cache.h b/src/graphics/metal/metal_pipeline_cache.h
 new file mode 100644
-index 0000000..2aeec57
+index 0000000..df809cb
 --- /dev/null
 +++ b/src/graphics/metal/metal_pipeline_cache.h
-@@ -0,0 +1,169 @@
+@@ -0,0 +1,176 @@
 +/**
 + * @file        graphics/metal/metal_pipeline_cache.h
 + * @brief       Guest shader translation and render pipeline states for the Metal backend
@@ -2657,6 +2742,7 @@ index 0000000..2aeec57
 +
 +#import <Metal/Metal.h>
 +
++#include "../pipeline/shader/xsc/xsc_translator.h"
 +#include "metal_spirv.h"
 +
 +namespace rex::graphics::metal {
@@ -2681,12 +2767,16 @@ index 0000000..2aeec57
 +    id<MTLFunction> GetOrCreateFunction(id<MTLDevice> device, bool rasterization_disabled = false);
 +    // Whether the function reads buffer sizes at kMslBufferSizesIndex (valid after creation).
 +    bool needs_buffer_sizes() const { return needs_buffer_sizes_; }
++    // Whether the translated binary is MSL from the Xenos shader compiler rather than SPIR-V.
++    bool is_xsc() const { return is_xsc_; }
++    void set_is_xsc(bool is_xsc) { is_xsc_ = is_xsc; }
 +
 +   private:
 +    // Indexed by whether rasterization is disabled.
 +    id<MTLFunction> functions_[2] = {nil, nil};
 +    bool functions_failed_[2] = {false, false};
 +    bool needs_buffer_sizes_ = false;
++    bool is_xsc_ = false;
 +  };
 +
 +  MetalShader(xenos::ShaderType shader_type, uint64_t ucode_data_hash,
@@ -2790,6 +2880,8 @@ index 0000000..2aeec57
 +  MetalRenderTargetCache& render_target_cache_;
 +
 +  std::unique_ptr<SpirvShaderTranslator> shader_translator_;
++  // The Xenos shader compiler, if shader_compiler is xsc.
++  std::unique_ptr<xsc::XscShaderTranslator> xsc_translator_;
 +  rex::string::StringBuffer ucode_disasm_buffer_;
 +
 +  std::unordered_map<uint64_t, MetalShader*> shaders_;
@@ -2800,10 +2892,10 @@ index 0000000..2aeec57
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_pipeline_cache.mm b/src/graphics/metal/metal_pipeline_cache.mm
 new file mode 100644
-index 0000000..f1296a0
+index 0000000..9edd4b6
 --- /dev/null
 +++ b/src/graphics/metal/metal_pipeline_cache.mm
-@@ -0,0 +1,606 @@
+@@ -0,0 +1,630 @@
 +/**
 + * @file        graphics/metal/metal_pipeline_cache.mm
 + * @brief       Guest shader translation and render pipeline states for the Metal backend
@@ -2820,6 +2912,8 @@ index 0000000..f1296a0
 +#include <fmt/format.h>
 +#include <xxhash.h>
 +
++#include <rex/cvar.h>
++#include <rex/graphics/flags.h>
 +#include <rex/graphics/util/draw.h>
 +#include <rex/logging.h>
 +#include <rex/math.h>
@@ -2946,42 +3040,51 @@ index 0000000..f1296a0
 +    functions_failed_[variant] = true;
 +    return nil;
 +  }
-+  const std::vector<uint8_t>& spirv = translated_binary();
 +  MslShader msl;
-+  MslStage stage =
-+      metal_shader.type() == xenos::ShaderType::kVertex ? MslStage::kVertex : MslStage::kFragment;
-+  std::string name = fmt::format("{} {:016X} modification {:016X}{}",
-+                                 stage == MslStage::kVertex ? "vertex shader" : "pixel shader",
-+                                 metal_shader.ucode_data_hash(), modification(),
-+                                 variant ? " without rasterization" : "");
-+  // Named by the guest shader and its modification, as in the Metal traces and GPU captures. Pixel
-+  // shaders also carry what affects hidden surface removal: e (early depth and stencil tests),
-+  // k (kill instructions), z (depth written by the shader).
-+  std::string flags;
-+  if (stage == MslStage::kFragment) {
-+    if (SpirvShaderTranslator::Modification(modification()).pixel.depth_stencil_mode ==
-+        SpirvShaderTranslator::Modification::DepthStencilMode::kEarlyHint) {
-+      flags += 'e';
++  std::string name;
++  if (is_xsc_) {
++    // The Xenos shader compiler's binary is the MSL source.
++    const std::vector<uint8_t>& source = translated_binary();
++    msl.source.assign(source.begin(), source.end());
++    msl.entry_point = xsc::XscShaderTranslator::GetEntryPointName(metal_shader, modification());
++    name = msl.entry_point;
++  } else {
++    const std::vector<uint8_t>& spirv = translated_binary();
++    MslStage stage =
++        metal_shader.type() == xenos::ShaderType::kVertex ? MslStage::kVertex : MslStage::kFragment;
++    name = fmt::format("{} {:016X} modification {:016X}{}",
++                       stage == MslStage::kVertex ? "vertex shader" : "pixel shader",
++                       metal_shader.ucode_data_hash(), modification(),
++                       variant ? " without rasterization" : "");
++    // Named by the guest shader and its modification, as in the Metal traces and GPU captures.
++    // Pixel shaders also carry what affects hidden surface removal: e (early depth and stencil
++    // tests), k (kill instructions), z (depth written by the shader).
++    std::string flags;
++    if (stage == MslStage::kFragment) {
++      if (SpirvShaderTranslator::Modification(modification()).pixel.depth_stencil_mode ==
++          SpirvShaderTranslator::Modification::DepthStencilMode::kEarlyHint) {
++        flags += 'e';
++      }
++      if (metal_shader.kills_pixels()) {
++        flags += 'k';
++      }
++      if (metal_shader.writes_depth()) {
++        flags += 'z';
++      }
 +    }
-+    if (metal_shader.kills_pixels()) {
-+      flags += 'k';
++    std::string entry_point_name =
++        fmt::format("{}_{:016x}_{:016x}{}{}{}", stage == MslStage::kVertex ? "vs" : "ps",
++                    metal_shader.ucode_data_hash(), modification(), flags.empty() ? "" : "_", flags,
++                    variant ? "_norast" : "");
++    if (!SpirvToMsl(reinterpret_cast<const uint32_t*>(spirv.data()), spirv.size() / sizeof(uint32_t),
++                    stage, GetGuestShaderBindings(metal_shader), msl, variant != 0,
++                    entry_point_name)) {
++      REXGPU_ERROR("Metal: failed to convert the {} to MSL", name);
++      functions_failed_[variant] = true;
++      return nil;
 +    }
-+    if (metal_shader.writes_depth()) {
-+      flags += 'z';
-+    }
++    needs_buffer_sizes_ = needs_buffer_sizes_ || msl.needs_buffer_sizes;
 +  }
-+  std::string entry_point_name =
-+      fmt::format("{}_{:016x}_{:016x}{}{}{}", stage == MslStage::kVertex ? "vs" : "ps",
-+                  metal_shader.ucode_data_hash(), modification(), flags.empty() ? "" : "_", flags,
-+                  variant ? "_norast" : "");
-+  if (!SpirvToMsl(reinterpret_cast<const uint32_t*>(spirv.data()), spirv.size() / sizeof(uint32_t),
-+                  stage, GetGuestShaderBindings(metal_shader), msl, variant != 0,
-+                  entry_point_name)) {
-+    REXGPU_ERROR("Metal: failed to convert the {} to MSL", name);
-+    functions_failed_[variant] = true;
-+    return nil;
-+  }
-+  needs_buffer_sizes_ = needs_buffer_sizes_ || msl.needs_buffer_sizes;
 +  functions_[variant] = CompileMslFunction(device, msl, name.c_str());
 +  if (!functions_[variant]) {
 +    functions_failed_[variant] = true;
@@ -3013,6 +3116,11 @@ index 0000000..f1296a0
 +  shader_translator_ = std::make_unique<SpirvShaderTranslator>(
 +      features, true, true, false, render_target_cache_.draw_resolution_scale_x(),
 +      render_target_cache_.draw_resolution_scale_y());
++  if (REXCVAR_GET(shader_compiler) == "xsc") {
++    xsc_translator_ =
++        std::make_unique<xsc::XscShaderTranslator>(xsc::XscShaderTranslator::Target::kMsl);
++    REXGPU_INFO("Metal: pixel shaders translated by the Xenos shader compiler (XSC)");
++  }
 +  return true;
 +}
 +
@@ -3024,6 +3132,7 @@ index 0000000..f1296a0
 +  }
 +  shaders_.clear();
 +  shader_translator_.reset();
++  xsc_translator_.reset();
 +}
 +
 +MetalShader* MetalPipelineCache::LoadShader(xenos::ShaderType shader_type,
@@ -3123,7 +3232,14 @@ index 0000000..f1296a0
 +    }
 +    if (!translation->is_translated()) {
 +      translation->shader().AnalyzeUcode(ucode_disasm_buffer_);
-+      if (!shader_translator_->TranslateAnalyzedShader(*translation)) {
++      // The Xenos shader compiler first if enabled; what it does not support yet, and every
++      // vertex shader, goes to the SPIR-V translator. Both fill the same texture and sampler
++      // bindings.
++      bool translated_by_xsc = xsc_translator_ &&
++                               translation->shader().type() == xenos::ShaderType::kPixel &&
++                               xsc_translator_->TranslateAnalyzedShader(*translation);
++      translation->set_is_xsc(translated_by_xsc);
++      if (!translated_by_xsc && !shader_translator_->TranslateAnalyzedShader(*translation)) {
 +        REXGPU_ERROR("Metal: shader {:016X} translation failed",
 +                     translation->shader().ucode_data_hash());
 +        return false;
@@ -10707,6 +10823,28 @@ index bd0019c..ca62abd 100644
                  }
                }
              }
+diff --git a/src/graphics/pipeline/shader/translator.cpp b/src/graphics/pipeline/shader/translator.cpp
+index e472251..21f81dc 100644
+--- a/src/graphics/pipeline/shader/translator.cpp
++++ b/src/graphics/pipeline/shader/translator.cpp
+@@ -672,12 +672,16 @@ bool ShaderTranslator::TranslateAnalyzedShader(Shader::Translation& translation)
+ }
+ 
+ void ShaderTranslator::EmitTranslationError(const char* message, bool is_fatal) {
++  RecordTranslationError(message, is_fatal);
++  REXGPU_ERROR("Shader translation {}error: {}", is_fatal ? "fatal " : "", message);
++}
++
++void ShaderTranslator::RecordTranslationError(const char* message, bool is_fatal) {
+   Shader::Error error;
+   error.is_fatal = is_fatal;
+   error.message = message;
+   // TODO(benvanik): location information.
+   errors_.push_back(std::move(error));
+-  REXGPU_ERROR("Shader translation {}error: {}", is_fatal ? "fatal " : "", message);
+ }
+ 
+ void ShaderTranslator::TranslateControlFlowInstruction(const ControlFlowInstruction& cf) {
 diff --git a/src/graphics/plugin_main.cpp b/src/graphics/plugin_main.cpp
 index ec756d3..6e16b00 100644
 --- a/src/graphics/plugin_main.cpp
