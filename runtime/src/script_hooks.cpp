@@ -37,6 +37,7 @@
 // scanning new GNames entries every so often until they appear.
 
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -210,15 +211,19 @@ enum WatchedName {
   kReturnToMain,             // UIScene_Options.Callback_ReturnToMain: back to the categories
   kResetAcceptAlias,         // button alias of the Defaults message box's Accept button
   kGenericAcceptAlias,       // button alias of the game's plain Accept button
+  kBuildCampaignURL,         // GearMenuGame: builds travel URL for campaign
+  kServerTravel,             // WorldInfo: travels to a new level
+  kProcessServerTravel,      // GameInfo: processes server travel URL
   kWatchedNameCount,
 };
 constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "HandleMenuSelection",   "PopulateOptionsList",    "GetOptionValueAt",
     "OnConfirm_ResetDefaults", "FilterButtonInput",    "Callback_VideoOptions",
     "CloseVideoOptionsScene", "Callback_MenuOptionSelected", "Callback_ReturnToMain",
-    "ResetAccept",           "GenericAccept"};
+    "ResetAccept",           "GenericAccept",
+    "BuildCampaignURL",      "ServerTravel",           "ProcessServerTravel"};
 
-std::atomic<int32_t> g_names[kWatchedNameCount] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
+std::atomic<int32_t> g_names[kWatchedNameCount] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
 std::atomic<int> g_names_missing{kWatchedNameCount};
 std::atomic<uint32_t> g_names_scanned{0};
 std::atomic<uint32_t> g_calls{0};
@@ -597,6 +602,189 @@ bool HandleOptionsButton(PPCContext& ctx, uint8_t* base, uint32_t function) {
   return true;
 }
 
+// Table of persistent maps for each of the 31 campaign chapters (from Xbox360-GearGame.ini)
+constexpr const char* const kChapterMaps[31] = {
+    "sp_nightmare_p",         // 0: Prólogo
+    "sp_ravens_p",            // 1: Acto 1, Cap 1
+    "sp_ravens2_p",           // 2: Acto 1, Cap 2
+    "sp_hanover_p",           // 3: Acto 1, Cap 3
+    "sp_warehouse_p",         // 4: Acto 1, Cap 4
+    "sp_stadium_p",           // 5: Acto 1, Cap 5
+    "sp_bridge_p",            // 6: Acto 1, Cap 6
+    "sp_wreckage_p",          // 7: Acto 2, Cap 1
+    "sp_badlands_p",          // 8: Acto 2, Cap 2
+    "sp_badlands_p",          // 9: Acto 2, Cap 3
+    "sp_badlands2_p",         // 10: Acto 2, Cap 4
+    "sp_badlands2_p",         // 11: Acto 2, Cap 5
+    "sp_blimp1_p",            // 12: Acto 2, Cap 6
+    "sp_blimp2_p",            // 13: Acto 2, Cap 7
+    "sp_fort_p",              // 14: Acto 3, Cap 1
+    "sp_fort_p",              // 15: Acto 3, Cap 2
+    "sp_convoy_p",            // 16: Acto 3, Cap 3
+    "sp_mercy_p",             // 17: Acto 3, Cap 4
+    "sp_mercy_p",             // 18: Acto 3, Cap 5
+    "sp_char_p",              // 19: Acto 4, Cap 1
+    "sp_char_p",              // 20: Acto 4, Cap 2
+    "sp_char_p",              // 21: Acto 4, Cap 3
+    "SP_Oldshipyard_Intro_P", // 22: Acto 4, Cap 4
+    "sp_oldshipyard_p",       // 23: Acto 4, Cap 5
+    "sp_maelstrom_p",         // 24: Acto 4, Cap 6
+    "sp_coast_p",             // 25: Acto 5, Cap 1
+    "sp_coast_p",             // 26: Acto 5, Cap 2
+    "SP_Azura_Intro_P",       // 27: Acto 5, Cap 3
+    "sp_azura2_p",            // 28: Acto 5, Cap 4
+    "sp_tower_p",             // 29: Acto 5, Cap 5
+    "SP_Rooftop_P",           // 30: Acto 5, Cap 6
+};
+
+// Several chapters are sections of the same persistent map; duplicate entries are intentional.
+static void StripListenParam(std::string& s) {
+  std::string lower = s;
+  for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+  size_t pos = 0;
+  while ((pos = lower.find("listen", pos)) != std::string::npos) {
+    if (pos == 0 || (s[pos - 1] != '?' && s[pos - 1] != '&')) {
+      pos += 6;
+      continue;
+    }
+
+    const size_t after = pos + 6;
+    if (after < s.size() && s[after] != '?' && s[after] != '&' && s[after] != '#') {
+      pos = after;
+      continue;
+    }
+
+    const size_t start = pos - 1;
+    if (s[start] == '?' && after < s.size() && (s[after] == '?' || s[after] == '&')) {
+      s.replace(start, after - start + 1, "?");
+      lower.replace(start, after - start + 1, "?");
+    } else {
+      s.erase(start, after - start);
+      lower.erase(start, after - start);
+    }
+    pos = start;
+  }
+}
+
+// Intercepts campaign and menu travel URLs to prevent infinite socket/network stalls
+// and replaces GearGame_P with the chapter's real persistent level map from kChapterMaps.
+bool PatchTravelURL(uint8_t* base, uint32_t fstring_addr) {
+  if (!fstring_addr) return false;
+  const uint32_t data = LoadU32(base, fstring_addr);
+  const uint32_t count = LoadU32(base, fstring_addr + 4);
+  const uint32_t max = LoadU32(base, fstring_addr + 8);
+  if (!data || count <= 1) return false;
+  if (max == 0 || count > max) {
+    REXLOG_WARN("[Azura travel] Invalid FString capacity (count={}, max={}); URL left unchanged", count, max);
+    return false;
+  }
+
+  auto write_url = [&](const std::string& value) {
+    if (value.size() >= max) {
+      REXLOG_WARN("[Azura travel] Rewritten URL needs {} TCHARs, but capacity is {}; URL left unchanged",
+                  value.size() + 1, max);
+      return false;
+    }
+    for (size_t i = 0; i < value.size(); ++i) {
+      base[data + i * 2] = 0;
+      base[data + i * 2 + 1] = static_cast<uint8_t>(value[i]);
+    }
+    base[data + value.size() * 2] = 0;
+    base[data + value.size() * 2 + 1] = 0;
+    StoreU32(base, fstring_addr + 4, static_cast<uint32_t>(value.size() + 1));
+    return true;
+  };
+
+  std::string url;
+  url.reserve(count);
+  for (uint32_t i = 0; i + 1 < count; ++i) {
+    const uint16_t w = static_cast<uint16_t>(base[data + i * 2] << 8 | base[data + i * 2 + 1]);
+    url.push_back(w < 128 ? static_cast<char>(w) : '?');
+  }
+
+  std::string lower_url = url;
+  for (char& c : lower_url) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+  if (lower_url.rfind("geargame_p", 0) != 0) {
+    return false;
+  }
+
+  int chapter = -1;
+  size_t ch_pos = lower_url.find("chapter=");
+  if (ch_pos != std::string::npos) {
+    size_t num_start = ch_pos + 8;
+    size_t num_end = lower_url.find_first_not_of("0123456789", num_start);
+    std::string ch_str = lower_url.substr(num_start, num_end == std::string::npos ? std::string::npos : num_end - num_start);
+    if (!ch_str.empty()) {
+      try {
+        chapter = std::stoi(ch_str);
+      } catch (...) {}
+    }
+  }
+
+  if (chapter < 0 || chapter >= 31) {
+    REXLOG_WARN("[Azura campaign] GearGame_P requested but invalid chapter {}", chapter);
+    return false;
+  }
+
+  const char* real_map = kChapterMaps[chapter];
+  size_t qpos = url.find('?');
+  std::string new_url = std::string(real_map) + (qpos != std::string::npos ? url.substr(qpos) : "");
+
+  // This hook has no verified single-player/co-op discriminator; stripping listen may affect co-op.
+  StripListenParam(new_url);
+
+  uint32_t new_count = static_cast<uint32_t>(new_url.size() + 1);
+
+  // If it still doesn't fit, strip package prefix "geargamecontent." from game class
+  if (new_count > max) {
+    size_t pkg_pos = new_url.find("geargamecontent.");
+    if (pkg_pos != std::string::npos) {
+      new_url.erase(pkg_pos, 16);
+    }
+    new_count = static_cast<uint32_t>(new_url.size() + 1);
+  }
+
+  // If it still doesn't fit, strip redundant ?chapter=X
+  if (new_count > max) {
+    size_t ch_p = new_url.find("?chapter=");
+    if (ch_p == std::string::npos) ch_p = new_url.find("&chapter=");
+    if (ch_p != std::string::npos) {
+      size_t next_q = new_url.find_first_of("?&", ch_p + 1);
+      new_url.erase(ch_p, next_q == std::string::npos ? std::string::npos : next_q - ch_p);
+    }
+    new_count = static_cast<uint32_t>(new_url.size() + 1);
+  }
+
+  // If it still doesn't fit, strip ?loadcheckpoint=0
+  if (new_count > max) {
+    size_t lc_pos = new_url.find("?loadcheckpoint=0");
+    if (lc_pos == std::string::npos) lc_pos = new_url.find("&loadcheckpoint=0");
+    if (lc_pos != std::string::npos) {
+      new_url.erase(lc_pos, 17);
+    }
+    new_count = static_cast<uint32_t>(new_url.size() + 1);
+  }
+
+  // Final fallback: just the persistent map name to ensure it never loads empty GearGame_P
+  if (new_count > max) {
+    new_url = real_map;
+    new_count = static_cast<uint32_t>(new_url.size() + 1);
+  }
+
+  if (new_count > max) {
+    REXLOG_WARN("[Azura campaign] Rewritten URL for chapter {} needs {} TCHARs, but capacity is {}; URL left unchanged",
+                chapter, new_count, max);
+    return false;
+  }
+
+  REXLOG_INFO("[Azura campaign] Remapped campaign map for chapter {}: '{}' -> '{}' (buffer count={}, max={})",
+              chapter, url, new_url, count, max);
+
+  return write_url(new_url);
+}
+
 }  // namespace
 
 extern "C" void sub_822DF4D0(PPCContext& __restrict ctx, uint8_t* base) {
@@ -641,6 +829,21 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     ScanNewNames(base);
   }
   const uint32_t function = LoadU32(base, ctx.r4.u32 + kFrameNode);
+  if (Is(base, function, kBuildCampaignURL)) {
+    const uint32_t result = ctx.r5.u32;
+    __imp__sub_822DF9E0(ctx, base);
+    if (result) {
+      PatchTravelURL(base, result);
+    }
+    return;
+  }
+  if (Is(base, function, kServerTravel) || Is(base, function, kProcessServerTravel)) {
+    const uint32_t locals = LoadU32(base, ctx.r4.u32 + kFrameLocals);
+    const int32_t url_offset = ParamOffset(base, function, "URL");
+    if (url_offset >= 0) {
+      PatchTravelURL(base, locals + static_cast<uint32_t>(url_offset));
+    }
+  }
   const int quit_option = azura::menu::MainMenuQuitOption();
   if (quit_option >= 0 && Is(base, function, kHandleMenuSelection) && IsQuitSelection(base, ctx.r4.u32, quit_option)) {
     RequestQuit();
