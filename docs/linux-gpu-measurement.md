@@ -62,10 +62,9 @@ reflections or when Jack cloaks. They happen on macOS (Metal and Vulkan, both on
 targets) and not with `fsi` on Linux, and these sessions tell whether `fbo` brings them on Linux
 too.
 
-With `shader_compiler=xsc` the log says `Vulkan: pixel shaders translated by the Xenos shader
-compiler (XSC)` at the start; a line `XSC: shader ... translated by the SPIR-V translator` names
-a pixel shader that XSC does not support yet (vertex shaders all go to the translator until
-phase 3).
+With `shader_compiler=xsc` the log says `Vulkan: shaders translated by the Xenos shader compiler
+(XSC)` at the start; a line `XSC: shader ... translated by the SPIR-V translator` names a shader
+that XSC does not support yet (rectangle lists and memory export, a handful in this game).
 
 ## 4. Send
 

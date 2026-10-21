@@ -306,9 +306,11 @@ intro, campaign, room with light shafts) and Metal System Traces.
 - **Fixed on the way, for both targets:**
   - The draw resolution scale. XSC ignored it in the pixel position (`ps_param_gen`) and in the
     texture offsets and weights of textures resolved at the scaled resolution, which the SPIR-V
-    translator takes into account; the game runs at 3x3 on macOS. With the scale simulated in the
-    bench, XSC before the fix differed in 2,472 of 3,825 comparisons (mostly one step of 8 bits);
-    after it, in none. Phase 1's in-game captures had not shown it.
+    translator takes into account. With the scale simulated in the bench, XSC before the fix
+    differed in 2,472 of 3,825 comparisons (mostly one step of 8 bits); after it, in none. It only
+    matters on Vulkan: the Metal backend does not support resolution scaling yet and runs at 1x
+    whatever `draw_resolution_scale` says (its log says so at start), so phase 1 on Metal was not
+    affected.
   - 7e3 render targets. The Xbox 360 converts the color written to a `k_2_10_10_10_FLOAT` render
     target to 7e3 (RGB in [0, 31.875], NaN as 0, alpha fixed-point); the host render target is
     float16 and keeps negative and larger values. XSC clamps the color when the render target is
@@ -328,7 +330,40 @@ intro, campaign, room with light shafts) and Metal System Traces.
   renders and no XSC shader falls back, checked without input), and the Linux sessions of
   docs/linux-gpu-measurement.md (section 3), with and without XSC.
 
-## 14. Risks
+## 14. Phase 3 results: vertex shaders
+
+- **Code.** `xsc_translator_vs.cpp` (the prologue: outputs, the guest vertex index in r0.x from the
+  host index, the line loop closing vertex, the guest index buffer for point sprites or when the
+  host can't take 32-bit indices, the endian swap, the base index, the mask and the clamp; the
+  epilogue: the W, XY and Z formats of the guest position, user clip planes, the guest to host
+  viewport transform, vertex kill as a NaN W, the point size output and the point sprite
+  expansion with its clip distances), vertex fetch in `xsc_translator_fetch.cpp` (every vertex
+  format, the endian swap, normalization, the exponent bias), and both emitters: MSL with the
+  outputs named as SPIRV-Cross names them, the Y flip, and a second entry point `<name>_norast`
+  for pipelines without rasterization; SPIR-V with `gl_PerVertex` and the shared memory storage
+  buffer. Both backends send every shader to XSC first.
+- **Not supported yet (the SPIR-V translator takes them):** rectangle lists (3 variants of 2
+  shaders in the corpus), memory export (1 shader), tessellation, cull distances, and the shared
+  memory split into several storage buffers on Vulkan devices with a small storage buffer range.
+- **Bench.** Vertex shaders are compared too: each translation's function without rasterization
+  gets a capture inserted (the outputs written to a buffer, one record per vertex) and is drawn
+  as 1,024 points with the same inputs (random guest memory, vertex fetch constants pointing into
+  it, random position formats and viewport constants). 1,474 of 1,478 variants (516 vertex and
+  958 pixel) translate with XSC to MSL and to SPIR-V, all the SPIR-V passes `spirv-val`, and the
+  comparison gives 5,889 comparisons (2,064 of vertex shaders) with no difference for both. The
+  corpus has no point sprite variant XSC supports, so `XSC_BENCH_VS_SYNTHETIC` changes every
+  vertex variant to cover point sprites, the point size, 1 to 6 user clip planes and indices
+  loaded from the guest memory (16 and 32 bits, every endianness): 5,881 comparisons, no
+  difference.
+- **Positions in the depth prepass and the main pass.** Every operation rounds the same way in
+  both translators (the bench compares positions bit for bit, +0 and -0 equal), so a draw whose
+  vertex shader falls back to the SPIR-V translator still gets the same positions as one compiled
+  by XSC.
+- **In the game,** checked without input (the screen was locked): Metal and Vulkan start with
+  XSC for both stages, no GPU error, only the rectangle list and memory export shaders fall back.
+  Pending: a play session on each backend, and the measurements.
+
+## 15. Risks
 
 - Visual differences in shaders the bench does not reach with random constants (branches the
   game never takes in the bench, special texture formats): the in-game captures cover the main
