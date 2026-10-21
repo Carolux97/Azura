@@ -268,7 +268,10 @@ intro, campaign, room with light shafts) and Metal System Traces.
 - **Inherited rules to check later in the game** (kept as they are for parity, they look like
   errors of the SPIR-V translator):
   - linear filtering between the layers of a stacked texture computes
-    `layer1 + (layer1 - layer0) * f` instead of `layer0 + (layer1 - layer0) * f`;
+    `layer1 + (layer1 - layer0) * f` instead of `layer0 + (layer1 - layer0) * f` (the DXBC
+    translator interpolates from layer 0); only one shader of the corpus can take that path, the
+    color grading lookup at the end of the post-processing, and only if its texture is a stacked
+    one rather than 3D;
   - with register gradients on 2D textures, the horizontal and the vertical ones are swapped.
 - **Compile time.** Translation of the corpus 0.46 s against 4.2 s (SPIR-V translator and
   SPIRV-Cross), Metal compilation of the generated MSL 44 s against 64 s.
@@ -282,7 +285,50 @@ intro, campaign, room with light shafts) and Metal System Traces.
   expensive pixel shader 1.73 to 0.14 ms, large shaders 2 to 4 times cheaper, small ones the
   same.
 
-## 13. Risks
+## 13. Phase 2 results: pixel shaders to SPIR-V
+
+- **Code.** `xsc_spirv.cpp`, the SPIR-V emitter: one instruction per IR operation, `NoContraction`
+  on the float arithmetic (an option, for phase 4), the IR's if, loop and switch as SPIR-V
+  structured control flow (OpPhi in the merge blocks, a continue block per loop, fallthrough as a
+  branch to the next case), the interface of the SPIR-V translator (descriptor sets, bindings and
+  locations; the constant buffers declared as arrays of 4-component vectors with the same layout).
+  `XscShaderTranslator` takes the target (MSL or SPIR-V) and the same host configuration as the
+  SPIR-V translator of the backend: the device features (demote, sample rate shading, float
+  controls, view swizzles), native 2x MSAA and the draw resolution scale.
+- **Vulkan backend.** `VulkanPipelineCache` translates pixel shaders with XSC first when
+  `shader_compiler = "xsc"`, on the host render target path only (`fsi` keeps the SPIR-V
+  translator, which does the render target logic in the shader); what XSC does not support goes to
+  the SPIR-V translator as on Metal.
+- **Bench.** A third translator, `xsc-spirv`: XSC's SPIR-V converted by SPIRV-Cross like the SPIR-V
+  translator's. All 958 pixel shader variants translate and compile, the 958 modules pass
+  `spirv-val --target-env vulkan1.2` (built from the SDK's SPIRV-Tools), and the comparison gives
+  3,825 comparisons with no difference, at scale 1 and with `XSC_BENCH_RESOLUTION_SCALE=3`.
+- **Fixed on the way, for both targets:**
+  - The draw resolution scale. XSC ignored it in the pixel position (`ps_param_gen`) and in the
+    texture offsets and weights of textures resolved at the scaled resolution, which the SPIR-V
+    translator takes into account; the game runs at 3x3 on macOS. With the scale simulated in the
+    bench, XSC before the fix differed in 2,472 of 3,825 comparisons (mostly one step of 8 bits);
+    after it, in none. Phase 1's in-game captures had not shown it.
+  - 7e3 render targets. The Xbox 360 converts the color written to a `k_2_10_10_10_FLOAT` render
+    target to 7e3 (RGB in [0, 31.875], NaN as 0, alpha fixed-point); the host render target is
+    float16 and keeps negative and larger values. XSC clamps the color when the render target is
+    7e3 (the backends now fill `edram_rt_format_flags` on the host render target path too). The
+    bench checks it with `XSC_BENCH_RT_7E3` (the reference clamped the same way: no difference).
+    It does not change the white flashes below.
+- **White flashes (open, both backends on macOS, not with `fsi` on Linux).** Measured with
+  `xsc_debug_color_range` (markers and per-shader counters of out-of-range colors): 221 pixel
+  shaders write RGB above 31.875 to 7e3 render targets, some in every pixel (lights, sky), and the
+  markers appear where the flashes are; but clamping the color as the Xbox 360 does leaves the
+  flashes, so the out-of-range values mark the bright surfaces rather than cause the flashes.
+  Ruled out by play tests: the draw resolution scale (they also happen at 720p) and the occlusion
+  queries (`query_occlusion_fake_sample_count = 1` leaves them; Linux uses fake results too). Next:
+  `render_target_path_vulkan = "fbo"` on Linux (docs/linux-gpu-measurement.md, section 3) tells
+  whether the host render target path brings them there.
+- **Pending, needs playing:** a Vulkan (MoltenVK) session on macOS with captures (the title screen
+  renders and no XSC shader falls back, checked without input), and the Linux sessions of
+  docs/linux-gpu-measurement.md (section 3), with and without XSC.
+
+## 14. Risks
 
 - Visual differences in shaders the bench does not reach with random constants (branches the
   game never takes in the bench, special texture formats): the in-game captures cover the main
