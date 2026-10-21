@@ -392,7 +392,7 @@ Implemented in `runtime/src/menu/pc_options.{h,cpp}` (data and texts) and `scrip
 
 | Position | Category | Change |
 | --- | --- | --- |
-| 1 | Video | A list: Calibrate brightness (opens the game's calibration screen), Full screen, Vsync, Anti-aliasing, Motion blur, Anisotropic filtering, Image scaling. Back and Defaults |
+| 1 | Video | A list: Calibrate brightness (opens the game's calibration screen), Full screen, Vsync, Anti-aliasing, Motion blur, Anisotropic filtering, Image scaling, Performance overlay, FPS-only and Advanced overlay options. Back and Defaults |
 | 5 | Keyboard and mouse | Replaces the storage location: Mouse sensitivity. Back and Defaults |
 
 How:
@@ -406,13 +406,17 @@ How:
   values that Gears does not read (**inferred**): Controller Sensitivity 13 (anisotropic filtering:
   off, 4x, 16x) and Voice Via Speakers 6 (image scaling: bilinear, AMD CAS, AMD FSR). Their
   definitions (`ProfileMappings[2]`, `[3]` and `[11]` to `[15]`) get our value names. The calibration row's definition has two values, both named "Open",
-  since an array cannot shrink. The slider uses ID 9105, which the profile does not have.
+  since an array cannot shrink. The performance overlay and its two style toggles reuse the existing
+  Full screen Off/On profile mapping; their values are stored independently by the menu hook. Both
+  style toggles off means the existing full overlay, while FPS-only and Advanced select their
+  respective display modes. The slider uses ID 9105, which the profile does not have.
 - **Showing values:** while `PopulateOptionsList` is on one of our rows, every call it makes
   (entered through `CallFunction`) rewrites its locals `Slider_Value` / `OptionList_Index` with the
   real value, so the call that hands them to Flash reads ours.
 - **Saving values:** when `GetOptionValueAt(Index)` returns for one of our rows, the value is
   applied to its cvar (`fullscreen`, `vsync`, `swap_post_effect`, `motion_blur`,
-  `anisotropic_override`, `present_effect`, `mnk_sensitivity`)
+  `anisotropic_override`, `present_effect`, `perf_overlay`, `perf_overlay_fps_only`,
+  `perf_overlay_advanced`, `mnk_sensitivity`)
   and written to `azura.toml`, leaving the rest of the file as it is. The menu also writes the
   borrowed profile settings, which is harmless.
 - **Defaults** resets our rows to the values in `azura.default.toml` (the SDK's default when a key

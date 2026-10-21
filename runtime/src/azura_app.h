@@ -101,6 +101,19 @@ class AzuraApp : public rex::ReXApp {
         }
       });
     });
+    SetGuestFrameStats([]() -> rex::ui::FrameStats {
+      float fps = 0.0f;
+      float ms = 0.0f;
+      uint64_t count = 0;
+      float low_fps = 0.0f;
+      float one_percent_low_fps = 0.0f;
+      azura::GetGuestFrameStats(fps, ms, low_fps, one_percent_low_fps, count);
+      rex::ui::FrameStats stats;
+      stats.fps = fps;
+      stats.frame_time_ms = ms;
+      stats.frame_count = count;
+      return stats;
+    });
   }
 
   // The game module is running and guest memory holds its textures: start keeping the button
@@ -145,13 +158,7 @@ class AzuraApp : public rex::ReXApp {
   }
 
   void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {
-    rex::ui::RegisterBind("bind_perf_overlay", "F6", "Toggle performance overlay", [this, drawer] {
-      if (perf_overlay_) {
-        perf_overlay_.reset();
-      } else {
-        perf_overlay_ = std::make_unique<azura::PerfOverlayDialog>(drawer);
-      }
-    });
+    perf_overlay_ = std::make_unique<azura::PerfOverlayDialog>(drawer);
   }
 
  private:

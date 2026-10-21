@@ -1,5 +1,6 @@
 #if defined(__APPLE__)
 #import <Cocoa/Cocoa.h>
+#import <Metal/Metal.h>
 #import <mach-o/dyld.h>
 #include <climits>
 #include <cstdlib>
@@ -53,6 +54,20 @@ void SetMacAppIcon(const std::string& icon_path) {
     }
 
     REXLOG_INFO("[Azura] Application and window icons set from: {}", icon_path);
+  }
+}
+
+void GetMacGpuMemoryStats(uint64_t& used_bytes, uint64_t& budget_bytes) {
+  used_bytes = 0;
+  budget_bytes = 0;
+  @autoreleasepool {
+    id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+    if (!device) return;
+    used_bytes = static_cast<uint64_t>(device.currentAllocatedSize);
+    budget_bytes = static_cast<uint64_t>(device.recommendedMaxWorkingSetSize);
+#if !__has_feature(objc_arc)
+    [device release];
+#endif
   }
 }
 

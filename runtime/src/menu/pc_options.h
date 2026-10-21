@@ -3,8 +3,8 @@
 // The Options menu (UIScene_Options) is a list of categories whose rows each edit a profile
 // setting. Azura changes it so that:
 //   - Video, which only opened the brightness calibration screen, becomes a list: a "Calibrate
-//     brightness" row that opens that screen with Accept, then full screen, vsync, anti-aliasing
-//     and motion blur;
+//     brightness" row that opens that screen with Accept, then full screen, vsync, anti-aliasing,
+//     motion blur and the optional performance overlay with FPS-only and advanced display modes;
 //   - "Storage location", which has no use on a PC, becomes "Keyboard and mouse", with the mouse
 //     sensitivity (and the place for key bindings later).
 // How:

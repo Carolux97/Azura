@@ -59,7 +59,7 @@ endif()
 # stages the Vulkan loader and MoltenVK.
 rexglue_setup_target(azura GPU_PLUGINS xenos)
 if(APPLE)
-    target_link_libraries(azura PRIVATE "-framework Cocoa")
+    target_link_libraries(azura PRIVATE "-framework Cocoa" "-framework Metal")
 endif()
 
 # The SDK copies MoltenVK into vulkan/lib in azura's POST_BUILD step, which only runs when azura

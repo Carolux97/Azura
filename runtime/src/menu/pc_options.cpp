@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <functional>
 #include <map>
@@ -18,6 +19,12 @@
 REXCVAR_DEFINE_BOOL(motion_blur, true, "Azura/Graphics",
                     "Motion blur (the game's SystemSettings.MotionBlur); read when the game starts")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_BOOL(perf_overlay, false, "Azura/Graphics",
+                    "Show performance and system resource usage while playing");
+REXCVAR_DEFINE_BOOL(perf_overlay_fps_only, false, "Azura/Graphics",
+                    "Show only the game framerate in the performance overlay");
+REXCVAR_DEFINE_BOOL(perf_overlay_advanced, false, "Azura/Graphics",
+                    "Show frame time and low framerate statistics in the performance overlay");
 
 namespace azura::menu {
 
@@ -35,6 +42,9 @@ enum class Label {
   kMouseSensitivity,
   kAnisotropic,
   kUpscaling,
+  kPerfOverlay,
+  kPerfOverlayFpsOnly,
+  kPerfOverlayAdvanced,
   kCount
 };
 
@@ -71,6 +81,13 @@ const std::vector<Option>& Options() {
       // Sensitivity (it has its own, 368, 59 and 60) and Voice Via Speakers.
       {kVideoCategory, 5, Label::kAnisotropic, "anisotropic_override", Kind::kChoice, 13, 2, {"0", "3", "5"}},
       {kVideoCategory, 6, Label::kUpscaling, "present_effect", Kind::kChoice, 6, 3, {"bilinear", "cas", "fsr"}},
+      // Reuse the existing Accelerator profile list (already mapped to Off/On); its game-side
+      // value is unused. The menu hook stores this row independently in perf_overlay.
+      {kVideoCategory, 7, Label::kPerfOverlay, "perf_overlay", Kind::kToggle, 22, 15, {}},
+      // These toggles share the existing Off/On labels; neither adds or changes a profile mapping.
+      // With both disabled, the overlay keeps its current full display.
+      {kVideoCategory, 8, Label::kPerfOverlayFpsOnly, "perf_overlay_fps_only", Kind::kToggle, 22, 15, {}},
+      {kVideoCategory, 9, Label::kPerfOverlayAdvanced, "perf_overlay_advanced", Kind::kToggle, 22, 15, {}},
       // A slider needs no definition, and its ID is one the profile does not have: the menu's reads
       // and writes of it fail and change nothing.
       {kKeyboardMouseCategory, 0, Label::kMouseSensitivity, "mnk_sensitivity", Kind::kSlider, 9105, -1, {}, 0.1f, 3.0f,
@@ -104,7 +121,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"MOTION BLUR", "Blur the image during fast movement. Takes effect the next time the game starts."},
          {"MOUSE SENSITIVITY", "Adjust how fast the camera turns with the mouse."},
          {"ANISOTROPIC FILTERING", "Keep textures sharp when seen at an angle."},
-         {"IMAGE SCALING", "How the image is scaled to the window. Takes effect the next time the game starts."}},
+         {"IMAGE SCALING", "How the image is scaled to the window. Takes effect the next time the game starts."},
+         {"PERFORMANCE OVERLAY", "Show performance and system resource usage while playing."},
+         {"FPS ONLY", "Show only the game's framerate in the overlay."},
+         {"ADVANCED OVERLAY", "Also show frame time, minimum FPS and 1% low."}},
         "Off", "On", "FXAA", "FXAA extreme", "Open", "Bilinear (original)", "AMD CAS (sharpening)", "AMD FSR 1"}},
       {"esn",
        {{"TECLADO Y RATÓN", "Ajuste las opciones del teclado y el ratón."},
@@ -116,7 +136,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
           "Desenfoque la imagen en los movimientos rápidos. Se aplica la próxima vez que inicie el juego."},
          {"SENSIBILIDAD DEL RATÓN", "Ajuste la velocidad a la que gira la cámara con el ratón."},
          {"FILTRADO ANISOTRÓPICO", "Mantenga nítidas las texturas vistas en ángulo."},
-         {"ESCALADO DE IMAGEN", "Cómo se escala la imagen a la ventana. Se aplica la próxima vez que inicie el juego."}},
+         {"ESCALADO DE IMAGEN", "Cómo se escala la imagen a la ventana. Se aplica la próxima vez que inicie el juego."},
+         {"SUPERPOSICIÓN DE RENDIMIENTO", "Muestra el rendimiento y el uso de recursos del sistema mientras juegas."},
+         {"SOLO FPS", "Muestra solo los fotogramas por segundo en la superposición."},
+         {"SUPERPOSICIÓN AVANZADA", "También muestra el tiempo de fotograma, los FPS mínimos y el 1 % bajo."}},
         "Desactivado", "Activado", "FXAA", "FXAA extremo", "Abrir", "Bilineal (original)", "AMD CAS (nitidez)", "AMD FSR 1"}},
       {"deu",
        {{"TASTATUR UND MAUS", "Passen Sie die Einstellungen für Tastatur und Maus an."},
@@ -127,7 +150,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"BEWEGUNGSUNSCHÄRFE", "Verwischt das Bild bei schnellen Bewegungen. Wird beim nächsten Spielstart wirksam."},
          {"MAUSEMPFINDLICHKEIT", "Legt fest, wie schnell sich die Kamera mit der Maus dreht."},
          {"ANISOTROPE FILTERUNG", "Hält schräg betrachtete Texturen scharf."},
-         {"BILDSKALIERUNG", "Wie das Bild auf das Fenster skaliert wird. Wird beim nächsten Spielstart wirksam."}},
+         {"BILDSKALIERUNG", "Wie das Bild auf das Fenster skaliert wird. Wird beim nächsten Spielstart wirksam."},
+         {"LEISTUNGSANZEIGE", "Zeigt Leistung und Systemressourcen während des Spielens an."},
+         {"NUR FPS", "Zeigt nur die Bildrate in der Anzeige an."},
+         {"ERWEITERTE ANZEIGE", "Zeigt zusätzlich Framezeit, minimale FPS und 1-%-Low an."}},
         "Aus", "Ein", "FXAA", "FXAA extrem", "Öffnen", "Bilinear (Original)", "AMD CAS (Schärfung)", "AMD FSR 1"}},
       {"ita",
        {{"TASTIERA E MOUSE", "Regola le impostazioni di tastiera e mouse."},
@@ -138,7 +164,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"SFOCATURA DI MOVIMENTO", "Sfoca l'immagine durante i movimenti rapidi. Ha effetto al prossimo avvio del gioco."},
          {"SENSIBILITÀ DEL MOUSE", "Regola la velocità con cui la visuale ruota con il mouse."},
          {"FILTRO ANISOTROPICO", "Mantiene nitide le texture viste di sbieco."},
-         {"RIDIMENSIONAMENTO IMMAGINE", "Come l'immagine viene scalata nella finestra. Ha effetto al prossimo avvio del gioco."}},
+         {"RIDIMENSIONAMENTO IMMAGINE", "Come l'immagine viene scalata nella finestra. Ha effetto al prossimo avvio del gioco."},
+         {"SOVRIMPRESSIONE PRESTAZIONI", "Mostra prestazioni e uso delle risorse di sistema durante il gioco."},
+         {"SOLO FPS", "Mostra solo i fotogrammi al secondo nella sovrimpressione."},
+         {"SOVRIMPRESSIONE AVANZATA", "Mostra anche il frame time, gli FPS minimi e l'1% low."}},
         "Disattivato", "Attivato", "FXAA", "FXAA estremo", "Apri", "Bilineare (originale)", "AMD CAS (nitidezza)", "AMD FSR 1"}},
       {"jpn",
        {{"キーボードとマウス", "キーボードとマウスの設定を調整します。"},
@@ -149,7 +178,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"モーションブラー", "素早い動きの際に映像をぼかします。次回ゲーム起動時に適用されます。"},
          {"マウス感度", "マウスでカメラを回転させる速さを調整します。"},
          {"異方性フィルタリング", "斜めから見たテクスチャを鮮明に保ちます。"},
-         {"画像スケーリング", "映像をウィンドウに合わせて拡大する方法です。次回ゲーム起動時に適用されます。"}},
+         {"画像スケーリング", "映像をウィンドウに合わせて拡大する方法です。次回ゲーム起動時に適用されます。"},
+         {"パフォーマンス オーバーレイ", "プレイ中にパフォーマンスとシステムリソースの使用状況を表示します。"},
+         {"FPS のみ", "オーバーレイにフレームレートのみを表示します。"},
+         {"詳細オーバーレイ", "フレーム時間、最低 FPS、1% Low も表示します。"}},
         "オフ", "オン", "FXAA", "FXAA (最大)", "開く", "バイリニア（オリジナル）", "AMD CAS（シャープ化）", "AMD FSR 1"}},
       {"fra",
        {{"CLAVIER ET SOURIS", "Réglez les options du clavier et de la souris."},
@@ -160,7 +192,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"FLOU DE MOUVEMENT", "Floutez l'image lors des mouvements rapides. Prend effet au prochain lancement du jeu."},
          {"SENSIBILITÉ DE LA SOURIS", "Réglez la vitesse de rotation de la caméra avec la souris."},
          {"FILTRAGE ANISOTROPE", "Gardez les textures nettes vues en biais."},
-         {"MISE À L'ÉCHELLE", "Mise à l'échelle de l'image dans la fenêtre. Prend effet au prochain lancement du jeu."}},
+         {"MISE À L'ÉCHELLE", "Mise à l'échelle de l'image dans la fenêtre. Prend effet au prochain lancement du jeu."},
+         {"SUPERPOSITION DES PERFORMANCES", "Affiche les performances et l’utilisation des ressources système en jeu."},
+         {"FPS UNIQUEMENT", "Affiche uniquement la fréquence d’images dans la superposition."},
+         {"SUPERPOSITION AVANCÉE", "Affiche aussi le temps d’image, les FPS minimum et le 1 % low."}},
         "Désactivé", "Activé", "FXAA", "FXAA extrême", "Ouvrir", "Bilinéaire (d'origine)", "AMD CAS (netteté)", "AMD FSR 1"}},
       {"ptb",
        {{"TECLADO E MOUSE", "Ajuste as opções do teclado e do mouse."},
@@ -172,7 +207,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
           "Desfoca a imagem em movimentos rápidos. Aplica-se na próxima vez que o jogo for iniciado."},
          {"SENSIBILIDADE DO MOUSE", "Ajuste a velocidade com que a câmera gira com o mouse."},
          {"FILTRAGEM ANISOTRÓPICA", "Mantém nítidas as texturas vistas em ângulo."},
-         {"ESCALA DA IMAGEM", "Como a imagem é dimensionada para a janela. Aplica-se na próxima vez que o jogo for iniciado."}},
+         {"ESCALA DA IMAGEM", "Como a imagem é dimensionada para a janela. Aplica-se na próxima vez que o jogo for iniciado."},
+         {"SOBREPOSIÇÃO DE DESEMPENHO", "Mostra o desempenho e o uso dos recursos do sistema durante o jogo."},
+         {"SOMENTE FPS", "Mostra somente os quadros por segundo na sobreposição."},
+         {"SOBREPOSIÇÃO AVANÇADA", "Também mostra o tempo de quadro, FPS mínimo e 1% low."}},
         "Desativado", "Ativado", "FXAA", "FXAA extremo", "Abrir", "Bilinear (original)", "AMD CAS (nitidez)", "AMD FSR 1"}},
       {"pol",
        {{"KLAWIATURA I MYSZ", "Dostosuj ustawienia klawiatury i myszy."},
@@ -183,7 +221,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"ROZMYCIE RUCHU", "Rozmywa obraz podczas szybkiego ruchu. Zadziała po ponownym uruchomieniu gry."},
          {"CZUŁOŚĆ MYSZY", "Dostosuj szybkość obrotu kamery myszą."},
          {"FILTROWANIE ANIZOTROPOWE", "Zachowuje ostrość tekstur oglądanych pod kątem."},
-         {"SKALOWANIE OBRAZU", "Sposób skalowania obrazu do okna. Zadziała po ponownym uruchomieniu gry."}},
+         {"SKALOWANIE OBRAZU", "Sposób skalowania obrazu do okna. Zadziała po ponownym uruchomieniu gry."},
+         {"NAKŁADKA WYDAJNOŚCI", "Pokazuje wydajność i użycie zasobów systemowych podczas gry."},
+         {"TYLKO FPS", "Pokazuje w nakładce tylko liczbę klatek na sekundę."},
+         {"NAKŁADKA ZAAWANSOWANA", "Pokazuje także czas klatki, minimalne FPS i 1% low."}},
         "Wyłączone", "Włączone", "FXAA", "FXAA ekstremalne", "Otwórz", "Dwuliniowe (oryginalne)", "AMD CAS (wyostrzanie)", "AMD FSR 1"}},
       {"rus",
        {{"КЛАВИАТУРА И МЫШЬ", "Настройте параметры клавиатуры и мыши."},
@@ -194,7 +235,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"РАЗМЫТИЕ В ДВИЖЕНИИ", "Размывает изображение при быстром движении. Вступит в силу при следующем запуске игры."},
          {"ЧУВСТВИТЕЛЬНОСТЬ МЫШИ", "Настройте скорость поворота камеры мышью."},
          {"АНИЗОТРОПНАЯ ФИЛЬТРАЦИЯ", "Сохраняет чёткость текстур, видимых под углом."},
-         {"МАСШТАБИРОВАНИЕ ИЗОБРАЖЕНИЯ", "Способ масштабирования изображения под окно. Вступит в силу при следующем запуске игры."}},
+         {"МАСШТАБИРОВАНИЕ ИЗОБРАЖЕНИЯ", "Способ масштабирования изображения под окно. Вступит в силу при следующем запуске игры."},
+         {"ИНДИКАТОР ПРОИЗВОДИТЕЛЬНОСТИ", "Показывает производительность и использование ресурсов системы во время игры."},
+         {"ТОЛЬКО FPS", "Показывать в индикаторе только частоту кадров."},
+         {"РАСШИРЕННЫЙ ИНДИКАТОР", "Также показывает время кадра, минимальный FPS и 1% low."}},
         "Выкл.", "Вкл.", "FXAA", "FXAA (макс.)", "Открыть", "Билинейное (оригинал)", "AMD CAS (резкость)", "AMD FSR 1"}},
       {"cze",
        {{"KLÁVESNICE A MYŠ", "Upravte nastavení klávesnice a myši."},
@@ -205,7 +249,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"ROZMAZÁNÍ POHYBU", "Rozmazává obraz při rychlém pohybu. Projeví se při příštím spuštění hry."},
          {"CITLIVOST MYŠI", "Upravte rychlost otáčení kamery myší."},
          {"ANIZOTROPNÍ FILTROVÁNÍ", "Udržuje ostré textury viděné pod úhlem."},
-         {"ŠKÁLOVÁNÍ OBRAZU", "Způsob škálování obrazu do okna. Projeví se při příštím spuštění hry."}},
+         {"ŠKÁLOVÁNÍ OBRAZU", "Způsob škálování obrazu do okna. Projeví se při příštím spuštění hry."},
+         {"PŘEKRYVNÉ ZOBRAZENÍ VÝKONU", "Zobrazuje výkon a využití systémových prostředků během hraní."},
+         {"POUZE FPS", "V překryvném zobrazení ukazuje pouze počet snímků za sekundu."},
+         {"ROZŠÍŘENÉ ZOBRAZENÍ", "Ukazuje také dobu snímku, minimální FPS a 1% low."}},
         "Vypnuto", "Zapnuto", "FXAA", "FXAA extrémní", "Otevřít", "Bilineární (původní)", "AMD CAS (zostření)", "AMD FSR 1"}},
       {"hun",
        {{"BILLENTYŰZET ÉS EGÉR", "A billentyűzet és az egér beállításai."},
@@ -216,7 +263,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"MOZGÁSI ELMOSÓDÁS", "Elmossa a képet gyors mozgáskor. A játék következő indításakor lép életbe."},
          {"EGÉRÉRZÉKENYSÉG", "Az egérrel történő kameraforgatás sebessége."},
          {"ANIZOTRÓP SZŰRÉS", "Élesen tartja a ferdén látott textúrákat."},
-         {"KÉPSKÁLÁZÁS", "A kép ablakhoz méretezésének módja. A játék következő indításakor lép életbe."}},
+         {"KÉPSKÁLÁZÁS", "A kép ablakhoz méretezésének módja. A játék következő indításakor lép életbe."},
+         {"TELJESÍTMÉNY-ÁTFEDÉS", "Megjeleníti a teljesítményt és a rendszer erőforrásainak használatát játék közben."},
+         {"CSAK FPS", "Csak a képkockasebességet jeleníti meg."},
+         {"RÉSZLETES ÁTFEDÉS", "A képkockaidőt, a minimális FPS-t és az 1%-os minimumot is megjeleníti."}},
         "Ki", "Be", "FXAA", "FXAA (extrém)", "Megnyitás", "Bilineáris (eredeti)", "AMD CAS (élesítés)", "AMD FSR 1"}},
       {"chn",
        {{"鍵盤與滑鼠", "調整鍵盤與滑鼠設定。"},
@@ -227,7 +277,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"動態模糊", "在快速移動時模糊畫面。下次啟動遊戲時生效。"},
          {"滑鼠靈敏度", "調整用滑鼠轉動鏡頭的速度。"},
          {"非等向性過濾", "讓斜角觀看的材質保持清晰。"},
-         {"影像縮放", "影像縮放至視窗的方式。下次啟動遊戲時生效。"}},
+         {"影像縮放", "影像縮放至視窗的方式。下次啟動遊戲時生效。"},
+         {"效能疊加層", "在遊戲期間顯示效能與系統資源使用情況。"},
+         {"僅顯示 FPS", "疊加層中只顯示每秒影格數。"},
+         {"進階疊加層", "另外顯示影格時間、最低 FPS 和 1% low。"}},
         "關閉", "開啟", "FXAA", "FXAA 極致", "開啟", "雙線性（原始）", "AMD CAS（銳利化）", "AMD FSR 1"}},
       {"kor",
        {{"키보드 및 마우스", "키보드 및 마우스 설정을 조정합니다."},
@@ -238,7 +291,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"모션 블러", "빠르게 움직일 때 화면을 흐리게 합니다. 다음에 게임을 시작할 때 적용됩니다."},
          {"마우스 감도", "마우스로 카메라를 돌리는 속도를 조정합니다."},
          {"비등방성 필터링", "비스듬히 보이는 텍스처를 선명하게 유지합니다."},
-         {"이미지 스케일링", "화면을 창 크기에 맞게 조정하는 방식입니다. 다음에 게임을 시작할 때 적용됩니다."}},
+         {"이미지 스케일링", "화면을 창 크기에 맞게 조정하는 방식입니다. 다음에 게임을 시작할 때 적용됩니다."},
+         {"성능 오버레이", "플레이 중 성능과 시스템 리소스 사용량을 표시합니다."},
+         {"FPS만 표시", "오버레이에 초당 프레임만 표시합니다."},
+         {"고급 오버레이", "프레임 시간, 최저 FPS, 1% low도 표시합니다."}},
         "끔", "켬", "FXAA", "FXAA 최대", "열기", "바이리니어 (원본)", "AMD CAS (선명화)", "AMD FSR 1"}},
   };
   return texts;
@@ -513,6 +569,7 @@ void PcOptionStoreValue(int option, float value) {
   if (!Valid(option) || PcOptionIsAction(option)) return;
   const Option& entry = Options()[option];
   std::filesystem::path config_path;
+  int exclusive_option = -1;
   {
     std::lock_guard lock(g_mutex);
     const auto found = g_values.find(option);
@@ -520,11 +577,35 @@ void PcOptionStoreValue(int option, float value) {
     g_started.emplace(option, shown);
     if (FormatValue(entry, shown, false) == FormatValue(entry, value, false)) return;
     g_values[option] = value;
+    if (value >= 0.5f && entry.cvar) {
+      const char* exclusive_cvar = nullptr;
+      if (std::strcmp(entry.cvar, "perf_overlay_fps_only") == 0) {
+        exclusive_cvar = "perf_overlay_advanced";
+      } else if (std::strcmp(entry.cvar, "perf_overlay_advanced") == 0) {
+        exclusive_cvar = "perf_overlay_fps_only";
+      }
+      if (exclusive_cvar) {
+        for (size_t i = 0; i < Options().size(); ++i) {
+          if (Options()[i].cvar && std::strcmp(Options()[i].cvar, exclusive_cvar) == 0) {
+            exclusive_option = static_cast<int>(i);
+            g_values[exclusive_option] = 0.0f;
+            break;
+          }
+        }
+      }
+    }
     config_path = g_config_path;
   }
-  rex::cvar::SetFlagByName(entry.cvar, FormatValue(entry, value, false));
-  REXLOG_INFO("[Azura options] {} = {}", entry.cvar, FormatValue(entry, value, false));
+  const std::string formatted_value = FormatValue(entry, value, false);
+  rex::cvar::SetFlagByName(entry.cvar, formatted_value);
+  REXLOG_INFO("[Azura options] {} = {}", entry.cvar, formatted_value);
   if (!config_path.empty()) UpsertTomlKey(config_path, entry.cvar, FormatValue(entry, value, true));
+  if (exclusive_option >= 0) {
+    const Option& exclusive = Options()[exclusive_option];
+    rex::cvar::SetFlagByName(exclusive.cvar, "false");
+    REXLOG_INFO("[Azura options] {} = false", exclusive.cvar);
+    if (!config_path.empty()) UpsertTomlKey(config_path, exclusive.cvar, "false");
+  }
 }
 
 void PcOptionsResetDefaults(int category) {

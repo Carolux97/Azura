@@ -11,9 +11,19 @@
 # GPU emulation plugin loaded at start-up. "xenos" translates the console GPU to Vulkan, which
 # runs on Metal through MoltenVK on macOS.
 gpu_plugin = "xenos"
+# Enable the in-game performance overlay (Video options).
+perf_overlay = false
+# When enabled, show only FPS; otherwise the standard overlay is shown.
+perf_overlay_fps_only = false
+# Add frame time, minimum FPS and 1% low to the standard overlay.
+perf_overlay_advanced = false
 
 # ---------- Display ----------
 fullscreen = false
+# Present in step with the display refresh. Immediate and mailbox can repaint the same frame
+# repeatedly, taking GPU time from the game.
+vulkan_allow_present_mode_immediate = false
+vulkan_allow_present_mode_mailbox = false
 
 # ---------- Localization ----------
 # 1 = English, 2 = Japanese, 3 = German, 4 = French, 5 = Spanish, 6 = Italian,
@@ -57,4 +67,3 @@ keybind_dpad_left = "Left,1"           # D-pad left: weapon 1 (1) / menu left
 keybind_dpad_right = "Right,2"         # D-pad right: weapon 2 (2) / menu right
 keybind_start = "Return,Escape"        # Start: Enter (shown on prompts) / Escape (pause)
 keybind_back = "Tab"                   # Back: scoreboard
-
