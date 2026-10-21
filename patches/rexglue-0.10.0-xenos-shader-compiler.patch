@@ -1,9 +1,9 @@
 diff --git a/src/graphics/pipeline/shader/xsc/bench/xsc_bench.mm b/src/graphics/pipeline/shader/xsc/bench/xsc_bench.mm
 new file mode 100644
-index 0000000..8af04f5
+index 0000000..3bd78e6
 --- /dev/null
 +++ b/src/graphics/pipeline/shader/xsc/bench/xsc_bench.mm
-@@ -0,0 +1,991 @@
+@@ -0,0 +1,1340 @@
 +/**
 + * @file        graphics/pipeline/shader/xsc/bench/xsc_bench.mm
 + * @brief       Offline bench for the Xenos shader compiler: translates the game's real shaders
@@ -79,6 +79,8 @@ index 0000000..8af04f5
 +  uint32_t float_constant_count = 0;
 +  uint32_t writes_color_targets = 0;
 +  bool writes_depth = false;
++  // Vertex shaders: the vertex fetch constants used (0-95).
++  std::vector<uint32_t> vertex_fetch_constants;
 +  double translate_ms = 0;
 +  double compile_ms = 0;
 +  id<MTLFunction> function = nil;
@@ -99,6 +101,10 @@ index 0000000..8af04f5
 +  std::string derivatives = "fixed";
 +};
 +
++// XSC_BENCH_VS_SYNTHETIC: vertex shader variants changed to cover point sprites, the point size,
++// user clip planes and index loads from the guest memory (LoadVariants, GenerateVertexInputs).
++bool g_vertex_synthetic = false;
++
 +std::vector<uint32_t> ReadUcode(const fs::path& path) {
 +  std::ifstream file(path, std::ios::binary);
 +  std::vector<char> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
@@ -116,7 +122,7 @@ index 0000000..8af04f5
 +    if (entry.path().extension() != ".metal" || !std::regex_match(stem, match, name_regex)) {
 +      continue;
 +    }
-+    if (match[5].matched) {
++    if (match[5].matched || match[4].str() == "_norast") {
 +      // The variant without rasterization of a vertex shader shares the translation.
 +      continue;
 +    }
@@ -128,6 +134,23 @@ index 0000000..8af04f5
 +    variant.hash = std::stoull(match[2].str(), nullptr, 16);
 +    variant.modification = std::stoull(match[3].str(), nullptr, 16);
 +    variant.name = stem;
++    if (g_vertex_synthetic && variant.type == xenos::ShaderType::kVertex) {
++      // Vertex shader paths the game's variants do not take: point sprites for half of the
++      // shaders, the point size output for the others, user clip planes for all.
++      SpirvShaderTranslator::Modification modification(variant.modification);
++      if (modification.vertex.host_vertex_shader_type != Shader::HostVertexShaderType::kVertex) {
++        continue;
++      }
++      if (variant.hash & 1) {
++        modification.vertex.host_vertex_shader_type =
++            Shader::HostVertexShaderType::kPointListAsTriangleStrip;
++      }
++      modification.vertex.output_point_parameters = 1;
++      modification.vertex.user_clip_plane_count = 1 + uint32_t(variant.hash % 6);
++      modification.vertex.point_ps_ucp_mode = uint32_t((variant.hash >> 3) % 4);
++      variant.modification = modification.value;
++      variant.name += "_synthetic";
++    }
 +    variants.push_back(variant);
 +  }
 +  std::sort(variants.begin(), variants.end(),
@@ -170,6 +193,8 @@ index 0000000..8af04f5
 +  features.signed_zero_inf_nan_preserve_float32 = false;
 +  features.denorm_flush_to_zero_float32 = false;
 +  features.rounding_mode_rte_float32 = false;
++  // The synthetic vertex variants also cover the indices loaded by the shader.
++  features.full_draw_index_uint32 = !g_vertex_synthetic;
 +  return features;
 +}
 +
@@ -191,6 +216,10 @@ index 0000000..8af04f5
 +}
 +
 +bool g_fixed_derivatives = true;
++// Compare mode: vertex shaders are translated without rasterization, with their outputs written to
++// a buffer (InjectVertexCapture).
++bool g_vertex_capture = false;
++constexpr uint32_t kBufferVertexCapture = 28;
 +// XSC_BENCH_RT_7E3: every color target is a 7e3 one (XSC clamps to its range, and the reference
 +// output of another translator is clamped the same way before the comparison).
 +bool g_render_targets_7e3 = false;
@@ -240,6 +269,82 @@ index 0000000..8af04f5
 +  return [library newFunctionWithName:@(translated.msl.entry_point.c_str())];
 +}
 +
++// The vertex shader outputs written to the capture buffer, in order, for a modification: the
++// position, the interpolators the modification outputs, the point size or coordinates, the clip
++// distances. Each entry is the MSL expression of the output struct member and its float count.
++std::vector<std::pair<std::string, uint32_t>> VertexCaptureLayout(uint64_t modification_bits) {
++  SpirvShaderTranslator::Modification modification(modification_bits);
++  std::vector<std::pair<std::string, uint32_t>> layout = {{"gl_Position", 4}};
++  uint32_t interpolators_remaining = modification.vertex.interpolator_mask;
++  uint32_t interpolator_index;
++  while (rex::bit_scan_forward(interpolators_remaining, &interpolator_index)) {
++    interpolators_remaining &= ~(UINT32_C(1) << interpolator_index);
++    layout.emplace_back(fmt::format("xe_out_interpolator_{}", interpolator_index), 4);
++  }
++  if (modification.vertex.output_point_parameters) {
++    if (modification.vertex.host_vertex_shader_type ==
++        Shader::HostVertexShaderType::kPointListAsTriangleStrip) {
++      layout.emplace_back("xe_out_point_coordinates", 2);
++    } else {
++      layout.emplace_back("xe_out_point_size", 1);
++    }
++  }
++  for (uint32_t i = 0; i < modification.GetVertexClipDistanceCount(); ++i) {
++    layout.emplace_back(fmt::format("gl_ClipDistance[{}]", i), 1);
++  }
++  return layout;
++}
++
++uint32_t VertexCaptureStride(uint64_t modification) {
++  uint32_t stride = 0;
++  for (const auto& [name, count] : VertexCaptureLayout(modification)) {
++    stride += count;
++  }
++  return stride;
++}
++
++// Makes the vertex function without rasterization write its outputs (`out`, named as SPIRV-Cross
++// names them, which XSC follows) to a buffer, one record per vertex: a capture buffer parameter is
++// added, and the writes are inserted at the end of the function (the last one in the source).
++bool InjectVertexCapture(std::string& source, const std::string& entry_point,
++                         uint64_t modification) {
++  size_t signature = source.find("vertex void " + entry_point + "(");
++  if (signature == std::string::npos) {
++    return false;
++  }
++  size_t body = source.find("\n{", signature);
++  size_t parameters_end = source.rfind(')', body);
++  if (body == std::string::npos || parameters_end == std::string::npos ||
++      parameters_end < signature) {
++    return false;
++  }
++  std::string extra_parameters =
++      fmt::format(", device float* xe_bench_capture [[buffer({})]]", kBufferVertexCapture);
++  if (source.substr(signature, parameters_end - signature).find("[[vertex_id]]") ==
++      std::string::npos) {
++    extra_parameters += ", uint gl_VertexIndex [[vertex_id]]";
++  }
++  source.insert(parameters_end, extra_parameters);
++  std::string writes = fmt::format("    {{\n        uint xe_bench_base = gl_VertexIndex * {};\n",
++                                   VertexCaptureStride(modification));
++  uint32_t offset = 0;
++  for (const auto& [name, count] : VertexCaptureLayout(modification)) {
++    for (uint32_t i = 0; i < count; ++i) {
++      writes += fmt::format("        xe_bench_capture[xe_bench_base + {}] = out.{}{};\n",
++                            offset + i, name,
++                            count > 1 ? std::string(".") + "xyzw"[i] : std::string());
++    }
++    offset += count;
++  }
++  writes += "    }\n";
++  size_t function_end = source.rfind('}');
++  if (function_end == std::string::npos || function_end < parameters_end) {
++    return false;
++  }
++  source.insert(function_end, writes);
++  return true;
++}
++
 +// Translates the variant to SPIR-V (with the SPIR-V translator, or with XSC for "xsc-spirv") and
 +// converts it with SPIRV-Cross, as the Metal backend does.
 +Translated TranslateSpirv(id<MTLDevice> device, ShaderTranslator& translator,
@@ -268,7 +373,7 @@ index 0000000..8af04f5
 +  if (!rex::graphics::metal::SpirvToMsl(
 +          reinterpret_cast<const uint32_t*>(spirv.data()), spirv.size() / sizeof(uint32_t),
 +          vertex ? MslStage::kVertex : MslStage::kFragment, GetGuestShaderBindings(shader),
-+          translated.msl, false, variant.name)) {
++          translated.msl, vertex && g_vertex_capture, variant.name)) {
 +    translated.error = "SPIRV-Cross conversion failed";
 +    return translated;
 +  }
@@ -299,6 +404,17 @@ index 0000000..8af04f5
 +    // Forbids the Metal compiler to fuse the multiplications and additions SPIRV-Cross writes in
 +    // one expression, to check whether a difference comes from such fusion.
 +    translated.msl.source = "#pragma METAL fp contract(off)\n" + translated.msl.source;
++  }
++  if (variant.type == xenos::ShaderType::kVertex) {
++    for (const Shader::VertexBinding& binding : shader.vertex_bindings()) {
++      translated.vertex_fetch_constants.push_back(binding.fetch_constant);
++    }
++    if (g_vertex_capture && !InjectVertexCapture(translated.msl.source,
++                                                 translated.msl.entry_point,
++                                                 variant.modification)) {
++      translated.error = "the vertex capture could not be inserted";
++      return translated;
++    }
 +  }
 +  translated.textures = shader.GetTextureBindingsAfterTranslation();
 +  translated.samplers = shader.GetSamplerBindingsAfterTranslation();
@@ -665,6 +781,166 @@ index 0000000..8af04f5
 +  return output;
 +}
 +
++// The inputs of a vertex shader draw: those of a pixel shader, plus the guest memory the vertex
++// fetches read (random words) with vertex fetch constants pointing into it, and the vertex
++// processing system constants.
++struct VertexDrawInputs {
++  DrawInputs common;
++  std::vector<uint32_t> shared_memory;
++};
++
++VertexDrawInputs GenerateVertexInputs(id<MTLDevice> device, const Translated& translated,
++                                      uint32_t seed) {
++  VertexDrawInputs inputs;
++  inputs.common = GenerateInputs(device, translated, seed);
++  Random random(seed ^ 0x5EED5EEDu);
++  // 16 MB of guest memory; fetches start in the first 4 MB, so index * stride stays inside.
++  inputs.shared_memory.resize(size_t(4) << 20);
++  bool specials = (seed % 2) == 1;
++  for (uint32_t& word : inputs.shared_memory) {
++    if (specials) {
++      word = random.Next();
++    } else {
++      // Mostly finite floats and small integers.
++      float value = random.Value(false);
++      std::memcpy(&word, &value, sizeof(word));
++      if (random.Next() % 4 == 0) {
++        word = random.Next() & 0xFFFF;
++      }
++    }
++  }
++  uint32_t* fetch_words = reinterpret_cast<uint32_t*>(inputs.common.fetch);
++  for (uint32_t fetch_constant : translated.vertex_fetch_constants) {
++    xenos::xe_gpu_vertex_fetch_t vertex_fetch = {};
++    vertex_fetch.type = xenos::FetchConstantType::kVertex;
++    vertex_fetch.address = random.Next() % (uint32_t(1) << 20);
++    vertex_fetch.endian = xenos::Endian(random.Next() % 4);
++    vertex_fetch.size = 1 << 20;
++    fetch_words[fetch_constant * 2] = vertex_fetch.dword_0;
++    fetch_words[fetch_constant * 2 + 1] = vertex_fetch.dword_1;
++  }
++  SpirvShaderTranslator::SystemConstants& system = inputs.common.system;
++  // The position format flags, at random.
++  system.flags = (random.Next() % 2 ? SpirvShaderTranslator::kSysFlag_WNotReciprocal : 0) |
++                 (random.Next() % 2 ? SpirvShaderTranslator::kSysFlag_XYDividedByW : 0) |
++                 (random.Next() % 2 ? SpirvShaderTranslator::kSysFlag_ZDividedByW : 0);
++  system.line_loop_closing_index = UINT32_MAX;
++  system.vertex_index_endian = xenos::Endian::kNone;
++  system.vertex_base_index = int32_t(random.Next() % 64);
++  system.vertex_index_min = 0;
++  system.vertex_index_max = xenos::kVertexIndexMask;
++  if (g_vertex_synthetic) {
++    // Indices from the guest memory (random words, clamped to a range that keeps the vertex
++    // fetches inside the buffer), 16 or 32 bits, any endianness.
++    system.flags |= SpirvShaderTranslator::kSysFlag_VertexIndexLoad |
++                    SpirvShaderTranslator::kSysFlag_ComputeOrPrimitiveVertexIndexLoad;
++    if (random.Next() % 2) {
++      system.flags |= SpirvShaderTranslator::kSysFlag_ComputeOrPrimitiveVertexIndexLoad32Bit;
++    }
++    system.vertex_index_load_address = (random.Next() % (uint32_t(1) << 18)) * 4;
++    system.vertex_index_endian = xenos::Endian(random.Next() % 4);
++    system.vertex_index_min = random.Next() % 16;
++    system.vertex_index_max = 4095;
++    system.line_loop_closing_index = random.Next() % 1024;
++  }
++  for (uint32_t i = 0; i < 3; ++i) {
++    system.ndc_scale[i] = 0.5f + random.Unit() * 1.5f;
++    system.ndc_offset[i] = random.Unit() * 2.0f - 1.0f;
++  }
++  for (uint32_t i = 0; i < 2; ++i) {
++    system.point_constant_diameter[i] = random.Unit() * 8.0f;
++    system.point_screen_diameter_to_ndc_radius[i] = random.Unit() * 0.01f;
++  }
++  for (auto& plane : system.user_clip_planes) {
++    for (float& component : plane) {
++      component = random.Unit() * 2.0f - 1.0f;
++    }
++  }
++  return inputs;
++}
++
++struct VertexOutput {
++  bool ok = false;
++  std::string error;
++  std::vector<float> values;
++  double gpu_ms = 0;
++};
++
++// Runs a vertex shader (its function without rasterization, with the capture inserted) for
++// `vertex_count` points and reads its outputs back.
++VertexOutput DrawVertexShader(id<MTLDevice> device, id<MTLCommandQueue> queue,
++                              const Translated& translated, const VertexDrawInputs& inputs,
++                              uint32_t vertex_count, uint32_t stride) {
++  VertexOutput output;
++  MTLRenderPipelineDescriptor* descriptor = [MTLRenderPipelineDescriptor new];
++  descriptor.vertexFunction = translated.function;
++  descriptor.rasterizationEnabled = NO;
++  NSError* error = nil;
++  id<MTLRenderPipelineState> pipeline = [device newRenderPipelineStateWithDescriptor:descriptor
++                                                                               error:&error];
++  if (!pipeline) {
++    output.error = error ? error.localizedDescription.UTF8String : "pipeline creation failed";
++    return output;
++  }
++  id<MTLBuffer> shared_memory =
++      [device newBufferWithBytes:inputs.shared_memory.data()
++                          length:inputs.shared_memory.size() * sizeof(uint32_t)
++                         options:MTLResourceStorageModeShared];
++  size_t capture_size = size_t(vertex_count) * stride * sizeof(float);
++  id<MTLBuffer> capture = [device newBufferWithLength:std::max(capture_size, sizeof(float))
++                                              options:MTLResourceStorageModeShared];
++  // A value no shader writes by chance.
++  std::fill_n(static_cast<float*>(capture.contents), size_t(vertex_count) * stride, -12345.0f);
++
++  id<MTLCommandBuffer> command_buffer = [queue commandBuffer];
++  MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
++  pass.renderTargetWidth = 1;
++  pass.renderTargetHeight = 1;
++  pass.defaultRasterSampleCount = 1;
++  id<MTLRenderCommandEncoder> encoder = [command_buffer renderCommandEncoderWithDescriptor:pass];
++  [encoder setRenderPipelineState:pipeline];
++  const DrawInputs& common = inputs.common;
++  [encoder setVertexBuffer:shared_memory offset:0 atIndex:kBufferSharedMemory];
++  [encoder setVertexBytes:&common.system
++                   length:sizeof(common.system)
++                  atIndex:kBufferConstantsFirst + SpirvShaderTranslator::kConstantBufferSystem];
++  [encoder setVertexBytes:common.float_constants.data()
++                   length:common.float_constants.size() * sizeof(float)
++                  atIndex:kBufferConstantsFirst + SpirvShaderTranslator::kConstantBufferFloatVertex];
++  [encoder setVertexBytes:common.bool_loop
++                   length:sizeof(common.bool_loop)
++                  atIndex:kBufferConstantsFirst + SpirvShaderTranslator::kConstantBufferBoolLoop];
++  [encoder setVertexBytes:common.fetch
++                   length:sizeof(common.fetch)
++                  atIndex:kBufferConstantsFirst + SpirvShaderTranslator::kConstantBufferFetch];
++  if (translated.msl.needs_buffer_sizes) {
++    uint32_t sizes[32] = {};
++    sizes[kBufferSharedMemory] = uint32_t(shared_memory.length);
++    [encoder setVertexBytes:sizes length:sizeof(sizes) atIndex:kBufferSizes];
++  }
++  [encoder setVertexBuffer:capture offset:0 atIndex:kBufferVertexCapture];
++  for (size_t i = 0; i < common.textures.size(); ++i) {
++    [encoder setVertexTexture:common.textures[i] atIndex:i];
++  }
++  for (size_t i = 0; i < common.samplers.size(); ++i) {
++    [encoder setVertexSamplerState:common.samplers[i] atIndex:i];
++  }
++  [encoder drawPrimitives:MTLPrimitiveTypePoint vertexStart:0 vertexCount:vertex_count];
++  [encoder endEncoding];
++  [command_buffer commit];
++  [command_buffer waitUntilCompleted];
++  if (command_buffer.status != MTLCommandBufferStatusCompleted) {
++    output.error = command_buffer.error ? command_buffer.error.localizedDescription.UTF8String
++                                        : "the command buffer failed";
++    return output;
++  }
++  output.gpu_ms = (command_buffer.GPUEndTime - command_buffer.GPUStartTime) * 1000.0;
++  const float* values = static_cast<const float*>(capture.contents);
++  output.values.assign(values, values + size_t(vertex_count) * stride);
++  output.ok = true;
++  return output;
++}
++
 +// The color as a 7e3 render target holds it (what XSC pixel shaders clamp to): RGB in
 +// [0, 31.875], alpha in [0, 1], NaN as 0. The marker of discarded pixels is kept.
 +void ClampColorsTo7e3(Output& output) {
@@ -733,7 +1009,22 @@ index 0000000..8af04f5
 +  translated.msl.source.assign(source.begin(), source.end());
 +  translated.msl.entry_point =
 +      xsc::XscShaderTranslator::GetEntryPointName(shader, variant.modification);
++  if (variant.type == xenos::ShaderType::kVertex && g_vertex_capture) {
++    // The entry point without rasterization.
++    translated.msl.entry_point += "_norast";
++  }
 +  translated.translate_ms = MsSince(start);
++  if (variant.type == xenos::ShaderType::kVertex) {
++    for (const Shader::VertexBinding& binding : shader.vertex_bindings()) {
++      translated.vertex_fetch_constants.push_back(binding.fetch_constant);
++    }
++    if (g_vertex_capture && !InjectVertexCapture(translated.msl.source,
++                                                 translated.msl.entry_point,
++                                                 variant.modification)) {
++      translated.error = "the vertex capture could not be inserted";
++      return translated;
++    }
++  }
 +  translated.textures = shader.GetTextureBindingsAfterTranslation();
 +  translated.samplers = shader.GetSamplerBindingsAfterTranslation();
 +  translated.float_constant_count = shader.constant_register_map().float_count;
@@ -807,6 +1098,8 @@ index 0000000..8af04f5
 +
 +    g_fixed_derivatives = options.derivatives == "fixed" && options.mode == "compare";
 +    g_render_targets_7e3 = std::getenv("XSC_BENCH_RT_7E3") != nullptr;
++    g_vertex_capture = options.mode == "compare";
++    g_vertex_synthetic = std::getenv("XSC_BENCH_VS_SYNTHETIC") != nullptr;
 +    id<MTLDevice> device = MTLCreateSystemDefaultDevice();
 +    id<MTLCommandQueue> queue = [device newCommandQueue];
 +    MTLCompileOptions* vertex_options = [MTLCompileOptions new];
@@ -880,7 +1173,63 @@ index 0000000..8af04f5
 +        }
 +        translations.push_back(std::move(*translated));
 +      }
-+      if (options.mode == "translate" || variant.type != xenos::ShaderType::kPixel) {
++      if (options.mode == "translate") {
++        continue;
++      }
++      if (variant.type == xenos::ShaderType::kVertex) {
++        // Every translation run for the same vertices with the same inputs, compared with the
++        // first one value by value.
++        uint32_t vertex_count = options.size * options.size;
++        uint32_t stride = VertexCaptureStride(variant.modification);
++        for (uint32_t seed = 0; seed < options.seeds; ++seed) {
++          std::vector<VertexOutput> outputs;
++          for (size_t i = 0; i < translations.size(); ++i) {
++            if (!translations[i].ok) {
++              outputs.emplace_back();
++              continue;
++            }
++            VertexDrawInputs inputs = GenerateVertexInputs(
++                device, translations[0].ok ? translations[0] : translations[i],
++                uint32_t(variant.hash) ^ (seed * 7919));
++            VertexOutput output =
++                DrawVertexShader(device, queue, translations[i], inputs, vertex_count, stride);
++            if (!output.ok) {
++              std::printf("%s [%s] seed %u: %s\n", variant.name.c_str(),
++                          options.translators[i].c_str(), seed, output.error.c_str());
++            } else {
++              Totals& t = totals[options.translators[i]];
++              ++t.drawn;
++              t.gpu_ms += output.gpu_ms;
++            }
++            outputs.push_back(std::move(output));
++          }
++          for (size_t i = 1; i < outputs.size(); ++i) {
++            if (!outputs[0].ok || !outputs[i].ok) {
++              continue;
++            }
++            Totals& t = totals[options.translators[i]];
++            ++t.compared;
++            uint32_t mismatches = 0;
++            std::string first_mismatch;
++            for (size_t j = 0; j < outputs[0].values.size(); ++j) {
++              float a = outputs[0].values[j], v = outputs[i].values[j];
++              if (std::memcmp(&a, &v, sizeof(float)) == 0 || (std::isnan(a) && std::isnan(v)) ||
++                  (a == 0.0f && v == 0.0f)) {
++                continue;
++              }
++              if (!mismatches++) {
++                first_mismatch = fmt::format("vertex {} value {}: {} vs {}", j / stride, j % stride,
++                                             a, v);
++              }
++            }
++            if (mismatches) {
++              ++t.mismatched;
++              std::printf("%s seed %u: %s differs from %s in %u values, first %s\n",
++                          variant.name.c_str(), seed, options.translators[i].c_str(),
++                          options.translators[0].c_str(), mismatches, first_mismatch.c_str());
++            }
++          }
++        }
 +        continue;
 +      }
 +      // Draw every translation with the same inputs and compare each with the first. Seeds whose
@@ -1384,10 +1733,10 @@ index 0000000..5148592
 +}  // namespace rex::graphics::xsc
 diff --git a/src/graphics/pipeline/shader/xsc/xsc_ir.h b/src/graphics/pipeline/shader/xsc/xsc_ir.h
 new file mode 100644
-index 0000000..152ad56
+index 0000000..6d2d864
 --- /dev/null
 +++ b/src/graphics/pipeline/shader/xsc/xsc_ir.h
-@@ -0,0 +1,308 @@
+@@ -0,0 +1,333 @@
 +/**
 + * @file        graphics/pipeline/shader/xsc/xsc_ir.h
 + * @brief       Intermediate representation of the Xenos shader compiler (XSC)
@@ -1464,6 +1813,10 @@ index 0000000..152ad56
 +  kLoadFragCoord,
 +  kLoadFrontFacing,
 +  kLoadPointCoord,
++  // Vertex shader input: the host vertex index as a uint.
++  kLoadVertexIndex,
++  // operand 0: the dword index (int or uint) in the shared memory (the guest memory). Result uint.
++  kLoadSharedMemoryWord,
 +
 +  // Float arithmetic, per component. The emitters keep each one as a separate operation, so the
 +  // host compiler does not fuse or reorder them.
@@ -1491,6 +1844,10 @@ index 0000000..152ad56
 +  kCos,
 +  // operand 0 * 2^operand 1 (int).
 +  kLdexp,
++  // Dot product of two vectors (GLSL dot, SPIR-V OpDot).
++  kDot,
++  // uint operand 0 to the float2 of its two float16 halves (GLSL unpackHalf2x16).
++  kUnpackHalf2x16,
 +
 +  // Comparisons with bool results, per component.
 +  kFOrdEqual,
@@ -1517,6 +1874,7 @@ index 0000000..152ad56
 +  // Integer arithmetic and bit operations.
 +  kIAdd,
 +  kISub,
++  kIMul,
 +  kShiftLeftLogical,
 +  kShiftRightLogical,
 +  kBitwiseAnd,
@@ -1528,6 +1886,7 @@ index 0000000..152ad56
 +  // operands: base, insert, offset, count.
 +  kBitFieldInsert,
 +  kUMin,
++  kUMax,
 +  kSMin,
 +  kSMax,
 +  kUMod,
@@ -1597,6 +1956,13 @@ index 0000000..152ad56
 +  kOutputColor,
 +  kOutputDepth,
 +  kOutputSampleMask,
++  // Vertex outputs: interpolators, the point size and the point coordinates at Variable::location,
++  // the position, and the clip distances (an array).
++  kOutputInterpolator,
++  kOutputPointSize,
++  kOutputPointCoordinates,
++  kOutputPosition,
++  kOutputClipDistance,
 +};
 +
 +struct Variable {
@@ -1670,6 +2036,13 @@ index 0000000..152ad56
 +  bool early_fragment_tests = false;
 +};
 +
++// What a vertex shader writes, for the interface of the emitted function (the outputs themselves
++// are the variables with vertex output storage).
++struct VertexInterface {
++  // The clip distances written (the array size of the kOutputClipDistance variable).
++  uint32_t clip_distance_count = 0;
++};
++
 +// A texture or sampler binding the emitted code reads, in the order of the shader's bindings.
 +struct TextureBindingInfo {
 +  uint32_t fetch_constant;
@@ -1681,6 +2054,7 @@ index 0000000..152ad56
 +  bool is_pixel_shader = true;
 +  std::string entry_point;
 +  FragmentInterface fragment;
++  VertexInterface vertex;
 +  std::vector<TextureBindingInfo> textures;
 +  uint32_t sampler_count = 0;
 +  // float4 elements of the float constant buffer of the stage (at least 1).
@@ -1698,10 +2072,10 @@ index 0000000..152ad56
 +}  // namespace rex::graphics::xsc
 diff --git a/src/graphics/pipeline/shader/xsc/xsc_msl.cpp b/src/graphics/pipeline/shader/xsc/xsc_msl.cpp
 new file mode 100644
-index 0000000..2c980a0
+index 0000000..c43d650
 --- /dev/null
 +++ b/src/graphics/pipeline/shader/xsc/xsc_msl.cpp
-@@ -0,0 +1,730 @@
+@@ -0,0 +1,824 @@
 +/**
 + * @file        graphics/pipeline/shader/xsc/xsc_msl.cpp
 + * @brief       MSL emitter of the Xenos shader compiler
@@ -1713,7 +2087,10 @@ index 0000000..2c980a0
 + * cannot fuse a multiplication and an addition (it only contracts within an expression with
 + * MTLMathModeSafe, measured on an M4) and the results match the Xenos rules bit for bit. The
 + * interface is the one the Metal backend binds for the SPIR-V translator's shaders: buffer 0 the
-+ * shared memory, 1-5 the constant buffers, textures and samplers in binding order.
++ * shared memory, 1-5 the constant buffers, textures and samplers in binding order, and the vertex
++ * outputs named as SPIRV-Cross names them. A vertex shader has a second entry point, with the
++ * name suffixed by _norast, for pipelines without rasterization (returning nothing, as Metal
++ * requires there).
 + */
 +
 +#include "xsc_msl.h"
@@ -1806,7 +2183,14 @@ index 0000000..2c980a0
 +  }
 +
 +  std::string Emit() {
-+    WriteHeader();
++    out_ +=
++        "#include <metal_stdlib>\n"
++        "using namespace metal;\n\n";
++    if (!program_.is_pixel_shader) {
++      return EmitVertex();
++    }
++    WriteFragmentHeader();
++    WriteLocals();
 +    WriteBody(program_.body, 1);
 +    if (uses_demote_) {
 +      // Demoted pixels are discarded once nothing needs their values for derivatives.
@@ -1865,14 +2249,106 @@ index 0000000..2c980a0
 +        return "out.gl_FragDepth";
 +      case Storage::kOutputSampleMask:
 +        return "out.gl_SampleMask";
++      case Storage::kOutputInterpolator:
++      case Storage::kOutputPointSize:
++      case Storage::kOutputPointCoordinates:
++      case Storage::kOutputPosition:
++      case Storage::kOutputClipDistance:
++        // Vertex outputs are named in their variables, as SPIRV-Cross names them.
++        return "out." + variable.name;
 +    }
 +    return variable.name;
 +  }
 +
-+  void WriteHeader() {
-+    out_ +=
-+        "#include <metal_stdlib>\n"
-+        "using namespace metal;\n\n";
++  // The parameters with the buffers, textures and samplers, as the Metal backend binds them.
++  std::vector<std::string> ResourceParameters() const {
++    std::vector<std::string> parameters;
++    parameters.push_back("const device uint* xe_shared_memory [[buffer(0)]]");
++    parameters.push_back(
++        fmt::format("constant uint4* xe_system [[buffer({})]]", kBufferSystemConstants));
++    parameters.push_back(fmt::format(
++        "constant float4* xe_float_constants [[buffer({})]]",
++        program_.is_pixel_shader ? kBufferFloatConstantsPixel : kBufferFloatConstantsVertex));
++    parameters.push_back(
++        fmt::format("constant uint4* xe_bool_loop [[buffer({})]]", kBufferBoolLoopConstants));
++    parameters.push_back(
++        fmt::format("constant uint4* xe_fetch [[buffer({})]]", kBufferFetchConstants));
++    if (program_.debug_counter_slot != UINT32_MAX) {
++      parameters.push_back(fmt::format("device atomic_uint* xe_debug_counters [[buffer({})]]",
++                                       kBufferDebugCounters));
++    }
++    for (size_t i = 0; i < program_.textures.size(); ++i) {
++      const char* type = "texture2d_array<float>";
++      if (program_.textures[i].dimension == TextureDimension::k3D) {
++        type = "texture3d<float>";
++      } else if (program_.textures[i].dimension == TextureDimension::kCube) {
++        type = "texturecube<float>";
++      }
++      parameters.push_back(fmt::format("{} xe_texture{} [[texture({})]]", type, i, i));
++    }
++    for (uint32_t i = 0; i < program_.sampler_count; ++i) {
++      parameters.push_back(fmt::format("sampler xe_sampler{} [[sampler({})]]", i, i));
++    }
++    return parameters;
++  }
++
++  static std::string JoinParameters(const std::vector<std::string>& parameters) {
++    std::string text;
++    for (size_t i = 0; i < parameters.size(); ++i) {
++      text += (i ? ",\n        " : "") + parameters[i];
++    }
++    return text;
++  }
++
++  std::string EmitVertex() {
++    // The outputs.
++    out_ += "struct XeVertexOut {\n";
++    for (const Variable& variable : program_.variables) {
++      switch (variable.storage) {
++        case Storage::kOutputInterpolator:
++        case Storage::kOutputPointSize:
++        case Storage::kOutputPointCoordinates:
++          out_ += fmt::format("    {} {} [[user(locn{})]];\n", TypeName(variable.type),
++                              variable.name, variable.location);
++          break;
++        case Storage::kOutputPosition:
++          out_ += fmt::format("    float4 {} [[position]];\n", variable.name);
++          break;
++        case Storage::kOutputClipDistance:
++          out_ += fmt::format("    float {} [[clip_distance]] [{}];\n", variable.name,
++                              variable.array_size);
++          break;
++        default:
++          break;
++      }
++    }
++    out_ += "};\n\n";
++    std::vector<std::string> parameters = {"uint gl_VertexIndex [[vertex_id]]"};
++    std::vector<std::string> resources = ResourceParameters();
++    parameters.insert(parameters.end(), resources.begin(), resources.end());
++    std::string parameter_text = JoinParameters(parameters);
++    // The body, shared by both entry points.
++    std::string head = std::move(out_);
++    out_.clear();
++    out_ += "    XeVertexOut out = {};\n";
++    WriteLocals();
++    WriteBody(program_.body, 1);
++    std::string body = std::move(out_);
++    out_ = std::move(head);
++    // The SPIR-V shaders follow Vulkan clip space, where -Y is the top: flipped for Metal as
++    // SPIRV-Cross does for the SPIR-V translator's vertex shaders.
++    out_ += fmt::format(
++        "vertex XeVertexOut {}({})\n{{\n{}    out.gl_Position.y = -(out.gl_Position.y);\n"
++        "    return out;\n}}\n\n",
++        program_.entry_point, parameter_text, body);
++    // Flipped there too, like SPIRV-Cross, though nothing reads it.
++    out_ += fmt::format(
++        "vertex void {}_norast({})\n{{\n{}    out.gl_Position.y = -(out.gl_Position.y);\n}}\n",
++        program_.entry_point, parameter_text, body);
++    return std::move(out_);
++  }
++
++  void WriteFragmentHeader() {
 +    const FragmentInterface& fragment = program_.fragment;
 +    // Inputs.
 +    out_ += "struct XeIn {\n";
@@ -1925,36 +2401,15 @@ index 0000000..2c980a0
 +    if (fragment.front_facing) {
 +      parameters.push_back("bool gl_FrontFacing [[front_facing]]");
 +    }
-+    parameters.push_back(
-+        fmt::format("constant uint4* xe_system [[buffer({})]]", kBufferSystemConstants));
-+    parameters.push_back(fmt::format(
-+        "constant float4* xe_float_constants [[buffer({})]]",
-+        program_.is_pixel_shader ? kBufferFloatConstantsPixel : kBufferFloatConstantsVertex));
-+    parameters.push_back(
-+        fmt::format("constant uint4* xe_bool_loop [[buffer({})]]", kBufferBoolLoopConstants));
-+    parameters.push_back(
-+        fmt::format("constant uint4* xe_fetch [[buffer({})]]", kBufferFetchConstants));
-+    if (program_.debug_counter_slot != UINT32_MAX) {
-+      parameters.push_back(fmt::format("device atomic_uint* xe_debug_counters [[buffer({})]]",
-+                                       kBufferDebugCounters));
-+    }
-+    for (size_t i = 0; i < program_.textures.size(); ++i) {
-+      const char* type = "texture2d_array<float>";
-+      if (program_.textures[i].dimension == TextureDimension::k3D) {
-+        type = "texture3d<float>";
-+      } else if (program_.textures[i].dimension == TextureDimension::kCube) {
-+        type = "texturecube<float>";
-+      }
-+      parameters.push_back(fmt::format("{} xe_texture{} [[texture({})]]", type, i, i));
-+    }
-+    for (uint32_t i = 0; i < program_.sampler_count; ++i) {
-+      parameters.push_back(fmt::format("sampler xe_sampler{} [[sampler({})]]", i, i));
-+    }
-+    for (size_t i = 0; i < parameters.size(); ++i) {
-+      out_ += (i ? ",\n        " : "") + parameters[i];
-+    }
++    std::vector<std::string> resources = ResourceParameters();
++    parameters.insert(parameters.end(), resources.begin(), resources.end());
++    out_ += JoinParameters(parameters);
 +    out_ += ")\n{\n";
 +    out_ += "    XeOut out = {};\n";
++  }
++
++  // The local variables: the demote flag and the function variables.
++  void WriteLocals() {
 +    if (uses_demote_) {
 +      out_ += "    bool xe_demoted = false;\n";
 +    }
@@ -2111,6 +2566,7 @@ index 0000000..2c980a0
 +        return "-";
 +      case Op::kFMul:
 +      case Op::kVectorTimesScalar:
++      case Op::kIMul:
 +        return "*";
 +      case Op::kFDiv:
 +        return "/";
@@ -2192,7 +2648,10 @@ index 0000000..2c980a0
 +      case Op::kSMin:
 +        return "min";
 +      case Op::kSMax:
++      case Op::kUMax:
 +        return "max";
++      case Op::kDot:
++        return "dot";
 +      case Op::kDpdxCoarse:
 +        return "dfdx";
 +      case Op::kDpdyCoarse:
@@ -2275,6 +2734,15 @@ index 0000000..2c980a0
 +        return;
 +      case Op::kLoadPointCoord:
 +        Define(instruction, depth, "in.xe_in_point_coordinates");
++        return;
++      case Op::kLoadVertexIndex:
++        Define(instruction, depth, "gl_VertexIndex");
++        return;
++      case Op::kLoadSharedMemoryWord:
++        Define(instruction, depth, fmt::format("xe_shared_memory[{}]", Value(operands[0])));
++        return;
++      case Op::kUnpackHalf2x16:
++        Define(instruction, depth, fmt::format("float2(as_type<half2>({}))", Value(operands[0])));
 +        return;
 +      case Op::kFNeg:
 +        Define(instruction, depth, fmt::format("-{}", Value(operands[0])));
@@ -2460,10 +2928,10 @@ index 0000000..271f880
 +}  // namespace rex::graphics::xsc
 diff --git a/src/graphics/pipeline/shader/xsc/xsc_spirv.cpp b/src/graphics/pipeline/shader/xsc/xsc_spirv.cpp
 new file mode 100644
-index 0000000..71b836f
+index 0000000..ccc8e43
 --- /dev/null
 +++ b/src/graphics/pipeline/shader/xsc/xsc_spirv.cpp
-@@ -0,0 +1,945 @@
+@@ -0,0 +1,1069 @@
 +/**
 + * @file        graphics/pipeline/shader/xsc/xsc_spirv.cpp
 + * @brief       SPIR-V emitter of the Xenos shader compiler
@@ -2560,17 +3028,20 @@ index 0000000..71b836f
 +    WriteBody(program_.body);
 +    builder_.leaveFunction();
 +
-+    spv::Instruction* entry_point =
-+        builder_.addEntryPoint(spv::ExecutionModelFragment, function_, "main");
++    spv::Instruction* entry_point = builder_.addEntryPoint(
++        program_.is_pixel_shader ? spv::ExecutionModelFragment : spv::ExecutionModelVertex,
++        function_, "main");
 +    for (spv::Id interface_id : interface_) {
 +      entry_point->addIdOperand(interface_id);
 +    }
-+    builder_.addExecutionMode(function_, spv::ExecutionModeOriginUpperLeft);
-+    if (program_.fragment.early_fragment_tests) {
-+      builder_.addExecutionMode(function_, spv::ExecutionModeEarlyFragmentTests);
-+    }
-+    if (program_.fragment.depth) {
-+      builder_.addExecutionMode(function_, spv::ExecutionModeDepthReplacing);
++    if (program_.is_pixel_shader) {
++      builder_.addExecutionMode(function_, spv::ExecutionModeOriginUpperLeft);
++      if (program_.fragment.early_fragment_tests) {
++        builder_.addExecutionMode(function_, spv::ExecutionModeEarlyFragmentTests);
++      }
++      if (program_.fragment.depth) {
++        builder_.addExecutionMode(function_, spv::ExecutionModeDepthReplacing);
++      }
 +    }
 +    if (options_.denorm_flush_to_zero_float32) {
 +      builder_.addCapability(spv::CapabilityDenormFlushToZero);
@@ -2687,7 +3158,54 @@ index 0000000..71b836f
 +    return variable;
 +  }
 +
++  // The vertex shader's built-in input and outputs: the vertex index, gl_PerVertex with the
++  // position and the clip distances, and the interpolator and point outputs at their locations.
++  void DeclareVertexInterface() {
++    input_vertex_index_ =
++        CreateInterfaceVariable(spv::StorageClassInput, TypeId(kInt), "gl_VertexIndex");
++    builder_.addDecoration(input_vertex_index_, spv::DecorationBuiltIn, spv::BuiltInVertexIndex);
++    std::vector<spv::Id> per_vertex_members = {TypeId(kFloat4)};
++    uint32_t clip_distance_count = program_.vertex.clip_distance_count;
++    if (clip_distance_count) {
++      builder_.addCapability(spv::CapabilityClipDistance);
++      spv::Id type_clip_distance = builder_.makeArrayType(
++          TypeId(kFloat), builder_.makeUintConstant(clip_distance_count), 0);
++      builder_.addDecoration(type_clip_distance, spv::DecorationArrayStride, sizeof(float));
++      per_vertex_members.push_back(type_clip_distance);
++    }
++    spv::Id type_per_vertex = builder_.makeStructType(per_vertex_members, "gl_PerVertex");
++    builder_.addMemberName(type_per_vertex, 0, "gl_Position");
++    builder_.addMemberDecoration(type_per_vertex, 0, spv::DecorationBuiltIn, spv::BuiltInPosition);
++    if (clip_distance_count) {
++      builder_.addMemberName(type_per_vertex, 1, "gl_ClipDistance");
++      builder_.addMemberDecoration(type_per_vertex, 1, spv::DecorationBuiltIn,
++                                   spv::BuiltInClipDistance);
++    }
++    builder_.addDecoration(type_per_vertex, spv::DecorationBlock);
++    output_per_vertex_ = CreateInterfaceVariable(spv::StorageClassOutput, type_per_vertex, "");
++    // Invariant like the SPIR-V translator's outputs, for the same positions in every pass.
++    builder_.addDecoration(output_per_vertex_, spv::DecorationInvariant);
++    for (size_t i = 0; i < program_.variables.size(); ++i) {
++      const Variable& variable = program_.variables[i];
++      if (variable.storage != Storage::kOutputInterpolator &&
++          variable.storage != Storage::kOutputPointSize &&
++          variable.storage != Storage::kOutputPointCoordinates) {
++        continue;
++      }
++      spv::Id output = CreateInterfaceVariable(spv::StorageClassOutput, TypeId(variable.type),
++                                               variable.name.c_str());
++      builder_.addDecoration(output, spv::DecorationLocation, int(variable.location));
++      builder_.addDecoration(output, spv::DecorationInvariant);
++      variables_[i + 1] = output;
++    }
++  }
++
 +  void DeclareInterface() {
++    if (!program_.is_pixel_shader) {
++      DeclareVertexInterface();
++      DeclareTexturesAndSamplers();
++      return;
++    }
 +    const FragmentInterface& fragment = program_.fragment;
 +    spv::Id type_float4 = TypeId(kFloat4);
 +    for (size_t i = 0; i < fragment.interpolators.size(); ++i) {
@@ -2723,8 +3241,6 @@ index 0000000..71b836f
 +      const Variable& variable = program_.variables[i];
 +      spv::Id output = spv::NoResult;
 +      switch (variable.storage) {
-+        case Storage::kFunction:
-+          continue;
 +        case Storage::kOutputColor:
 +          output = CreateInterfaceVariable(
 +              spv::StorageClassOutput, type_float4,
@@ -2746,11 +3262,21 @@ index 0000000..71b836f
 +          // SampleMask depends on SampleRateShading in some SPIR-V revisions.
 +          builder_.addCapability(spv::CapabilitySampleRateShading);
 +          break;
++        default:
++          // Function variables, and no vertex outputs in a pixel shader.
++          continue;
 +      }
 +      variables_[i + 1] = output;
 +    }
 +
-+    // Textures, then samplers, in the pixel shader's descriptor set.
++    DeclareTexturesAndSamplers();
++  }
++
++  // Textures, then samplers, in the descriptor set of the stage.
++  void DeclareTexturesAndSamplers() {
++    int texture_set = int(program_.is_pixel_shader
++                              ? SpirvShaderTranslator::kDescriptorSetTexturesPixel
++                              : SpirvShaderTranslator::kDescriptorSetTexturesVertex);
 +    for (size_t i = 0; i < program_.textures.size(); ++i) {
 +      const TextureBindingInfo& texture = program_.textures[i];
 +      spv::Dim dimension = spv::Dim2D;
@@ -2776,8 +3302,7 @@ index 0000000..71b836f
 +          fmt::format("xe_texture{}_{}_{}", texture.fetch_constant, dimension_name,
 +                      texture.is_signed ? 's' : 'u')
 +              .c_str());
-+      builder_.addDecoration(variable, spv::DecorationDescriptorSet,
-+                             int(SpirvShaderTranslator::kDescriptorSetTexturesPixel));
++      builder_.addDecoration(variable, spv::DecorationDescriptorSet, texture_set);
 +      builder_.addDecoration(variable, spv::DecorationBinding, int(i));
 +      textures_.push_back({variable, image_type});
 +    }
@@ -2785,8 +3310,7 @@ index 0000000..71b836f
 +      spv::Id variable = CreateInterfaceVariable(spv::StorageClassUniformConstant,
 +                                                 builder_.makeSamplerType(),
 +                                                 fmt::format("xe_sampler{}", i).c_str());
-+      builder_.addDecoration(variable, spv::DecorationDescriptorSet,
-+                             int(SpirvShaderTranslator::kDescriptorSetTexturesPixel));
++      builder_.addDecoration(variable, spv::DecorationDescriptorSet, texture_set);
 +      builder_.addDecoration(variable, spv::DecorationBinding,
 +                             int(program_.textures.size() + i));
 +      samplers_.push_back(variable);
@@ -2815,6 +3339,34 @@ index 0000000..71b836f
 +                           int(SpirvShaderTranslator::kDescriptorSetConstants));
 +    builder_.addDecoration(variable, spv::DecorationBinding, int(buffer));
 +    return variable;
++  }
++
++  // The shared memory storage buffer (uint[] in one binding), declared on first use.
++  spv::StorageClass SharedMemoryStorageClass() const {
++    return options_.spirv_version >= spv::Spv_1_3 ? spv::StorageClassStorageBuffer
++                                                  : spv::StorageClassUniform;
++  }
++  spv::Id SharedMemory() {
++    if (shared_memory_ != spv::NoResult) {
++      return shared_memory_;
++    }
++    spv::Id type_array = builder_.makeRuntimeArray(TypeId(kUint));
++    // Storage buffers have std430 packing, no padding to 4-component vectors.
++    builder_.addDecoration(type_array, spv::DecorationArrayStride, sizeof(uint32_t));
++    spv::Id type_shared_memory = builder_.makeStructType({type_array}, "XeSharedMemory");
++    builder_.addMemberName(type_shared_memory, 0, "shared_memory");
++    builder_.addMemberDecoration(type_shared_memory, 0, spv::DecorationRestrict);
++    builder_.addMemberDecoration(type_shared_memory, 0, spv::DecorationNonWritable);
++    builder_.addMemberDecoration(type_shared_memory, 0, spv::DecorationOffset, 0);
++    builder_.addDecoration(type_shared_memory, options_.spirv_version >= spv::Spv_1_3
++                                                   ? spv::DecorationBlock
++                                                   : spv::DecorationBufferBlock);
++    shared_memory_ = CreateInterfaceVariable(SharedMemoryStorageClass(), type_shared_memory,
++                                             "xe_shared_memory");
++    builder_.addDecoration(shared_memory_, spv::DecorationDescriptorSet,
++                           int(SpirvShaderTranslator::kDescriptorSetSharedMemoryAndEdram));
++    builder_.addDecoration(shared_memory_, spv::DecorationBinding, 0);
++    return shared_memory_;
 +  }
 +
 +  spv::Id LoadUniformWord(spv::Id buffer, uint32_t dword) {
@@ -3048,6 +3600,17 @@ index 0000000..71b836f
 +    spv::Id pointer = variables_[instruction.variable];
 +    spv::StorageClass storage_class =
 +        variable.storage == Storage::kFunction ? spv::StorageClassFunction : spv::StorageClassOutput;
++    // Members of gl_PerVertex.
++    if (variable.storage == Storage::kOutputPosition) {
++      return builder_.createAccessChain(storage_class, output_per_vertex_,
++                                        {builder_.makeIntConstant(0)});
++    }
++    if (variable.storage == Storage::kOutputClipDistance) {
++      spv::Id index = dynamic_index != kNoValue ? Value(dynamic_index)
++                                                : builder_.makeIntConstant(int(instruction.imm[0]));
++      return builder_.createAccessChain(storage_class, output_per_vertex_,
++                                        {builder_.makeIntConstant(1), index});
++    }
 +    if (variable.storage == Storage::kOutputSampleMask) {
 +      return builder_.createAccessChain(storage_class, pointer, {builder_.makeIntConstant(0)});
 +    }
@@ -3100,9 +3663,11 @@ index 0000000..71b836f
 +                               instruction.imm[0]));
 +        return;
 +      case Op::kLoadFloatConstant: {
-+        spv::Id buffer =
-+            UniformBuffer(SpirvShaderTranslator::kConstantBufferFloatPixel, ScalarType::kFloat,
-+                          program_.float_constant_count, "XeFloatConstants");
++        spv::Id buffer = UniformBuffer(program_.is_pixel_shader
++                                           ? SpirvShaderTranslator::kConstantBufferFloatPixel
++                                           : SpirvShaderTranslator::kConstantBufferFloatVertex,
++                                       ScalarType::kFloat, program_.float_constant_count,
++                                       "XeFloatConstants");
 +        spv::Id pointer = builder_.createAccessChain(
 +            spv::StorageClassUniform, buffer, {builder_.makeIntConstant(0), Value(operands[0])});
 +        Define(instruction, builder_.createLoad(pointer, spv::NoPrecision));
@@ -3119,6 +3684,25 @@ index 0000000..71b836f
 +        return;
 +      case Op::kLoadPointCoord:
 +        Define(instruction, builder_.createLoad(input_point_coordinates_, spv::NoPrecision));
++        return;
++      case Op::kLoadVertexIndex:
++        Define(instruction,
++               builder_.createUnaryOp(spv::OpBitcast, type,
++                                      builder_.createLoad(input_vertex_index_, spv::NoPrecision)));
++        return;
++      case Op::kLoadSharedMemoryWord:
++        Define(instruction,
++               builder_.createLoad(
++                   builder_.createAccessChain(SharedMemoryStorageClass(), SharedMemory(),
++                                              {builder_.makeIntConstant(0), Value(operands[0])}),
++                   spv::NoPrecision));
++        return;
++      case Op::kDot:
++        Define(instruction, builder_.createBinOp(spv::OpDot, type, Value(operands[0]),
++                                                 Value(operands[1])));
++        return;
++      case Op::kUnpackHalf2x16:
++        Define(instruction, Builtin(GLSLstd450UnpackHalf2x16, instruction));
 +        return;
 +
 +      case Op::kFAdd:
@@ -3200,6 +3784,7 @@ index 0000000..71b836f
 +      case Op::kLogicalOr:
 +      case Op::kIAdd:
 +      case Op::kISub:
++      case Op::kIMul:
 +      case Op::kShiftLeftLogical:
 +      case Op::kShiftRightLogical:
 +      case Op::kBitwiseAnd:
@@ -3222,6 +3807,7 @@ index 0000000..71b836f
 +            {Op::kLogicalOr, spv::OpLogicalOr},
 +            {Op::kIAdd, spv::OpIAdd},
 +            {Op::kISub, spv::OpISub},
++            {Op::kIMul, spv::OpIMul},
 +            {Op::kShiftLeftLogical, spv::OpShiftLeftLogical},
 +            {Op::kShiftRightLogical, spv::OpShiftRightLogical},
 +            {Op::kBitwiseAnd, spv::OpBitwiseAnd},
@@ -3270,6 +3856,9 @@ index 0000000..71b836f
 +        return;
 +      case Op::kUMin:
 +        Define(instruction, Builtin(GLSLstd450UMin, instruction));
++        return;
++      case Op::kUMax:
++        Define(instruction, Builtin(GLSLstd450UMax, instruction));
 +        return;
 +      case Op::kSMin:
 +        Define(instruction, Builtin(GLSLstd450SMin, instruction));
@@ -3393,6 +3982,9 @@ index 0000000..71b836f
 +  spv::Id input_point_coordinates_ = spv::NoResult;
 +  spv::Id input_frag_coord_ = spv::NoResult;
 +  spv::Id input_front_facing_ = spv::NoResult;
++  spv::Id input_vertex_index_ = spv::NoResult;
++  spv::Id output_per_vertex_ = spv::NoResult;
++  spv::Id shared_memory_ = spv::NoResult;
 +  std::unordered_map<uint32_t, spv::Id> uniform_buffers_;
 +  // The variable and the image type of each texture.
 +  std::vector<std::pair<spv::Id, spv::Id>> textures_;
@@ -3452,10 +4044,10 @@ index 0000000..cedc9eb
 +}  // namespace rex::graphics::xsc
 diff --git a/src/graphics/pipeline/shader/xsc/xsc_translator.cpp b/src/graphics/pipeline/shader/xsc/xsc_translator.cpp
 new file mode 100644
-index 0000000..cc5c79a
+index 0000000..358a9b1
 --- /dev/null
 +++ b/src/graphics/pipeline/shader/xsc/xsc_translator.cpp
-@@ -0,0 +1,842 @@
+@@ -0,0 +1,881 @@
 +/**
 + * @file        graphics/pipeline/shader/xsc/xsc_translator.cpp
 + * @brief       Xenos shader compiler: translation setup, control flow, operands and results
@@ -3523,6 +4115,13 @@ index 0000000..cc5c79a
 +  var_color_.fill(0);
 +  var_depth_ = 0;
 +  var_sample_mask_ = 0;
++  var_vfetch_address_ = 0;
++  var_point_size_edge_flag_kill_vertex_ = 0;
++  var_interpolators_.fill(0);
++  var_position_ = 0;
++  var_point_size_ = 0;
++  var_point_coordinates_ = 0;
++  var_clip_distances_ = 0;
 +  system_constant_flags_ = kNoValue;
 +  frag_coord_ = kNoValue;
 +  front_facing_ = kNoValue;
@@ -3584,13 +4183,29 @@ index 0000000..cc5c79a
 +  Builder& b = *builder_;
 +  const Shader& shader = current_shader();
 +
-+  if (!is_pixel_shader()) {
-+    Unsupported("vertex shaders");
-+  }
 +  if (shader.memexport_eM_written()) {
 +    Unsupported("memory export");
 +  }
 +  Modification modification = GetModification();
++  if (is_vertex_shader()) {
++    // Host vertex shader types: the vertex and point sprites (4 host vertices per guest point);
++    // rectangle lists (3 guest vertices per invocation), tessellation and the memory export
++    // compute shader go to the SPIR-V translator.
++    Shader::HostVertexShaderType host_vertex_shader_type =
++        modification.vertex.host_vertex_shader_type;
++    if (host_vertex_shader_type != Shader::HostVertexShaderType::kVertex &&
++        host_vertex_shader_type != Shader::HostVertexShaderType::kPointListAsTriangleStrip) {
++      Unsupported("this host vertex shader type");
++    }
++    if (modification.GetVertexCullDistanceCount()) {
++      Unsupported("cull distances");
++    }
++    if (target_ == Target::kSpirv &&
++        SpirvShaderTranslator::GetSharedMemoryStorageBufferCountLog2(
++            features_.max_storage_buffer_range)) {
++      Unsupported("shared memory split into several storage buffers");
++    }
++  }
 +  if (is_pixel_shader() &&
 +      (modification.pixel.depth_stencil_mode == Modification::DepthStencilMode::kFloat24Truncating ||
 +       modification.pixel.depth_stencil_mode == Modification::DepthStencilMode::kFloat24Rounding)) {
@@ -3624,6 +4239,9 @@ index 0000000..cc5c79a
 +                                             Storage::kFunction, 0, b.ConstFloat(0.0f, 3));
 +  var_tfetch_gradients_v_ = b.CreateVariable(kFloat3, "xe_var_tfetch_gradients_v", 0,
 +                                             Storage::kFunction, 0, b.ConstFloat(0.0f, 3));
++  // The address of vfetch_full in dwords, for the following vfetch_mini.
++  var_vfetch_address_ = b.CreateVariable(kInt, "xe_var_vfetch_address", 0, Storage::kFunction, 0,
++                                         b.ConstInt(0));
 +  if (register_count()) {
 +    var_registers_ = b.CreateVariable(kFloat4, "xe_var_registers", register_count());
 +  }
@@ -3633,6 +4251,8 @@ index 0000000..cc5c79a
 +
 +  if (is_pixel_shader()) {
 +    StartFragmentShaderInMain();
++  } else {
++    StartVertexShaderInMain();
 +  }
 +
 +  // The main loop, with a switch over the labels if there are jumps or loops.
@@ -3661,6 +4281,8 @@ index 0000000..cc5c79a
 +
 +  if (is_pixel_shader()) {
 +    CompleteFragmentShaderInMain();
++  } else {
++    CompleteVertexShaderInMain();
 +  }
 +
 +  program_->body = b.TakeBody();
@@ -3908,11 +4530,6 @@ index 0000000..cc5c79a
 +  }
 +}
 +
-+void XscShaderTranslator::ProcessVertexFetchInstruction(
-+    const ParsedVertexFetchInstruction& instr) {
-+  Unsupported("vertex fetch");
-+}
-+
 +void XscShaderTranslator::UpdateExecConditionals(ParsedExecInstruction::Type type,
 +                                                 uint32_t bool_constant_index, bool condition) {
 +  // Merge with the previous exec if possible (also merging the instruction-level predicate).
@@ -4139,6 +4756,20 @@ index 0000000..cc5c79a
 +      target_dynamic_index = GetStorageAddressingIndex(
 +          result.storage_addressing_mode, result.storage_index, false, &target_constant_index);
 +      break;
++    case InstructionStorageTarget::kInterpolator:
++      assert_true(is_vertex_shader());
++      // Interpolators the pixel shader does not need have no variable.
++      target = var_interpolators_[result.storage_index];
++      break;
++    case InstructionStorageTarget::kPosition:
++      assert_true(is_vertex_shader());
++      target = var_position_;
++      break;
++    case InstructionStorageTarget::kPointSizeEdgeFlagKillVertex:
++      assert_true(is_vertex_shader());
++      assert_zero(used_write_mask & 0b1000);
++      target = var_point_size_edge_flag_kill_vertex_;
++      break;
 +    case InstructionStorageTarget::kColor:
 +      assert_true(is_pixel_shader());
 +      target = var_color_[result.storage_index];
@@ -4300,10 +4931,10 @@ index 0000000..cc5c79a
 +}  // namespace rex::graphics::xsc
 diff --git a/src/graphics/pipeline/shader/xsc/xsc_translator.h b/src/graphics/pipeline/shader/xsc/xsc_translator.h
 new file mode 100644
-index 0000000..6ff2cd7
+index 0000000..165aad0
 --- /dev/null
 +++ b/src/graphics/pipeline/shader/xsc/xsc_translator.h
-@@ -0,0 +1,256 @@
+@@ -0,0 +1,273 @@
 +/**
 + * @file        graphics/pipeline/shader/xsc/xsc_translator.h
 + * @brief       Xenos shader compiler (XSC): lowers Xenos microcode into the XSC IR and emits it
@@ -4440,6 +5071,15 @@ index 0000000..6ff2cd7
 +  bool IsEarlyFragmentTests() const;
 +  uint32_t GetPsParamGenInterpolator() const;
 +
++  // Vertex shader prologue (the outputs, the vertex index in r0.x) and epilogue (the position
++  // from the guest to the host, clip distances, vertex kill, point size and point sprites).
++  void StartVertexShaderInMain();
++  void CompleteVertexShaderInMain();
++  // 32-bit endian swap of every component of a uint value by a xenos::Endian value.
++  ValueId EndianSwap32Uint(ValueId value, ValueId endian);
++  // `count` consecutive float system constants as a float vector (or a float).
++  ValueId LoadSystemConstantFloats(size_t offset_bytes, uint8_t count);
++
 +  // Fragment shader prologue and epilogue.
 +  void StartFragmentShaderInMain();
 +  void CompleteFragmentShaderInMain();
@@ -4535,6 +5175,14 @@ index 0000000..6ff2cd7
 +  std::array<VariableId, 4> var_color_ = {};
 +  VariableId var_depth_ = 0;
 +  VariableId var_sample_mask_ = 0;
++  // Vertex shader state and outputs.
++  VariableId var_vfetch_address_ = 0;
++  VariableId var_point_size_edge_flag_kill_vertex_ = 0;
++  std::array<VariableId, xenos::kMaxInterpolators> var_interpolators_ = {};
++  VariableId var_position_ = 0;
++  VariableId var_point_size_ = 0;
++  VariableId var_point_coordinates_ = 0;
++  VariableId var_clip_distances_ = 0;
 +
 +  ValueId system_constant_flags_ = kNoValue;
 +  // Fragment inputs, loaded in the prologue when needed.
@@ -5417,10 +6065,10 @@ index 0000000..bc45626
 +}  // namespace rex::graphics::xsc
 diff --git a/src/graphics/pipeline/shader/xsc/xsc_translator_fetch.cpp b/src/graphics/pipeline/shader/xsc/xsc_translator_fetch.cpp
 new file mode 100644
-index 0000000..edb59b7
+index 0000000..91699b4
 --- /dev/null
 +++ b/src/graphics/pipeline/shader/xsc/xsc_translator_fetch.cpp
-@@ -0,0 +1,880 @@
+@@ -0,0 +1,1180 @@
 +/**
 + * @file        graphics/pipeline/shader/xsc/xsc_translator_fetch.cpp
 + * @brief       Xenos shader compiler: texture fetch instructions
@@ -5436,6 +6084,7 @@ index 0000000..edb59b7
 + */
 +
 +#include <cmath>
++#include <cstring>
 +
 +#include <rex/assert.h>
 +#include <rex/math.h>
@@ -5445,6 +6094,305 @@ index 0000000..edb59b7
 +namespace rex::graphics::xsc {
 +
 +using SystemConstants = SpirvShaderTranslator::SystemConstants;
++
++void XscShaderTranslator::ProcessVertexFetchInstruction(
++    const ParsedVertexFetchInstruction& instr) {
++  Builder& b = *builder_;
++  UpdateInstructionPredication(instr.is_predicated, instr.predicate_condition);
++
++  uint32_t used_result_components = instr.result.GetUsedResultComponents();
++  uint32_t needed_words =
++      xenos::GetVertexFormatNeededWords(instr.attributes.data_format, used_result_components);
++  // vfetch_full computes the address for the following vfetch_mini even if it loads nothing.
++  if (!needed_words && instr.is_mini_fetch) {
++    // Only constant 0 and 1 writes, or components the format does not have (written as zero).
++    StoreResult(instr.result, kNoValue);
++    return;
++  }
++
++  // Each vertex fetch constant is 2 dwords of the fetch constant buffer.
++  uint32_t fetch_constant_word_0_index = instr.operands[1].storage_index << 1;
++
++  ValueId address;
++  if (instr.is_mini_fetch) {
++    // `base + index * stride` from vfetch_full.
++    address = b.Load(var_vfetch_address_);
++  } else {
++    // The base address in dwords in bits 2:31 of the first word of the fetch constant.
++    address = b.Emit(
++        Op::kBitcast, kInt,
++        {b.Binary(Op::kShiftRightLogical,
++                  b.Emit(Op::kLoadFetchConstantWord, kUint, {}, {fetch_constant_word_0_index}),
++                  b.ConstUint(2))});
++    if (instr.attributes.stride) {
++      // The index floored, or rounded to the nearest as floor(index + 0.5).
++      ValueId index =
++          GetOperandComponents(LoadOperandStorage(instr.operands[0]), instr.operands[0], 0b0001);
++      if (instr.attributes.is_index_rounded) {
++        index = b.Binary(Op::kFAdd, index, b.ConstFloat(0.5f));
++      }
++      index = b.Emit(Op::kConvertFToS, kInt, {b.Unary(Op::kFloor, index)});
++      if (instr.attributes.stride > 1) {
++        index = b.Binary(Op::kIMul, index, b.ConstInt(int32_t(instr.attributes.stride)));
++      }
++      address = b.Binary(Op::kIAdd, address, index);
++    }
++    b.Store(var_vfetch_address_, address);
++  }
++
++  if (!needed_words) {
++    StoreResult(instr.result, kNoValue);
++    return;
++  }
++
++  // The needed words: the instruction's signed word offset plus the word's offset in the element.
++  uint32_t word_composite_indices[4] = {};
++  std::vector<ValueId> word_values;
++  uint32_t words_remaining = needed_words;
++  uint32_t word_index;
++  while (rex::bit_scan_forward(words_remaining, &word_index)) {
++    words_remaining &= ~(UINT32_C(1) << word_index);
++    ValueId word_address = address;
++    int32_t word_offset = instr.attributes.offset + int32_t(word_index);
++    if (word_offset) {
++      word_address = b.Binary(Op::kIAdd, word_address, b.ConstInt(word_offset));
++    }
++    word_composite_indices[word_index] = uint32_t(word_values.size());
++    word_values.push_back(b.Emit(Op::kLoadSharedMemoryWord, kUint, {word_address}));
++  }
++  uint32_t word_count = uint32_t(word_values.size());
++  ValueId words = b.Construct(kUint.WithComponents(uint8_t(word_count)), word_values);
++
++  // Endian swap, with the endianness in bits 0:1 of the second word of the fetch constant.
++  words = EndianSwap32Uint(
++      words,
++      b.Binary(Op::kBitwiseAnd,
++               b.Emit(Op::kLoadFetchConstantWord, kUint, {}, {fetch_constant_word_0_index + 1}),
++               b.ConstUint(0b11)));
++
++  // The format conversion.
++  ValueId result = kNoValue;
++  uint32_t used_format_components =
++      used_result_components &
++      ((UINT32_C(1) << xenos::GetVertexFormatComponentCount(instr.attributes.data_format)) - 1);
++  assert_not_zero(used_format_components);
++  uint8_t used_format_component_count = uint8_t(rex::bit_count(used_format_components));
++  Type result_type = kFloat.WithComponents(used_format_component_count);
++  bool is_signed = instr.attributes.is_signed;
++  bool format_is_packed = false;
++  int packed_widths[4] = {}, packed_offsets[4] = {};
++  uint32_t packed_words[4] = {};
++  auto word_component = [&](uint32_t word) {
++    return word_count > 1 ? b.Extract(words, word_composite_indices[word]) : words;
++  };
++  switch (instr.attributes.data_format) {
++    case xenos::VertexFormat::k_8_8_8_8:
++      format_is_packed = true;
++      packed_widths[0] = packed_widths[1] = packed_widths[2] = packed_widths[3] = 8;
++      packed_offsets[1] = 8;
++      packed_offsets[2] = 16;
++      packed_offsets[3] = 24;
++      break;
++    case xenos::VertexFormat::k_2_10_10_10:
++      format_is_packed = true;
++      packed_widths[0] = packed_widths[1] = packed_widths[2] = 10;
++      packed_widths[3] = 2;
++      packed_offsets[1] = 10;
++      packed_offsets[2] = 20;
++      packed_offsets[3] = 30;
++      break;
++    case xenos::VertexFormat::k_10_11_11:
++      format_is_packed = true;
++      packed_widths[0] = packed_widths[1] = 11;
++      packed_widths[2] = 10;
++      packed_offsets[1] = 11;
++      packed_offsets[2] = 22;
++      break;
++    case xenos::VertexFormat::k_11_11_10:
++      format_is_packed = true;
++      packed_widths[0] = 10;
++      packed_widths[1] = packed_widths[2] = 11;
++      packed_offsets[1] = 10;
++      packed_offsets[2] = 21;
++      break;
++    case xenos::VertexFormat::k_16_16:
++      format_is_packed = true;
++      packed_widths[0] = packed_widths[1] = 16;
++      packed_offsets[1] = 16;
++      break;
++    case xenos::VertexFormat::k_16_16_16_16:
++      format_is_packed = true;
++      packed_widths[0] = packed_widths[1] = packed_widths[2] = packed_widths[3] = 16;
++      packed_offsets[1] = packed_offsets[3] = 16;
++      packed_words[2] = packed_words[3] = 1;
++      break;
++
++    case xenos::VertexFormat::k_16_16_FLOAT:
++    case xenos::VertexFormat::k_16_16_16_16_FLOAT: {
++      // As the SPIR-V translator: host float16 with NaNs, not the Xbox 360 one with an extended
++      // range.
++      ValueId word_needed_component_values[2] = {};
++      for (uint32_t i = 0; i < 2; ++i) {
++        uint32_t word_needed_components = (used_format_components >> (i * 2)) & 0b11;
++        if (!word_needed_components) {
++          continue;
++        }
++        ValueId word = b.Emit(Op::kUnpackHalf2x16, kFloat2, {word_component(i)});
++        if (word_needed_components != 0b11) {
++          word = b.Extract(word, (word_needed_components & 0b01) ? 0 : 1);
++        }
++        word_needed_component_values[i] = word;
++      }
++      if (word_needed_component_values[1] == kNoValue) {
++        result = word_needed_component_values[0];
++      } else if (word_needed_component_values[0] == kNoValue) {
++        result = word_needed_component_values[1];
++      } else {
++        result = b.Construct(result_type,
++                             {word_needed_component_values[0], word_needed_component_values[1]});
++      }
++    } break;
++
++    case xenos::VertexFormat::k_32:
++    case xenos::VertexFormat::k_32_32:
++    case xenos::VertexFormat::k_32_32_32_32:
++      assert_true(used_format_components == needed_words);
++      if (is_signed) {
++        result = b.Emit(Op::kConvertSToF, result_type,
++                        {b.Emit(Op::kBitcast, kInt.WithComponents(used_format_component_count),
++                                {words})});
++      } else {
++        result = b.Emit(Op::kConvertUToF, result_type, {words});
++      }
++      if (!instr.attributes.is_integer) {
++        auto scale = [&](ValueId value, float factor) {
++          return used_format_component_count > 1
++                     ? b.Emit(Op::kVectorTimesScalar, result_type, {value, b.ConstFloat(factor)})
++                     : b.Binary(Op::kFMul, value, b.ConstFloat(factor));
++        };
++        if (is_signed) {
++          switch (instr.attributes.signed_rf_mode) {
++            case xenos::SignedRepeatingFractionMode::kZeroClampMinusOne:
++              // 1/(2^31-1) rounds to 1/2^31 as float32, so no clamp to -1 is needed.
++              result = scale(result, 1.0f / 2147483647.0f);
++              break;
++            case xenos::SignedRepeatingFractionMode::kNoZero:
++              result = scale(result, 1.0f / 2147483647.5f);
++              result = b.Binary(Op::kFAdd, result,
++                                b.ConstFloat(0.5f / 2147483647.5f, used_format_component_count));
++              break;
++            default:
++              assert_unhandled_case(instr.attributes.signed_rf_mode);
++          }
++        } else {
++          result = scale(result, 1.0f / 4294967295.0f);
++        }
++      }
++      break;
++
++    case xenos::VertexFormat::k_32_FLOAT:
++    case xenos::VertexFormat::k_32_32_FLOAT:
++    case xenos::VertexFormat::k_32_32_32_32_FLOAT:
++    case xenos::VertexFormat::k_32_32_32_FLOAT:
++      assert_true(used_format_components == needed_words);
++      result = b.Emit(Op::kBitcast, kFloat.WithComponents(uint8_t(word_count)), {words});
++      break;
++
++    default:
++      Unsupported("this vertex format");
++      StoreResult(instr.result, kNoValue);
++      return;
++  }
++
++  if (format_is_packed) {
++    // Extract the components as ints (sign-extending) or uints.
++    Type component_type = is_signed ? kInt : kUint;
++    if (is_signed) {
++      words = b.Emit(Op::kBitcast, kInt.WithComponents(uint8_t(word_count)), {words});
++    }
++    int extracted_widths[4] = {};
++    std::vector<ValueId> extracted_components;
++    uint32_t extraction_word_current_index = UINT32_MAX;
++    ValueId extraction_word_current = words;
++    for (uint32_t i = 0; i < 4; ++i) {
++      if (!(used_format_components & (UINT32_C(1) << i))) {
++        continue;
++      }
++      if (word_count > 1) {
++        uint32_t extraction_word_new_index = word_composite_indices[packed_words[i]];
++        if (extraction_word_current_index != extraction_word_new_index) {
++          extraction_word_current_index = extraction_word_new_index;
++          extraction_word_current = b.Extract(words, extraction_word_new_index);
++        }
++      }
++      int extraction_width = packed_widths[i];
++      assert_not_zero(extraction_width);
++      extracted_widths[extracted_components.size()] = extraction_width;
++      extracted_components.push_back(b.Emit(
++          is_signed ? Op::kBitFieldSExtract : Op::kBitFieldUExtract, component_type,
++          {extraction_word_current, b.ConstInt(packed_offsets[i]), b.ConstInt(extraction_width)}));
++    }
++    assert_true(extracted_components.size() == used_format_component_count);
++    result = b.Construct(component_type.WithComponents(used_format_component_count),
++                         extracted_components);
++    result = b.Emit(is_signed ? Op::kConvertSToF : Op::kConvertUToF, result_type, {result});
++    // Normalization.
++    if (!instr.attributes.is_integer) {
++      std::array<uint32_t, 4> packed_scales = {};
++      std::array<uint32_t, 4> packed_no_zero_offsets = {};
++      for (uint32_t i = 0; i < used_format_component_count; ++i) {
++        int extracted_width = extracted_widths[i];
++        assert_true(extracted_width >= 2);
++        float packed_scale_inv;
++        if (is_signed) {
++          packed_scale_inv = float((UINT32_C(1) << (extracted_width - 1)) - 1);
++          if (instr.attributes.signed_rf_mode == xenos::SignedRepeatingFractionMode::kNoZero) {
++            packed_scale_inv += 0.5f;
++          }
++        } else {
++          packed_scale_inv = float((UINT32_C(1) << extracted_width) - 1);
++        }
++        float packed_scale = 1.0f / packed_scale_inv;
++        float packed_no_zero_offset = 0.5f * packed_scale;
++        std::memcpy(&packed_scales[i], &packed_scale, sizeof(uint32_t));
++        std::memcpy(&packed_no_zero_offsets[i], &packed_no_zero_offset, sizeof(uint32_t));
++      }
++      // Per-component scales (the SPIR-V translator multiplies by a vector of them).
++      result = b.Binary(Op::kFMul, result, b.Constant(result_type, packed_scales));
++      if (is_signed) {
++        switch (instr.attributes.signed_rf_mode) {
++          case xenos::SignedRepeatingFractionMode::kZeroClampMinusOne:
++            // Both -(2^(n-1)) and -(2^(n-1)-1) are -1 (no NaN here, so NMax is FMax).
++            result = b.Binary(Op::kNMax, result,
++                              b.ConstFloat(-1.0f, used_format_component_count));
++            break;
++          case xenos::SignedRepeatingFractionMode::kNoZero:
++            result = b.Binary(Op::kFAdd, result, b.Constant(result_type, packed_no_zero_offsets));
++            break;
++          default:
++            assert_unhandled_case(instr.attributes.signed_rf_mode);
++        }
++      }
++    }
++  }
++
++  // The exponent bias.
++  if (instr.attributes.exp_adjust) {
++    ValueId factor = b.ConstFloat(std::ldexp(1.0f, instr.attributes.exp_adjust));
++    result = b.TypeOf(result).components > 1
++                 ? b.Emit(Op::kVectorTimesScalar, b.TypeOf(result), {result, factor})
++                 : b.Binary(Op::kFMul, result, factor);
++  }
++
++  // Components requested that the format does not have are zero.
++  uint32_t used_missing_components = used_result_components & ~used_format_components;
++  if (used_missing_components) {
++    result = b.Construct(
++        kFloat.WithComponents(uint8_t(rex::bit_count(used_result_components))),
++        {result, b.ConstFloat(0.0f, uint8_t(rex::bit_count(used_missing_components)))});
++  }
++  StoreResult(instr.result, result);
++}
 +
 +size_t XscShaderTranslator::FindOrAddTextureBinding(uint32_t fetch_constant,
 +                                                    xenos::FetchOpDimension dimension,
@@ -6736,6 +7684,336 @@ index 0000000..4549386
 +      b.Emit(is_vector ? Op::kVectorTimesScalar : Op::kFMul, b.TypeOf(linear),
 +             {b.Unary(Op::kTrunc, b.Binary(Op::kFMul, linear, scale)), b.ConstFloat(1.0f / 255.0f)}),
 +      offset);
++}
++
++}  // namespace rex::graphics::xsc
+diff --git a/src/graphics/pipeline/shader/xsc/xsc_translator_vs.cpp b/src/graphics/pipeline/shader/xsc/xsc_translator_vs.cpp
+new file mode 100644
+index 0000000..e9144d6
+--- /dev/null
++++ b/src/graphics/pipeline/shader/xsc/xsc_translator_vs.cpp
+@@ -0,0 +1,324 @@
++/**
++ * @file        graphics/pipeline/shader/xsc/xsc_translator_vs.cpp
++ * @brief       Xenos shader compiler: vertex shader prologue and epilogue
++ *
++ * @license     BSD 3-Clause License
++ *              See LICENSE file in the project root for full license text.
++ *
++ * The vertex path of the SPIR-V translator (spirv_translator.cpp StartVertexOrTessEvalShader*,
++ * CompleteVertexOrTessEvalShaderInMain) for the host vertex shader types XSC supports, the vertex
++ * and point sprites: the guest vertex index in r0.x (from the host index, the guest index buffer
++ * for point sprites, endian swapped, offset and clamped), and at the end the position from the
++ * guest's format to the host clip space, user clip planes, vertex kill, the point size and the
++ * expansion of point sprites.
++ */
++
++#include <fmt/format.h>
++
++#include <rex/assert.h>
++#include <rex/math.h>
++
++#include "xsc_translator.h"
++
++namespace rex::graphics::xsc {
++
++using SystemConstants = SpirvShaderTranslator::SystemConstants;
++
++ValueId XscShaderTranslator::LoadSystemConstantFloats(size_t offset_bytes, uint8_t count) {
++  Builder& b = *builder_;
++  std::vector<ValueId> components;
++  for (uint8_t i = 0; i < count; ++i) {
++    components.push_back(LoadSystemConstantFloat(offset_bytes + sizeof(float) * i));
++  }
++  return b.Construct(kFloat.WithComponents(count), std::move(components));
++}
++
++ValueId XscShaderTranslator::EndianSwap32Uint(ValueId value, ValueId endian) {
++  Builder& b = *builder_;
++  uint8_t n = b.TypeOf(value).components;
++  ValueId is_8in16 = b.Compare(Op::kIEqual, endian, b.ConstUint(uint32_t(xenos::Endian::k8in16)));
++  ValueId is_8in32 = b.Compare(Op::kIEqual, endian, b.ConstUint(uint32_t(xenos::Endian::k8in32)));
++  ValueId is_16in32 =
++      b.Compare(Op::kIEqual, endian, b.ConstUint(uint32_t(xenos::Endian::k16in32)));
++  // 8-in-16, or the first half of 8-in-32.
++  ValueId const_8 = b.ConstUint(8, n);
++  ValueId const_00ff00ff = b.ConstUint(0x00FF00FF, n);
++  ValueId swapped_8in16 = b.Binary(
++      Op::kBitwiseOr,
++      b.Binary(Op::kBitwiseAnd, b.Binary(Op::kShiftRightLogical, value, const_8), const_00ff00ff),
++      b.Binary(Op::kShiftLeftLogical, b.Binary(Op::kBitwiseAnd, value, const_00ff00ff), const_8));
++  value = b.Select(b.Emit(Op::kLogicalOr, kBool, {is_8in16, is_8in32}), swapped_8in16, value);
++  // 16-in-32, or the second half of 8-in-32.
++  ValueId swapped_16in32 = b.EmitWithOperands(
++      Op::kBitFieldInsert, b.TypeOf(value),
++      {b.Binary(Op::kShiftRightLogical, value, b.ConstUint(16, n)), value, b.ConstUint(16),
++       b.ConstUint(16)});
++  return b.Select(b.Emit(Op::kLogicalOr, kBool, {is_8in32, is_16in32}), swapped_16in32, value);
++}
++
++void XscShaderTranslator::StartVertexShaderInMain() {
++  Builder& b = *builder_;
++  const Shader& shader = current_shader();
++  Modification modification = GetModification();
++  Shader::HostVertexShaderType host_vertex_shader_type =
++      modification.vertex.host_vertex_shader_type;
++  bool point_sprites =
++      host_vertex_shader_type == Shader::HostVertexShaderType::kPointListAsTriangleStrip;
++
++  // The outputs: the interpolators the pixel shader needs at consecutive locations, then the point
++  // coordinates (point sprites) or the point size (other primitives), the position, the clip
++  // distances.
++  uint32_t output_location = 0;
++  {
++    uint32_t interpolators_remaining = modification.vertex.interpolator_mask;
++    uint32_t interpolator_index;
++    while (rex::bit_scan_forward(interpolators_remaining, &interpolator_index)) {
++      interpolators_remaining &= ~(UINT32_C(1) << interpolator_index);
++      var_interpolators_[interpolator_index] = b.CreateVariable(
++          kFloat4, fmt::format("xe_out_interpolator_{}", interpolator_index).c_str(), 0,
++          Storage::kOutputInterpolator, output_location++);
++    }
++  }
++  if (modification.vertex.output_point_parameters) {
++    if (point_sprites) {
++      var_point_coordinates_ = b.CreateVariable(kFloat2, "xe_out_point_coordinates", 0,
++                                                Storage::kOutputPointCoordinates, output_location++);
++    } else {
++      // Not the host point size, which must be positive: a varying the point sprite expansion of
++      // the backend reads, negative when the shader does not set it.
++      var_point_size_ = b.CreateVariable(kFloat, "xe_out_point_size", 0, Storage::kOutputPointSize,
++                                         output_location++);
++    }
++  }
++  var_position_ = b.CreateVariable(kFloat4, "gl_Position", 0, Storage::kOutputPosition);
++  uint32_t clip_distance_count = modification.GetVertexClipDistanceCount();
++  if (clip_distance_count) {
++    var_clip_distances_ = b.CreateVariable(kFloat, "gl_ClipDistance", clip_distance_count,
++                                           Storage::kOutputClipDistance);
++    program_->vertex.clip_distance_count = clip_distance_count;
++  }
++
++  // The point size (X, negative unless the shader overrides it), the edge flag (Y, ignored) and
++  // the vertex kill (Z, not killed unless bits 0:30 are set).
++  if (shader.writes_point_size_edge_flag_kill_vertex() & 0b101) {
++    var_point_size_edge_flag_kill_vertex_ =
++        b.CreateVariable(kFloat3, "xe_var_point_size_edge_flag_kill_vertex", 0, Storage::kFunction,
++                         0, b.ConstFloats({-1.0f, 0.0f, 0.0f}));
++  }
++
++  // Zero the registers (games may read registers they only initialize conditionally), the
++  // interpolators and the position.
++  ValueId const_float4_0 = b.ConstFloat(0.0f, 4);
++  for (uint32_t i = 0; i < register_count(); ++i) {
++    b.Store(var_registers_, const_float4_0, kNoValue, i);
++  }
++  for (VariableId interpolator : var_interpolators_) {
++    if (interpolator) {
++      b.Store(interpolator, const_float4_0);
++    }
++  }
++  b.Store(var_position_, const_float4_0);
++
++  // The guest vertex index in r0.x.
++  if (!register_count()) {
++    return;
++  }
++  ValueId const_uint_0 = b.ConstUint(0);
++  ValueId vertex_index = b.Emit(Op::kLoadVertexIndex, kUint, {});
++  // The closing vertex of a line loop is vertex 0.
++  vertex_index = b.Select(
++      b.Compare(Op::kINotEqual, vertex_index,
++                LoadSystemConstantWord(offsetof(SystemConstants, line_loop_closing_index))),
++      vertex_index, const_uint_0);
++  auto flag_set = [&](uint32_t flag) {
++    return b.Compare(Op::kINotEqual,
++                     b.Binary(Op::kBitwiseAnd, system_constant_flags_, b.ConstUint(flag)),
++                     const_uint_0);
++  };
++  ValueId vertex_index_endian =
++      LoadSystemConstantWord(offsetof(SystemConstants, vertex_index_endian));
++  if (point_sprites) {
++    // 4 host vertices per guest point.
++    vertex_index = b.Binary(Op::kShiftRightLogical, vertex_index, b.ConstUint(2));
++    // The guest index from the guest index buffer if it is indexed.
++    Builder::If load_vertex_index_if(
++        b, flag_set(SpirvShaderTranslator::kSysFlag_ComputeOrPrimitiveVertexIndexLoad));
++    ValueId loaded_vertex_index;
++    {
++      ValueId vertex_index_is_32bit =
++          flag_set(SpirvShaderTranslator::kSysFlag_ComputeOrPrimitiveVertexIndexLoad32Bit);
++      ValueId const_uint_2 = b.ConstUint(2);
++      ValueId vertex_index_address = b.Binary(
++          Op::kIAdd, LoadSystemConstantWord(offsetof(SystemConstants, vertex_index_load_address)),
++          b.Binary(Op::kShiftLeftLogical, vertex_index,
++                   b.Select(vertex_index_is_32bit, const_uint_2, b.ConstUint(1))));
++      // The 32 bits with the whole index or two 16-bit indices.
++      loaded_vertex_index = b.Emit(
++          Op::kLoadSharedMemoryWord, kUint,
++          {b.Binary(Op::kShiftRightLogical, vertex_index_address, const_uint_2)});
++      loaded_vertex_index = b.Select(
++          vertex_index_is_32bit, loaded_vertex_index,
++          b.Emit(Op::kBitFieldUExtract, kUint,
++                 {loaded_vertex_index,
++                  b.Binary(Op::kShiftLeftLogical,
++                           b.Binary(Op::kBitwiseAnd, vertex_index_address, const_uint_2),
++                           b.ConstUint(4 - 1)),
++                  b.ConstUint(16)}));
++      loaded_vertex_index = EndianSwap32Uint(loaded_vertex_index, vertex_index_endian);
++    }
++    load_vertex_index_if.End();
++    vertex_index = load_vertex_index_if.MergePhi(loaded_vertex_index, vertex_index);
++  } else {
++    if (!features_.full_draw_index_uint32) {
++      // The full 32-bit index loaded from the guest index buffer when the host can't take it.
++      Builder::If load_vertex_index_if(b, flag_set(SpirvShaderTranslator::kSysFlag_VertexIndexLoad));
++      ValueId loaded_vertex_index = b.Emit(
++          Op::kLoadSharedMemoryWord, kUint,
++          {b.Binary(Op::kIAdd,
++                    b.Binary(Op::kShiftRightLogical,
++                             LoadSystemConstantWord(
++                                 offsetof(SystemConstants, vertex_index_load_address)),
++                             b.ConstUint(2)),
++                    vertex_index)});
++      load_vertex_index_if.End();
++      vertex_index = load_vertex_index_if.MergePhi(loaded_vertex_index, vertex_index);
++    }
++    vertex_index = EndianSwap32Uint(vertex_index, vertex_index_endian);
++  }
++  // The base index, the 24-bit index mask and the clamp to the draw's index range.
++  vertex_index = b.Binary(Op::kIAdd, vertex_index,
++                          LoadSystemConstantWord(offsetof(SystemConstants, vertex_base_index)));
++  vertex_index =
++      b.Binary(Op::kBitwiseAnd, vertex_index, b.ConstUint(xenos::kVertexIndexMask));
++  vertex_index = b.Binary(
++      Op::kUMin,
++      b.Binary(Op::kUMax, vertex_index,
++               LoadSystemConstantWord(offsetof(SystemConstants, vertex_index_min))),
++      LoadSystemConstantWord(offsetof(SystemConstants, vertex_index_max)));
++  ValueId const_float_0 = b.ConstFloat(0.0f);
++  b.Store(var_registers_,
++          b.Construct(kFloat4, {b.Emit(Op::kConvertUToF, kFloat, {vertex_index}), const_float_0,
++                                const_float_0, const_float_0}),
++          kNoValue, 0);
++}
++
++void XscShaderTranslator::CompleteVertexShaderInMain() {
++  Builder& b = *builder_;
++  const Shader& shader = current_shader();
++  Modification modification = GetModification();
++  ValueId const_uint_0 = b.ConstUint(0);
++  auto flag_set = [&](uint32_t flag) {
++    return b.Compare(Op::kINotEqual,
++                     b.Binary(Op::kBitwiseAnd, system_constant_flags_, b.ConstUint(flag)),
++                     const_uint_0);
++  };
++
++  ValueId guest_position = b.Load(var_position_);
++
++  // W, from 1/W if the shader returns that.
++  ValueId position_w = b.Extract(guest_position, 3);
++  position_w =
++      b.Select(flag_set(SpirvShaderTranslator::kSysFlag_WNotReciprocal), position_w,
++               b.Binary(Op::kFDiv, b.ConstFloat(1.0f), position_w));
++  // XY and Z multiplied back by W if the shader returns them divided by W.
++  ValueId position_xy = b.Swizzle(guest_position, {0, 1});
++  position_xy = b.Select(flag_set(SpirvShaderTranslator::kSysFlag_XYDividedByW),
++                         b.Emit(Op::kVectorTimesScalar, kFloat2, {position_xy, position_w}),
++                         position_xy);
++  ValueId position_z = b.Extract(guest_position, 2);
++  position_z = b.Select(flag_set(SpirvShaderTranslator::kSysFlag_ZDividedByW),
++                        b.Binary(Op::kFMul, position_z, position_w), position_z);
++  ValueId position_xyz = b.Construct(kFloat3, {position_xy, position_z});
++
++  // User clip planes, with the guest position (before the guest to host NDC transform).
++  uint32_t clip_distance_count = modification.GetVertexClipDistanceCount();
++  auto write_clip_distances = [&](ValueId position) {
++    for (uint32_t i = 0; i < clip_distance_count; ++i) {
++      ValueId user_clip_plane =
++          LoadSystemConstantFloats(offsetof(SystemConstants, user_clip_planes) +
++                                       sizeof(float) * 4 * i,
++                                   4);
++      b.Store(var_clip_distances_, b.Emit(Op::kDot, kFloat, {position, user_clip_plane}),
++              kNoValue, i);
++    }
++  };
++  write_clip_distances(b.Construct(kFloat4, {position_xyz, position_w}));
++
++  // The guest to host viewport transformation.
++  ValueId ndc_scale = LoadSystemConstantFloats(offsetof(SystemConstants, ndc_scale), 3);
++  ValueId ndc_offset = LoadSystemConstantFloats(offsetof(SystemConstants, ndc_offset), 3);
++  position_xyz = b.Binary(Op::kFMul, position_xyz, ndc_scale);
++  position_xyz = b.Binary(Op::kFAdd, position_xyz,
++                          b.Emit(Op::kVectorTimesScalar, kFloat3, {ndc_offset, position_w}));
++
++  // Vertex kill: the primitive is dropped by a NaN W ("or" mode; the "and" mode needs cull
++  // distances, not supported).
++  if (shader.writes_point_size_edge_flag_kill_vertex() & 0b100) {
++    ValueId kill_vertex_bits =
++        b.Emit(Op::kBitcast, kUint, {b.Extract(b.Load(var_point_size_edge_flag_kill_vertex_), 2)});
++    ValueId kill_vertex = b.Compare(
++        Op::kINotEqual, b.Binary(Op::kBitwiseAnd, kill_vertex_bits, b.ConstUint(0x7FFFFFFF)),
++        const_uint_0);
++    position_w = b.Select(kill_vertex, b.Emit(Op::kBitcast, kFloat, {b.ConstUint(0x7FC00000)}),
++                          position_w);
++  }
++
++  // The point size for the backend's point sprite expansion.
++  ValueId point_vertex_diameter = kNoValue;
++  if (shader.writes_point_size_edge_flag_kill_vertex() & 0b001) {
++    point_vertex_diameter = b.Extract(b.Load(var_point_size_edge_flag_kill_vertex_), 0);
++  }
++  if (var_point_size_) {
++    b.Store(var_point_size_,
++            point_vertex_diameter != kNoValue ? point_vertex_diameter : b.ConstFloat(-1.0f));
++  }
++
++  if (modification.vertex.host_vertex_shader_type !=
++      Shader::HostVertexShaderType::kPointListAsTriangleStrip) {
++    b.Store(var_position_, b.Construct(kFloat4, {position_xyz, position_w}));
++    return;
++  }
++
++  // Point sprites: top-left, bottom-left, top-right, bottom-right host vertices.
++  ValueId host_vertex_index = b.Emit(Op::kLoadVertexIndex, kUint, {});
++  ValueId point_vertex_positive = b.Compare(
++      Op::kINotEqual,
++      b.Binary(Op::kBitwiseAnd, b.Construct(kUint.WithComponents(2), {host_vertex_index,
++                                                                       host_vertex_index}),
++               b.Constant(kUint.WithComponents(2), {0b10, 0b01, 0, 0})),
++      b.ConstUint(0, 2));
++  // The diameter in guest pixels: the constant one, or the vertex shader's if it wrote a
++  // non-negative one (the prologue sets -1).
++  ValueId point_guest_diameter =
++      LoadSystemConstantFloats(offsetof(SystemConstants, point_constant_diameter), 2);
++  if (point_vertex_diameter != kNoValue) {
++    point_guest_diameter =
++        b.Select(b.Compare(Op::kFOrdGreaterThanEqual, point_vertex_diameter, b.ConstFloat(0.0f)),
++                 b.Smear(point_vertex_diameter, 2), point_guest_diameter);
++  }
++  // The radius in the normalized device coordinates, then in the clip space.
++  ValueId point_radius = b.Binary(
++      Op::kFMul, point_guest_diameter,
++      LoadSystemConstantFloats(offsetof(SystemConstants, point_screen_diameter_to_ndc_radius), 2));
++  point_radius = b.Emit(Op::kVectorTimesScalar, kFloat2, {point_radius, position_w});
++  ValueId point_position_xy =
++      b.Binary(Op::kFAdd, b.Swizzle(position_xyz, {0, 1}),
++               b.Select(point_vertex_positive, point_radius, b.Unary(Op::kFNeg, point_radius)));
++  ValueId point_position_z = b.Extract(position_xyz, 2);
++  b.Store(var_position_, b.Construct(kFloat4, {point_position_xy, point_position_z, position_w}));
++  if (var_point_coordinates_) {
++    b.Store(var_point_coordinates_,
++            b.Select(point_vertex_positive, b.ConstFloat(1.0f, 2), b.ConstFloat(0.0f, 2)));
++  }
++  // The clip distances again for the expanded vertex with PA_CL_CLIP_CNTL::ps_ucp_mode 2 and 3,
++  // with the host position transformed back to the guest clip space.
++  if (clip_distance_count && modification.vertex.point_ps_ucp_mode >= 2) {
++    ValueId point_guest_position_xyz = b.Binary(
++        Op::kFSub, b.Construct(kFloat3, {point_position_xy, point_position_z}),
++        b.Emit(Op::kVectorTimesScalar, kFloat3, {ndc_offset, position_w}));
++    point_guest_position_xyz = b.Binary(Op::kFDiv, point_guest_position_xyz, ndc_scale);
++    write_clip_distances(b.Construct(kFloat4, {point_guest_position_xyz, position_w}));
++  }
 +}
 +
 +}  // namespace rex::graphics::xsc
