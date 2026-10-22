@@ -23,6 +23,10 @@ shader_compiler = "xsc"
 # whole EDRAM, and every render target in the way is copied out and back: in the campaign this
 # cut the GPU time of render target transfers from ~10 to ~2 ms per frame.
 execute_unclipped_draw_vs_on_cpu = true
+# With async_shader_compilation, Vulkan skips the draws whose pipeline a background thread is still
+# making. Present those frames anyway, as Metal does: an object may appear a few frames late, while
+# not presenting them freezes the picture for as long as the pipelines take.
+vulkan_async_skip_incomplete_frames = false
 
 # ---------- CPU ----------
 # Run guest functions the code generator did not find (indirect call targets it cannot see, jump
