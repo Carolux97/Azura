@@ -52,26 +52,47 @@ recompiled code today, what an interpreter has to match, how it plugs in, and ho
 
 ## 2. Design
 
-- **Where.** `rex::runtime::ResolveIndirectFunction` and `FunctionDispatcher::Execute` return an
-  interpreter entry instead of `InvalidFunctionTrap` (behind a setting while it is incomplete). The
-  entry has the `PPCFunc` signature and reads its guest address from `ctx.last_indirect_target`,
-  which the caller set right before.
-- **Execution.** The interpreter fetches, decodes and runs instructions from guest memory, with
-  its own program counter, until a `blr` (or a taken conditional return) at its own level, then
-  returns to its C++ caller: the same convention as the generated code.
-  - `bl` to an address in the function table: C++ call, as the generated code does. `bl` to an
-    unknown address: interpreted recursively (C++ recursion). `bl` to the next instruction: only
-    `lr`.
-  - `b` (and conditional branches) to an address in the function table other than the one being
-    interpreted: tail call. Otherwise a jump.
-  - `bctr`: jump, or tail call if the target is in the function table. `bctrl`/`blrl`: call, through
-    the table or interpreted.
+- **Where.** `rex::runtime::ResolveIndirectFunction` and `FunctionDispatcher::Execute` return
+  `InterpretMissingFunction` instead of `InvalidFunctionTrap` when the setting
+  `ppc_interpreter_fallback` is on (off until phase 5). It has the `PPCFunc` signature and reads
+  its guest address from `ctx.last_indirect_target`, which the caller set right before (`Execute`
+  sets it too). It logs each function once, with the address that called it, so it can be added
+  to the manifest as a hint, and stops the game with the instruction it could not run.
+- **Execution.** The interpreter (`src/system/ppc_interpreter.cpp`) fetches, decodes and runs
+  instructions from guest memory, with its own program counter, until a `blr` (or a taken
+  conditional return) at its own level, then returns to its C++ caller: the same convention as
+  the generated code, which also returns on `blr` whatever `lr` holds and continues after a call
+  when the callee returns. Decoded instructions are cached per thread by address.
+  - `bl`: sets `lr`, then calls the recompiled function at the target, or interprets the target
+    (C++ recursion). `bl` to the next instruction only sets `lr`.
+  - `b`, and taken conditional branches, to a recompiled function other than the one being
+    interpreted: tail call (call, then return). Otherwise a jump.
+  - `bctr`: tail call when CTR holds a recompiled function, otherwise a jump, which covers the
+    jump tables the generated code turns into a `switch`. `bctrl`, `blrl` and `bnectr`: an
+    indirect call like `REX_CALL_INDIRECT_FUNC`, recompiled or interpreted, with
+    `last_indirect_target` set on a miss as the generated code sets it.
+  - Recompiled functions are found through the dispatcher (`FindGuestFunction`); hits are cached
+    per thread. The bench replaces the lookup with `SetGuestFunctionResolver`.
 - **Semantics by construction.** Each instruction is written from the code generator's builder for
-  it (`src/codegen/builders/`), with the same `PPCContext` fields and helpers (CR and XER updates,
-  record forms, the reservation, `REX_QUERY_TIMEBASE`, traps, flush mode), so both paths compute
-  the same thing. The decoder is the code generator's own (`ppc_insn`, operands as it decodes them).
-- **Log.** Each interpreted function is logged once with its address, so it can be added to the
-  manifest as a hint and go back to the fast path.
+  it (`src/codegen/builders/`), statement by statement and with the C++ integer promotions of the
+  emitted expressions (for example `mfxer` and `mfocrf` sign-extend, because the builder shifts a
+  byte promoted to `int` into bit 31). The decoder is the code generator's own (`ppc_insn`,
+  operands as it decodes them), so operand numbering is the builders'.
+- **Memory.** Plain big-endian accesses with the 0x1000 host offset of the physical range, exactly
+  the `REX_LOAD_*`/`REX_STORE_*` macros. The generated code switches to `REX_MM_*` only where it
+  recognises an MMIO base register; elsewhere an access to 0x7F000000-0x7FFFFFFF reaches the MMIO
+  handler through its fault handler, and the interpreter's accesses do the same.
+- **Not supported, on purpose:** `mfmsr` and `mtmsrd`. The generated code's global lock counter is
+  an inline function of the game's own generated header, which the runtime cannot reach; the
+  interpreter stops on them rather than keep a second counter. Floating point and vector
+  instructions, including their loads and stores, come in phases 2 and 3 (they also switch the
+  host's flush-to-zero mode).
+- **Assumed from this game's configuration:** `skip_lr` off (calls set `lr`), and no `setjmp` or
+  `longjmp` addresses reached from interpreted code.
+- **Where the interpreter is more general than the generated code:** a `bdnz`-type branch out of
+  its function, which the generated code turns into a return, is a jump; a `bl` to the next
+  instruction, which the code generator emits as a goto to a label it never defines (it does not
+  compile, so this game has none), only sets `lr`.
 
 ## 3. The differential bench
 
@@ -93,10 +114,16 @@ sdk/rexglue-0.10.0-src/out/mac-arm64/RelWithDebInfo/ppc_interp_bench [--seeds N]
   entry that matches, so aliases like `tdlnli` never get words of their own). Six words per form;
   each case is the word followed by `blr`, at its own address from 0x82010000. No assembler is
   needed.
-- **Left out of the random cases:** branches (they move the program counter and get layouts of
-  their own in phase 1), `mftb`/`mftbu` (the time base differs between two runs), `mtmsrd` (it
-  takes and releases the global lock), and the service traps 20 and 26 (they log a string read at
-  r3).
+- **Branches** are laid out with code around them: conditional branches go forward to an
+  internal label (`li r3,1` on the fall-through path, `li r3,2` on the taken one) or, for those
+  testing a CR bit, to a callee; conditional returns are followed by `li r3,1`; `b` goes to an
+  internal label or tail-calls the callee; `bl` calls the callee; `bctr`, `bctrl`, `bnectr` and
+  `blrl` get CTR or LR pointing at the callee. The callee is a recompiled function of its own
+  (`xori r5,r5,0x1234; blr`), registered in the table the recompiled code's indirect calls read and
+  in the interpreter's lookup.
+- **Left out of the random cases:** `mftb`/`mftbu` (the time base differs between two runs),
+  `mtmsrd` (it takes and releases the global lock), and the service traps 20 and 26 (they log a
+  string read at r3).
 - **Recompiled side.** The cases go through the real code generator as a test binary
   (`TestModule` and `AnalyzeTestBinary`, as `rexglue recompile-tests` does), with every register
   in `ctx`, so all effects are visible. The emitted C++ is compiled like the game's generated code:
@@ -111,7 +138,7 @@ sdk/rexglue-0.10.0-src/out/mac-arm64/RelWithDebInfo/ppc_interp_bench [--seeds N]
   that the access lands in the middle of a window (8-byte aligned for the atomic forms). A stray
   access faults, and the fault is reported for that case instead of stopping the bench.
 - **State.** Random registers from a seed per run: GPRs with small, sign- and zero-extended,
-  full 64-bit and edge values; floating point values including zeros, infinities, quiet and
+  full 64-bit and edge values; CTR also as small counts with and without an upper half; floating point values including zeros, infinities, quiet and
   signaling NaNs, denormals, singles and integers near the conversion limits; vector lanes with
   float specials, small integers and random bits; CR and XER bits; the reservation (half the time
   equal to memory, so `stwcx.` and `stdcx.` store); the rounding mode and flush-to-zero bits of the
@@ -130,7 +157,12 @@ sdk/rexglue-0.10.0-src/out/mac-arm64/RelWithDebInfo/ppc_interp_bench [--seeds N]
    identical runs in 2.6 s.
 1. Integer core (arithmetic, logical, shifts and rotates, compares, branches, condition and
    special registers, loads and stores, `lwarx`/`stwcx.`) and the fallback in the dispatcher behind
-   a setting.
+   the setting `ppc_interpreter_fallback`. Measured: with the branch layouts the bench has 638
+   forms and 3,795 cases; the 337 forms the interpreter implements match bit for bit in all
+   129,102 runs (64 seeds); the other 301 are floating point (with its loads and stores), vector
+   and `mfmsr`. The bench catches deliberate bugs: a wrong carry in `addc`, a wrong reservation in
+   `stwcx.`, and `bdnz` testing all 64 bits of CTR (this one only after CTR values got their own
+   generator).
 2. Floating point.
 3. VMX and VMX128.
 4. In the game, without the 0x824B8CF0 hint: the point where the game stopped is passed through the
