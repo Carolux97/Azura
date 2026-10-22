@@ -2,10 +2,11 @@
 // in the style of the game's own checkpoint indicator: a turning cog, a bold upper-case title and a
 // line with the progress below, white with a soft shadow and no panel.
 //
-// The Metal backend makes guest shaders and pipelines in the background: at start-up it
-// precompiles the ones stored by earlier runs, and while playing it makes the ones a draw needs
-// for the first time (skipping that draw until they are ready). The graphics system counts that
-// work; this dialog shows it in the player's language while it lasts.
+// The Metal and Vulkan backends make guest shaders and pipelines in the background: at start-up
+// they precompile the ones stored by earlier runs, and while playing (with
+// async_shader_compilation) they make the ones a draw needs for the first time, skipping that
+// draw until they are ready. The graphics system counts that work; this dialog shows it in the
+// player's language while it lasts.
 //
 // The dialog exists only while there is work: the app creates it when work starts (the graphics
 // system's callback) and it closes itself once nothing has been pending for a moment. It draws on
