@@ -7283,10 +7283,10 @@ index 0000000..765a9ac
 +}  // namespace rex::graphics::xsc
 diff --git a/src/graphics/pipeline/shader/xsc/xsc_translator_ps.cpp b/src/graphics/pipeline/shader/xsc/xsc_translator_ps.cpp
 new file mode 100644
-index 0000000..4549386
+index 0000000..d044e25
 --- /dev/null
 +++ b/src/graphics/pipeline/shader/xsc/xsc_translator_ps.cpp
-@@ -0,0 +1,432 @@
+@@ -0,0 +1,447 @@
 +/**
 + * @file        graphics/pipeline/shader/xsc/xsc_translator_ps.cpp
 + * @brief       Xenos shader compiler: pixel shader prologue and epilogue, gamma conversions
@@ -7609,6 +7609,21 @@ index 0000000..4549386
 +                             b.ConstFloats({31.875f, 31.875f, 31.875f, 1.0f})}),
 +                     color);
 +    b.Store(var_color_[color_target_index], color);
++  }
++
++  // The host stores float24 depth in [0, 0.5] (the viewport maps guest [0, 1] there, see
++  // full_float24_in_0_to_1 in draw_util::GetHostViewportInfo), but the viewport doesn't apply to
++  // oDepth, so it is scaled here like in the DXBC translator. Otherwise depth written by the shader
++  // would be twice the depth of the geometry tested against it.
++  if (var_depth_) {
++    ValueId is_float24 = b.Compare(
++        Op::kINotEqual,
++        b.Binary(Op::kBitwiseAnd, system_constant_flags_,
++                 b.ConstUint(SpirvShaderTranslator::kSysFlag_DepthFloat24)),
++        b.ConstUint(0));
++    ValueId depth = b.Load(var_depth_);
++    b.Store(var_depth_,
++            b.Select(is_float24, b.Binary(Op::kFMul, depth, b.ConstFloat(0.5f)), depth));
 +  }
 +}
 +
