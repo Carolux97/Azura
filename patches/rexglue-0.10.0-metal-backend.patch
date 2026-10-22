@@ -55,6 +55,34 @@ index 2cf24c4..272c7e1 100644
  REXCVAR_DECLARE(std::string, swap_post_effect);
  
  #if REX_HAS_VULKAN
+diff --git a/include/rex/graphics/graphics_system.h b/include/rex/graphics/graphics_system.h
+index ac6b056..8ef1ee8 100644
+--- a/include/rex/graphics/graphics_system.h
++++ b/include/rex/graphics/graphics_system.h
+@@ -90,6 +90,12 @@ class GraphicsSystem : public system::IGraphicsSystem {
+   bool Save(::rex::stream::ByteStream* stream);
+   bool Restore(::rex::stream::ByteStream* stream);
+ 
++  ShaderCompilation GetShaderCompilation() const override;
++  void SetShaderCompilationStartedCallback(std::function<void()> callback) override;
++  // The backend counts the background shader and pipeline work, from any thread.
++  void AddShaderCompilationQueued(uint32_t count);
++  void AddShaderCompilationDone(uint32_t count);
++
+  protected:
+   GraphicsSystem();
+ 
+@@ -130,6 +136,10 @@ class GraphicsSystem : public system::IGraphicsSystem {
+   std::unique_ptr<::rex::ui::Presenter> presenter_;
+ 
+   std::atomic_flag host_gpu_loss_reported_;
++
++  mutable std::mutex shader_compilation_mutex_;
++  ShaderCompilation shader_compilation_;
++  std::function<void()> shader_compilation_started_callback_;
+ };
+ 
+ }  // namespace rex::graphics
 diff --git a/include/rex/graphics/pipeline/render_target/cache.h b/include/rex/graphics/pipeline/render_target/cache.h
 index b246319..d57e36f 100644
 --- a/include/rex/graphics/pipeline/render_target/cache.h
@@ -175,10 +203,10 @@ index 7b938b9..d091212 100644
    struct LayoutUID {
      size_t uid;
 diff --git a/include/rex/perf/counter.h b/include/rex/perf/counter.h
-index 83f0dff..e0a0c06 100644
+index 83f0dff..4de3528 100644
 --- a/include/rex/perf/counter.h
 +++ b/include/rex/perf/counter.h
-@@ -24,6 +24,26 @@ enum class CounterId : uint16_t {
+@@ -24,6 +24,35 @@ enum class CounterId : uint16_t {
    kFrameTimeUs,
    kFps,
  
@@ -202,9 +230,50 @@ index 83f0dff..e0a0c06 100644
 +  // once (Metal: command buffer GPU start and end times; Vulkan: timestamp queries)
 +  kHostGpuTimeUs,
 +
++  // Guest shaders and pipelines made while drawing (Metal backend), and the time it took
++  kShaderTranslations,         // Translations to MSL (XSC, or the SPIR-V translator and SPIRV-Cross)
++  kShaderTranslationUs,
++  kShaderLibraryCompiles,      // MSL compiled to a Metal library (newLibraryWithSource)
++  kShaderLibraryCompileUs,
++  kPipelineCreations,          // Render pipeline states created (newRenderPipelineStateWithDescriptor)
++  kPipelineCreationUs,
++  kDrawsSkippedForPipelines,   // Draws skipped while their pipeline is made in the background
++
    // GPU
    kDrawCalls,
    kCommandBufferStalls,
+diff --git a/include/rex/system/interfaces/graphics.h b/include/rex/system/interfaces/graphics.h
+index d54df86..74913c7 100644
+--- a/include/rex/system/interfaces/graphics.h
++++ b/include/rex/system/interfaces/graphics.h
+@@ -13,6 +13,7 @@
+ 
+ #include <cstdint>
+ #include <filesystem>
++#include <functional>
+ 
+ #include <rex/system/xtypes.h>
+ 
+@@ -79,6 +80,19 @@ class IGraphicsSystem {
+     (void)blocking;
+   }
+ 
++  // Guest shaders and pipelines the backend is making in the background (precompiled from the
++  // shader storage, or needed by draws that are skipped until they are ready), for a progress
++  // display. Both counts go back to zero once everything queued is done. Default: none.
++  struct ShaderCompilation {
++    uint32_t queued = 0;
++    uint32_t done = 0;
++  };
++  virtual ShaderCompilation GetShaderCompilation() const { return {}; }
++  // Called, from the thread that queues the work, when work is queued while nothing was pending.
++  virtual void SetShaderCompilationStartedCallback(std::function<void()> callback) {
++    (void)callback;
++  }
++
+   // One-shot convenience for callers that don't care about the split.
+   X_STATUS Setup(runtime::FunctionDispatcher* function_dispatcher, KernelState* kernel_state,
+                  ui::WindowedAppContext* app_context, bool with_presentation) {
 diff --git a/include/rex/ui/vulkan/device.h b/include/rex/ui/vulkan/device.h
 index 947817f..23e4d04 100644
 --- a/include/rex/ui/vulkan/device.h
@@ -241,10 +310,10 @@ index aa55a4a..c8bb914 100644
  XE_UI_VULKAN_FUNCTION(vkMapMemory)
  XE_UI_VULKAN_FUNCTION(vkResetCommandPool)
 diff --git a/src/core/perf/counter.cpp b/src/core/perf/counter.cpp
-index d3f26eb..92570e3 100644
+index d3f26eb..2af51b3 100644
 --- a/src/core/perf/counter.cpp
 +++ b/src/core/perf/counter.cpp
-@@ -46,6 +46,17 @@ std::array<std::atomic<int64_t>, kNumCounters> g_snapshot{};
+@@ -46,6 +46,24 @@ std::array<std::atomic<int64_t>, kNumCounters> g_snapshot{};
  constexpr const char* kCounterNames[] = {
      "frame_time_us",
      "fps",
@@ -259,10 +328,17 @@ index d3f26eb..92570e3 100644
 +    "host_draws_shader_kill",
 +    "host_draws_blended",
 +    "host_gpu_time_us",
++    "shader_translations",
++    "shader_translation_us",
++    "shader_library_compiles",
++    "shader_library_compile_us",
++    "pipeline_creations",
++    "pipeline_creation_us",
++    "draws_skipped_for_pipelines",
      "draw_calls",
      "command_buffer_stalls",
      "vertices_processed",
-@@ -94,6 +105,17 @@ static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must matc
+@@ -94,6 +112,24 @@ static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must matc
  constexpr bool kIsGauge[] = {
      false,  // kFrameTimeUs       (set each frame)
      false,  // kFps               (set each frame)
@@ -277,11 +353,18 @@ index d3f26eb..92570e3 100644
 +    false,  // kHostDrawsShaderKill
 +    false,  // kHostDrawsBlended
 +    false,  // kHostGpuTimeUs
++    false,  // kShaderTranslations
++    false,  // kShaderTranslationUs
++    false,  // kShaderLibraryCompiles
++    false,  // kShaderLibraryCompileUs
++    false,  // kPipelineCreations
++    false,  // kPipelineCreationUs
++    false,  // kDrawsSkippedForPipelines
      false,  // kDrawCalls
      false,  // kCommandBufferStalls
      false,  // kVerticesProcessed
 diff --git a/src/graphics/CMakeLists.txt b/src/graphics/CMakeLists.txt
-index 0d8f8af..8168f54 100644
+index 0d8f8af..2ab2ac1 100644
 --- a/src/graphics/CMakeLists.txt
 +++ b/src/graphics/CMakeLists.txt
 @@ -41,6 +41,18 @@ set(REXGPU_XENOS_SPIRV_SOURCES
@@ -303,7 +386,7 @@ index 0d8f8af..8168f54 100644
  # Vulkan backend
  set(REXGPU_XENOS_VULKAN_SOURCES
      vulkan/graphics_system.cpp
-@@ -54,6 +66,21 @@ set(REXGPU_XENOS_VULKAN_SOURCES
+@@ -54,6 +66,22 @@ set(REXGPU_XENOS_VULKAN_SOURCES
      vulkan/texture_cache.cpp
  )
  
@@ -312,6 +395,7 @@ index 0d8f8af..8168f54 100644
 +set(REXGPU_XENOS_METAL_SOURCES
 +    metal/metal_spirv.mm
 +    metal/metal_provider.mm
++    metal/metal_immediate_drawer.mm
 +    metal/metal_presenter.mm
 +    metal/metal_graphics_system.mm
 +    metal/metal_command_processor.mm
@@ -325,7 +409,7 @@ index 0d8f8af..8168f54 100644
  # D3D12 backend
  if(REXGLUE_USE_D3D12)
      # DXBC third-party dependency
-@@ -86,7 +113,18 @@ if(REXGLUE_USE_D3D12)
+@@ -86,7 +114,18 @@ if(REXGLUE_USE_D3D12)
  endif()
  
  if(REXGLUE_USE_VULKAN)
@@ -345,7 +429,7 @@ index 0d8f8af..8168f54 100644
  endif()
  
  if(REXGLUE_USE_D3D12)
-@@ -151,6 +189,90 @@ if(REXGLUE_USE_VULKAN)
+@@ -151,6 +190,90 @@ if(REXGLUE_USE_VULKAN)
      )
  endif()
  
@@ -528,12 +612,58 @@ index e2983a4..ad10b87 100644
  REXCVAR_DEFINE_BOOL(use_fuzzy_alpha_epsilon, false, "GPU",
                      "Use approximate compare for alpha test values to prevent "
                      "flickering on NVIDIA graphics cards");
+diff --git a/src/graphics/graphics_system.cpp b/src/graphics/graphics_system.cpp
+index 8f2fcb0..66df781 100644
+--- a/src/graphics/graphics_system.cpp
++++ b/src/graphics/graphics_system.cpp
+@@ -76,6 +76,41 @@ GraphicsSystem::GraphicsSystem() : vsync_worker_running_(false) {}
+ 
+ GraphicsSystem::~GraphicsSystem() = default;
+ 
++GraphicsSystem::ShaderCompilation GraphicsSystem::GetShaderCompilation() const {
++  std::lock_guard<std::mutex> lock(shader_compilation_mutex_);
++  return shader_compilation_;
++}
++
++void GraphicsSystem::AddShaderCompilationQueued(uint32_t count) {
++  if (!count) {
++    return;
++  }
++  std::function<void()> started_callback;
++  {
++    std::lock_guard<std::mutex> lock(shader_compilation_mutex_);
++    if (shader_compilation_.queued == shader_compilation_.done) {
++      started_callback = shader_compilation_started_callback_;
++    }
++    shader_compilation_.queued += count;
++  }
++  if (started_callback) {
++    started_callback();
++  }
++}
++
++void GraphicsSystem::AddShaderCompilationDone(uint32_t count) {
++  std::lock_guard<std::mutex> lock(shader_compilation_mutex_);
++  shader_compilation_.done = std::min(shader_compilation_.done + count, shader_compilation_.queued);
++  if (shader_compilation_.done == shader_compilation_.queued) {
++    shader_compilation_ = ShaderCompilation();
++  }
++}
++
++void GraphicsSystem::SetShaderCompilationStartedCallback(std::function<void()> callback) {
++  std::lock_guard<std::mutex> lock(shader_compilation_mutex_);
++  shader_compilation_started_callback_ = std::move(callback);
++}
++
+ X_STATUS GraphicsSystem::SetupPresentation(ui::WindowedAppContext* app_context) {
+   if (presenter_) {
+     return X_STATUS_SUCCESS;
 diff --git a/src/graphics/metal/metal_command_processor.h b/src/graphics/metal/metal_command_processor.h
 new file mode 100644
-index 0000000..5c957ab
+index 0000000..b3690db
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.h
-@@ -0,0 +1,316 @@
+@@ -0,0 +1,319 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.h
 + * @brief       Xenos command processing with Metal
@@ -595,12 +725,15 @@ index 0000000..5c957ab
 +  ~MetalCommandProcessor();
 +
 +  void ClearCaches() override;
++  void InitializeShaderStorage(const std::filesystem::path& cache_root, uint32_t title_id,
++                               bool blocking) override;
 +  void InvalidateGpuMemory() override;
 +
 +  void IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbuffer_width,
 +                 uint32_t frontbuffer_height) override;
 +
 +  id<MTLDevice> device() const { return device_; }
++  GraphicsSystem* graphics_system() const { return graphics_system_; }
 +
 +  uint64_t GetCurrentSubmission() const { return submission_current_; }
 +  uint64_t GetCompletedSubmission() const { return submission_completed_; }
@@ -852,10 +985,10 @@ index 0000000..5c957ab
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_command_processor.mm b/src/graphics/metal/metal_command_processor.mm
 new file mode 100644
-index 0000000..f0061ae
+index 0000000..47bda4c
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.mm
-@@ -0,0 +1,2270 @@
+@@ -0,0 +1,2286 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.mm
 + * @brief       Xenos command processing with Metal
@@ -1908,6 +2041,13 @@ index 0000000..f0061ae
 +  pending_guest_fences_.push_back({submission, address, value});
 +}
 +
++void MetalCommandProcessor::InitializeShaderStorage(const std::filesystem::path& cache_root,
++                                                    uint32_t title_id, bool blocking) {
++  CommandProcessor::InitializeShaderStorage(cache_root, title_id, blocking);
++  // Whether blocking or not, the stored pipelines are created in the background.
++  pipeline_cache_->InitializeShaderStorage(cache_root, title_id);
++}
++
 +void MetalCommandProcessor::PrepareForWait() {
 +  // The guest may be waiting for work that is still only encoded.
 +  if (accurate_fences_ && submission_open_ && submission_has_work_) {
@@ -2180,15 +2320,24 @@ index 0000000..f0061ae
 +  }
 +  const MetalRenderPass& render_pass = render_target_cache_->last_update_render_pass();
 +
-+  // Create the pipeline.
++  // Create the pipeline. With async_shader_compilation, a draw whose pipeline is not ready yet is
++  // skipped while the creation threads make it, unless skipping would lose side effects
++  // (memexport) or it has no pixel shader (depth-only draws whose absence would show).
++  bool pipeline_async = REXCVAR_GET(async_shader_compilation) && pixel_shader != nullptr &&
++                        !memexport_writes_possible;
 +  id<MTLRenderPipelineState> pipeline;
 +  MetalDrawState draw_state;
++  bool pipeline_pending = false;
 +  if (!pipeline_cache_->ConfigurePipeline(vertex_shader_translation, pixel_shader_translation,
 +                                          primitive_processing_result, normalized_depth_control,
 +                                          normalized_color_mask,
 +                                          render_target_cache_->last_update_render_pass_formats(),
-+                                          pipeline, draw_state)) {
++                                          pipeline_async, pipeline, draw_state, pipeline_pending)) {
 +    return false;
++  }
++  if (pipeline_pending) {
++    PERF_counter_inc(kDrawsSkippedForPipelines);
++    return true;
 +  }
 +
 +  // Ensure the vertex buffers and the memory export destinations are resident (with the shared
@@ -3202,12 +3351,360 @@ index 0000000..e650748
 +}
 +
 +}  // namespace rex::graphics::metal
+diff --git a/src/graphics/metal/metal_immediate_drawer.h b/src/graphics/metal/metal_immediate_drawer.h
+new file mode 100644
+index 0000000..991d589
+--- /dev/null
++++ b/src/graphics/metal/metal_immediate_drawer.h
+@@ -0,0 +1,78 @@
++/**
++ * @file        graphics/metal/metal_immediate_drawer.h
++ * @brief       Immediate mode drawing (ImGui overlays) for the Metal presenter
++ *
++ * @license     BSD 3-Clause License
++ *              See LICENSE file in the project root for full license text.
++ */
++
++#pragma once
++
++#include <cstdint>
++#include <memory>
++
++#include <rex/ui/immediate_drawer.h>
++#include <rex/ui/presenter.h>
++
++#import <Metal/Metal.h>
++
++namespace rex::graphics::metal {
++
++// What the Metal presenter hands to the UI drawers: the render pass that paints the drawable, open
++// after the guest output is drawn.
++class MetalUIDrawContext final : public ui::UIDrawContext {
++ public:
++  MetalUIDrawContext(ui::Presenter& presenter, uint32_t render_target_width,
++                     uint32_t render_target_height, id<MTLRenderCommandEncoder> encoder,
++                     MTLPixelFormat pixel_format)
++      : ui::UIDrawContext(presenter, render_target_width, render_target_height),
++        encoder_(encoder),
++        pixel_format_(pixel_format) {}
++
++  id<MTLRenderCommandEncoder> encoder() const { return encoder_; }
++  MTLPixelFormat pixel_format() const { return pixel_format_; }
++
++ private:
++  id<MTLRenderCommandEncoder> encoder_;
++  MTLPixelFormat pixel_format_;
++};
++
++// Draws the immediate mode batches of the UI drawers (ImGui) into the presenter's render pass:
++// textured or untextured triangles and lines, alpha blended, with scissor rectangles.
++class MetalImmediateDrawer final : public ui::ImmediateDrawer {
++ public:
++  static std::unique_ptr<MetalImmediateDrawer> Create(id<MTLDevice> device);
++
++  std::unique_ptr<ui::ImmediateTexture> CreateTexture(uint32_t width, uint32_t height,
++                                                      ui::ImmediateTextureFilter filter,
++                                                      bool is_repeated,
++                                                      const uint8_t* data) override;
++
++  void Begin(ui::UIDrawContext& ui_draw_context, float coordinate_space_width,
++             float coordinate_space_height) override;
++  void BeginDrawBatch(const ui::ImmediateDrawBatch& batch) override;
++  void Draw(const ui::ImmediateDraw& draw) override;
++  void EndDrawBatch() override;
++  void End() override;
++
++ private:
++  explicit MetalImmediateDrawer(id<MTLDevice> device) : device_(device) {}
++  bool Initialize();
++  id<MTLRenderPipelineState> GetPipeline(MTLPixelFormat pixel_format);
++
++  id<MTLDevice> device_;
++  id<MTLLibrary> library_ = nil;
++  // The presenter's drawable format is fixed, so one pipeline is enough in practice.
++  MTLPixelFormat pipeline_format_ = MTLPixelFormatInvalid;
++  id<MTLRenderPipelineState> pipeline_ = nil;
++  // Bound for untextured draws, so one pipeline serves both.
++  id<MTLTexture> white_texture_ = nil;
++  id<MTLSamplerState> white_sampler_ = nil;
++
++  // Valid between Begin and End, and between BeginDrawBatch and EndDrawBatch.
++  id<MTLRenderCommandEncoder> encoder_ = nil;
++  id<MTLBuffer> batch_indices_ = nil;
++  bool batch_has_indices_ = false;
++};
++
++}  // namespace rex::graphics::metal
+diff --git a/src/graphics/metal/metal_immediate_drawer.mm b/src/graphics/metal/metal_immediate_drawer.mm
+new file mode 100644
+index 0000000..796de0e
+--- /dev/null
++++ b/src/graphics/metal/metal_immediate_drawer.mm
+@@ -0,0 +1,258 @@
++/**
++ * @file        graphics/metal/metal_immediate_drawer.mm
++ * @brief       Immediate mode drawing (ImGui overlays) for the Metal presenter
++ *
++ * @license     BSD 3-Clause License
++ *              See LICENSE file in the project root for full license text.
++ */
++
++#include "metal_immediate_drawer.h"
++
++#include <cstring>
++
++#include <rex/logging.h>
++
++namespace rex::graphics::metal {
++
++namespace {
++
++// Vertex buffer index; the constants follow it.
++constexpr uint32_t kBufferVertices = 0;
++constexpr uint32_t kBufferConstants = 1;
++
++// Vertices are ui::ImmediateVertex: position in the coordinate space, texture coordinates, and the
++// color as RGBA8 (red in the lowest byte, as ImGui packs it).
++NSString* const kImmediateShaderSource = @R"MSL(
++#include <metal_stdlib>
++using namespace metal;
++struct Vertex {
++  packed_float2 position;
++  packed_float2 texcoord;
++  uint color;
++};
++struct Constants {
++  // Coordinate space to clip space.
++  float2 scale;
++  float2 offset;
++};
++struct Interpolators {
++  float4 position [[position]];
++  float2 texcoord;
++  float4 color;
++};
++vertex Interpolators immediate_vertex(uint vertex_id [[vertex_id]],
++                                      const device Vertex* vertices [[buffer(0)]],
++                                      constant Constants& constants [[buffer(1)]]) {
++  Vertex v = vertices[vertex_id];
++  Interpolators out;
++  out.position = float4(float2(v.position) * constants.scale + constants.offset, 0.0, 1.0);
++  out.texcoord = float2(v.texcoord);
++  out.color = unpack_unorm4x8_to_float(v.color);
++  return out;
++}
++fragment float4 immediate_fragment(Interpolators in [[stage_in]],
++                                   texture2d<float> texture [[texture(0)]],
++                                   sampler texture_sampler [[sampler(0)]]) {
++  return in.color * texture.sample(texture_sampler, in.texcoord);
++}
++)MSL";
++
++class MetalImmediateTexture final : public ui::ImmediateTexture {
++ public:
++  MetalImmediateTexture(uint32_t width, uint32_t height, id<MTLTexture> texture,
++                        id<MTLSamplerState> sampler)
++      : ui::ImmediateTexture(width, height), texture_(texture), sampler_(sampler) {}
++  id<MTLTexture> texture() const { return texture_; }
++  id<MTLSamplerState> sampler() const { return sampler_; }
++
++ private:
++  id<MTLTexture> texture_;
++  id<MTLSamplerState> sampler_;
++};
++
++id<MTLSamplerState> CreateSampler(id<MTLDevice> device, ui::ImmediateTextureFilter filter,
++                                  bool is_repeated) {
++  MTLSamplerDescriptor* descriptor = [MTLSamplerDescriptor new];
++  MTLSamplerMinMagFilter min_mag = filter == ui::ImmediateTextureFilter::kLinear
++                                       ? MTLSamplerMinMagFilterLinear
++                                       : MTLSamplerMinMagFilterNearest;
++  descriptor.minFilter = min_mag;
++  descriptor.magFilter = min_mag;
++  MTLSamplerAddressMode address =
++      is_repeated ? MTLSamplerAddressModeRepeat : MTLSamplerAddressModeClampToEdge;
++  descriptor.sAddressMode = address;
++  descriptor.tAddressMode = address;
++  return [device newSamplerStateWithDescriptor:descriptor];
++}
++
++id<MTLTexture> CreateRgba8Texture(id<MTLDevice> device, uint32_t width, uint32_t height,
++                                  const uint8_t* data) {
++  MTLTextureDescriptor* descriptor =
++      [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
++                                                         width:width
++                                                        height:height
++                                                     mipmapped:NO];
++  descriptor.usage = MTLTextureUsageShaderRead;
++  descriptor.storageMode = MTLStorageModeShared;
++  id<MTLTexture> texture = [device newTextureWithDescriptor:descriptor];
++  if (texture && data) {
++    [texture replaceRegion:MTLRegionMake2D(0, 0, width, height)
++               mipmapLevel:0
++                 withBytes:data
++               bytesPerRow:width * 4];
++  }
++  return texture;
++}
++
++}  // namespace
++
++std::unique_ptr<MetalImmediateDrawer> MetalImmediateDrawer::Create(id<MTLDevice> device) {
++  std::unique_ptr<MetalImmediateDrawer> drawer(new MetalImmediateDrawer(device));
++  if (!drawer->Initialize()) {
++    return nullptr;
++  }
++  return drawer;
++}
++
++bool MetalImmediateDrawer::Initialize() {
++  NSError* error = nil;
++  library_ = [device_ newLibraryWithSource:kImmediateShaderSource options:nil error:&error];
++  if (!library_) {
++    REXLOG_ERROR("Metal: failed to compile the immediate drawer shaders: {}",
++                 error ? error.localizedDescription.UTF8String : "unknown error");
++    return false;
++  }
++  const uint8_t white[4] = {0xFF, 0xFF, 0xFF, 0xFF};
++  white_texture_ = CreateRgba8Texture(device_, 1, 1, white);
++  white_sampler_ = CreateSampler(device_, ui::ImmediateTextureFilter::kNearest, false);
++  return white_texture_ && white_sampler_;
++}
++
++id<MTLRenderPipelineState> MetalImmediateDrawer::GetPipeline(MTLPixelFormat pixel_format) {
++  if (pipeline_ && pipeline_format_ == pixel_format) {
++    return pipeline_;
++  }
++  MTLRenderPipelineDescriptor* descriptor = [MTLRenderPipelineDescriptor new];
++  descriptor.label = @"Immediate drawer";
++  descriptor.vertexFunction = [library_ newFunctionWithName:@"immediate_vertex"];
++  descriptor.fragmentFunction = [library_ newFunctionWithName:@"immediate_fragment"];
++  MTLRenderPipelineColorAttachmentDescriptor* attachment = descriptor.colorAttachments[0];
++  attachment.pixelFormat = pixel_format;
++  // Alpha blending for the color and accumulated coverage for the alpha, as ImGui expects.
++  attachment.blendingEnabled = YES;
++  attachment.sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
++  attachment.destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
++  attachment.rgbBlendOperation = MTLBlendOperationAdd;
++  attachment.sourceAlphaBlendFactor = MTLBlendFactorOne;
++  attachment.destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
++  attachment.alphaBlendOperation = MTLBlendOperationAdd;
++  NSError* error = nil;
++  pipeline_ = [device_ newRenderPipelineStateWithDescriptor:descriptor error:&error];
++  pipeline_format_ = pixel_format;
++  if (!pipeline_) {
++    REXLOG_ERROR("Metal: failed to create the immediate drawer pipeline: {}",
++                 error ? error.localizedDescription.UTF8String : "unknown error");
++  }
++  return pipeline_;
++}
++
++std::unique_ptr<ui::ImmediateTexture> MetalImmediateDrawer::CreateTexture(
++    uint32_t width, uint32_t height, ui::ImmediateTextureFilter filter, bool is_repeated,
++    const uint8_t* data) {
++  id<MTLTexture> texture = CreateRgba8Texture(device_, width, height, data);
++  id<MTLSamplerState> sampler = CreateSampler(device_, filter, is_repeated);
++  if (!texture || !sampler) {
++    return nullptr;
++  }
++  return std::make_unique<MetalImmediateTexture>(width, height, texture, sampler);
++}
++
++void MetalImmediateDrawer::Begin(ui::UIDrawContext& ui_draw_context, float coordinate_space_width,
++                                 float coordinate_space_height) {
++  ImmediateDrawer::Begin(ui_draw_context, coordinate_space_width, coordinate_space_height);
++  auto& metal_context = static_cast<MetalUIDrawContext&>(ui_draw_context);
++  id<MTLRenderPipelineState> pipeline = GetPipeline(metal_context.pixel_format());
++  if (!pipeline) {
++    return;
++  }
++  encoder_ = metal_context.encoder();
++  [encoder_ pushDebugGroup:@"Immediate drawer"];
++  [encoder_ setRenderPipelineState:pipeline];
++  MTLViewport viewport = {0.0, 0.0, double(ui_draw_context.render_target_width()),
++                          double(ui_draw_context.render_target_height()), 0.0, 1.0};
++  [encoder_ setViewport:viewport];
++  // Coordinate space (origin at the top left, y down) to clip space (y up).
++  float constants[4] = {2.0f / this->coordinate_space_width(),
++                        -2.0f / this->coordinate_space_height(), -1.0f, 1.0f};
++  [encoder_ setVertexBytes:constants length:sizeof(constants) atIndex:kBufferConstants];
++}
++
++void MetalImmediateDrawer::BeginDrawBatch(const ui::ImmediateDrawBatch& batch) {
++  if (!encoder_ || !batch.vertices || batch.vertex_count <= 0) {
++    return;
++  }
++  // Small batches go inline; larger ones in a buffer of their own, kept alive by the command
++  // buffer until it completes.
++  size_t vertices_size = sizeof(ui::ImmediateVertex) * size_t(batch.vertex_count);
++  if (vertices_size <= 4096) {
++    [encoder_ setVertexBytes:batch.vertices length:vertices_size atIndex:kBufferVertices];
++  } else {
++    id<MTLBuffer> vertices = [device_ newBufferWithBytes:batch.vertices
++                                                  length:vertices_size
++                                                 options:MTLResourceStorageModeShared];
++    [encoder_ setVertexBuffer:vertices offset:0 atIndex:kBufferVertices];
++  }
++  batch_has_indices_ = batch.indices && batch.index_count > 0;
++  batch_indices_ =
++      batch_has_indices_
++          ? [device_ newBufferWithBytes:batch.indices
++                                 length:sizeof(uint16_t) * size_t(batch.index_count)
++                                options:MTLResourceStorageModeShared]
++          : nil;
++}
++
++void MetalImmediateDrawer::Draw(const ui::ImmediateDraw& draw) {
++  if (!encoder_ || draw.count <= 0) {
++    return;
++  }
++  uint32_t scissor_left, scissor_top, scissor_width, scissor_height;
++  if (!ScissorToRenderTarget(draw, scissor_left, scissor_top, scissor_width, scissor_height)) {
++    return;
++  }
++  [encoder_ setScissorRect:{scissor_left, scissor_top, scissor_width, scissor_height}];
++  auto* texture = static_cast<MetalImmediateTexture*>(draw.texture);
++  [encoder_ setFragmentTexture:texture ? texture->texture() : white_texture_ atIndex:0];
++  [encoder_ setFragmentSamplerState:texture ? texture->sampler() : white_sampler_ atIndex:0];
++  MTLPrimitiveType primitive_type = draw.primitive_type == ui::ImmediatePrimitiveType::kLines
++                                        ? MTLPrimitiveTypeLine
++                                        : MTLPrimitiveTypeTriangle;
++  if (batch_has_indices_) {
++    [encoder_ drawIndexedPrimitives:primitive_type
++                         indexCount:NSUInteger(draw.count)
++                          indexType:MTLIndexTypeUInt16
++                        indexBuffer:batch_indices_
++                  indexBufferOffset:sizeof(uint16_t) * NSUInteger(draw.index_offset)
++                      instanceCount:1
++                         baseVertex:draw.base_vertex
++                       baseInstance:0];
++  } else {
++    [encoder_ drawPrimitives:primitive_type
++                 vertexStart:NSUInteger(draw.base_vertex)
++                 vertexCount:NSUInteger(draw.count)];
++  }
++}
++
++void MetalImmediateDrawer::EndDrawBatch() {
++  batch_indices_ = nil;
++  batch_has_indices_ = false;
++}
++
++void MetalImmediateDrawer::End() {
++  if (encoder_) {
++    [encoder_ popDebugGroup];
++    encoder_ = nil;
++  }
++  ImmediateDrawer::End();
++}
++
++}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_pipeline_cache.h b/src/graphics/metal/metal_pipeline_cache.h
 new file mode 100644
-index 0000000..0590f78
+index 0000000..05ac182
 --- /dev/null
 +++ b/src/graphics/metal/metal_pipeline_cache.h
-@@ -0,0 +1,180 @@
+@@ -0,0 +1,260 @@
 +/**
 + * @file        graphics/metal/metal_pipeline_cache.h
 + * @brief       Guest shader translation and render pipeline states for the Metal backend
@@ -3219,11 +3716,17 @@ index 0000000..0590f78
 +#pragma once
 +
 +#include <array>
++#include <atomic>
++#include <condition_variable>
 +#include <cstdint>
++#include <cstdio>
++#include <deque>
++#include <filesystem>
 +#include <memory>
 +#include <mutex>
 +#include <string>
 +#include <unordered_map>
++#include <unordered_set>
 +#include <vector>
 +
 +#include <rex/graphics/pipeline/shader/spirv.h>
@@ -3232,7 +3735,9 @@ index 0000000..0590f78
 +#include <rex/graphics/register_file.h>
 +#include <rex/graphics/registers.h>
 +#include <rex/graphics/xenos.h>
++#include <rex/platform.h>
 +#include <rex/string/buffer.h>
++#include <rex/thread.h>
 +
 +#import <Metal/Metal.h>
 +
@@ -3258,8 +3763,9 @@ index 0000000..0590f78
 +   public:
 +    explicit MetalTranslation(MetalShader& shader, uint64_t modification)
 +        : SpirvTranslation(shader, modification) {}
-+    // Converts the translated SPIR-V to MSL and compiles it on first use. Vertex shaders have a
-+    // separate variant for pipelines without rasterization.
++    // Converts the translated SPIR-V to MSL and compiles it on first use, from any thread (the
++    // translation must be done). Vertex shaders have a separate variant for pipelines without
++    // rasterization.
 +    id<MTLFunction> GetOrCreateFunction(id<MTLDevice> device, bool rasterization_disabled = false);
 +    // Whether the function reads buffer sizes at kMslBufferSizesIndex (valid after creation).
 +    bool needs_buffer_sizes() const { return needs_buffer_sizes_; }
@@ -3268,6 +3774,8 @@ index 0000000..0590f78
 +    void set_is_xsc(bool is_xsc) { is_xsc_ = is_xsc; }
 +
 +   private:
++    // Pipelines may be created on several threads at once.
++    std::mutex function_mutex_;
 +    // Indexed by whether rasterization is disabled.
 +    id<MTLFunction> functions_[2] = {nil, nil};
 +    bool functions_failed_[2] = {false, false};
@@ -3314,6 +3822,13 @@ index 0000000..0590f78
 +  bool Initialize();
 +  void Shutdown();
 +
++  // Loads the guest shaders and pipelines stored by earlier runs, translates them, and queues their
++  // creation on the pipeline creation threads, so they are ready by the time the game draws with
++  // them. New pipelines are appended to the storage as they appear. Called on the command
++  // processor thread.
++  void InitializeShaderStorage(const std::filesystem::path& cache_root, uint32_t title_id);
++  void ShutdownShaderStorage();
++
 +  MetalShader* LoadShader(xenos::ShaderType shader_type, const uint32_t* host_address,
 +                          uint32_t dword_count);
 +  void AnalyzeShaderUcode(Shader& shader) {
@@ -3332,20 +3847,26 @@ index 0000000..0590f78
 +  bool EnsureShadersTranslated(MetalShader::MetalTranslation* vertex_shader,
 +                               MetalShader::MetalTranslation* pixel_shader);
 +
-+  // The render pipeline state and the per-draw encoder state for the current guest state.
++  // The render pipeline state and the per-draw encoder state for the current guest state. With
++  // allow_async, a pipeline that is not created yet is left to the creation threads and
++  // pending_out is set: the draw is to be skipped.
 +  bool ConfigurePipeline(MetalShader::MetalTranslation* vertex_shader,
 +                         MetalShader::MetalTranslation* pixel_shader,
 +                         const PrimitiveProcessor::ProcessingResult& primitive_processing_result,
 +                         reg::RB_DEPTHCONTROL normalized_depth_control,
 +                         uint32_t normalized_color_mask, const MetalRenderPassFormats& formats,
-+                         __strong id<MTLRenderPipelineState>& pipeline_out,
-+                         MetalDrawState& state_out);
++                         bool allow_async, __strong id<MTLRenderPipelineState>& pipeline_out,
++                         MetalDrawState& state_out, bool& pending_out);
 +
 + private:
-+  // Everything that makes a render pipeline state distinct, hashed as raw bytes.
-+  struct PipelineKey {
-+    const void* vertex_function;
-+    const void* fragment_function;
++  // Everything that makes a render pipeline state distinct: hashed as raw bytes for the lookup,
++  // and written as is to the pipeline storage. Update kVersion if anything is changed.
++  struct PipelineDescription {
++    uint64_t vertex_shader_hash;
++    uint64_t vertex_shader_modification;
++    // Zero when there is no fragment function (no pixel shader, or rasterization disabled).
++    uint64_t pixel_shader_hash;
++    uint64_t pixel_shader_modification;
 +    std::array<uint32_t, xenos::kMaxColorRenderTargets> color_formats;
 +    uint32_t depth_format;
 +    uint32_t stencil_format;
@@ -3355,7 +3876,48 @@ index 0000000..0590f78
 +    uint32_t alpha_to_coverage;
 +    uint32_t rasterization_disabled;
 +    uint32_t topology_class;
++
++    static constexpr uint32_t kVersion = 1;
 +  };
++  static_assert(sizeof(PipelineDescription) == 88, "PipelineDescription is stored as raw bytes");
++
++  // A render pipeline state made on the command processor thread or on a creation thread.
++  struct Pipeline {
++    enum class State : uint32_t { kPending, kReady, kFailed };
++
++    PipelineDescription description;
++    MetalShader::MetalTranslation* vertex_shader = nullptr;
++    // nullptr when the description has no pixel shader.
++    MetalShader::MetalTranslation* pixel_shader = nullptr;
++    // Held while the state object is being created.
++    std::mutex creation_mutex;
++    std::atomic<State> state{State::kPending};
++    // Valid once state is kReady.
++    id<MTLRenderPipelineState> state_object = nil;
++    // Queued for a draw that is waiting for it (rather than only preloaded).
++    bool queued_for_draw = false;
++    // Counted in the graphics system's shader compilation progress.
++    std::atomic<bool> counted_in_progress{false};
++  };
++
++  // The guest shader storage (.xsh) record header, shared with the Vulkan backend.
++  REXPACKEDSTRUCT(ShaderStoredHeader, {
++    uint64_t ucode_data_hash;
++
++    uint32_t ucode_dword_count : 31;
++    xenos::ShaderType type : 1;
++
++    static constexpr uint32_t kVersion = 0x20201219;
++  });
++
++  // Translates a shader modification on the command processor thread if not done yet.
++  bool EnsureTranslated(MetalShader::MetalTranslation& translation);
++  // Creates the state object of a pending pipeline (on any thread). Returns whether it is ready.
++  bool EnsurePipelineCreated(Pipeline& pipeline);
++  // Queues a pending pipeline for the creation threads, a draw's pipelines before preloaded ones.
++  void QueuePipelineCreation(Pipeline& pipeline, bool for_draw);
++  void CreationThread();
++  void StorePipeline(const Pipeline& pipeline);
 +  struct DepthStencilKey {
 +    uint32_t depth_compare;
 +    uint32_t depth_write;
@@ -3368,7 +3930,7 @@ index 0000000..0590f78
 +    uint32_t write_mask_back;
 +  };
 +
-+  id<MTLRenderPipelineState> CreatePipeline(const PipelineKey& key,
++  id<MTLRenderPipelineState> CreatePipeline(const PipelineDescription& description,
 +                                            MetalShader::MetalTranslation* vertex_shader,
 +                                            MetalShader::MetalTranslation* pixel_shader);
 +  id<MTLDepthStencilState> GetDepthStencilState(const DepthStencilKey& key);
@@ -3383,17 +3945,32 @@ index 0000000..0590f78
 +  rex::string::StringBuffer ucode_disasm_buffer_;
 +
 +  std::unordered_map<uint64_t, MetalShader*> shaders_;
-+  std::unordered_map<uint64_t, id<MTLRenderPipelineState>> pipelines_;
++  // By the hash of the description. Only the command processor thread adds to it or looks in it;
++  // the creation threads get pointers to the pipelines through the queues.
++  std::unordered_map<uint64_t, std::unique_ptr<Pipeline>> pipelines_;
 +  std::unordered_map<uint64_t, id<MTLDepthStencilState>> depth_stencil_states_;
++
++  // Pipeline creation threads (async_shader_compilation and the storage preload).
++  std::vector<std::unique_ptr<rex::thread::Thread>> creation_threads_;
++  std::mutex creation_queue_mutex_;
++  std::condition_variable creation_queue_condition_;
++  std::deque<Pipeline*> creation_queue_for_draws_;
++  std::deque<Pipeline*> creation_queue_preload_;
++  bool creation_threads_shutdown_ = false;
++
++  // Shader storage, written as new shaders and pipelines appear.
++  FILE* shader_storage_file_ = nullptr;
++  FILE* pipeline_storage_file_ = nullptr;
++  std::unordered_set<uint64_t> stored_shaders_;
 +};
 +
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_pipeline_cache.mm b/src/graphics/metal/metal_pipeline_cache.mm
 new file mode 100644
-index 0000000..d1850f8
+index 0000000..c161539
 --- /dev/null
 +++ b/src/graphics/metal/metal_pipeline_cache.mm
-@@ -0,0 +1,638 @@
+@@ -0,0 +1,970 @@
 +/**
 + * @file        graphics/metal/metal_pipeline_cache.mm
 + * @brief       Guest shader translation and render pipeline states for the Metal backend
@@ -3405,16 +3982,22 @@ index 0000000..d1850f8
 +#include "metal_pipeline_cache.h"
 +
 +#include <algorithm>
++#include <chrono>
 +#include <cstring>
 +
 +#include <fmt/format.h>
 +#include <xxhash.h>
 +
 +#include <rex/cvar.h>
++#include <rex/filesystem.h>
 +#include <rex/graphics/flags.h>
++#include <rex/graphics/graphics_system.h>
 +#include <rex/graphics/util/draw.h>
 +#include <rex/logging.h>
 +#include <rex/math.h>
++#include <rex/memory/utils.h>
++#include <rex/perf/counter.h>
++#include <rex/types.h>
 +
 +#include "metal_command_processor.h"
 +#include "metal_render_target_cache.h"
@@ -3423,6 +4006,13 @@ index 0000000..d1850f8
 +namespace rex::graphics::metal {
 +
 +namespace {
++
++// Microseconds since start, for the shader and pipeline compilation counters.
++[[maybe_unused]] int64_t MicrosecondsSince(std::chrono::steady_clock::time_point start) {
++  return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() -
++                                                               start)
++      .count();
++}
 +
 +// Vulkan descriptor sets of the translated shaders to Metal argument table indices. Textures come
 +// first in the texture sets, then samplers (the translator numbers samplers after textures).
@@ -3531,6 +4121,7 @@ index 0000000..d1850f8
 +  const MetalShader& metal_shader = static_cast<const MetalShader&>(shader());
 +  // Only vertex shaders have the variant.
 +  size_t variant = rasterization_disabled && metal_shader.type() == xenos::ShaderType::kVertex;
++  std::lock_guard<std::mutex> lock(function_mutex_);
 +  if (functions_[variant] || functions_failed_[variant]) {
 +    return functions_[variant];
 +  }
@@ -3578,16 +4169,24 @@ index 0000000..d1850f8
 +        fmt::format("{}_{:016x}_{:016x}{}{}{}", stage == MslStage::kVertex ? "vs" : "ps",
 +                    metal_shader.ucode_data_hash(), modification(), flags.empty() ? "" : "_", flags,
 +                    variant ? "_norast" : "");
-+    if (!SpirvToMsl(reinterpret_cast<const uint32_t*>(spirv.data()), spirv.size() / sizeof(uint32_t),
-+                    stage, GetGuestShaderBindings(metal_shader), msl, variant != 0,
-+                    entry_point_name)) {
++    [[maybe_unused]] auto conversion_start = std::chrono::steady_clock::now();
++    bool converted = SpirvToMsl(reinterpret_cast<const uint32_t*>(spirv.data()),
++                                spirv.size() / sizeof(uint32_t), stage,
++                                GetGuestShaderBindings(metal_shader), msl, variant != 0,
++                                entry_point_name);
++    // The second half of the SPIR-V translator's translation to MSL.
++    PERF_counter_add(kShaderTranslationUs, MicrosecondsSince(conversion_start));
++    if (!converted) {
 +      REXGPU_ERROR("Metal: failed to convert the {} to MSL", name);
 +      functions_failed_[variant] = true;
 +      return nil;
 +    }
 +    needs_buffer_sizes_ = needs_buffer_sizes_ || msl.needs_buffer_sizes;
 +  }
++  [[maybe_unused]] auto compile_start = std::chrono::steady_clock::now();
 +  functions_[variant] = CompileMslFunction(device, msl, name.c_str());
++  PERF_counter_inc(kShaderLibraryCompiles);
++  PERF_counter_add(kShaderLibraryCompileUs, MicrosecondsSince(compile_start));
 +  if (!functions_[variant]) {
 +    functions_failed_[variant] = true;
 +  }
@@ -3629,10 +4228,37 @@ index 0000000..d1850f8
 +    }
 +    REXGPU_INFO("Metal: shaders translated by the Xenos shader compiler (XSC)");
 +  }
++
++  // Creation threads for the storage preload and async_shader_compilation. The Metal compiler runs
++  // in its own service processes, so these mostly wait for it.
++  uint32_t creation_thread_count =
++      std::clamp(rex::thread::logical_processor_count() * 3 / 4, uint32_t(1), uint32_t(8));
++  creation_threads_shutdown_ = false;
++  for (uint32_t i = 0; i < creation_thread_count; ++i) {
++    std::unique_ptr<rex::thread::Thread> thread =
++        rex::thread::Thread::Create({}, [this]() { CreationThread(); });
++    if (!thread) {
++      break;
++    }
++    thread->set_name("Metal Pipelines");
++    creation_threads_.push_back(std::move(thread));
++  }
 +  return true;
 +}
 +
 +void MetalPipelineCache::Shutdown() {
++  {
++    std::lock_guard<std::mutex> lock(creation_queue_mutex_);
++    creation_threads_shutdown_ = true;
++    creation_queue_for_draws_.clear();
++    creation_queue_preload_.clear();
++  }
++  creation_queue_condition_.notify_all();
++  for (const auto& thread : creation_threads_) {
++    rex::thread::Wait(thread.get(), false);
++  }
++  creation_threads_.clear();
++  ShutdownShaderStorage();
 +  pipelines_.clear();
 +  depth_stencil_states_.clear();
 +  for (auto& shader : shaders_) {
@@ -3732,26 +4358,30 @@ index 0000000..d1850f8
 +  return modification;
 +}
 +
++bool MetalPipelineCache::EnsureTranslated(MetalShader::MetalTranslation& translation) {
++  if (!translation.is_translated()) {
++    [[maybe_unused]] auto translation_start = std::chrono::steady_clock::now();
++    translation.shader().AnalyzeUcode(ucode_disasm_buffer_);
++    // The Xenos shader compiler first if enabled; what it does not support yet goes to the
++    // SPIR-V translator. Both fill the same texture and sampler bindings.
++    bool translated_by_xsc = xsc_translator_ && xsc_translator_->TranslateAnalyzedShader(translation);
++    translation.set_is_xsc(translated_by_xsc);
++    bool translated = translated_by_xsc || shader_translator_->TranslateAnalyzedShader(translation);
++    PERF_counter_inc(kShaderTranslations);
++    PERF_counter_add(kShaderTranslationUs, MicrosecondsSince(translation_start));
++    if (!translated) {
++      REXGPU_ERROR("Metal: shader {:016X} translation failed",
++                   translation.shader().ucode_data_hash());
++      return false;
++    }
++  }
++  return translation.is_valid();
++}
++
 +bool MetalPipelineCache::EnsureShadersTranslated(MetalShader::MetalTranslation* vertex_shader,
 +                                                 MetalShader::MetalTranslation* pixel_shader) {
 +  for (MetalShader::MetalTranslation* translation : {vertex_shader, pixel_shader}) {
-+    if (!translation) {
-+      continue;
-+    }
-+    if (!translation->is_translated()) {
-+      translation->shader().AnalyzeUcode(ucode_disasm_buffer_);
-+      // The Xenos shader compiler first if enabled; what it does not support yet goes to the
-+      // SPIR-V translator. Both fill the same texture and sampler bindings.
-+      bool translated_by_xsc =
-+          xsc_translator_ && xsc_translator_->TranslateAnalyzedShader(*translation);
-+      translation->set_is_xsc(translated_by_xsc);
-+      if (!translated_by_xsc && !shader_translator_->TranslateAnalyzedShader(*translation)) {
-+        REXGPU_ERROR("Metal: shader {:016X} translation failed",
-+                     translation->shader().ucode_data_hash());
-+        return false;
-+      }
-+    }
-+    if (!translation->is_valid()) {
++    if (translation && !EnsureTranslated(*translation)) {
 +      return false;
 +    }
 +  }
@@ -3762,23 +4392,13 @@ index 0000000..d1850f8
 +    MetalShader::MetalTranslation* vertex_shader, MetalShader::MetalTranslation* pixel_shader,
 +    const PrimitiveProcessor::ProcessingResult& primitive_processing_result,
 +    reg::RB_DEPTHCONTROL normalized_depth_control, uint32_t normalized_color_mask,
-+    const MetalRenderPassFormats& formats, __strong id<MTLRenderPipelineState>& pipeline_out,
-+    MetalDrawState& state_out) {
++    const MetalRenderPassFormats& formats, bool allow_async,
++    __strong id<MTLRenderPipelineState>& pipeline_out, MetalDrawState& state_out,
++    bool& pending_out) {
 +  const RegisterFile& regs = register_file_;
-+  id<MTLDevice> device = command_processor_.device();
 +  state_out = MetalDrawState();
-+
-+  id<MTLFunction> vertex_function = vertex_shader->GetOrCreateFunction(device);
-+  if (!vertex_function) {
-+    return false;
-+  }
-+  id<MTLFunction> fragment_function = nil;
-+  if (pixel_shader) {
-+    fragment_function = pixel_shader->GetOrCreateFunction(device);
-+    if (!fragment_function) {
-+      return false;
-+    }
-+  }
++  pipeline_out = nil;
++  pending_out = false;
 +
 +  // Primitive type. Fans, quads, points and rectangles are converted or expanded before here.
 +  MTLPrimitiveTopologyClass topology_class = MTLPrimitiveTopologyClassTriangle;
@@ -3812,7 +4432,7 @@ index 0000000..d1850f8
 +  bool rasterization_enabled = draw_util::IsRasterizationPotentiallyDone(regs, primitive_polygonal);
 +  state_out.rasterization_disabled = !rasterization_enabled;
 +
-+  PipelineKey key;
++  PipelineDescription key;
 +  std::memset(&key, 0, sizeof(key));
 +  // Attachment formats must match the render pass even when nothing is rasterized.
 +  for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
@@ -3820,8 +4440,12 @@ index 0000000..d1850f8
 +  }
 +  key.depth_format = uint32_t(formats.depth);
 +  key.stencil_format = formats.depth_has_stencil ? uint32_t(formats.depth) : 0;
-+  key.vertex_function = (__bridge const void*)vertex_function;
-+  key.fragment_function = (__bridge const void*)fragment_function;
++  key.vertex_shader_hash = vertex_shader->shader().ucode_data_hash();
++  key.vertex_shader_modification = vertex_shader->modification();
++  if (pixel_shader) {
++    key.pixel_shader_hash = pixel_shader->shader().ucode_data_hash();
++    key.pixel_shader_modification = pixel_shader->modification();
++  }
 +  key.sample_count = formats.sample_count;
 +  key.rasterization_disabled = state_out.rasterization_disabled;
 +  key.topology_class = uint32_t(topology_class);
@@ -3860,19 +4484,19 @@ index 0000000..d1850f8
 +    }
 +
 +    for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
-+      if (formats.color[i] == MTLPixelFormatInvalid || !fragment_function) {
++      if (formats.color[i] == MTLPixelFormatInvalid || !pixel_shader) {
 +        continue;
 +      }
 +      key.blend[i] = PackBlend(
 +          regs.Get<reg::RB_BLENDCONTROL>(reg::RB_BLENDCONTROL::rt_register_indices[i]),
 +          (normalized_color_mask >> (i * 4)) & 0b1111);
 +    }
-+    key.alpha_to_coverage =
-+        fragment_function && formats.sample_count > 1 &&
-+        regs.Get<reg::RB_COLORCONTROL>().alpha_to_mask_enable;
++    key.alpha_to_coverage = pixel_shader && formats.sample_count > 1 &&
++                            regs.Get<reg::RB_COLORCONTROL>().alpha_to_mask_enable;
 +  } else {
 +    // Only the vertex shader's side effects (memexport) matter.
-+    key.fragment_function = nullptr;
++    key.pixel_shader_hash = 0;
++    key.pixel_shader_modification = 0;
 +  }
 +
 +  // Depth and stencil.
@@ -3922,17 +4546,296 @@ index 0000000..d1850f8
 +
 +  uint64_t key_hash = XXH3_64bits(&key, sizeof(key));
 +  auto it = pipelines_.find(key_hash);
++  Pipeline* pipeline;
 +  if (it != pipelines_.end()) {
-+    pipeline_out = it->second;
-+    return pipeline_out != nil;
++    pipeline = it->second.get();
++  } else {
++    auto new_pipeline = std::make_unique<Pipeline>();
++    new_pipeline->description = key;
++    new_pipeline->vertex_shader = vertex_shader;
++    new_pipeline->pixel_shader = key.pixel_shader_hash ? pixel_shader : nullptr;
++    pipeline = new_pipeline.get();
++    pipelines_.emplace(key_hash, std::move(new_pipeline));
++    StorePipeline(*pipeline);
 +  }
-+  pipeline_out = CreatePipeline(key, vertex_shader, pixel_shader);
-+  pipelines_.emplace(key_hash, pipeline_out);
-+  return pipeline_out != nil;
++  switch (pipeline->state.load(std::memory_order_acquire)) {
++    case Pipeline::State::kReady:
++      pipeline_out = pipeline->state_object;
++      return true;
++    case Pipeline::State::kFailed:
++      return false;
++    case Pipeline::State::kPending:
++      break;
++  }
++  if (allow_async && !creation_threads_.empty()) {
++    if (!pipeline->queued_for_draw) {
++      QueuePipelineCreation(*pipeline, true);
++    }
++    pending_out = true;
++    return true;
++  }
++  // Needed now: created here, or waited for if a creation thread has already started it.
++  if (!EnsurePipelineCreated(*pipeline)) {
++    return false;
++  }
++  pipeline_out = pipeline->state_object;
++  return true;
++}
++
++bool MetalPipelineCache::EnsurePipelineCreated(Pipeline& pipeline) {
++  Pipeline::State state = pipeline.state.load(std::memory_order_acquire);
++  if (state == Pipeline::State::kPending) {
++    std::lock_guard<std::mutex> lock(pipeline.creation_mutex);
++    state = pipeline.state.load(std::memory_order_acquire);
++    if (state == Pipeline::State::kPending) {
++      id<MTLRenderPipelineState> state_object =
++          CreatePipeline(pipeline.description, pipeline.vertex_shader, pipeline.pixel_shader);
++      pipeline.state_object = state_object;
++      state = state_object ? Pipeline::State::kReady : Pipeline::State::kFailed;
++      pipeline.state.store(state, std::memory_order_release);
++    }
++  }
++  // Whoever gets here first after the creation reports it to the progress display.
++  if (pipeline.counted_in_progress.exchange(false)) {
++    if (GraphicsSystem* graphics_system = command_processor_.graphics_system()) {
++      graphics_system->AddShaderCompilationDone(1);
++    }
++  }
++  return state == Pipeline::State::kReady;
++}
++
++void MetalPipelineCache::QueuePipelineCreation(Pipeline& pipeline, bool for_draw) {
++  // Counted before a creation thread can take it.
++  if (!pipeline.counted_in_progress.exchange(true)) {
++    if (GraphicsSystem* graphics_system = command_processor_.graphics_system()) {
++      graphics_system->AddShaderCompilationQueued(1);
++    }
++  }
++  {
++    std::lock_guard<std::mutex> lock(creation_queue_mutex_);
++    // A preloaded pipeline a draw is now waiting for is queued again, ahead; the creation threads
++    // skip whichever copy they reach after it is created.
++    (for_draw ? creation_queue_for_draws_ : creation_queue_preload_).push_back(&pipeline);
++  }
++  if (for_draw) {
++    pipeline.queued_for_draw = true;
++  }
++  creation_queue_condition_.notify_one();
++}
++
++void MetalPipelineCache::CreationThread() {
++  while (true) {
++    Pipeline* pipeline;
++    {
++      std::unique_lock<std::mutex> lock(creation_queue_mutex_);
++      creation_queue_condition_.wait(lock, [this] {
++        return creation_threads_shutdown_ || !creation_queue_for_draws_.empty() ||
++               !creation_queue_preload_.empty();
++      });
++      if (creation_threads_shutdown_) {
++        return;
++      }
++      std::deque<Pipeline*>& queue =
++          creation_queue_for_draws_.empty() ? creation_queue_preload_ : creation_queue_for_draws_;
++      pipeline = queue.front();
++      queue.pop_front();
++    }
++    EnsurePipelineCreated(*pipeline);
++  }
++}
++
++namespace {
++// Storage file headers: 'XESH' for the guest shaders shared with the Vulkan backend, 'XEPS' with
++// 'MTL ' for this backend's pipelines.
++constexpr uint32_t kShaderStorageMagic = 0x48534558;
++constexpr uint32_t kPipelineStorageMagic = 0x53504558;
++constexpr uint32_t kPipelineStorageMagicApi = 0x204C544D;
++struct ShaderStorageFileHeader {
++  uint32_t magic;
++  uint32_t version_swapped;
++};
++struct PipelineStorageFileHeader {
++  uint32_t magic;
++  uint32_t magic_api;
++  uint32_t version;
++};
++}  // namespace
++
++void MetalPipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_root,
++                                                 uint32_t title_id) {
++  ShutdownShaderStorage();
++  auto storage_root = cache_root / "shaders" / "shareable";
++  std::error_code error_code;
++  std::filesystem::create_directories(storage_root, error_code);
++
++  // Guest shaders, in the format of the Vulkan backend's storage: a header, then for each shader
++  // its hash, type and size, and its ucode in guest byte order (what the hash is computed on).
++  auto shader_storage_path = storage_root / fmt::format("{:08X}.xsh", title_id);
++  shader_storage_file_ = rex::filesystem::OpenFile(shader_storage_path, "a+b");
++  if (!shader_storage_file_) {
++    REXGPU_ERROR("Metal: failed to open the shader storage {}, shaders will not be stored",
++                 rex::path_to_utf8(shader_storage_path));
++    return;
++  }
++  // "a+" leaves the read position at the end on macOS (BSD), and at the start on Linux (glibc).
++  rex::filesystem::Seek(shader_storage_file_, 0, SEEK_SET);
++  ShaderStorageFileHeader shader_file_header;
++  if (std::fread(&shader_file_header, sizeof(shader_file_header), 1, shader_storage_file_) &&
++      shader_file_header.magic == kShaderStorageMagic &&
++      rex::byte_swap(shader_file_header.version_swapped) == ShaderStoredHeader::kVersion) {
++    uint64_t valid_bytes = sizeof(shader_file_header);
++    ShaderStoredHeader shader_header;
++    std::vector<uint32_t> ucode_dwords;
++    // Until the end, or until a record is cut short or corrupted.
++    while (std::fread(&shader_header, sizeof(shader_header), 1, shader_storage_file_)) {
++      size_t ucode_byte_count = shader_header.ucode_dword_count * sizeof(uint32_t);
++      ucode_dwords.resize(shader_header.ucode_dword_count);
++      if (ucode_byte_count &&
++          !std::fread(ucode_dwords.data(), ucode_byte_count, 1, shader_storage_file_)) {
++        break;
++      }
++      if (XXH3_64bits(ucode_dwords.data(), ucode_byte_count) != shader_header.ucode_data_hash) {
++        break;
++      }
++      valid_bytes += sizeof(shader_header) + ucode_byte_count;
++      LoadShader(shader_header.type, ucode_dwords.data(), shader_header.ucode_dword_count);
++      stored_shaders_.insert(shader_header.ucode_data_hash);
++    }
++    rex::filesystem::TruncateStdioFile(shader_storage_file_, valid_bytes);
++  } else {
++    rex::filesystem::TruncateStdioFile(shader_storage_file_, 0);
++    shader_file_header.magic = kShaderStorageMagic;
++    shader_file_header.version_swapped = rex::byte_swap(ShaderStoredHeader::kVersion);
++    std::fwrite(&shader_file_header, sizeof(shader_file_header), 1, shader_storage_file_);
++    std::fflush(shader_storage_file_);
++  }
++
++  // Pipelines: the descriptions, which name their shaders by hash and modification. The version
++  // covers the description layout and the meaning of the modification bits.
++  auto pipeline_storage_path = storage_root / fmt::format("{:08X}.mtl.xpso", title_id);
++  pipeline_storage_file_ = rex::filesystem::OpenFile(pipeline_storage_path, "a+b");
++  if (!pipeline_storage_file_) {
++    REXGPU_ERROR("Metal: failed to open the pipeline storage {}, pipelines will not be stored",
++                 rex::path_to_utf8(pipeline_storage_path));
++    return;
++  }
++  const uint32_t pipeline_storage_version =
++      (PipelineDescription::kVersion << 16) | SpirvShaderTranslator::Modification::kVersion;
++  std::vector<PipelineDescription> descriptions;
++  rex::filesystem::Seek(pipeline_storage_file_, 0, SEEK_SET);
++  PipelineStorageFileHeader pipeline_file_header;
++  if (std::fread(&pipeline_file_header, sizeof(pipeline_file_header), 1,
++                 pipeline_storage_file_) &&
++      pipeline_file_header.magic == kPipelineStorageMagic &&
++      pipeline_file_header.magic_api == kPipelineStorageMagicApi &&
++      pipeline_file_header.version == pipeline_storage_version) {
++    PipelineDescription description;
++    while (std::fread(&description, sizeof(description), 1, pipeline_storage_file_)) {
++      descriptions.push_back(description);
++    }
++    rex::filesystem::TruncateStdioFile(
++        pipeline_storage_file_,
++        sizeof(pipeline_file_header) + sizeof(PipelineDescription) * descriptions.size());
++  } else {
++    rex::filesystem::TruncateStdioFile(pipeline_storage_file_, 0);
++    pipeline_file_header.magic = kPipelineStorageMagic;
++    pipeline_file_header.magic_api = kPipelineStorageMagicApi;
++    pipeline_file_header.version = pipeline_storage_version;
++    std::fwrite(&pipeline_file_header, sizeof(pipeline_file_header), 1, pipeline_storage_file_);
++    std::fflush(pipeline_storage_file_);
++  }
++
++  // Translate the stored pipelines' shaders here (the translators are used on this thread only),
++  // and leave the Metal compilation to the creation threads, so the game starts meanwhile.
++  auto start = std::chrono::steady_clock::now();
++  auto get_translation = [this](uint64_t hash,
++                                uint64_t modification) -> MetalShader::MetalTranslation* {
++    auto shader_it = shaders_.find(hash);
++    if (shader_it == shaders_.end()) {
++      return nullptr;
++    }
++    auto* translation = static_cast<MetalShader::MetalTranslation*>(
++        shader_it->second->GetOrCreateTranslation(modification));
++    return EnsureTranslated(*translation) ? translation : nullptr;
++  };
++  uint32_t queued = 0;
++  for (const PipelineDescription& description : descriptions) {
++    uint64_t key_hash = XXH3_64bits(&description, sizeof(description));
++    if (pipelines_.count(key_hash)) {
++      continue;
++    }
++    MetalShader::MetalTranslation* vertex_shader =
++        get_translation(description.vertex_shader_hash, description.vertex_shader_modification);
++    MetalShader::MetalTranslation* pixel_shader = nullptr;
++    if (description.pixel_shader_hash) {
++      pixel_shader =
++          get_translation(description.pixel_shader_hash, description.pixel_shader_modification);
++    }
++    if (!vertex_shader || (description.pixel_shader_hash && !pixel_shader)) {
++      continue;
++    }
++    auto pipeline = std::make_unique<Pipeline>();
++    pipeline->description = description;
++    pipeline->vertex_shader = vertex_shader;
++    pipeline->pixel_shader = pixel_shader;
++    QueuePipelineCreation(*pipeline, false);
++    pipelines_.emplace(key_hash, std::move(pipeline));
++    ++queued;
++  }
++  REXGPU_INFO(
++      "Metal: {} shaders and {} pipelines in the shader storage, {} pipelines translated in {} ms "
++      "and queued for creation",
++      stored_shaders_.size(), descriptions.size(), queued, MicrosecondsSince(start) / 1000);
++}
++
++void MetalPipelineCache::ShutdownShaderStorage() {
++  if (pipeline_storage_file_) {
++    std::fclose(pipeline_storage_file_);
++    pipeline_storage_file_ = nullptr;
++  }
++  if (shader_storage_file_) {
++    std::fclose(shader_storage_file_);
++    shader_storage_file_ = nullptr;
++  }
++  stored_shaders_.clear();
++}
++
++void MetalPipelineCache::StorePipeline(const Pipeline& pipeline) {
++  if (!pipeline_storage_file_ || !shader_storage_file_) {
++    return;
++  }
++  // The shaders first, so a pipeline is never stored without them.
++  std::vector<uint32_t> ucode_guest_endian;
++  for (MetalShader::MetalTranslation* translation : {pipeline.vertex_shader, pipeline.pixel_shader}) {
++    if (!translation) {
++      continue;
++    }
++    const Shader& shader = translation->shader();
++    if (!stored_shaders_.insert(shader.ucode_data_hash()).second) {
++      continue;
++    }
++    ShaderStoredHeader shader_header;
++    std::memset(&shader_header, 0, sizeof(shader_header));
++    shader_header.ucode_data_hash = shader.ucode_data_hash();
++    shader_header.ucode_dword_count = uint32_t(shader.ucode_dword_count());
++    shader_header.type = shader.type();
++    std::fwrite(&shader_header, sizeof(shader_header), 1, shader_storage_file_);
++    if (shader_header.ucode_dword_count) {
++      // The hash is of the ucode in guest byte order.
++      ucode_guest_endian.resize(shader_header.ucode_dword_count);
++      memory::copy_and_swap(ucode_guest_endian.data(), shader.ucode_dwords(),
++                            shader_header.ucode_dword_count);
++      std::fwrite(ucode_guest_endian.data(), shader_header.ucode_dword_count * sizeof(uint32_t), 1,
++                  shader_storage_file_);
++    }
++    std::fflush(shader_storage_file_);
++  }
++  std::fwrite(&pipeline.description, sizeof(pipeline.description), 1, pipeline_storage_file_);
++  std::fflush(pipeline_storage_file_);
 +}
 +
 +id<MTLRenderPipelineState> MetalPipelineCache::CreatePipeline(
-+    const PipelineKey& key, MetalShader::MetalTranslation* vertex_shader,
++    const PipelineDescription& key, MetalShader::MetalTranslation* vertex_shader,
 +    MetalShader::MetalTranslation* pixel_shader) {
 +  id<MTLDevice> device = command_processor_.device();
 +  MTLRenderPipelineDescriptor* descriptor = [MTLRenderPipelineDescriptor new];
@@ -3941,8 +4844,11 @@ index 0000000..d1850f8
 +  if (!descriptor.vertexFunction) {
 +    return nil;
 +  }
-+  if (key.fragment_function && pixel_shader) {
++  if (key.pixel_shader_hash && pixel_shader) {
 +    descriptor.fragmentFunction = pixel_shader->GetOrCreateFunction(device);
++    if (!descriptor.fragmentFunction) {
++      return nil;
++    }
 +  }
 +  descriptor.rasterizationEnabled = !key.rasterization_disabled;
 +  descriptor.rasterSampleCount = std::max(key.sample_count, uint32_t(1));
@@ -3990,8 +4896,11 @@ index 0000000..d1850f8
 +  descriptor.stencilAttachmentPixelFormat = MTLPixelFormat(key.stencil_format);
 +
 +  NSError* error = nil;
++  [[maybe_unused]] auto creation_start = std::chrono::steady_clock::now();
 +  id<MTLRenderPipelineState> pipeline = [device newRenderPipelineStateWithDescriptor:descriptor
 +                                                                               error:&error];
++  PERF_counter_inc(kPipelineCreations);
++  PERF_counter_add(kPipelineCreationUs, MicrosecondsSince(creation_start));
 +  if (!pipeline) {
 +    REXGPU_ERROR("Metal: failed to create a pipeline for vertex shader {:016X} pixel shader "
 +                 "{:016X}: {}",
@@ -4115,10 +5024,10 @@ index 0000000..940bce8
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_presenter.mm b/src/graphics/metal/metal_presenter.mm
 new file mode 100644
-index 0000000..cd78367
+index 0000000..a508249
 --- /dev/null
 +++ b/src/graphics/metal/metal_presenter.mm
-@@ -0,0 +1,245 @@
+@@ -0,0 +1,251 @@
 +/**
 + * @file        graphics/metal/metal_presenter.mm
 + * @brief       Presents the guest output to a CAMetalLayer with Metal
@@ -4128,6 +5037,8 @@ index 0000000..cd78367
 + */
 +
 +#include "metal_presenter.h"
++
++#include "metal_immediate_drawer.h"
 +
 +#include <algorithm>
 +#include <mutex>
@@ -4355,8 +5266,12 @@ index 0000000..cd78367
 +      [encoder setFragmentSamplerState:paint_sampler_ atIndex:0];
 +      [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
 +    }
++    // The UI drawers (ImGui overlays) over the guest output, in the same pass.
++    if (execute_ui_drawers) {
++      MetalUIDrawContext ui_draw_context(*this, width, height, encoder, layer_.pixelFormat);
++      ExecuteUIDrawersFromUIThread(ui_draw_context);
++    }
 +    [encoder endEncoding];
-+    (void)execute_ui_drawers;
 +    [command_buffer presentDrawable:drawable];
 +    [command_buffer commit];
 +    return PaintResult::kPresented;
@@ -4558,10 +5473,10 @@ index 0000000..d45db08
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_provider.h b/src/graphics/metal/metal_provider.h
 new file mode 100644
-index 0000000..7e1267d
+index 0000000..a8d5e2f
 --- /dev/null
 +++ b/src/graphics/metal/metal_provider.h
-@@ -0,0 +1,50 @@
+@@ -0,0 +1,51 @@
 +/**
 + * @file        graphics/metal/metal_provider.h
 + * @brief       Metal graphics provider: the device and queue shared by the GPU emulation and the
@@ -4592,7 +5507,8 @@ index 0000000..7e1267d
 +      ui::Presenter::HostGpuLossCallback host_gpu_loss_callback =
 +          ui::Presenter::FatalErrorHostGpuLossCallback) override;
 +  // The Dear ImGui overlays (F4 settings, debug overlay) are not drawn with Metal yet.
-+  std::unique_ptr<ui::ImmediateDrawer> CreateImmediateDrawer() override { return nullptr; }
++  // For the UI drawers (ImGui overlays) the presenter runs over the guest output.
++  std::unique_ptr<ui::ImmediateDrawer> CreateImmediateDrawer() override;
 +
 +#ifdef __OBJC__
 +  id<MTLDevice> device() const { return device_; }
@@ -4614,10 +5530,10 @@ index 0000000..7e1267d
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_provider.mm b/src/graphics/metal/metal_provider.mm
 new file mode 100644
-index 0000000..5b3c1ff
+index 0000000..d717bea
 --- /dev/null
 +++ b/src/graphics/metal/metal_provider.mm
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,56 @@
 +/**
 + * @file        graphics/metal/metal_provider.mm
 + * @brief       Metal graphics provider
@@ -4633,6 +5549,7 @@ index 0000000..5b3c1ff
 +#include <rex/cvar.h>
 +#include <rex/logging.h>
 +
++#include "metal_immediate_drawer.h"
 +#include "metal_presenter.h"
 +
 +REXCVAR_DECLARE(int32_t, metal_gpu_capture_frames);
@@ -4666,6 +5583,10 @@ index 0000000..5b3c1ff
 +std::unique_ptr<ui::Presenter> MetalProvider::CreatePresenter(
 +    ui::Presenter::HostGpuLossCallback host_gpu_loss_callback) {
 +  return MetalPresenter::Create(host_gpu_loss_callback, device_, queue_);
++}
++
++std::unique_ptr<ui::ImmediateDrawer> MetalProvider::CreateImmediateDrawer() {
++  return MetalImmediateDrawer::Create(device_);
 +}
 +
 +}  // namespace rex::graphics::metal
@@ -11575,7 +12496,7 @@ index 34330f6..b8816db 100644
        dirty |= system_constants_.edram_rt_keep_mask[i][0] != rt_keep_masks[i][0];
        system_constants_.edram_rt_keep_mask[i][0] = rt_keep_masks[i][0];
 diff --git a/src/graphics/vulkan/pipeline_cache.cpp b/src/graphics/vulkan/pipeline_cache.cpp
-index 4e7ad78..3217c36 100644
+index 4e7ad78..0e2d535 100644
 --- a/src/graphics/vulkan/pipeline_cache.cpp
 +++ b/src/graphics/vulkan/pipeline_cache.cpp
 @@ -41,6 +41,8 @@
@@ -11610,7 +12531,24 @@ index 4e7ad78..3217c36 100644
  
    if (edram_fragment_shader_interlock) {
      std::vector<uint8_t> depth_only_fragment_shader_code =
-@@ -876,6 +894,7 @@ void VulkanPipelineCache::Shutdown() {
+@@ -428,6 +446,8 @@ void VulkanPipelineCache::InitializeShaderStorage(const std::filesystem::path& c
+     return;
+   }
+   pipeline_storage_file_flush_needed_ = false;
++  // "a+" leaves the read position at the end on macOS (BSD), and at the start on Linux (glibc).
++  rex::filesystem::Seek(pipeline_storage_file_, 0, SEEK_SET);
+   // 'XEPS'.
+   const uint32_t pipeline_storage_magic = 0x53504558;
+   const uint32_t pipeline_storage_magic_api = edram_fragment_shader_interlock ? 1u : 0u;
+@@ -514,6 +534,7 @@ void VulkanPipelineCache::InitializeShaderStorage(const std::filesystem::path& c
+   }
+   ++shader_storage_index_;
+   shader_storage_file_flush_needed_ = false;
++  rex::filesystem::Seek(shader_storage_file_, 0, SEEK_SET);
+   struct {
+     uint32_t magic;
+     uint32_t version_swapped;
+@@ -876,6 +897,7 @@ void VulkanPipelineCache::Shutdown() {
    texture_binding_layouts_.clear();
  
    // Shut down shader translation.
@@ -11618,7 +12556,7 @@ index 4e7ad78..3217c36 100644
    shader_translator_.reset();
  }
  
-@@ -1244,9 +1263,12 @@ bool VulkanPipelineCache::TranslateAnalyzedShader(SpirvShaderTranslator& transla
+@@ -1244,9 +1266,12 @@ bool VulkanPipelineCache::TranslateAnalyzedShader(SpirvShaderTranslator& transla
                                                    VulkanShader::VulkanTranslation& translation) {
    VulkanShader& shader = static_cast<VulkanShader&>(translation.shader());
  
