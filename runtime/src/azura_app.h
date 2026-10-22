@@ -11,9 +11,12 @@
 #include <filesystem>
 #include <memory>
 
+#include <imgui.h>
+
 #include <rex/cvar.h>
 #include <rex/perf/counter.h>
 #include <rex/rex_app.h>
+#include <rex/runtime.h>
 #include <rex/system/flags.h>
 
 #include "menu/menu_patches.h"
@@ -21,6 +24,7 @@
 #include "prompts/button_prompts.h"
 #include "relaunch.h"
 #include "script_hooks.h"
+#include "shader_compile_overlay.h"
 
 // Defined by the SDK (core/perf/counter.cpp), which never opens the file itself.
 REXCVAR_DECLARE(std::string, perf_log_csv);
@@ -54,6 +58,7 @@ class AzuraApp : public rex::ReXApp {
   // loading the defaults here lets any key missing from azura.toml keep the project's default
   // (keyboard and mouse on, the key bindings, button prompts) instead of the SDK's.
   void OnConfigurePaths(rex::PathConfig& paths) override {
+    exe_dir_ = paths.config_path.parent_path();
     const auto defaults = paths.config_path.parent_path() / (std::string(GetName()) + ".default.toml");
     if (std::filesystem::exists(defaults)) {
       rex::cvar::LoadConfig(defaults);
@@ -77,6 +82,19 @@ class AzuraApp : public rex::ReXApp {
     AutoConfigureMacAppIcon();
 #endif
     azura::menu::InstallMenuPatches(runtime());
+    // A notice while the GPU backend compiles shaders in the background, from the shader storage
+    // preload that runs right after this hook to the shaders of new areas while playing.
+    if (auto* graphics_system = runtime()->graphics_system()) {
+      graphics_system->SetShaderCompilationStartedCallback([this, graphics_system] {
+        app_context().CallInUIThread([this, graphics_system] {
+          if (!shutting_down_ && dialog_drawer_ && !shader_compile_overlay_) {
+            shader_compile_overlay_ = new azura::ShaderCompileOverlay(
+                dialog_drawer_, graphics_system, REXCVAR_GET(user_language), title_font_,
+                body_font_, &shader_compile_overlay_);
+          }
+        });
+      });
+    }
     azura::script::SetQuitHandler([this] {
       app_context().CallInUIThread([this] {
         if (window()) {
@@ -108,8 +126,35 @@ class AzuraApp : public rex::ReXApp {
     button_prompts_ = std::make_unique<azura::prompts::ButtonPrompts>(runtime());
   }
 
-  // Stop the prompt thread before the runtime and its memory go away.
-  void OnShutdown() override { button_prompts_.reset(); }
+  // The ImGui drawer the game's own dialogs are added to.
+  void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override { dialog_drawer_ = drawer; }
+
+  // Barlow (installed in assets/fonts) for the shader compilation notice, rasterized large and drawn
+  // smaller so it stays sharp on high-DPI displays. ImGui's default font stays the first one, so
+  // the SDK's own overlays are unchanged.
+  void OnConfigureFonts(ImFontAtlas* atlas) override {
+    auto load = [&](const char* name) -> ImFont* {
+      std::filesystem::path path = exe_dir_ / "assets" / "fonts" / name;
+      std::error_code error_code;
+      return std::filesystem::exists(path, error_code)
+                 ? atlas->AddFontFromFileTTF(path.string().c_str(), 48.0f)
+                 : nullptr;
+    };
+    title_font_ = load("Barlow-SemiBold.ttf");
+    body_font_ = load("Barlow-Medium.ttf");
+  }
+
+  // Stop the prompt thread before the runtime and its memory go away, and remove the shader
+  // compilation notice before the ImGui drawer does.
+  void OnShutdown() override {
+    button_prompts_.reset();
+    shutting_down_ = true;
+    if (auto* graphics_system = runtime()->graphics_system()) {
+      graphics_system->SetShaderCompilationStartedCallback(nullptr);
+    }
+    delete shader_compile_overlay_;
+    shader_compile_overlay_ = nullptr;
+  }
 
 
   // ReXApp computes path_config BEFORE LoadConfig(config_path_) is executed, so
@@ -144,4 +189,11 @@ class AzuraApp : public rex::ReXApp {
 
  private:
   std::unique_ptr<azura::prompts::ButtonPrompts> button_prompts_;
+  std::filesystem::path exe_dir_;
+  rex::ui::ImGuiDrawer* dialog_drawer_ = nullptr;
+  ImFont* title_font_ = nullptr;
+  ImFont* body_font_ = nullptr;
+  // Deletes itself when it closes, clearing this pointer. Accessed on the UI thread only.
+  azura::ShaderCompileOverlay* shader_compile_overlay_ = nullptr;
+  bool shutting_down_ = false;
 };
