@@ -318,15 +318,14 @@ intro, campaign, room with light shafts) and Metal System Traces.
     7e3 (the backends now fill `edram_rt_format_flags` on the host render target path too). The
     bench checks it with `XSC_BENCH_RT_7E3` (the reference clamped the same way: no difference).
     It does not change the white flashes below.
-- **White flashes (open, both backends on macOS, not with `fsi` on Linux).** Measured with
+- **White flashes (fixed later, section 17).** Measured with
   `xsc_debug_color_range` (markers and per-shader counters of out-of-range colors): 221 pixel
   shaders write RGB above 31.875 to 7e3 render targets, some in every pixel (lights, sky), and the
   markers appear where the flashes are; but clamping the color as the Xbox 360 does leaves the
   flashes, so the out-of-range values mark the bright surfaces rather than cause the flashes.
   Ruled out by play tests: the draw resolution scale (they also happen at 720p) and the occlusion
-  queries (`query_occlusion_fake_sample_count = 1` leaves them; Linux uses fake results too). Next:
-  `render_target_path_vulkan = "fbo"` on Linux (docs/linux-gpu-measurement.md, section 3) tells
-  whether the host render target path brings them there.
+  queries (`query_occlusion_fake_sample_count = 1` leaves them; Linux uses fake results too). The
+  cause was the texture exponent bias (section 17).
 - **Pending, needs playing:** a Vulkan (MoltenVK) session on macOS with captures (the title screen
   renders and no XSC shader falls back, checked without input), and the Linux sessions of
   docs/linux-gpu-measurement.md (section 3), with and without XSC.
@@ -419,7 +418,38 @@ intro, campaign, room with light shafts) and Metal System Traces.
   depth precision (`depth_float24_convert_in_pixel_shader` left the flashes; the option also
   breaks the picture on Metal, with the SPIR-V translator, which takes those shaders).
 
-## 17. Risks
+## 17. White flashes and dark sky cards: the texture exponent bias
+
+Two artifacts on macOS (Metal and Vulkan) had the same cause: white flashes on some objects
+(sprites and smoke in the intro, dust, glows, Jack cloaking) and dark rectangles over the sky on
+the rooftop with the fountain, where the background behind them showed four times darker.
+
+- **Cause.** The Xenos multiplies the result of every texture fetch by 2^`exp_adjust`, bits 13:18
+  of the word 3 of the texture fetch constant (`xe_gpu_texture_fetch_t`), as the DXBC translator
+  reads it. The SPIR-V translator took bits 13:18 of the word 4 instead, which are part of the LOD
+  bias, and XSC did the same to match it bit for bit. So the real exponent was ignored and one
+  taken from the LOD bias was applied.
+- **How it was found.** A frame history (`metal_frame_history_frames`) gave the images of the
+  frames with the artifacts, and a per-draw pixel history (`metal_pixel_history`, a grid of render
+  target 0 sampled after every draw, with the shaders and fetch constants of each draw) the draws
+  that changed those pixels (docs/metal-backend-design.md, section 10). The dark rectangles are
+  distortion cards (pixel shader 28ECCE34FC872029) that sample a copy of the scene
+  (`k_2_10_10_10_AS_16_16_16_16`, 1280x720) fetched with `exp_adjust` 2: the shaders applied x1, and
+  the card darkened the sky x0.24 where it should be almost invisible. The intro flash is a draw
+  (pixel shader 4D71F55D9299E7D4) sampling a DXT1 texture with `exp_adjust` 0 and a LOD bias whose
+  bits made x256. With a temporary field logging the bits the shaders used, 12 pixel histories
+  (gameplay and intro) had the two exponents differ in 628 of 26,367 texture fetch bindings, in
+  about 64 pixel shaders: `exp_adjust` 2 read as 0 (the scene
+  copies of the distortion cards and of the bloom), and `exp_adjust` 0 read as anything from -27
+  to 30, depending on the LOD bias of the material.
+- **Fix.** Both translators read the exponent from the word 3. The bench still finds no difference
+  between XSC (MSL and SPIR-V) and the SPIR-V translator (5,889 comparisons). In a play session
+  of the intro and the rooftop no artifact was left, and the user saw the game look as on the
+  Xbox 360; the bloom, whose source was read four times too dark, is stronger now.
+- **Not explained.** Kabu did not see the flashes on Linux, where the SPIR-V translator had the same
+  bug; not verified why.
+
+## 18. Risks
 
 - Visual differences in shaders the bench does not reach with random constants (branches the
   game never takes in the bench, special texture formats): the in-game captures cover the main

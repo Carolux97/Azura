@@ -6095,10 +6095,10 @@ index 0000000..bc45626
 +}  // namespace rex::graphics::xsc
 diff --git a/src/graphics/pipeline/shader/xsc/xsc_translator_fetch.cpp b/src/graphics/pipeline/shader/xsc/xsc_translator_fetch.cpp
 new file mode 100644
-index 0000000..91699b4
+index 0000000..765a9ac
 --- /dev/null
 +++ b/src/graphics/pipeline/shader/xsc/xsc_translator_fetch.cpp
-@@ -0,0 +1,1180 @@
+@@ -0,0 +1,1182 @@
 +/**
 + * @file        graphics/pipeline/shader/xsc/xsc_translator_fetch.cpp
 + * @brief       Xenos shader compiler: texture fetch instructions
@@ -6989,7 +6989,7 @@ index 0000000..91699b4
 +      }
 +      ValueId is_any_unsigned = b.Unary(Op::kLogicalNot, is_all_signed);
 +
-+      // The word 4: LOD and gradient biases, the result exponent bias, stacked filtering.
++      // The word 4: LOD and gradient biases, stacked filtering.
 +      ValueId fetch_constant_word_4 = LoadFetchConstantWord(fetch_constant_index, 4);
 +      ValueId fetch_constant_word_4_signed = b.Emit(Op::kBitcast, kInt, {fetch_constant_word_4});
 +
@@ -7248,11 +7248,13 @@ index 0000000..91699b4
 +        }
 +      }
 +
-+      // The exponent bias in bits 13:18 of the word 4.
++      // The exponent bias (exp_adjust) in bits 13:18 of the word 3.
++      ValueId fetch_constant_word_3_signed =
++          b.Emit(Op::kBitcast, kInt, {LoadFetchConstantWord(fetch_constant_index, 3)});
 +      ValueId result_exponent_bias = b.Emit(
 +          Op::kLdexp, kFloat,
 +          {b.ConstFloat(1.0f), b.Emit(Op::kBitFieldSExtract, kInt,
-+                                      {fetch_constant_word_4_signed, b.ConstUint(13),
++                                      {fetch_constant_word_3_signed, b.ConstUint(13),
 +                                       b.ConstUint(6)})});
 +      {
 +        uint32_t result_remaining_components = used_result_nonzero_components;
