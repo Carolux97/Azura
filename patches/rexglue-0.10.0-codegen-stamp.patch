@@ -1,0 +1,66 @@
+diff --git a/resources/templates/init/rexglue_cmake.inja b/resources/templates/init/rexglue_cmake.inja
+index f39557b..ac6c13e 100644
+--- a/resources/templates/init/rexglue_cmake.inja
++++ b/resources/templates/init/rexglue_cmake.inja
+@@ -109,7 +109,9 @@ macro(rexglue_setup_target target_name)
+ endmacro()
+ 
+ # Codegen runs as part of the build, re-running only when an input in codegen.d
+-# changes. Build it alone with 'cmake --build . --target {{ names.snake_case }}_codegen'.
++# or the rexglue executable changes (the generated code depends on the
++# generator too, and codegen's own stamp includes a hash of it). Build it
++# alone with 'cmake --build . --target {{ names.snake_case }}_codegen'.
+ # Listing the sources as outputs orders any target that compiles them after
+ # codegen, including one a project assembles itself rather than taking the
+ # library rexglue_setup_target() builds. The stamp comes first: the DEPFILE
+@@ -118,6 +120,7 @@ add_custom_command(
+     OUTPUT "{{ cmake_var("CMAKE_CURRENT_SOURCE_DIR") }}/{{ entrypoint_out_dir }}/codegen.build.stamp"
+            {{ cmake_var("REXGLUE_ENTRYPOINT_GENERATED_SOURCES") }}
+     COMMAND $<TARGET_FILE:rex::rexglue> codegen {{ cmake_var("CMAKE_CURRENT_SOURCE_DIR") }}/{{ names.snake_case }}_manifest.toml
++    DEPENDS $<TARGET_FILE:rex::rexglue>
+     DEPFILE "{{ cmake_var("CMAKE_CURRENT_SOURCE_DIR") }}/{{ entrypoint_out_dir }}/codegen.d"
+     WORKING_DIRECTORY {{ cmake_var("CMAKE_CURRENT_SOURCE_DIR") }}
+     COMMENT "Generating recompiled code for {{ names.snake_case }}"
+diff --git a/src/codegen/project_recompiler.cpp b/src/codegen/project_recompiler.cpp
+index 240bcb0..2cd57bc 100644
+--- a/src/codegen/project_recompiler.cpp
++++ b/src/codegen/project_recompiler.cpp
+@@ -29,6 +29,8 @@
+ #include <rex/codegen/output_stamp.h>
+ #include <rex/codegen/progress_reporter.h>
+ #include <rex/codegen/template_registry.h>
++#include <rex/filesystem.h>
++#include <rex/hash.h>
+ #include <rex/kernel/init.h>
+ #include <rex/logging.h>
+ #include <rex/runtime.h>
+@@ -76,10 +78,29 @@ std::vector<std::filesystem::path> CollectModuleInputs(const RecompilerConfig& c
+   return inputs;
+ }
+ 
++// Hash of the running rexglue executable. The generated code depends on the generator's builders
++// and analysis as much as on its inputs, so a rebuilt generator must not find its old output up
++// to date. Computed once per run.
++const std::string& GeneratorHash() {
++  static const std::string hash = [] {
++    std::filesystem::path executable = rex::filesystem::GetExecutablePath();
++    std::string digest = executable.empty() ? std::string() : rex::hash_file(executable);
++    if (digest.empty()) {
++      // Without it the stamp could keep stale output: make every run regenerate instead.
++      REXCODEGEN_WARN("Could not hash the rexglue executable; codegen will not skip modules");
++      digest = fmt::format("<unknown:{}>",
++                           std::chrono::steady_clock::now().time_since_epoch().count());
++    }
++    return digest;
++  }();
++  return hash;
++}
++
+ std::string FingerprintModule(const RecompilerConfig& cfg,
+                               std::span<const std::filesystem::path> inputs,
+                               std::string_view sdkVersion) {
+   std::vector<std::string> flags{
++      fmt::format("generator={}", GeneratorHash()),
+       fmt::format("templates={}", EmbeddedTemplatesHash()),
+       fmt::format("generate_exception_handlers={}", cfg.generateExceptionHandlers),
+       fmt::format("max_jump_extension={}", cfg.maxJumpExtension),
