@@ -267,9 +267,9 @@ What the backend does now (`metal_pipeline_cache.mm`):
   draw whose pipeline is not ready is skipped (`draws_skipped_for_pipelines`) while they make it,
   except draws without a pixel shader and draws with memory export, which wait for it.
 - **Notice.** The graphics system counts the work queued and done
-  (`IGraphicsSystem::GetShaderCompilation`), and the runtime shows "COMPILANDO SHADERS" with the
-  progress and a turning cog at the bottom left, in the style of the game's checkpoint indicator,
-  when the work lasts more than 0.4 s (`runtime/src/shader_compile_overlay.cpp`, Barlow fonts in
+  (`IGraphicsSystem::GetShaderCompilation`), and the runtime shows a small "COMPILANDO SHADERS"
+  with the progress and a turning cog at the top left, in the style of the game's checkpoint
+  indicator but away from it, when the work lasts more than 0.4 s (`runtime/src/shader_compile_overlay.cpp`, Barlow fonts in
   `runtime/assets/fonts/`).
 - **ImGui on Metal.** The Metal provider had no immediate drawer and the presenter skipped the UI
   drawers, so no ImGui overlay was ever drawn on Metal. `metal_immediate_drawer.mm` draws them in
