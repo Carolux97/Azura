@@ -78,15 +78,26 @@ recompiled code today, what an interpreter has to match, how it plugs in, and ho
   emitted expressions (for example `mfxer` and `mfocrf` sign-extend, because the builder shifts a
   byte promoted to `int` into bit 31). The decoder is the code generator's own (`ppc_insn`,
   operands as it decodes them), so operand numbering is the builders'.
+- **The vector unit is generated from the builders.** `rexglue interp-vector-gen` runs the builder
+  of every vector form with placeholder registers and every value of its immediate operands (taken
+  from the words that decode to the form), and turns each output into a function of the
+  interpreter whose register operands come from the decoded instruction
+  (`src/system/ppc_interpreter_vector.inc`, checked in). The interpreter looks the function up by
+  opcode table entry and immediate values when it decodes the instruction. The key also records
+  whether each general register operand is r0 (the builders leave rA out of the address then, even
+  for `lvx128`, whose rA the decoder does not mark as rA|0) and, for `vupkhsb128`/`vupklsb128`,
+  whether operand 2 is 0x60, which the code generator's dispatch turns into the halfword forms.
+  1,337 functions for 215 forms; building the bench fails if the file is stale.
 - **Memory.** Plain big-endian accesses with the 0x1000 host offset of the physical range, exactly
   the `REX_LOAD_*`/`REX_STORE_*` macros. The generated code switches to `REX_MM_*` only where it
   recognises an MMIO base register; elsewhere an access to 0x7F000000-0x7FFFFFFF reaches the MMIO
   handler through its fault handler, and the interpreter's accesses do the same.
 - **Not supported, on purpose:** `mfmsr` and `mtmsrd`. The generated code's global lock counter is
   an inline function of the game's own generated header, which the runtime cannot reach; the
-  interpreter stops on them rather than keep a second counter. Floating point and vector
-  instructions, including their loads and stores, come in phases 2 and 3 (they also switch the
-  host's flush-to-zero mode).
+  interpreter stops on them rather than keep a second counter. It also stops where a builder emits
+  a trap for operand values it does not handle (some `vpkd3d128` and `vupkd3d128` types) and where
+  a builder's output is undefined C++: `vupkd3d128` type 6 shifts a 32-bit integer by 44, so the
+  recompiled result depends on the compiler (a bug of the code generator).
 - **Assumed from this game's configuration:** `skip_lr` off (calls set `lr`), and no `setjmp` or
   `longjmp` addresses reached from interpreted code.
 - **Where the interpreter is more general than the generated code:** a `bdnz`-type branch out of
@@ -143,6 +154,9 @@ sdk/rexglue-0.10.0-src/out/mac-arm64/RelWithDebInfo/ppc_interp_bench [--seeds N]
   float specials, small integers and random bits; CR and XER bits; the reservation (half the time
   equal to memory, so `stwcx.` and `stdcx.` store); the rounding mode and flush-to-zero bits of the
   host register; random window contents.
+- **Coverage of immediates.** Six words per form leave most values of a large immediate untested
+  (`vpermwi128` has 256). The CMake cache variable `INTERP_BENCH_CASES_PER_FORM` raises it; 64
+  words per form gives 37,909 cases.
 - **Comparison.** Every field of `PPCContext`, the host floating point control register and both
   windows, after each side, bit for bit; a mismatch is reported with the instruction, the seed and
   the first differing field. `--self-check` runs the recompiled code on both sides, which must
@@ -173,7 +187,12 @@ sdk/rexglue-0.10.0-src/out/mac-arm64/RelWithDebInfo/ppc_interp_bench [--seeds N]
    161,232 runs (64 seeds, random rounding mode and flush bit, NaNs, infinities and denormals);
    216 forms left, all vector plus `mfmsr`. Deliberate bugs caught: `fmadd` as a multiply then an
    add, `fadd` without turning flush-to-zero off (the host register differs), `fctiw` truncating.
-3. VMX and VMX128.
+3. VMX and VMX128, generated from the builders (section 2). Measured: 637 of the 638 forms match
+   bit for bit in 242,313 runs (6 words per form, 64 seeds) and in 1,211,352 runs (64 words per
+   form, 32 seeds); the one left is `mfmsr`. The extended run found the `vupklsb128` halfword
+   fixup, which the first version missed; and the `vupkd3d128` type 6 mismatch led to finding its
+   undefined shift. Swapping two vector operands in the interpreter makes 140 forms fail (all but
+   the commutative ones).
 4. In the game, without the 0x824B8CF0 hint: the point where the game stopped is passed through the
    interpreter, and the cost is measured.
 5. On by default, documentation, and the decision on a data pointer scan in the code generator.

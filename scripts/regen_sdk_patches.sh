@@ -26,6 +26,7 @@ INTERP_PATHS=(
   include/rex/ppc/context_access.h
   include/rex/system/ppc_interpreter.h
   src/system/ppc_interpreter.cpp
+  src/system/ppc_interpreter_vector.inc
   src/system/function_dispatcher.cpp
   src/system/CMakeLists.txt
   src/codegen/builders.h
