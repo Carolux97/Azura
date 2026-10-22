@@ -163,7 +163,16 @@ sdk/rexglue-0.10.0-src/out/mac-arm64/RelWithDebInfo/ppc_interp_bench [--seeds N]
    and `mfmsr`. The bench catches deliberate bugs: a wrong carry in `addc`, a wrong reservation in
    `stwcx.`, and `bdnz` testing all 64 bits of CTR (this one only after CTR values got their own
    generator).
-2. Floating point.
+2. Floating point: arithmetic, fused multiply-add through `std::fma` as the builders emit it,
+   conversions through the same SIMDe calls, compares, `mffs`/`mtfsf` (only the rounding mode,
+   kept in the host register), and the floating point loads and stores. Every one first turns
+   flush-to-zero off like its builder; the generated code skips that when it knows the mode from
+   an earlier instruction of the same block (it forgets it at every label and call), and switching
+   only when the bit differs, as the interpreter does, ends in the same state. Record forms do not
+   update cr1, as in the generated code. Measured: the 422 implemented forms match bit for bit in
+   161,232 runs (64 seeds, random rounding mode and flush bit, NaNs, infinities and denormals);
+   216 forms left, all vector plus `mfmsr`. Deliberate bugs caught: `fmadd` as a multiply then an
+   add, `fadd` without turning flush-to-zero off (the host register differs), `fctiw` truncating.
 3. VMX and VMX128.
 4. In the game, without the 0x824B8CF0 hint: the point where the game stopped is passed through the
    interpreter, and the cost is measured.
