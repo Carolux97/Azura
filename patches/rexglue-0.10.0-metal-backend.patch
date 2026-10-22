@@ -309,6 +309,40 @@ index aa55a4a..c8bb914 100644
  XE_UI_VULKAN_FUNCTION(vkInvalidateMappedMemoryRanges)
  XE_UI_VULKAN_FUNCTION(vkMapMemory)
  XE_UI_VULKAN_FUNCTION(vkResetCommandPool)
+diff --git a/src/core/memory_posix.cpp b/src/core/memory_posix.cpp
+index b52bf39..13f51dc 100644
+--- a/src/core/memory_posix.cpp
++++ b/src/core/memory_posix.cpp
+@@ -478,9 +478,14 @@ FileMappingHandle CreateFileMappingHandle(const std::filesystem::path& path, siz
+   if (ret < 0) {
+     return kFileMappingHandleInvalid;
+   }
++  // The name is removed at once: the descriptor and the views mapped from it keep the memory, and
++  // the system frees it when the process ends, also when it ends without running the destructors
++  // (the hard exit after the title terminates, a crash). Otherwise every run would leave a file
++  // the size of the guest address space in /dev/shm, and once that is full, touching new guest
++  // memory raises SIGBUS.
++  shm_unlink(full_path.c_str());
+   if (rex_ftruncate64(ret, static_cast<off_t>(length)) != 0) {
+     close(ret);
+-    shm_unlink(full_path.c_str());
+     return kFileMappingHandleInvalid;
+   }
+   return static_cast<FileMappingHandle>(ret);
+@@ -488,11 +493,9 @@ FileMappingHandle CreateFileMappingHandle(const std::filesystem::path& path, siz
+ }
+ 
+ void CloseFileMappingHandle(FileMappingHandle handle, const std::filesystem::path& path) {
++  // The shared memory name was already removed when the handle was created.
++  (void)path;
+   close(static_cast<int>(handle));
+-#if !REX_PLATFORM_ANDROID
+-  auto full_path = MakeShmName(path);
+-  shm_unlink(full_path.c_str());
+-#endif
+ }
+ 
+ void* MapFileView(FileMappingHandle handle, void* base_address, size_t length, PageAccess access,
 diff --git a/src/core/perf/counter.cpp b/src/core/perf/counter.cpp
 index d3f26eb..2af51b3 100644
 --- a/src/core/perf/counter.cpp
