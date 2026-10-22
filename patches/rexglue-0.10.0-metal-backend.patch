@@ -273,10 +273,10 @@ index 7b938b9..89a63d8 100644
    bool creation_completion_set_event_ = false;
    size_t creation_threads_shutdown_from_ = SIZE_MAX;
 diff --git a/include/rex/perf/counter.h b/include/rex/perf/counter.h
-index 83f0dff..4de3528 100644
+index 83f0dff..8c33f7a 100644
 --- a/include/rex/perf/counter.h
 +++ b/include/rex/perf/counter.h
-@@ -24,6 +24,35 @@ enum class CounterId : uint16_t {
+@@ -24,6 +24,37 @@ enum class CounterId : uint16_t {
    kFrameTimeUs,
    kFps,
  
@@ -308,6 +308,8 @@ index 83f0dff..4de3528 100644
 +  kPipelineCreations,          // Render pipeline states created (newRenderPipelineStateWithDescriptor)
 +  kPipelineCreationUs,
 +  kDrawsSkippedForPipelines,   // Draws skipped while their pipeline is made in the background
++  kOcclusionQueries,           // Occlusion query results written to guest memory (Metal backend)
++  kOcclusionQueriesZero,       // Of those, results with no sample visible
 +
    // GPU
    kDrawCalls,
@@ -414,10 +416,10 @@ index b52bf39..13f51dc 100644
  
  void* MapFileView(FileMappingHandle handle, void* base_address, size_t length, PageAccess access,
 diff --git a/src/core/perf/counter.cpp b/src/core/perf/counter.cpp
-index d3f26eb..2af51b3 100644
+index d3f26eb..5d2ba98 100644
 --- a/src/core/perf/counter.cpp
 +++ b/src/core/perf/counter.cpp
-@@ -46,6 +46,24 @@ std::array<std::atomic<int64_t>, kNumCounters> g_snapshot{};
+@@ -46,6 +46,26 @@ std::array<std::atomic<int64_t>, kNumCounters> g_snapshot{};
  constexpr const char* kCounterNames[] = {
      "frame_time_us",
      "fps",
@@ -439,10 +441,12 @@ index d3f26eb..2af51b3 100644
 +    "pipeline_creations",
 +    "pipeline_creation_us",
 +    "draws_skipped_for_pipelines",
++    "occlusion_queries",
++    "occlusion_queries_zero",
      "draw_calls",
      "command_buffer_stalls",
      "vertices_processed",
-@@ -94,6 +112,24 @@ static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must matc
+@@ -94,6 +114,26 @@ static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must matc
  constexpr bool kIsGauge[] = {
      false,  // kFrameTimeUs       (set each frame)
      false,  // kFps               (set each frame)
@@ -464,6 +468,8 @@ index d3f26eb..2af51b3 100644
 +    false,  // kPipelineCreations
 +    false,  // kPipelineCreationUs
 +    false,  // kDrawsSkippedForPipelines
++    false,  // kOcclusionQueries
++    false,  // kOcclusionQueriesZero
      false,  // kDrawCalls
      false,  // kCommandBufferStalls
      false,  // kVerticesProcessed
@@ -771,10 +777,10 @@ index 8f2fcb0..66df781 100644
      return X_STATUS_SUCCESS;
 diff --git a/src/graphics/metal/metal_command_processor.h b/src/graphics/metal/metal_command_processor.h
 new file mode 100644
-index 0000000..b3690db
+index 0000000..b432d7c
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.h
-@@ -0,0 +1,319 @@
+@@ -0,0 +1,353 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.h
 + * @brief       Xenos command processing with Metal
@@ -877,6 +883,8 @@ index 0000000..b3690db
 +
 +  void PrepareForWait() override;
 +  void WriteGuestFence(uint32_t address, uint32_t value) override;
++  bool ExecutePacketType3_EVENT_WRITE_ZPD(memory::RingBuffer* reader, uint32_t packet,
++                                          uint32_t count) override;
 +
 +  Shader* LoadShader(xenos::ShaderType shader_type, uint32_t guest_address,
 +                     const uint32_t* host_address, uint32_t dword_count) override;
@@ -912,6 +920,9 @@ index 0000000..b3690db
 +    uint32_t vertex_constant_buffers_bound = 0;
 +    uint32_t fragment_constant_buffers_bound = 0;
 +    bool shared_memory_bound = false;
++    // The visibility result slot the encoder counts the guest draws' samples in for the active
++    // occlusion query, or UINT32_MAX if not counting.
++    uint32_t occlusion_slot = UINT32_MAX;
 +    // False after an encoder change or draws of the backend itself: everything is set again.
 +    bool valid = false;
 +  };
@@ -1012,6 +1023,35 @@ index 0000000..b3690db
 +  uint64_t submission_completed_by_gpu_ = 0;
 +  // Completion handlers registered and not finished yet, awaited at shutdown.
 +  std::atomic<uint32_t> completion_handlers_in_flight_{0};
++
++  // Occlusion queries (occlusion_query_enable): the samples of the guest draws between a query's
++  // begin and end are counted by the GPU in visibility result slots, one per render encoder the
++  // draws are in, and the sum is written to guest memory when the submission with them completes.
++  // The guest waits for the result to replace the marker its driver wrote at the end.
++  void CountOcclusionSamples();
++  void StopCountingOcclusionSamples();
++  void WriteGuestOcclusionResult(uint32_t address, uint64_t samples);
++  // Metal writes visibility results only at offsets below 256 KiB of the buffer (the API
++  // validation rejects larger offsets, and without it the GPU writes nothing there).
++  static constexpr size_t kOcclusionBufferMaxSize = size_t(256) << 10;
++  static constexpr uint32_t kOcclusionSlotCount =
++      uint32_t(kOcclusionBufferMaxSize / sizeof(uint64_t));
++  // kOcclusionSlotCount 64-bit counters, reused in turn.
++  id<MTLBuffer> occlusion_buffer_ = nil;
++  uint32_t occlusion_slot_next_ = 0;
++  struct ActiveOcclusionQuery {
++    bool valid = false;
++    uint32_t address = 0;
++    std::vector<uint32_t> slots;
++  };
++  ActiveOcclusionQuery active_occlusion_query_;
++  struct PendingOcclusionResult {
++    uint64_t submission;
++    uint32_t address;
++    std::vector<uint32_t> slots;
++  };
++  // Guarded by guest_fence_mutex_.
++  std::deque<PendingOcclusionResult> pending_occlusion_results_;
 +  bool device_lost_ = false;
 +
 +  // xsc_debug_color_range: the per-shader counters of out-of-range pixel shader colors, written by
@@ -1096,10 +1136,10 @@ index 0000000..b3690db
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_command_processor.mm b/src/graphics/metal/metal_command_processor.mm
 new file mode 100644
-index 0000000..47bda4c
+index 0000000..44e2028
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.mm
-@@ -0,0 +1,2286 @@
+@@ -0,0 +1,2431 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.mm
 + * @brief       Xenos command processing with Metal
@@ -1382,6 +1422,10 @@ index 0000000..47bda4c
 +  if (accurate_fences_) {
 +    REXGPU_INFO("Metal: guest fences are written when the GPU finishes the work before them");
 +  }
++  // Occlusion query counters are read by the CPU when the submissions complete, so shared.
++  occlusion_buffer_ = [device_ newBufferWithLength:size_t(kOcclusionSlotCount) * sizeof(uint64_t)
++                                           options:MTLResourceStorageModeShared];
++  occlusion_buffer_.label = @"Occlusion query results";
 +
 +  scratch_buffer_pool_ = std::make_unique<TransientBufferPool>(
 +      device_, MTLResourceStorageModePrivate, size_t(16) << 20, @"Scratch");
@@ -1789,7 +1833,7 @@ index 0000000..47bda4c
 +
 +  if (submission_open_) {
 +    EndEncoder(rex::perf::CounterId::kRenderPassEndsOther);
-+    if (accurate_fences_) {
++    if (accurate_fences_ || occlusion_buffer_) {
 +      uint64_t submission = submission_current_;
 +      completion_handlers_in_flight_.fetch_add(1, std::memory_order_relaxed);
 +      [command_buffer_ addCompletedHandler:^(id<MTLCommandBuffer>) {
@@ -2131,6 +2175,137 @@ index 0000000..47bda4c
 +    memory::store(memory_->TranslatePhysical(fence.address), fence.value);
 +    pending_guest_fences_.pop_front();
 +  }
++  const uint64_t* counters = static_cast<const uint64_t*>(occlusion_buffer_.contents);
++  while (!pending_occlusion_results_.empty() &&
++         pending_occlusion_results_.front().submission <= submission_completed_by_gpu_) {
++    const PendingOcclusionResult& result = pending_occlusion_results_.front();
++    uint64_t samples = 0;
++    for (uint32_t slot : result.slots) {
++      samples += counters[slot];
++    }
++    WriteGuestOcclusionResult(result.address, samples);
++    pending_occlusion_results_.pop_front();
++  }
++}
++
++bool MetalCommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(memory::RingBuffer* reader,
++                                                               uint32_t packet, uint32_t count) {
++  if (!REXCVAR_GET(occlusion_query_enable) || !occlusion_buffer_) {
++    StopCountingOcclusionSamples();
++    active_occlusion_query_ = ActiveOcclusionQuery();
++    return CommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(reader, packet, count);
++  }
++  assert_true(count == 1);
++  uint32_t initiator = reader->ReadAndSwap<uint32_t>();
++  WriteRegister(XE_GPU_REG_VGT_EVENT_INITIATOR, initiator & 0x3F);
++
++  uint32_t address = register_file_->values[XE_GPU_REG_RB_SAMPLE_COUNT_ADDR];
++  auto* sample_counts = memory_->TranslatePhysical<xenos::xe_gpu_depth_sample_counts*>(address);
++  if (!sample_counts) {
++    StopCountingOcclusionSamples();
++    active_occlusion_query_ = ActiveOcclusionQuery();
++    return true;
++  }
++  // The packet comes at the begin and at the end of a query, each with sample counts of its own
++  // (the end's are 0x20 bytes before the begin's). The guest's driver marks the end by writing
++  // 0xFFFFFEED to its sample counts, and waits for the result to replace it; the begin's counts
++  // are zero, as nothing is counted before the begin.
++  const uint32_t kQueryFinished = rex::byte_swap(0xFFFFFEED);
++  bool is_end = sample_counts->ZPass_A == kQueryFinished ||
++                sample_counts->ZPass_B == kQueryFinished ||
++                sample_counts->ZFail_A == kQueryFinished || sample_counts->ZFail_B == kQueryFinished;
++  if (!is_end) {
++    // Begin. Another query still open is dropped: the guest has not ended it, so nothing waits for
++    // it.
++    StopCountingOcclusionSamples();
++    std::memset(sample_counts, 0, sizeof(*sample_counts));
++    active_occlusion_query_ = ActiveOcclusionQuery();
++    active_occlusion_query_.valid = true;
++    active_occlusion_query_.address = address;
++    return true;
++  }
++  if (!active_occlusion_query_.valid) {
++    // An end without its begin: nothing was counted.
++    WriteGuestOcclusionResult(address, 0);
++    return true;
++  }
++  StopCountingOcclusionSamples();
++  PendingOcclusionResult result;
++  result.address = address;
++  result.slots = std::move(active_occlusion_query_.slots);
++  active_occlusion_query_ = ActiveOcclusionQuery();
++  if (result.slots.empty()) {
++    // No draw between the begin and the end.
++    std::lock_guard<std::mutex> lock(guest_fence_mutex_);
++    for (auto it = pending_occlusion_results_.begin(); it != pending_occlusion_results_.end();) {
++      it = it->address == address ? pending_occlusion_results_.erase(it) : std::next(it);
++    }
++    WriteGuestOcclusionResult(address, 0);
++    return true;
++  }
++  // The counted draws are in the open submission, or in the last one if none is open.
++  result.submission = submission_open_ ? submission_current_ : submission_current_ - 1;
++  std::lock_guard<std::mutex> lock(guest_fence_mutex_);
++  // An earlier result of the same query not written yet would overwrite this end's marker late.
++  for (auto it = pending_occlusion_results_.begin(); it != pending_occlusion_results_.end();) {
++    it = it->address == address ? pending_occlusion_results_.erase(it) : std::next(it);
++  }
++  if (submission_completed_by_gpu_ >= result.submission) {
++    const uint64_t* counters = static_cast<const uint64_t*>(occlusion_buffer_.contents);
++    uint64_t samples = 0;
++    for (uint32_t slot : result.slots) {
++      samples += counters[slot];
++    }
++    WriteGuestOcclusionResult(address, samples);
++    return true;
++  }
++  pending_occlusion_results_.push_back(std::move(result));
++  return true;
++}
++
++void MetalCommandProcessor::CountOcclusionSamples() {
++  if (!active_occlusion_query_.valid || encoder_type_ != EncoderType::kRender ||
++      render_encoder_state_.occlusion_slot != UINT32_MAX) {
++    return;
++  }
++  // A slot of its own for each encoder, so every count the GPU writes is of one render pass.
++  uint32_t slot = occlusion_slot_next_;
++  occlusion_slot_next_ = (occlusion_slot_next_ + 1) % kOcclusionSlotCount;
++  // The slot was last used kOcclusionSlotCount slots ago, by work long completed.
++  static_cast<uint64_t*>(occlusion_buffer_.contents)[slot] = 0;
++  [render_encoder_ setVisibilityResultMode:MTLVisibilityResultModeCounting
++                                    offset:sizeof(uint64_t) * slot];
++  render_encoder_state_.occlusion_slot = slot;
++  active_occlusion_query_.slots.push_back(slot);
++}
++
++void MetalCommandProcessor::StopCountingOcclusionSamples() {
++  if (encoder_type_ == EncoderType::kRender &&
++      render_encoder_state_.occlusion_slot != UINT32_MAX) {
++    [render_encoder_ setVisibilityResultMode:MTLVisibilityResultModeDisabled offset:0];
++  }
++  render_encoder_state_.occlusion_slot = UINT32_MAX;
++}
++
++void MetalCommandProcessor::WriteGuestOcclusionResult(uint32_t address, uint64_t samples) {
++  auto* sample_counts = memory_->TranslatePhysical<xenos::xe_gpu_depth_sample_counts*>(address);
++  if (!sample_counts) {
++    return;
++  }
++  // Render targets at a draw resolution scale have that many more samples than the guest's.
++  uint64_t scale = uint64_t(texture_cache_->draw_resolution_scale_x()) *
++                   texture_cache_->draw_resolution_scale_y();
++  if (scale > 1) {
++    samples = (samples + scale / 2) / scale;
++  }
++  uint32_t clamped = uint32_t(std::min(samples, uint64_t(UINT32_MAX)));
++  PERF_counter_inc(kOcclusionQueries);
++  if (!clamped) {
++    PERF_counter_inc(kOcclusionQueriesZero);
++  }
++  std::memset(sample_counts, 0, sizeof(*sample_counts));
++  sample_counts->Total_A = clamped;
++  sample_counts->ZPass_A = clamped;
 +}
 +
 +void MetalCommandProcessor::WriteGuestFence(uint32_t address, uint32_t value) {
@@ -2250,6 +2425,11 @@ index 0000000..47bda4c
 +  }
 +  descriptor.renderTargetWidth = render_pass.width;
 +  descriptor.renderTargetHeight = render_pass.height;
++  // Each pass counts into a slot of its own, written at the end of the pass (the default,
++  // MTLVisibilityResultTypeReset); a query sums the slots of the passes it spans.
++  if (occlusion_buffer_) {
++    descriptor.visibilityResultBuffer = occlusion_buffer_;
++  }
 +  if (!has_attachments) {
 +    descriptor.defaultRasterSampleCount = 1;
 +  }
@@ -2268,6 +2448,8 @@ index 0000000..47bda4c
 +  if (encoder.label == nil) {
 +    encoder.label = GetEncoderLabel(end_reason);
 +  }
++  // The backend's own draws are not counted in occlusion queries.
++  StopCountingOcclusionSamples();
 +  // The backend's own draws change the state that the guest draws track.
 +  render_encoder_state_.valid = false;
 +  return encoder;
@@ -2557,6 +2739,9 @@ index 0000000..47bda4c
 +    return false;
 +  }
 +  render_encoder_state_.valid = true;
++
++  // The draw's samples count for the active occlusion query, if any.
++  CountOcclusionSamples();
 +
 +  // Draw.
 +  PROFILE_DRAW_CALL();
@@ -12409,6 +12594,33 @@ index 9ce3bb4..edacf18 100644
                                    builder_->makeUintConstant(13), builder_->makeUintConstant(6)));
          {
            uint32_t result_remaining_components = used_result_nonzero_components;
+diff --git a/src/graphics/pipeline/shader/spirv_translator_rb.cpp b/src/graphics/pipeline/shader/spirv_translator_rb.cpp
+index 765c141..93ba501 100644
+--- a/src/graphics/pipeline/shader/spirv_translator_rb.cpp
++++ b/src/graphics/pipeline/shader/spirv_translator_rb.cpp
+@@ -1402,6 +1402,22 @@ void SpirvShaderTranslator::CompleteFragmentShaderInMain() {
+       depth = SpirvShaderTranslator::Depth20e4To32(*builder_, depth_float24, 0, true, false,
+                                                    ext_inst_glsl_std_450_);
+       builder_->createStore(depth, output_fragment_depth_);
++    } else if (current_shader().writes_depth()) {
++      // Without the conversion, the host stores float24 depth in [0, 0.5] (the viewport maps guest
++      // [0, 1] there, see full_float24_in_0_to_1 in draw_util::GetHostViewportInfo), but the
++      // viewport doesn't apply to oDepth, so it is scaled here like in the DXBC translator.
++      spv::Id depth_is_float24 = builder_->createBinOp(
++          spv::OpINotEqual, type_bool_,
++          builder_->createBinOp(spv::OpBitwiseAnd, type_uint_, main_system_constant_flags_,
++                                builder_->makeUintConstant(kSysFlag_DepthFloat24)),
++          const_uint_0_);
++      spv::Id depth = builder_->createLoad(output_fragment_depth_, spv::NoPrecision);
++      depth = builder_->createTriOp(
++          spv::OpSelect, type_float_, depth_is_float24,
++          builder_->createNoContractionBinOp(spv::OpFMul, type_float_, depth,
++                                             builder_->makeFloatConstant(0.5f)),
++          depth);
++      builder_->createStore(depth, output_fragment_depth_);
+     }
+   }
+ 
 diff --git a/src/graphics/pipeline/shader/translator.cpp b/src/graphics/pipeline/shader/translator.cpp
 index e472251..21f81dc 100644
 --- a/src/graphics/pipeline/shader/translator.cpp
