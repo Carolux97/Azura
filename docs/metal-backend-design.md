@@ -238,3 +238,49 @@ and they write into `metal_gpu_capture_path`. The keys are bound by physical pos
 The frame and pixel histories found the cause of the white flashes and the dark sky cards (the
 texture exponent bias, docs/shader-compiler-design.md section 17) where a GPU capture could not:
 the flashes are random, and finding one draw among ~2,500 by hand in Xcode was too slow.
+
+## 11. Shader compilation without hitches
+
+Card 8. Metal made every guest shader and pipeline on the GPU command thread the first time a draw
+needed it: the translation to MSL (XSC, ~0.4 ms), the Metal library (`newLibraryWithSource`) and
+the render pipeline state. `perf_log_csv` counts each step (`shader_translations`,
+`shader_library_compiles`, `pipeline_creations`, each with its time in microseconds).
+
+Measured on the route from the campaign start to past the rooftop with the fountain (6.7 minutes):
+94 frames above 50 ms, 92 of them with compilation in them, which explains 92% of their time.
+When Metal's own system shader cache already had a shader (areas played in earlier runs), the
+library took 0.26 ms and the pipeline 0.25 ms; for a shader never seen, 30 ms and 21 ms, so a few
+new shaders in one frame made hitches of 150 to 470 ms. In known areas the translation, which
+nothing kept, made 50-130 ms hitches when 50-136 shaders came at once.
+
+What the backend does now (`metal_pipeline_cache.mm`):
+
+- **Pipelines by description.** A pipeline is identified by the hashes and modifications of its
+  shaders and its state (render target formats, blend, primitive topology, sample count), so it
+  can be stored and made before any draw asks for it.
+- **Shader storage.** Guest shaders go to `cache/shaders/shareable/<title>.xsh`, the format and
+  file the Vulkan backend already uses, and pipelines to `<title>.mtl.xpso`. At start-up the stored
+  pipelines are translated on the command processor thread (~0.2 s for ~430) and queued for
+  creation; `store_shaders` turns this off.
+- **Creation threads.** Up to 8 threads ("Metal Pipelines", 3/4 of the cores) make the queued
+  pipelines, a draw's before preloaded ones. With `async_shader_compilation` (on by default), a
+  draw whose pipeline is not ready is skipped (`draws_skipped_for_pipelines`) while they make it,
+  except draws without a pixel shader and draws with memory export, which wait for it.
+- **Notice.** The graphics system counts the work queued and done
+  (`IGraphicsSystem::GetShaderCompilation`), and the runtime shows "COMPILANDO SHADERS" with the
+  progress and a turning cog at the bottom left, in the style of the game's checkpoint indicator,
+  when the work lasts more than 0.4 s (`runtime/src/shader_compile_overlay.cpp`, Barlow fonts in
+  `runtime/assets/fonts/`).
+- **ImGui on Metal.** The Metal provider had no immediate drawer and the presenter skipped the UI
+  drawers, so no ImGui overlay was ever drawn on Metal. `metal_immediate_drawer.mm` draws them in
+  the presenter's pass over the guest output; the SDK's own overlays (F3, the console, the
+  achievement notices) work on Metal too now.
+
+Same route after the change (8.4 minutes): 7 frames above 50 ms (none above 200 ms), against 94;
+4,767 draws skipped over 433 frames, while entering new areas, which the player did not notice.
+The 7 left are the start-up and bursts of 51-80 new shaders whose translation still runs on the
+command processor thread.
+
+Found on the way: on macOS, `fopen` with "a+" leaves the read position at the end of the file
+(at the start on Linux), so the storage read nothing and was truncated at every start. Both this
+backend and the Vulkan one now seek to the start before reading.
