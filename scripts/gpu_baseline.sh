@@ -28,7 +28,9 @@ summary() {
   python3 - "$1" <<'EOF'
 import csv, statistics, sys
 
-rows = [r for r in csv.DictReader(open(sys.argv[1])) if r.get("host_gpu_time_us")]
+# The last line can be cut short: the game exits without closing the CSV.
+rows = [r for r in csv.DictReader(open(sys.argv[1]))
+        if r.get("host_gpu_time_us") and None not in r.values()]
 # Gameplay frames: menus and loading screens draw a few hundred draws at most.
 game = [r for r in rows if int(r["host_draws"]) > 300]
 if not game:
