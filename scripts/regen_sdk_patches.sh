@@ -64,6 +64,7 @@ EARLIER_PATCHES=(
   rexglue-0.10.0-present-pipeline.patch
   rexglue-0.10.0-edram-sample-space.patch
   rexglue-0.10.0-input-race.patch
+  rexglue-0.10.0-kernel-random.patch
 )
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/sdk_patches.XXXXXX")"
