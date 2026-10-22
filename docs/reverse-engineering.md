@@ -132,7 +132,7 @@ example `./azura --script_trace=true`.
 
 | Cvar | What it does |
 | --- | --- |
-| `script_trace` | Logs the first call of every script function as `Class.Function` (`(event)` when it came through `ProcessEvent`: from Flash or native code). Slow. |
+| `script_trace` | Logs the first call of every script function as `Class.Function` (`(event)` when it came through `ProcessEvent`: from Flash or native code), and every call to `PawnDied`, `ShouldDeathCauseFailure`, `GetDeathGameOverReason`, `GameOverPlayer`, `ClientGameOver`, `ClientSetCinematicMode` and `MatineeCancelled` as `[Azura death trace]` with its parameters, to follow deaths around cinematics. Slow. |
 | `script_trace_args` | With `script_trace`: comma-separated functions whose every call is logged with its parameter values. Only script functions (it hooks `ProcessInternal`). The values are those at the start of the call, so `ReturnValue` and out parameters are not the results. |
 | `script_dump_classes` | Comma-separated classes logged once loaded: super class, functions with parameters, properties with offsets, structs and enums. An entry ending in `*` lists the class names with that prefix instead. For `UIScene_Options` and `GearProfileSettings` it also dumps their defaults (option categories and rows, setting definitions). It keeps looking for about ten minutes, so classes that load later can be caught by playing. |
 | `script_dump_code` | With `script_dump_classes`: also logs each function's locals with their offsets, a rough listing of its bytecode (variables, calls, constants and jumps in order) and, for short functions, the raw bytes. |
