@@ -530,10 +530,10 @@ index e2983a4..ad10b87 100644
                      "flickering on NVIDIA graphics cards");
 diff --git a/src/graphics/metal/metal_command_processor.h b/src/graphics/metal/metal_command_processor.h
 new file mode 100644
-index 0000000..203e86c
+index 0000000..5c957ab
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.h
-@@ -0,0 +1,288 @@
+@@ -0,0 +1,316 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.h
 + * @brief       Xenos command processing with Metal
@@ -776,6 +776,34 @@ index 0000000..203e86c
 +  void LogXscDebugCounters();
 +  id<MTLBuffer> xsc_debug_counters_ = nil;
 +
++  // metal_gpu_capture_frames: a Metal GPU capture of the next frames when the bound key is pressed
++  // (requested from the UI thread, started and stopped at frame boundaries).
++  void UpdateGpuCapture();
++  std::atomic<bool> gpu_capture_requested_{false};
++  uint32_t gpu_capture_frames_remaining_ = 0;
++
++  // metal_frame_history_frames: the last guest front buffers kept in a ring of textures, saved as
++  // images when the bound key is pressed (after something was seen on screen).
++  void RecordFrameHistory(id<MTLTexture> swap_texture, uint32_t width, uint32_t height);
++  void SaveFrameHistory();
++  std::vector<id<MTLTexture>> frame_history_;
++  std::vector<uint64_t> frame_history_guest_frames_;
++  uint32_t frame_history_next_ = 0;
++  std::atomic<bool> frame_history_save_requested_{false};
++
++  // metal_pixel_history: in the frame after bind_metal_frame_history, after every draw, a grid of
++  // render target 0 is sampled, and the state of the draw is logged, to find which draw changes a
++  // region of the screen.
++  void RecordPixelHistory(const MetalRenderPass& render_pass, const Shader* vertex_shader,
++                          const Shader* pixel_shader, uint32_t normalized_color_mask);
++  void SavePixelHistory();
++  enum class PixelHistoryState { kOff, kArmed, kRecording };
++  PixelHistoryState pixel_history_state_ = PixelHistoryState::kOff;
++  id<MTLComputePipelineState> pixel_history_pipeline_ = nil;
++  id<MTLBuffer> pixel_history_buffer_ = nil;
++  uint32_t pixel_history_draws_ = 0;
++  std::string pixel_history_log_;
++
 +  // Frames.
 +  bool frame_open_ = false;
 +  uint64_t frame_current_ = 1;
@@ -824,10 +852,10 @@ index 0000000..203e86c
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_command_processor.mm b/src/graphics/metal/metal_command_processor.mm
 new file mode 100644
-index 0000000..f0747c2
+index 0000000..f0061ae
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.mm
-@@ -0,0 +1,1919 @@
+@@ -0,0 +1,2270 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.mm
 + * @brief       Xenos command processing with Metal
@@ -840,6 +868,9 @@ index 0000000..f0747c2
 +
 +#include <algorithm>
 +#include <chrono>
++#include <cstdio>
++#include <ctime>
++#include <filesystem>
 +#include <cstring>
 +#include <functional>
 +#include <mutex>
@@ -856,11 +887,32 @@ index 0000000..f0747c2
 +#include <rex/math.h>
 +#include <rex/memory/utils.h>
 +#include <rex/thread.h>
++#include <rex/ui/keybinds.h>
 +
 +#include "metal_graphics_system.h"
 +#include "metal_presenter.h"
 +#include "metal_provider.h"
 +#include "metal_spirv.h"
++
++REXCVAR_DEFINE_INT32(metal_gpu_capture_frames, 0, "GPU/Metal",
++                     "Debugging aid: with more than 0, the key bind_metal_gpu_capture (RBracket, two "
++                     "keys right of P) saves a Metal GPU capture of that many frames as a "
++                     ".gputrace document for Xcode, in metal_gpu_capture_path")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++REXCVAR_DEFINE_STRING(metal_gpu_capture_path, "", "GPU/Metal",
++                      "Folder for the Metal GPU captures of metal_gpu_capture_frames and the frame "
++                      "histories of metal_frame_history_frames")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++REXCVAR_DEFINE_BOOL(metal_pixel_history, false, "GPU/Metal",
++                    "Debugging aid: with metal_frame_history_frames, the frame after "
++                    "bind_metal_frame_history samples a grid of render target 0 after every draw "
++                    "and logs the state of the draws, saved next to the frame history")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++REXCVAR_DEFINE_INT32(metal_frame_history_frames, 0, "GPU/Metal",
++                     "Debugging aid: with more than 0, that many of the last guest front buffers are "
++                     "kept, and the key bind_metal_frame_history (LBracket, the key right of P) "
++                     "saves them as images in metal_gpu_capture_path")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 +
 +REXCVAR_DEFINE_BOOL(metal_gpu_accurate_fences, true, "GPU/Metal",
 +                    "Write the fences the game waits on when the GPU has finished the work before "
@@ -885,6 +937,27 @@ index 0000000..f0747c2
 +constexpr uint32_t kSwapTextureSource = 1;
 +constexpr uint32_t kSwapTextureDestination = 2;
 +constexpr uint32_t kSwapBufferConstants = 0;
++
++// Pixel history (metal_pixel_history): a grid of points of a render target, read after a draw.
++constexpr uint32_t kPixelHistoryGridWidth = 64;
++constexpr uint32_t kPixelHistoryGridHeight = 36;
++constexpr uint32_t kPixelHistoryMaxDraws = 8192;
++NSString* const kPixelHistoryShaderSource = @R"MSL(
++#include <metal_stdlib>
++using namespace metal;
++// params: render target width and height, grid width and height.
++kernel void pixel_history_sample(uint2 point [[thread_position_in_grid]],
++                                 constant uint4& params [[buffer(0)]],
++                                 device half4* samples [[buffer(1)]],
++                                 texture2d<float, access::read> source [[texture(0)]]) {
++  if (point.x >= params.z || point.y >= params.w) {
++    return;
++  }
++  uint2 pixel = uint2((point.x * 2 + 1) * params.x / (params.z * 2),
++                      (point.y * 2 + 1) * params.y / (params.w * 2));
++  samples[point.y * params.z + point.x] = half4(source.read(pixel));
++}
++)MSL";
 +
 +// FXAA 3.11 console-style filter over the gamma-corrected output, with the luma of each pixel in
 +// alpha, with the constants of the Vulkan backend's FXAA so both look the same. Colors and lumas
@@ -1106,6 +1179,25 @@ index 0000000..f0747c2
 +    REXGPU_ERROR("Metal: failed to initialize the pipeline cache");
 +    return false;
 +  }
++  if (REXCVAR_GET(metal_gpu_capture_frames) > 0) {
++    if (![[MTLCaptureManager sharedCaptureManager]
++            supportsDestination:MTLCaptureDestinationGPUTraceDocument]) {
++      REXGPU_ERROR("Metal: GPU capture to a document is not available (MTL_CAPTURE_ENABLED)");
++    } else {
++      rex::ui::RegisterBind("bind_metal_gpu_capture", "RBracket",
++                            "Save a Metal GPU capture of the next metal_gpu_capture_frames frames",
++                            [this] { gpu_capture_requested_.store(true); });
++      REXGPU_INFO("Metal: GPU capture of {} frames on bind_metal_gpu_capture, into {}",
++                  REXCVAR_GET(metal_gpu_capture_frames), REXCVAR_GET(metal_gpu_capture_path));
++    }
++  }
++  if (REXCVAR_GET(metal_frame_history_frames) > 0) {
++    rex::ui::RegisterBind("bind_metal_frame_history", "LBracket",
++                          "Save the last metal_frame_history_frames guest frames as images",
++                          [this] { frame_history_save_requested_.store(true); });
++    REXGPU_INFO("Metal: the last {} frames are kept, saved on bind_metal_frame_history into {}",
++                REXCVAR_GET(metal_frame_history_frames), REXCVAR_GET(metal_gpu_capture_path));
++  }
 +  if (pipeline_cache_->xsc_translator() && REXCVAR_GET(xsc_debug_color_range)) {
 +    size_t size = sizeof(uint32_t) * xsc::XscShaderTranslator::kDebugCountersPerShader *
 +                  xsc::XscShaderTranslator::kDebugCounterMaxShaders;
@@ -1179,6 +1271,22 @@ index 0000000..f0747c2
 +    REXGPU_ERROR("Metal: failed to create the FXAA pipelines: {}",
 +                 error ? error.localizedDescription.UTF8String : "unknown error");
 +  }
++  if (REXCVAR_GET(metal_pixel_history)) {
++    id<MTLLibrary> pixel_history_library =
++        [device_ newLibraryWithSource:kPixelHistoryShaderSource options:nil error:&error];
++    id<MTLFunction> function =
++        [pixel_history_library newFunctionWithName:@"pixel_history_sample"];
++    pixel_history_pipeline_ =
++        function ? [device_ newComputePipelineStateWithFunction:function error:&error] : nil;
++    pixel_history_buffer_ =
++        [device_ newBufferWithLength:size_t(kPixelHistoryMaxDraws) * kPixelHistoryGridWidth *
++                                     kPixelHistoryGridHeight * 8
++                             options:MTLResourceStorageModeShared];
++    if (!pixel_history_pipeline_ || !pixel_history_buffer_) {
++      REXGPU_ERROR("Metal: failed to create the pixel history pipeline: {}",
++                   error ? error.localizedDescription.UTF8String : "unknown error");
++    }
++  }
 +  MTLSamplerDescriptor* sampler_descriptor = [MTLSamplerDescriptor new];
 +  sampler_descriptor.minFilter = MTLSamplerMinMagFilterLinear;
 +  sampler_descriptor.magFilter = MTLSamplerMinMagFilterLinear;
@@ -1189,6 +1297,17 @@ index 0000000..f0747c2
 +}
 +
 +void MetalCommandProcessor::ShutdownContext() {
++  if (REXCVAR_GET(metal_frame_history_frames) > 0) {
++    rex::ui::UnregisterBind("bind_metal_frame_history");
++  }
++  frame_history_.clear();
++  if (REXCVAR_GET(metal_gpu_capture_frames) > 0) {
++    rex::ui::UnregisterBind("bind_metal_gpu_capture");
++    if (gpu_capture_frames_remaining_) {
++      [[MTLCaptureManager sharedCaptureManager] stopCapture];
++      gpu_capture_frames_remaining_ = 0;
++    }
++  }
 +  AwaitSubmission(UINT64_MAX);
 +  // Completion handlers may still be finishing after the command buffers report completion.
 +  while (completion_handlers_in_flight_.load(std::memory_order_acquire)) {
@@ -1454,6 +1573,21 @@ index 0000000..f0747c2
 +    if (xsc_debug_counters_ && frame_current_ % kXscDebugCounterLogFrames == 0) {
 +      LogXscDebugCounters();
 +    }
++    UpdateGpuCapture();
++    if (pixel_history_state_ == PixelHistoryState::kRecording) {
++      pixel_history_state_ = PixelHistoryState::kOff;
++      SavePixelHistory();
++    } else if (pixel_history_state_ == PixelHistoryState::kArmed) {
++      pixel_history_state_ = PixelHistoryState::kRecording;
++      pixel_history_draws_ = 0;
++      pixel_history_log_.clear();
++    }
++    if (frame_history_save_requested_.exchange(false)) {
++      SaveFrameHistory();
++      if (pixel_history_pipeline_ && pixel_history_state_ == PixelHistoryState::kOff) {
++        pixel_history_state_ = PixelHistoryState::kArmed;
++      }
++    }
 +
 +    if (cache_clear_requested_) {
 +      cache_clear_requested_ = false;
@@ -1464,6 +1598,244 @@ index 0000000..f0747c2
 +  }
 +
 +  return true;
++}
++
++void MetalCommandProcessor::RecordFrameHistory(id<MTLTexture> swap_texture, uint32_t width,
++                                               uint32_t height) {
++  uint32_t count = uint32_t(REXCVAR_GET(metal_frame_history_frames));
++  if (frame_history_.size() != count || !frame_history_[0] ||
++      frame_history_[0].pixelFormat != swap_texture.pixelFormat ||
++      frame_history_[0].width != width || frame_history_[0].height != height) {
++    // Shared storage, read by the CPU when saving.
++    MTLTextureDescriptor* descriptor =
++        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:swap_texture.pixelFormat
++                                                           width:width
++                                                          height:height
++                                                       mipmapped:NO];
++    descriptor.storageMode = MTLStorageModeShared;
++    descriptor.usage = MTLTextureUsageShaderRead;
++    frame_history_.assign(count, nil);
++    frame_history_guest_frames_.assign(count, 0);
++    for (size_t i = 0; i < frame_history_.size(); ++i) {
++      frame_history_[i] = [device_ newTextureWithDescriptor:descriptor];
++    }
++    frame_history_next_ = 0;
++  }
++  id<MTLBlitCommandEncoder> blit = GetBlitEncoder(rex::perf::CounterId::kRenderPassEndsOther);
++  [blit copyFromTexture:swap_texture
++            sourceSlice:0
++            sourceLevel:0
++           sourceOrigin:MTLOriginMake(0, 0, 0)
++             sourceSize:MTLSizeMake(width, height, 1)
++              toTexture:frame_history_[frame_history_next_]
++       destinationSlice:0
++       destinationLevel:0
++      destinationOrigin:MTLOriginMake(0, 0, 0)];
++  frame_history_guest_frames_[frame_history_next_] = frame_current_;
++  frame_history_next_ = (frame_history_next_ + 1) % count;
++}
++
++void MetalCommandProcessor::SaveFrameHistory() {
++  if (frame_history_.empty()) {
++    return;
++  }
++  // Everything recorded must have reached the textures.
++  AwaitSubmission(UINT64_MAX);
++  auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
++  char name[64];
++  std::strftime(name, sizeof(name), "frames_%Y%m%d-%H%M%S", std::localtime(&now));
++  std::filesystem::path folder = std::filesystem::path(REXCVAR_GET(metal_gpu_capture_path)) / name;
++  std::error_code error_code;
++  std::filesystem::create_directories(folder, error_code);
++  uint32_t count = uint32_t(frame_history_.size());
++  uint32_t saved = 0;
++  std::vector<uint8_t> texels, rgb;
++  for (uint32_t i = 0; i < count; ++i) {
++    // Oldest first.
++    uint32_t slot = (frame_history_next_ + i) % count;
++    id<MTLTexture> texture = frame_history_[slot];
++    if (!frame_history_guest_frames_[slot]) {
++      continue;
++    }
++    uint32_t width = uint32_t(texture.width), height = uint32_t(texture.height);
++    texels.resize(size_t(width) * height * 4);
++    [texture getBytes:texels.data()
++          bytesPerRow:width * 4
++           fromRegion:MTLRegionMake2D(0, 0, width, height)
++          mipmapLevel:0];
++    rgb.resize(size_t(width) * height * 3);
++    MTLPixelFormat format = texture.pixelFormat;
++    for (size_t p = 0; p < size_t(width) * height; ++p) {
++      const uint8_t* t = &texels[p * 4];
++      uint8_t* o = &rgb[p * 3];
++      uint32_t packed;
++      std::memcpy(&packed, t, sizeof(packed));
++      switch (format) {
++        case MTLPixelFormatBGRA8Unorm:
++        case MTLPixelFormatBGRA8Unorm_sRGB:
++          o[0] = t[2], o[1] = t[1], o[2] = t[0];
++          break;
++        case MTLPixelFormatRGB10A2Unorm:
++          o[0] = uint8_t((packed & 0x3FF) >> 2);
++          o[1] = uint8_t(((packed >> 10) & 0x3FF) >> 2);
++          o[2] = uint8_t(((packed >> 20) & 0x3FF) >> 2);
++          break;
++        case MTLPixelFormatBGR10A2Unorm:
++          o[2] = uint8_t((packed & 0x3FF) >> 2);
++          o[1] = uint8_t(((packed >> 10) & 0x3FF) >> 2);
++          o[0] = uint8_t(((packed >> 20) & 0x3FF) >> 2);
++          break;
++        default:
++          // RGBA8 and anything else with 8-bit RGB first.
++          o[0] = t[0], o[1] = t[1], o[2] = t[2];
++          break;
++      }
++    }
++    // Binary PPM: no image library needed; sips or Preview convert it.
++    char file_name[64];
++    std::snprintf(file_name, sizeof(file_name), "frame_%03u_%llu.ppm", i,
++                  (unsigned long long)frame_history_guest_frames_[slot]);
++    FILE* file = std::fopen((folder / file_name).c_str(), "wb");
++    if (!file) {
++      continue;
++    }
++    std::fprintf(file, "P6\n%u %u\n255\n", width, height);
++    std::fwrite(rgb.data(), 1, rgb.size(), file);
++    std::fclose(file);
++    ++saved;
++  }
++  REXGPU_INFO("Metal: saved {} frames (pixel format {}) to {}", saved,
++              uint32_t(frame_history_[0].pixelFormat), folder.string());
++}
++
++void MetalCommandProcessor::RecordPixelHistory(const MetalRenderPass& render_pass,
++                                               const Shader* vertex_shader,
++                                               const Shader* pixel_shader,
++                                               uint32_t normalized_color_mask) {
++  if (pixel_history_draws_ >= kPixelHistoryMaxDraws) {
++    return;
++  }
++  const RegisterFile& regs = *register_file_;
++  uint32_t draw = pixel_history_draws_++;
++  id<MTLTexture> target = render_pass.color[0];
++  // Only single-sampled 2D float and normalized targets can be read as float.
++  bool sampled = false;
++  if (target && target.textureType == MTLTextureType2D && target.sampleCount == 1) {
++    switch (target.pixelFormat) {
++      case MTLPixelFormatRGBA8Unorm:
++      case MTLPixelFormatBGRA8Unorm:
++      case MTLPixelFormatRGB10A2Unorm:
++      case MTLPixelFormatRGBA16Float:
++      case MTLPixelFormatRGBA16Unorm:
++      case MTLPixelFormatRGBA16Snorm:
++      case MTLPixelFormatRG16Float:
++      case MTLPixelFormatR32Float:
++      case MTLPixelFormatRG32Float:
++      case MTLPixelFormatRGBA32Float:
++      case MTLPixelFormatRG11B10Float:
++        sampled = true;
++        break;
++      default:
++        break;
++    }
++  }
++  if (sampled) {
++    // Ends the render pass: the next draw starts a new one, loading what this one stored.
++    id<MTLComputeCommandEncoder> compute =
++        GetComputeEncoder(rex::perf::CounterId::kRenderPassEndsOther);
++    // Host render targets are as tall as the EDRAM allows; the grid covers the 16:9 top of it,
++    // where this game's screen-sized targets are.
++    uint32_t params[4] = {render_pass.width,
++                          std::min(render_pass.height, render_pass.width * 9 / 16),
++                          kPixelHistoryGridWidth, kPixelHistoryGridHeight};
++    [compute setComputePipelineState:pixel_history_pipeline_];
++    [compute setBytes:params length:sizeof(params) atIndex:0];
++    [compute setBuffer:pixel_history_buffer_
++                offset:size_t(draw) * kPixelHistoryGridWidth * kPixelHistoryGridHeight * 8
++               atIndex:1];
++    [compute setTexture:target atIndex:0];
++    [compute dispatchThreads:MTLSizeMake(kPixelHistoryGridWidth, kPixelHistoryGridHeight, 1)
++        threadsPerThreadgroup:MTLSizeMake(8, 4, 1)];
++  }
++  auto color_info = regs.Get<reg::RB_COLOR_INFO>(reg::RB_COLOR_INFO::rt_register_indices[0]);
++  auto blend_control =
++      regs.Get<reg::RB_BLENDCONTROL>(reg::RB_BLENDCONTROL::rt_register_indices[0]);
++  auto depth_control = regs.Get<reg::RB_DEPTHCONTROL>();
++  pixel_history_log_ += fmt::format(
++      "draw {} sampled {} rt0 {}x{} fmt {} base {} colormask {:04X} blend {:08X} depth {:08X} "
++      "vs {:016X} ps {:016X}",
++      draw, sampled ? 1 : 0, render_pass.width, render_pass.height,
++      uint32_t(color_info.color_format), uint32_t(color_info.color_base),
++      normalized_color_mask & 0xFFFF, blend_control.value, depth_control.value,
++      vertex_shader->ucode_data_hash(), pixel_shader ? pixel_shader->ucode_data_hash() : 0);
++  if (pixel_shader) {
++    for (const Shader::TextureBinding& binding : pixel_shader->texture_bindings()) {
++      xenos::xe_gpu_texture_fetch_t fetch = regs.GetTextureFetch(binding.fetch_constant);
++      // exp: the result exponent bias; lod: the LOD bias in 1/32.
++      pixel_history_log_ += fmt::format(
++          " tex{}:fmt{},addr{:08X},{}x{},dim{},tiled{},exp{},lod{}", binding.fetch_constant,
++          uint32_t(fetch.format), fetch.base_address << 12, fetch.size_2d.width + 1,
++          fetch.size_2d.height + 1, uint32_t(fetch.dimension), uint32_t(fetch.tiled),
++          int32_t(fetch.exp_adjust), int32_t(fetch.lod_bias));
++    }
++  }
++  pixel_history_log_ += '\n';
++}
++
++void MetalCommandProcessor::SavePixelHistory() {
++  AwaitSubmission(UINT64_MAX);
++  auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
++  char name[64];
++  std::strftime(name, sizeof(name), "pixels_%Y%m%d-%H%M%S", std::localtime(&now));
++  std::filesystem::path base = std::filesystem::path(REXCVAR_GET(metal_gpu_capture_path)) / name;
++  // Draw log, and the grids as raw half4 (64x36 per draw, in draw order).
++  if (FILE* file = std::fopen((base.string() + ".txt").c_str(), "wb")) {
++    std::fwrite(pixel_history_log_.data(), 1, pixel_history_log_.size(), file);
++    std::fclose(file);
++  }
++  if (FILE* file = std::fopen((base.string() + ".half4").c_str(), "wb")) {
++    std::fwrite(pixel_history_buffer_.contents, 1,
++                size_t(pixel_history_draws_) * kPixelHistoryGridWidth * kPixelHistoryGridHeight * 8,
++                file);
++    std::fclose(file);
++  }
++  REXGPU_INFO("Metal: saved the pixel history of {} draws to {}", pixel_history_draws_,
++              base.string());
++}
++
++void MetalCommandProcessor::UpdateGpuCapture() {
++  MTLCaptureManager* capture_manager = [MTLCaptureManager sharedCaptureManager];
++  if (gpu_capture_frames_remaining_) {
++    if (--gpu_capture_frames_remaining_ == 0) {
++      [capture_manager stopCapture];
++      REXGPU_INFO("Metal: GPU capture finished");
++    }
++    return;
++  }
++  if (!gpu_capture_requested_.exchange(false)) {
++    return;
++  }
++  // Between frames: every command buffer of the next frames is in the capture.
++  std::filesystem::path folder(REXCVAR_GET(metal_gpu_capture_path));
++  std::error_code error_code;
++  std::filesystem::create_directories(folder, error_code);
++  auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
++  char name[64];
++  std::strftime(name, sizeof(name), "azura_%Y%m%d-%H%M%S.gputrace", std::localtime(&now));
++  std::filesystem::path path = folder / name;
++  MTLCaptureDescriptor* descriptor = [MTLCaptureDescriptor new];
++  descriptor.captureObject = queue_;
++  descriptor.destination = MTLCaptureDestinationGPUTraceDocument;
++  descriptor.outputURL = [NSURL fileURLWithPath:@(path.c_str())];
++  NSError* error = nil;
++  if (![capture_manager startCaptureWithDescriptor:descriptor error:&error]) {
++    REXGPU_ERROR("Metal: failed to start the GPU capture: {}",
++                 error ? error.localizedDescription.UTF8String : "unknown error");
++    return;
++  }
++  gpu_capture_frames_remaining_ = uint32_t(REXCVAR_GET(metal_gpu_capture_frames));
++  REXGPU_INFO("Metal: GPU capture of {} frames started: {}", gpu_capture_frames_remaining_,
++              path.string());
 +}
 +
 +void MetalCommandProcessor::LogXscDebugCounters() {
@@ -1992,6 +2364,10 @@ index 0000000..f0747c2
 +                                       : MTLIndexTypeUInt32
 +                       indexBuffer:index_buffer.first
 +                 indexBufferOffset:index_buffer.second];
++  }
++
++  if (pixel_history_state_ == PixelHistoryState::kRecording) {
++    RecordPixelHistory(render_pass, vertex_shader, pixel_shader, normalized_color_mask);
 +  }
 +
 +  // Invalidate textures in memexported memory and watch for changes.
@@ -2626,6 +3002,9 @@ index 0000000..f0747c2
 +  uint32_t guest_output_height = frontbuffer_height
 +                                     ? std::min(frontbuffer_height, frontbuffer_height_scaled)
 +                                     : frontbuffer_height_scaled;
++  if (REXCVAR_GET(metal_frame_history_frames) > 0) {
++    RecordFrameHistory(swap_texture, guest_output_width, guest_output_height);
++  }
 +
 +  system::X_VIDEO_MODE video_mode;
 +  kernel::xboxkrnl::VdQueryVideoMode(&video_mode);
@@ -4235,10 +4614,10 @@ index 0000000..7e1267d
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_provider.mm b/src/graphics/metal/metal_provider.mm
 new file mode 100644
-index 0000000..314dec0
+index 0000000..5b3c1ff
 --- /dev/null
 +++ b/src/graphics/metal/metal_provider.mm
-@@ -0,0 +1,42 @@
+@@ -0,0 +1,51 @@
 +/**
 + * @file        graphics/metal/metal_provider.mm
 + * @brief       Metal graphics provider
@@ -4249,13 +4628,22 @@ index 0000000..314dec0
 +
 +#include "metal_provider.h"
 +
++#include <cstdlib>
++
++#include <rex/cvar.h>
 +#include <rex/logging.h>
 +
 +#include "metal_presenter.h"
 +
++REXCVAR_DECLARE(int32_t, metal_gpu_capture_frames);
++
 +namespace rex::graphics::metal {
 +
 +std::unique_ptr<MetalProvider> MetalProvider::Create() {
++  // GPU captures to a document outside Xcode need this before the device is created.
++  if (REXCVAR_GET(metal_gpu_capture_frames) > 0) {
++    setenv("MTL_CAPTURE_ENABLED", "1", 1);
++  }
 +  auto provider = std::unique_ptr<MetalProvider>(new MetalProvider());
 +  provider->device_ = MTLCreateSystemDefaultDevice();
 +  if (!provider->device_) {

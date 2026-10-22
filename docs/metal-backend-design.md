@@ -212,3 +212,25 @@ Same room, 15 s traces:
 The transfers left are almost all the 1280x720 region at tile 720 used in turn as 8_8_8_8 color,
 D24S8 depth and 2_10_10_10 (fixed and float) color, which the game does reinterpret. The CPU
 cost was ~0.3 ms more per frame on the GPU command thread (median). No new visual artefacts.
+
+## 10. Debugging tools for visual artifacts
+
+Three settings in `azura.toml`, all off by default and with no cost when off. They need a restart,
+and they write into `metal_gpu_capture_path`. The keys are bound by physical position.
+
+- **GPU capture** (`metal_gpu_capture_frames = N`): the key `bind_metal_gpu_capture` (RBracket, two
+  keys right of P) saves a Metal capture of the next N frames as a `.gputrace` document for Xcode.
+  Each capture copies the shared memory many times and takes 12 to 26 GB; replaying one in Xcode
+  takes minutes.
+- **Frame history** (`metal_frame_history_frames = N`): the last N guest front buffers are kept in
+  a ring of textures, and the key `bind_metal_frame_history` (LBracket, the key right of P) saves
+  them as PPM images in a `frames_<time>` folder. The key can be pressed after an artifact was
+  seen, even one that lasted a few frames. 90 frames (~3 s) take ~330 MB of memory.
+- **Pixel history** (`metal_pixel_history = true`, with the frame history): the frame after
+  `bind_metal_frame_history` samples a 64x36 grid of render target 0 after every draw (the 16:9
+  top of the host render target, where the screen-sized targets are), in a compute dispatch that
+  ends the render pass, and logs per draw the render target, blend and depth state, the shader
+  hashes and the pixel shader's texture fetch constants (format, address, size, exponent bias, LOD
+  bias). It saves `pixels_<time>.txt` and `pixels_<time>.half4`;
+  `scripts/pixel_history.py` lists the draws that change each part of the screen, the history of
+  one grid point, and the grid after any draw as an image. That frame is slow.
