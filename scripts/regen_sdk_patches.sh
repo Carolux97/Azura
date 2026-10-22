@@ -30,6 +30,11 @@ INTERP_PATHS=(
   src/system/function_dispatcher.cpp
   src/system/CMakeLists.txt
   src/codegen/builders.h
+  src/codegen/builders/builder_context.h
+  src/codegen/builders/context.cpp
+  src/codegen/builders/control_flow.cpp
+  src/codegen/codegen_writer.cpp
+  src/codegen/phase_validate.cpp
   src/codegen/instruction_dispatch.cpp
   src/codegen/ppc/disasm.cpp
   src/codegen/ppc/disasm.h
