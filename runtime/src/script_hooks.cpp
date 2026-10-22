@@ -214,6 +214,14 @@ enum WatchedName {
   kBuildCampaignURL,         // GearMenuGame: builds travel URL for campaign
   kServerTravel,             // WorldInfo: travels to a new level
   kProcessServerTravel,      // GameInfo: processes server travel URL
+  // Death trace (with script_trace): calls that show why the player dies around cinematics.
+  kPawnDied,                 // Controller: its pawn died or was destroyed
+  kShouldDeathCauseFailure,  // GearGameSP_Base: whether a death ends the game
+  kGetDeathGameOverReason,   // GearGame: the game over text for a death
+  kGameOverPlayer,           // GearGame: a player's game over
+  kClientGameOver,           // GearPC: shows the game over screen
+  kClientSetCinematicMode,   // PlayerController: a cinematic starts or ends
+  kMatineeCancelled,         // a Matinee sequence is skipped
   kWatchedNameCount,
 };
 constexpr const char* kWatchedNames[kWatchedNameCount] = {
@@ -221,9 +229,19 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "OnConfirm_ResetDefaults", "FilterButtonInput",    "Callback_VideoOptions",
     "CloseVideoOptionsScene", "Callback_MenuOptionSelected", "Callback_ReturnToMain",
     "ResetAccept",           "GenericAccept",
-    "BuildCampaignURL",      "ServerTravel",           "ProcessServerTravel"};
+    "BuildCampaignURL",      "ServerTravel",           "ProcessServerTravel",
+    "PawnDied",              "ShouldDeathCauseFailure", "GetDeathGameOverReason",
+    "GameOverPlayer",        "ClientGameOver",         "ClientSetCinematicMode",
+    "MatineeCancelled"};
 
-std::atomic<int32_t> g_names[kWatchedNameCount] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
+// FName index of each watched name, -1 until found (0 is a valid index: None).
+std::atomic<int32_t> g_names[kWatchedNameCount];
+[[maybe_unused]] const bool g_names_initialized = [] {
+  for (auto& name : g_names) {
+    name.store(-1, std::memory_order_relaxed);
+  }
+  return true;
+}();
 std::atomic<int> g_names_missing{kWatchedNameCount};
 std::atomic<uint32_t> g_names_scanned{0};
 std::atomic<uint32_t> g_calls{0};
@@ -829,6 +847,13 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     ScanNewNames(base);
   }
   const uint32_t function = LoadU32(base, ctx.r4.u32 + kFrameNode);
+  if (REXCVAR_GET(script_trace) &&
+      (Is(base, function, kPawnDied) || Is(base, function, kShouldDeathCauseFailure) ||
+       Is(base, function, kGetDeathGameOverReason) || Is(base, function, kGameOverPlayer) ||
+       Is(base, function, kClientGameOver) || Is(base, function, kClientSetCinematicMode) ||
+       Is(base, function, kMatineeCancelled))) {
+    REXLOG_INFO("[Azura death trace] {}", DescribeCall(base, ctx.r4.u32));
+  }
   if (Is(base, function, kBuildCampaignURL)) {
     const uint32_t result = ctx.r5.u32;
     __imp__sub_822DF9E0(ctx, base);
