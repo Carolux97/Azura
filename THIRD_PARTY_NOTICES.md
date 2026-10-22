@@ -9,6 +9,7 @@ and includes work by others, listed here with their licenses.
 |------|-----------|---------|
 | `patches/rexglue-0.10.0*.patch` | Changes to the [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk), Copyright (c) 2026 Tom Clay, with portions derived from [Xenia](https://xenia.jp), Copyright (c) 2022 Ben Vanik and Xenia project contributors | BSD 3-Clause (the SDK's license) |
 | `patches/moltenvk-*.patch` | Changes to [MoltenVK](https://github.com/KhronosGroup/MoltenVK), Copyright The Brenwill Workshop Ltd. and contributors | Apache License 2.0 |
+| `runtime/assets/fonts/Barlow-*.ttf` | [Barlow](https://github.com/jpt/barlow), Copyright 2017 The Barlow Project Authors | SIL Open Font License 1.1, see [runtime/assets/fonts/Barlow-OFL.txt](runtime/assets/fonts/Barlow-OFL.txt) |
 | `tools/extract-xiso` | [extract-xiso](https://github.com/XboxDev/extract-xiso), Copyright (c) 2003 in <in@fishtank.com> | BSD-style, see [tools/LICENSE.TXT](tools/LICENSE.TXT) |
 
 ## Used by the runtime
