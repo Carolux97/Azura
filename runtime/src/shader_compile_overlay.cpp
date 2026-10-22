@@ -143,29 +143,30 @@ void ShaderCompileOverlay::OnDraw(ImGuiIO& io) {
     percent = int(100.0f * float(work.done) / float(std::max(work.queued, uint32_t(1))));
   }
 
-  // Laid out like the checkpoint indicator at 720p, within the 16:9 area the game image takes in
-  // the window: cog of 58 pixels centred at (116, 613), text from x = 150.
+  // Small, in the top left corner of the 16:9 area the game image takes in the window, away from
+  // the game's own indicators at the bottom; sizes in pixels at 720p.
   float game_height = std::min(io.DisplaySize.y, io.DisplaySize.x * 9.0f / 16.0f);
   float game_width = game_height * 16.0f / 9.0f;
   float game_left = (io.DisplaySize.x - game_width) * 0.5f;
   float game_top = (io.DisplaySize.y - game_height) * 0.5f;
   float unit = game_height / 720.0f;
-  ImVec2 cog_center(game_left + 116.0f * unit, game_top + 613.0f * unit);
+  alpha *= 0.85f;
+  ImVec2 cog_center(game_left + 34.0f * unit, game_top + 34.0f * unit);
   float seconds = std::chrono::duration<float>(now - created_).count();
   ImDrawList* draw_list = ImGui::GetForegroundDrawList();
-  DrawCog(draw_list, cog_center, 29.0f * unit, seconds * 1.6f, alpha);
+  DrawCog(draw_list, cog_center, 12.0f * unit, seconds * 1.6f, alpha);
 
   Texts texts = LocalizedTexts(language_);
   char progress[96];
   std::snprintf(progress, sizeof(progress), texts.progress, percent);
   ImFont* title_font = title_font_ ? title_font_ : ImGui::GetFont();
   ImFont* body_font = body_font_ ? body_font_ : ImGui::GetFont();
-  float title_size = 22.0f * unit;
-  float body_size = 18.0f * unit;
-  float text_left = game_left + 150.0f * unit;
-  DrawShadowedText(draw_list, title_font, title_size, ImVec2(text_left, game_top + 584.0f * unit),
+  float title_size = 13.0f * unit;
+  float body_size = 11.0f * unit;
+  float text_left = game_left + 52.0f * unit;
+  DrawShadowedText(draw_list, title_font, title_size, ImVec2(text_left, game_top + 21.0f * unit),
                    texts.title, alpha);
-  DrawShadowedText(draw_list, body_font, body_size, ImVec2(text_left, game_top + 608.0f * unit),
+  DrawShadowedText(draw_list, body_font, body_size, ImVec2(text_left, game_top + 35.0f * unit),
                    progress, alpha);
 }
 

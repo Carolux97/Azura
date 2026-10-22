@@ -1,6 +1,6 @@
-// A notice in the game window while the GPU backend compiles shaders, in the style of the game's
-// own checkpoint indicator: a turning cog at the bottom left, a bold upper-case title and a line
-// with the progress below, white with a soft shadow and no panel.
+// A small notice in the top left corner of the game window while the GPU backend compiles shaders,
+// in the style of the game's own checkpoint indicator: a turning cog, a bold upper-case title and a
+// line with the progress below, white with a soft shadow and no panel.
 //
 // The Metal backend makes guest shaders and pipelines in the background: at start-up it
 // precompiles the ones stored by earlier runs, and while playing it makes the ones a draw needs
