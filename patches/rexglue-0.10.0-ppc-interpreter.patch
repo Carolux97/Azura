@@ -78,10 +78,10 @@ index 0000000..d9d2d1a
 +}  // namespace rex::ppc
 diff --git a/include/rex/system/ppc_interpreter.h b/include/rex/system/ppc_interpreter.h
 new file mode 100644
-index 0000000..bb74823
+index 0000000..9d7c34a
 --- /dev/null
 +++ b/include/rex/system/ppc_interpreter.h
-@@ -0,0 +1,47 @@
+@@ -0,0 +1,66 @@
 +/**
 + * @file        rex/system/ppc_interpreter.h
 + * @brief       PowerPC interpreter for guest functions the code generator did not find
@@ -101,6 +101,7 @@ index 0000000..bb74823
 +#include <string>
 +
 +#include <rex/ppc/context.h>
++#include <rex/ppc/func.h>
 +
 +namespace rex::runtime {
 +
@@ -122,8 +123,26 @@ index 0000000..bb74823
 +};
 +
 +// Runs the guest function at `address` until it returns to its caller, as a recompiled function
-+// would: registers in `ctx`, guest memory at `base`.
++// would: registers in `ctx`, guest memory at `base`. Calls and branches to recompiled functions
++// run them; calls to any other code are interpreted too.
 +InterpreterResult InterpretFunction(PPCContext& ctx, uint8_t* base, uint32_t address);
++
++// Finds the recompiled function at a guest address, or nullptr.
++using GuestFunctionResolver = PPCFunc* (*)(uint32_t address);
++
++// The function dispatcher's lookup (every loaded module), which the interpreter uses by default.
++PPCFunc* FindGuestFunction(uint32_t address);
++
++// Replaces how the interpreter finds recompiled functions (the differential bench has no
++// dispatcher); nullptr restores FindGuestFunction. Call it before interpreting anything, from the
++// thread that interprets.
++void SetGuestFunctionResolver(GuestFunctionResolver resolver);
++
++// The function dispatcher's fallback for a guest function that has no recompiled code: interprets
++// the function at ctx.last_indirect_target, which the caller sets before resolving the call, and
++// stops the game with a description if the interpreter cannot run it. Logs each function once, so
++// it can be added to the manifest as a function hint.
++void InterpretMissingFunction(PPCContext& ctx, uint8_t* base);
 +
 +// The instruction word as the decoder prints it ("addi r3,r1,16"), for reports.
 +std::string DescribeInstruction(uint32_t address, uint32_t instruction);
@@ -224,10 +243,10 @@ index 5de4b70..24468d5 100644
 +add_subdirectory(${REXGLUE_ROOT}/tests/interp_bench ${CMAKE_CURRENT_BINARY_DIR}/interp_bench)
 diff --git a/src/rexglue/commands/interp_bench.cpp b/src/rexglue/commands/interp_bench.cpp
 new file mode 100644
-index 0000000..d1753a1
+index 0000000..23d5203
 --- /dev/null
 +++ b/src/rexglue/commands/interp_bench.cpp
-@@ -0,0 +1,404 @@
+@@ -0,0 +1,585 @@
 +/**
 + * @file        rexglue/commands/interp_bench.cpp
 + * @brief       Case generator of the PowerPC interpreter's differential bench
@@ -235,9 +254,10 @@ index 0000000..d1753a1
 + * Every instruction form the code generator builds is run through the recompiled code and through
 + * the interpreter from the same state, and the results must match bit for bit (see
 + * tests/interp_bench). This command writes the recompiled side: for each form of the decoder's
-+ * opcode table, a few instruction words with random operand fields, each followed by `blr` and
-+ * recompiled by the real code generator as a function of its own, plus the table of cases the bench
-+ * runs. No assembler is needed: a word belongs to a form when the decoder decodes it to that form.
++ * opcode table, a few instruction words with random operand fields, each followed by `blr` (or, for
++ * branches, laid out with internal labels and a callee) and recompiled by the real code generator
++ * as a function of its own, plus the table of cases and the image the bench runs. No assembler is
++ * needed: a word belongs to a form when the decoder decodes it to that form.
 + *
 + * @license     BSD 3-Clause License
 + */
@@ -251,6 +271,7 @@ index 0000000..d1753a1
 +#include <filesystem>
 +#include <fstream>
 +#include <map>
++#include <optional>
 +#include <memory>
 +#include <random>
 +#include <set>
@@ -286,8 +307,7 @@ index 0000000..d1753a1
 +namespace fs = std::filesystem;
 +namespace codegen = rex::codegen;
 +
-+// Where the cases are linked, as for the recompiler tests. Each case takes 8 bytes: the
-+// instruction, then `blr`.
++// Where the image is linked, as for the recompiler tests: the callee, then the cases.
 +constexpr uint32_t kBenchBaseAddress = 0x82010000;
 +constexpr uint32_t kBlr = 0x4E800020;
 +// The generated functions are split over this many source files, so they compile in parallel.
@@ -358,10 +378,63 @@ index 0000000..d1753a1
 +}
 +
 +// Why a form of the opcode table has no cases.
-+enum class Exclusion { kNone, kDialect, kNotBuilt, kBranch, kNondeterministic };
++enum class Exclusion { kNone, kDialect, kNotBuilt, kAbsoluteBranch, kNondeterministic };
 +
-+// Branches change the program counter and are tested with layouts of their own. The time base
-+// differs between two runs, and mtmsrd takes and releases the global lock.
++// How a branch form is laid out in its cases (see BranchLayout).
++enum class Branch {
++  kNone,
++  // bc forms testing a CR bit (beq, bne, ...): to an internal label, or a tail call to the
++  // callee.
++  kConditional,
++  // bc forms that decrement CTR (bdnz, bdz, ...): to an internal label. The generated code turns a
++  // CTR branch out of its function into a return, so the callee is not a target.
++  kCounterConditional,
++  // bclr forms without link (blr, beqlr, bdnzlr, ...).
++  kReturn,
++  // blrl, with LR pointing at the callee.
++  kReturnAndLink,
++  // bcctr forms without link (bctr, bnectr), with CTR pointing at the callee.
++  kCounter,
++  // bctrl, with CTR pointing at the callee.
++  kCounterAndLink,
++  // b: to an internal label, or a tail call to the callee.
++  kBranch,
++  // bl: a call to the callee. (A bl to the next instruction, which only reads the program
++  // counter, does not compile: the code generator emits a goto to a label it never defines.)
++  kBranchAndLink,
++};
++
++Branch ClassifyBranch(const powerpc_opcode& form) {
++  uint32_t opcode = uint32_t(form.opcode);
++  uint32_t primary = opcode >> 26;
++  uint32_t extended = (opcode >> 1) & 0x3FF;
++  bool link = opcode & 1;
++  if (primary == 16) {
++    switch (form.id) {
++      case PPC_INST_BDZ:
++      case PPC_INST_BDNZ:
++      case PPC_INST_BDZF:
++      case PPC_INST_BDNZF:
++      case PPC_INST_BDNZT:
++        return Branch::kCounterConditional;
++      default:
++        return Branch::kConditional;
++    }
++  }
++  if (primary == 18) {
++    return link ? Branch::kBranchAndLink : Branch::kBranch;
++  }
++  if (primary == 19 && extended == 16) {
++    return link ? Branch::kReturnAndLink : Branch::kReturn;
++  }
++  if (primary == 19 && extended == 528) {
++    return link ? Branch::kCounterAndLink : Branch::kCounter;
++  }
++  return Branch::kNone;
++}
++
++// The time base differs between two runs, and mtmsrd takes and releases the global lock. Absolute
++// branches would need code at addresses below 32 KB.
 +Exclusion ExcludeForm(const powerpc_opcode& form) {
 +  if ((form.flags & codegen::ppc::kXenonDialect) == 0) {
 +    return Exclusion::kDialect;
@@ -370,9 +443,8 @@ index 0000000..d1753a1
 +    return Exclusion::kNotBuilt;
 +  }
 +  uint32_t primary = uint32_t(form.opcode) >> 26;
-+  uint32_t extended = (uint32_t(form.opcode) >> 1) & 0x3FF;
-+  if (primary == 16 || primary == 18 || (primary == 19 && (extended == 16 || extended == 528))) {
-+    return Exclusion::kBranch;
++  if ((primary == 16 || primary == 18) && (uint32_t(form.opcode) & 2)) {
++    return Exclusion::kAbsoluteBranch;
 +  }
 +  if (form.id == PPC_INST_MFTB || form.id == PPC_INST_MFTBU || form.id == PPC_INST_MTMSRD) {
 +    return Exclusion::kNondeterministic;
@@ -380,9 +452,14 @@ index 0000000..d1753a1
 +  return Exclusion::kNone;
 +}
 +
++// What the bench sets up before a branch case. Mirrors BenchSetup in tests/interp_bench.
++enum class Setup { kNone, kCtrToCallee, kLrToCallee };
++
 +struct Case {
-+  uint32_t word;
-+  const powerpc_opcode* form;
++  uint32_t address = 0;
++  // The case's code: the instruction under test first.
++  std::vector<uint32_t> words;
++  const powerpc_opcode* form = nullptr;
 +  std::string text;
 +  Addressing addressing = Addressing::kNone;
 +  uint32_t ra = 0;
@@ -390,6 +467,9 @@ index 0000000..d1753a1
 +  int32_t displacement = 0;
 +  uint8_t align = 1;
 +  uint8_t reserve_size = 0;
++  Setup setup = Setup::kNone;
++  // A b or bc to the callee, which the code generator emits as a tail call.
++  bool tail_call = false;
 +};
 +
 +// Builders emit a debug trap for operand values they do not handle (some vpkd3d128 and vupkd3d128
@@ -409,13 +489,14 @@ index 0000000..d1753a1
 +    return true;
 +  }
 +  const MemoryForm& memory = it->second;
++  uint32_t word = c.words[0];
 +  c.addressing = memory.addressing;
 +  c.align = memory.align;
 +  c.reserve_size = memory.reserve_size;
-+  c.ra = (c.word >> 16) & 0x1F;
-+  c.rb = (c.word >> 11) & 0x1F;
++  c.ra = (word >> 16) & 0x1F;
++  c.rb = (word >> 11) & 0x1F;
 +  if (memory.addressing == Addressing::kDForm) {
-+    c.displacement = int16_t(c.word & (memory.ds_form ? 0xFFFC : 0xFFFF));
++    c.displacement = int16_t(word & (memory.ds_form ? 0xFFFC : 0xFFFF));
 +    return c.ra != 0;
 +  }
 +  if (c.ra == 0) {
@@ -425,11 +506,84 @@ index 0000000..d1753a1
 +}
 +
 +// A service trap reads a string from guest memory at r3 to log it, which no case sets up.
-+bool IsServiceTrap(const Case& c) {
-+  uint32_t to = (c.word >> 21) & 0x1F;
-+  uint32_t ra = (c.word >> 16) & 0x1F;
-+  uint16_t code = uint16_t(c.word & 0xFFFF);
-+  return (c.word >> 26) == 3 && to == 0x1F && ra == 0 && (code == 20 || code == 26);
++bool IsServiceTrap(uint32_t word) {
++  uint32_t to = (word >> 21) & 0x1F;
++  uint32_t ra = (word >> 16) & 0x1F;
++  uint16_t code = uint16_t(word & 0xFFFF);
++  return (word >> 26) == 3 && to == 0x1F && ra == 0 && (code == 20 || code == 26);
++}
++
++// The decoder's text of a word at an address, or nullopt if it does not decode to `form`.
++std::optional<std::string> DecodesTo(uint32_t word, uint32_t address, const powerpc_opcode& form) {
++  uint32_t big_endian = __builtin_bswap32(word);
++  ppc_insn insn;
++  if (codegen::ppc::Disassemble(&big_endian, 4, address, insn) != 4 || insn.opcode != &form) {
++    return std::nullopt;
++  }
++  return insn.op_str[0] ? fmt::format("{} {}", form.name, insn.op_str) : std::string(form.name);
++}
++
++// Places a branch displacement: bits 2-25 for b and bl, bits 2-15 for bc.
++uint32_t WithDisplacement(uint32_t word, int32_t displacement) {
++  uint32_t mask = (word >> 26) == 18 ? 0x03FFFFFCu : 0x0000FFFCu;
++  return (word & ~mask) | (uint32_t(displacement) & mask);
++}
++
++// `li r3, value`: marks which path a branch case took.
++uint32_t LoadImmediateR3(int16_t value) {
++  return 0x38600000u | uint16_t(value);
++}
++
++// Lays out a branch case at `address`. `variant` picks between the two layouts of a kind. Returns
++// false when the patched word no longer decodes to the form (the displacement can change which
++// table entry matches, through the branch prediction hint).
++bool BranchLayout(Case& c, Branch kind, uint32_t address, uint32_t callee, bool variant) {
++  uint32_t word = c.words[0];
++  auto to = [&](uint32_t target) {
++    return WithDisplacement(word, int32_t(target - address));
++  };
++  switch (kind) {
++    case Branch::kConditional:
++    case Branch::kCounterConditional:
++      if (variant && kind == Branch::kConditional) {
++        c.words = {to(callee), LoadImmediateR3(1), kBlr};
++        c.tail_call = true;
++      } else {
++        c.words = {to(address + 12), LoadImmediateR3(1), kBlr, LoadImmediateR3(2), kBlr};
++      }
++      break;
++    case Branch::kReturn:
++      c.words = {word, LoadImmediateR3(1), kBlr};
++      break;
++    case Branch::kReturnAndLink:
++      c.words = {word, LoadImmediateR3(1), kBlr};
++      c.setup = Setup::kLrToCallee;
++      break;
++    case Branch::kCounter:
++    case Branch::kCounterAndLink:
++      c.words = {word, LoadImmediateR3(1), kBlr};
++      c.setup = Setup::kCtrToCallee;
++      break;
++    case Branch::kBranch:
++      if (variant) {
++        c.words = {to(callee), kBlr};
++        c.tail_call = true;
++      } else {
++        c.words = {to(address + 8), LoadImmediateR3(1), LoadImmediateR3(2), kBlr};
++      }
++      break;
++    case Branch::kBranchAndLink:
++      c.words = {to(callee), LoadImmediateR3(1), kBlr};
++      break;
++    case Branch::kNone:
++      break;
++  }
++  auto text = DecodesTo(c.words[0], address, *c.form);
++  if (!text) {
++    return false;
++  }
++  c.text = *text;
++  return true;
 +}
 +
 +std::string CppString(std::string_view text) {
@@ -454,6 +608,17 @@ index 0000000..d1753a1
 +  }
 +}
 +
++const char* SetupName(Setup setup) {
++  switch (setup) {
++    case Setup::kCtrToCallee:
++      return "BenchSetup::kCtrToCallee";
++    case Setup::kLrToCallee:
++      return "BenchSetup::kLrToCallee";
++    default:
++      return "BenchSetup::kNone";
++  }
++}
++
 +bool GenerateInterpBench(const std::string& outDir, int casesPerForm, uint64_t seed) {
 +  std::array<ui::KeyValueRow, 3> header_rows = {{
 +      {"Output dir", outDir},
@@ -463,8 +628,13 @@ index 0000000..d1753a1
 +  ui::KeyValueBlock("Generating the interpreter bench cases:", header_rows);
 +  fs::create_directories(outDir);
 +
++  // The callee, a recompiled function the branch cases call and jump to: xori r5,r5,0x1234; blr.
++  const uint32_t callee = kBenchBaseAddress;
++  const std::vector<uint32_t> callee_words = {0x68A51234, kBlr};
++
 +  std::mt19937_64 rng(seed);
 +  std::vector<Case> cases;
++  uint32_t next_address = callee + uint32_t(callee_words.size()) * 4;
 +  std::map<Exclusion, int> excluded;
 +  std::vector<std::string> unreachable;
 +  int forms_with_cases = 0;
@@ -476,25 +646,33 @@ index 0000000..d1753a1
 +      ++excluded[exclusion];
 +      continue;
 +    }
++    Branch branch = ClassifyBranch(form);
 +    // Operand fields are the bits outside the form's mask. The decoder takes the first table
 +    // entry that matches, so a word only counts for this form if it decodes to this entry.
 +    std::unordered_set<uint32_t> words;
 +    int found = 0;
 +    for (int attempt = 0; attempt < kAttemptsPerForm && found < casesPerForm; ++attempt) {
 +      uint32_t word = uint32_t(form.opcode) | (uint32_t(rng()) & ~uint32_t(form.mask));
-+      if (!words.insert(word).second) {
++      if (!words.insert(word).second || IsServiceTrap(word)) {
 +        continue;
 +      }
-+      uint32_t address = kBenchBaseAddress + uint32_t(cases.size()) * 8;
-+      uint32_t big_endian = __builtin_bswap32(word);
-+      ppc_insn insn;
-+      if (codegen::ppc::Disassemble(&big_endian, 4, address, insn) != 4 || insn.opcode != &form) {
++      auto text = DecodesTo(word, next_address, form);
++      if (!text) {
 +        continue;
 +      }
-+      Case c{word, &form, fmt::format("{} {}", form.name, insn.op_str)};
-+      if (!SetAddressing(c) || IsServiceTrap(c)) {
++      Case c;
++      c.address = next_address;
++      c.words = {word, kBlr};
++      c.form = &form;
++      c.text = *text;
++      if (branch != Branch::kNone) {
++        if (!BranchLayout(c, branch, c.address, callee, found % 2 == 1)) {
++          continue;
++        }
++      } else if (!SetAddressing(c)) {
 +        continue;
 +      }
++      next_address += uint32_t(c.words.size()) * 4;
 +      cases.push_back(std::move(c));
 +      ++found;
 +    }
@@ -505,14 +683,19 @@ index 0000000..d1753a1
 +    }
 +  }
 +
-+  // The test binary: each case's word followed by blr, big-endian, with a test_ symbol per case
-+  // so AnalyzeTestBinary makes each one a function.
-+  std::vector<uint8_t> image(cases.size() * 8);
++  // The test binary, big-endian, with a test_ symbol per function so AnalyzeTestBinary makes
++  // each one a function: the callee, then the cases.
++  std::vector<uint32_t> image_words = callee_words;
 +  std::map<size_t, std::string> symbols;
++  symbols[callee] = "test_callee";
 +  for (size_t i = 0; i < cases.size(); ++i) {
-+    uint32_t words[2] = {__builtin_bswap32(cases[i].word), __builtin_bswap32(kBlr)};
-+    std::memcpy(image.data() + i * 8, words, 8);
-+    symbols[kBenchBaseAddress + i * 8] = fmt::format("test_{}", i);
++    symbols[cases[i].address] = fmt::format("test_{}", i);
++    image_words.insert(image_words.end(), cases[i].words.begin(), cases[i].words.end());
++  }
++  std::vector<uint8_t> image(image_words.size() * 4);
++  for (size_t i = 0; i < image_words.size(); ++i) {
++    uint32_t big_endian = __builtin_bswap32(image_words[i]);
++    std::memcpy(image.data() + i * 4, &big_endian, 4);
 +  }
 +
 +  codegen::TestModule module;
@@ -523,38 +706,49 @@ index 0000000..d1753a1
 +  auto ctx =
 +      codegen::CodegenContext::Create(codegen::BinaryView::fromModule(module), std::move(config));
 +  codegen::AnalyzeTestBinary(ctx, "bench", symbols, kBenchBaseAddress, image.data(), image.size());
++  // AnalyzeTestBinary records bl calls; b and bc to the callee are tail calls.
++  codegen::FunctionNode* callee_node = ctx.graph.getFunction(callee);
++  for (const Case& c : cases) {
++    if (c.tail_call) {
++      ctx.graph.addTailCallToFunction(c.address, c.address,
++                                      codegen::CallTarget::function(callee_node));
++    }
++  }
 +  codegen::EmitContext emitCtx{ctx.binary(), ctx.Config(), ctx.graph, 0, nullptr};
 +
 +  std::array<std::string, kFunctionChunks> chunks;
-+  std::string table;
-+  size_t emitted = 0;
++  chunks[0] += callee_node->emitCpp(emitCtx) + "\n";
++  std::string table = fmt::format("REX_EXTERN(bench_{:X});\n", callee);
++  std::vector<size_t> emitted;
 +  for (size_t i = 0; i < cases.size(); ++i) {
-+    uint32_t address = kBenchBaseAddress + uint32_t(i) * 8;
-+    const codegen::FunctionNode* fn = ctx.graph.getFunction(address);
++    const Case& c = cases[i];
++    const codegen::FunctionNode* fn = ctx.graph.getFunction(c.address);
 +    std::string code = fn ? fn->emitCpp(emitCtx) : std::string();
 +    if (code.empty()) {
-+      REXLOG_WARN("No code emitted for case {} ({})", i, cases[i].text);
++      REXLOG_WARN("No code emitted for case {} ({})", i, c.text);
 +      continue;
 +    }
-+    std::string name = fmt::format("bench_{:X}", address);
++    std::string name = fmt::format("bench_{:X}", c.address);
 +    chunks[i * kFunctionChunks / cases.size()] += code + "\n";
-+    const Case& c = cases[i];
 +    table += fmt::format("REX_EXTERN({});\n", name);
 +    table += fmt::format(
 +        "static const BenchCase kCase{} = {{0x{:08X}, 0x{:08X}, {}, {}, {}, {}, {}, {}, {}, {}, "
-+        "{}, {}}};\n",
-+        i, address, c.word, CppString(c.form->name), CppString(c.text), AddressingName(c.addressing),
-+        c.ra, c.rb, c.displacement, c.align, c.reserve_size, RecompiledCodeTraps(code), name);
-+    ++emitted;
++        "{}, {}, {}}};\n",
++        i, c.address, c.words[0], CppString(c.form->name), CppString(c.text),
++        AddressingName(c.addressing), c.ra, c.rb, c.displacement, c.align, c.reserve_size,
++        SetupName(c.setup), RecompiledCodeTraps(code), name);
++    emitted.push_back(i);
 +  }
 +
-+  // The configuration header recompiled test code expects, with the bench's image.
++  // The configuration header recompiled test code expects, with the bench's image. The image
++  // size also places the table of functions for indirect calls, right after the image.
++  size_t image_size = std::max<size_t>((image.size() + 0xFFF) & ~size_t(0xFFF), 0x1000);
 +  codegen::TemplateRegistry registry;
 +  nlohmann::json templateData;
 +  templateData["image_base"] = fmt::format("{:X}", kBenchBaseAddress);
-+  templateData["image_size"] = fmt::format("{:X}", std::max<size_t>(image.size(), 0x1000));
++  templateData["image_size"] = fmt::format("{:X}", image_size);
 +  templateData["code_base"] = fmt::format("{:X}", kBenchBaseAddress);
-+  templateData["code_size"] = fmt::format("{:X}", std::max<size_t>(image.size(), 0x1000));
++  templateData["code_size"] = fmt::format("{:X}", image_size);
 +  {
 +    std::ofstream out(fmt::format("{}/ppc_config.h", outDir));
 +    out << codegen::renderWithJson(registry, "test/ppc_config_h", templateData);
@@ -564,7 +758,7 @@ index 0000000..d1753a1
 +    std::ofstream out(fmt::format("{}/bench_functions_{}.cpp", outDir, chunk));
 +    out << "// Generated by rexglue interp-bench-gen\n\n"
 +        << "#include \"ppc_config.h\"\n#include <rex/ppc.h>\n#include <rex/logging.h>\n\n"
-+        << chunks[chunk];
++        << fmt::format("DECLARE_REX_FUNC(bench_{:X});\n\n", callee) << chunks[chunk];
 +  }
 +
 +  {
@@ -572,21 +766,27 @@ index 0000000..d1753a1
 +    out << "// Generated by rexglue interp-bench-gen\n\n"
 +        << "#include <rex/ppc.h>\n\n#include \"bench_case.h\"\n\n"
 +        << table << "\nconst BenchCase* const kBenchCases[] = {\n";
-+    for (size_t i = 0; i < cases.size(); ++i) {
-+      if (ctx.graph.getFunction(kBenchBaseAddress + uint32_t(i) * 8)) {
-+        out << fmt::format("    &kCase{},\n", i);
-+      }
++    for (size_t i : emitted) {
++      out << fmt::format("    &kCase{},\n", i);
 +    }
-+    out << "};\nconst size_t kBenchCaseCount = sizeof(kBenchCases) / sizeof(kBenchCases[0]);\n";
++    out << "};\nconst size_t kBenchCaseCount = sizeof(kBenchCases) / sizeof(kBenchCases[0]);\n\n";
++    out << fmt::format("const BenchImage kBenchImage = {{0x{:08X}, 0x{:X}, {}, kBenchImageWords, "
++                       "{{0x{:08X}, bench_{:X}}}}};\n",
++                       kBenchBaseAddress, image_size, image_words.size(), callee, callee);
++    out << "const uint32_t kBenchImageWords[] = {";
++    for (size_t i = 0; i < image_words.size(); ++i) {
++      out << (i % 8 == 0 ? "\n    " : " ") << fmt::format("0x{:08X},", image_words[i]);
++    }
++    out << "\n};\n";
 +  }
 +
 +  std::array<ui::KeyValueRow, 7> summary = {{
 +      {"Forms with cases", std::to_string(forms_with_cases)},
-+      {"Cases", std::to_string(emitted)},
++      {"Cases", std::to_string(emitted.size())},
 +      {"Unreachable forms", std::to_string(unreachable.size())},
 +      {"Excluded: other dialects", std::to_string(excluded[Exclusion::kDialect])},
 +      {"Excluded: no builder", std::to_string(excluded[Exclusion::kNotBuilt])},
-+      {"Excluded: branches", std::to_string(excluded[Exclusion::kBranch])},
++      {"Excluded: absolute branches", std::to_string(excluded[Exclusion::kAbsoluteBranch])},
 +      {"Excluded: nondeterministic", std::to_string(excluded[Exclusion::kNondeterministic])},
 +  }};
 +  ui::KeyValueBlock("Interpreter bench cases:", summary);
@@ -599,7 +799,7 @@ index 0000000..d1753a1
 +    }
 +    REXLOG_INFO("Forms without cases: {}", list);
 +  }
-+  return emitted > 0;
++  return !emitted.empty();
 +}
 +
 +struct InterpBenchArgs {
@@ -699,20 +899,84 @@ index fc46d86..0a25c46 100644
  )
  
  if(REXGLUE_ENABLE_TRACY)
+diff --git a/src/system/function_dispatcher.cpp b/src/system/function_dispatcher.cpp
+index 1fb0d77..30f8007 100644
+--- a/src/system/function_dispatcher.cpp
++++ b/src/system/function_dispatcher.cpp
+@@ -14,6 +14,7 @@
+  */
+ 
+ #include <rex/assert.h>
++#include <rex/cvar.h>
+ #include <rex/dbg.h>
+ #include <rex/logging.h>
+ #include <rex/perf/counter.h>
+@@ -21,8 +22,13 @@
+ #include <rex/ppc/context.h>
+ #include <rex/runtime.h>
+ #include <rex/system/function_dispatcher.h>
++#include <rex/system/ppc_interpreter.h>
+ #include <rex/system/thread_state.h>
+ 
++REXCVAR_DEFINE_BOOL(ppc_interpreter_fallback, false, "Kernel",
++                    "Run guest functions the code generator did not find with the PowerPC "
++                    "interpreter instead of stopping");
++
+ namespace rex::runtime {
+ 
+ namespace {
+@@ -50,7 +56,14 @@ PPCFunc* ResolveIndirectFunction(uint32_t guest_address) {
+     return func;
+   }
+ 
+-  return &InvalidFunctionTrap;
++  // The caller set ctx.last_indirect_target to guest_address, which is where the interpreter
++  // starts.
++  return REXCVAR_GET(ppc_interpreter_fallback) ? &InterpretMissingFunction : &InvalidFunctionTrap;
++}
++
++PPCFunc* FindGuestFunction(uint32_t guest_address) {
++  FunctionDispatcher* dispatcher = GetBoundFunctionDispatcher();
++  return dispatcher ? dispatcher->GetFunction(guest_address) : nullptr;
+ }
+ 
+ FunctionDispatcher::FunctionDispatcher(rex::memory::Memory* memory, ExportResolver* export_resolver)
+@@ -62,13 +75,17 @@ bool FunctionDispatcher::Execute(ThreadState* thread_state, uint32_t address) {
+   SCOPE_profile_cpu_f("cpu");
+   PROFILE_FUNCTION_DISPATCHED();
+ 
++  auto* ctx = thread_state->context();
+   PPCFunc* fn = GetFunction(address);
+   if (!fn) {
+-    REXCPU_ERROR("Execute({:08X}): function not in function table", address);
+-    return false;
++    if (!REXCVAR_GET(ppc_interpreter_fallback)) {
++      REXCPU_ERROR("Execute({:08X}): function not in function table", address);
++      return false;
++    }
++    ctx->last_indirect_target = address;
++    fn = &InterpretMissingFunction;
+   }
+ 
+-  auto* ctx = thread_state->context();
+   auto* previous_thread_state = ThreadState::Get();
+ 
+   // Rebind the active guest thread for cross-module callbacks.
 diff --git a/src/system/ppc_interpreter.cpp b/src/system/ppc_interpreter.cpp
 new file mode 100644
-index 0000000..9f33f5e
+index 0000000..69dd428
 --- /dev/null
 +++ b/src/system/ppc_interpreter.cpp
-@@ -0,0 +1,91 @@
+@@ -0,0 +1,1366 @@
 +/**
 + * @file        system/ppc_interpreter.cpp
 + * @brief       PowerPC interpreter for guest functions the code generator did not find
 + *
 + * Instructions are decoded by the code generator's own decoder (binutils, thirdparty/disasm), so
 + * the forms and operands are the ones the code generator's builders see. Each implemented form
-+ * follows its builder in src/codegen/builders/; the differential bench (tests/interp_bench) runs
-+ * both on the same states and requires the same result bit for bit.
++ * follows its builder in src/codegen/builders/ statement by statement, including the C++ integer
++ * promotions of the emitted expressions; the differential bench (tests/interp_bench) runs both on
++ * the same states and requires the same result bit for bit.
 + *
 + * @license     BSD 3-Clause License
 + *              See LICENSE file in the project root for full license text.
@@ -720,10 +984,20 @@ index 0000000..9f33f5e
 +
 +#include <rex/system/ppc_interpreter.h>
 +
++#include <atomic>
++#include <climits>
 +#include <cstdio>
 +#include <cstring>
++#include <mutex>
++#include <unordered_map>
++#include <unordered_set>
 +
 +#include <fmt/format.h>
++
++#include <rex/chrono/clock.h>
++#include <rex/logging.h>
++#include <rex/platform.h>
++#include <rex/ppc/context_access.h>
 +
 +#include <dis-asm.h>
 +#include <ppc.h>
@@ -731,6 +1005,13 @@ index 0000000..9f33f5e
 +namespace rex::runtime {
 +
 +namespace {
++
++using rex::ppc::Cr;
++using rex::ppc::Gpr;
++
++//=============================================================================
++// Decoding
++//=============================================================================
 +
 +// Binutils PPC_OPCODE_* dialect bits of the Xenon CPU, the same set the code generator decodes
 +// with (kXenonDialect in src/codegen/ppc/disasm.h).
@@ -766,24 +1047,1281 @@ index 0000000..9f33f5e
 +
 +thread_local Decoder tDecoder;
 +
-+uint32_t FetchInstruction(const uint8_t* base, uint32_t address) {
-+  uint32_t big_endian;
-+  std::memcpy(&big_endian, base + address, sizeof(big_endian));
-+  return __builtin_bswap32(big_endian);
++// A decoded instruction, as the builders see it.
++struct Instruction {
++  uint32_t word = 0;
++  // PPC_INST_*, or 0 for a word the decoder does not know.
++  int id = 0;
++  // Record form (the name has a '.'), which some builders follow with a cr0 update.
++  bool record = false;
++  const char* name = nullptr;
++  uint32_t op[8] = {};
++};
++
++// Decoded instructions by address. Relative branch targets depend on the address, so the cache is
++// keyed by it; the word is compared on every fetch in case the code changed.
++thread_local std::unordered_map<uint32_t, Instruction> tDecoded;
++
++//=============================================================================
++// Guest memory, as the generated code's REX_LOAD_* and REX_STORE_* macros access it
++//=============================================================================
++
++inline uint32_t PhysicalHostOffset(uint32_t address) {
++#if REX_PLATFORM_WIN32 || (REX_PLATFORM_MAC && REX_ARCH_ARM64)
++  return address >= 0xE0000000u ? 0x1000u : 0u;
++#else
++  (void)address;
++  return 0;
++#endif
++}
++
++inline uint8_t* RawAddress(uint8_t* base, uint32_t address) {
++  return base + address + PhysicalHostOffset(address);
++}
++
++inline uint8_t Load8(uint8_t* base, uint32_t ea) {
++  return *reinterpret_cast<volatile uint8_t*>(RawAddress(base, ea));
++}
++inline uint16_t Load16(uint8_t* base, uint32_t ea) {
++  return __builtin_bswap16(*reinterpret_cast<volatile uint16_t*>(RawAddress(base, ea)));
++}
++inline uint32_t Load32(uint8_t* base, uint32_t ea) {
++  return __builtin_bswap32(*reinterpret_cast<volatile uint32_t*>(RawAddress(base, ea)));
++}
++inline uint64_t Load64(uint8_t* base, uint32_t ea) {
++  return __builtin_bswap64(*reinterpret_cast<volatile uint64_t*>(RawAddress(base, ea)));
++}
++inline void Store8(uint8_t* base, uint32_t ea, uint8_t value) {
++  *reinterpret_cast<volatile uint8_t*>(RawAddress(base, ea)) = value;
++}
++inline void Store16(uint8_t* base, uint32_t ea, uint16_t value) {
++  *reinterpret_cast<volatile uint16_t*>(RawAddress(base, ea)) = __builtin_bswap16(value);
++}
++inline void Store32(uint8_t* base, uint32_t ea, uint32_t value) {
++  *reinterpret_cast<volatile uint32_t*>(RawAddress(base, ea)) = __builtin_bswap32(value);
++}
++inline void Store64(uint8_t* base, uint32_t ea, uint64_t value) {
++  *reinterpret_cast<volatile uint64_t*>(RawAddress(base, ea)) = __builtin_bswap64(value);
++}
++
++//=============================================================================
++// Helpers shared with the builders
++//=============================================================================
++
++// compute_mask in src/codegen/builders/helpers.h.
++inline uint64_t ComputeMask(uint32_t mstart, uint32_t mstop) {
++  mstart &= 0x3F;
++  mstop &= 0x3F;
++  uint64_t value = (UINT64_MAX >> mstart) ^ ((mstop >= 63) ? 0 : UINT64_MAX >> (mstop + 1));
++  return mstart <= mstop ? value : ~value;
++}
++
++// Bit `bit` (0-31) of the condition register: field bit / 4, in the order lt, gt, eq, so.
++inline uint8_t& CrBit(PPCContext& ctx, uint32_t bit) {
++  return reinterpret_cast<uint8_t*>(&Cr(ctx, bit / 4))[bit % 4];
++}
++
++// emitRecordFormCompare: record forms compare the low word of the result with 0 into cr0.
++inline void RecordForm(PPCContext& ctx, const Instruction& in) {
++  if (in.record) {
++    ctx.cr0.compare<int32_t>(Gpr(ctx, in.op[0]).s32, 0, ctx.xer);
++  }
++}
++
++// ppc_trap in the generated code's configuration header.
++void Trap(PPCContext& ctx, uint8_t* base, uint16_t trap_type) {
++  switch (trap_type) {
++    case 20:
++    case 26: {
++      auto str = std::string_view(reinterpret_cast<const char*>(RawAddress(base, ctx.r3.u32)),
++                                  ctx.r4.u16);
++      REXCPU_DEBUG("(service trap) {}", str);
++      break;
++    }
++    case 0:
++    case 22:
++      REXCPU_WARN("tw/td trap hit (type {})", trap_type);
++      break;
++    case 25:
++      break;
++    default:
++      REXCPU_WARN("Unknown trap type {}", trap_type);
++      break;
++  }
++}
++
++// emitTrap: the TO field selects signed less, signed greater, equal, unsigned less and unsigned
++// greater; all five is an unconditional trap.
++template <typename S, typename U>
++void ConditionalTrap(PPCContext& ctx, uint8_t* base, uint32_t to, S a_signed, U a_unsigned,
++                     S b_signed, U b_unsigned) {
++  if (to == 0) {
++    return;
++  }
++  if (to == 0x1F) {
++    Trap(ctx, base, 0);
++    return;
++  }
++  if (((to & 0x10) && a_signed < b_signed) || ((to & 0x08) && a_signed > b_signed) ||
++      ((to & 0x04) && a_signed == b_signed) || ((to & 0x02) && a_unsigned < b_unsigned) ||
++      ((to & 0x01) && a_unsigned > b_unsigned)) {
++    Trap(ctx, base, 0);
++  }
++}
++
++//=============================================================================
++// Calls
++//=============================================================================
++
++GuestFunctionResolver gResolver = &FindGuestFunction;
++
++// Recompiled functions found by address. Functions are only ever added, so a hit stays valid; a
++// miss is looked up again next time, since a module may have registered it since.
++thread_local std::unordered_map<uint32_t, PPCFunc*> tResolved;
++
++PPCFunc* Resolve(uint32_t address) {
++  auto it = tResolved.find(address);
++  if (it != tResolved.end()) {
++    return it->second;
++  }
++  PPCFunc* function = gResolver(address);
++  if (function) {
++    tResolved.emplace(address, function);
++  }
++  return function;
++}
++
++InterpreterResult Run(PPCContext& ctx, uint8_t* base, uint32_t entry);
++
++// REX_CALL_INDIRECT_FUNC: the recompiled function at the address, or, when there is none, the
++// guest code there, interpreted (what the dispatcher's fallback does), with last_indirect_target
++// set as the generated code sets it before resolving.
++InterpreterResult CallIndirect(PPCContext& ctx, uint8_t* base, uint32_t target) {
++  if (PPCFunc* function = Resolve(target)) {
++    function(ctx, base);
++    return {};
++  }
++  ctx.last_indirect_target = target;
++  return Run(ctx, base, target);
++}
++
++const Instruction& Fetch(uint8_t* base, uint32_t pc) {
++  uint32_t word = Load32(base, pc);
++  Instruction& in = tDecoded[pc];
++  if (in.name && in.word == word) {
++    return in;
++  }
++  in = {};
++  in.word = word;
++  ppc_insn insn;
++  if (tDecoder.Decode(pc, word, insn)) {
++    in.id = insn.opcode->id;
++    in.name = insn.opcode->name;
++    in.record = std::strchr(insn.opcode->name, '.') != nullptr;
++    std::memcpy(in.op, insn.operands, sizeof(in.op));
++  } else {
++    in.name = "";
++  }
++  return in;
++}
++
++//=============================================================================
++// The interpreter loop
++//=============================================================================
++
++// Runs guest code from `entry` until it returns to its caller. Each case follows the builder of
++// the same name in src/codegen/builders/.
++InterpreterResult Run(PPCContext& ctx, uint8_t* base, uint32_t entry) {
++  uint32_t pc = entry;
++  for (;;) {
++    const Instruction& in = Fetch(base, pc);
++    const uint32_t* op = in.op;
++    uint32_t next = pc + 4;
++
++    // Taken branches: a recompiled function at the target is a tail call, anything else a jump
++    // within the code being interpreted (what the generated code does with internal labels).
++    auto branch = [&](uint32_t target) -> bool {
++      if (target != entry) {
++        if (PPCFunc* function = Resolve(target)) {
++          function(ctx, base);
++          return true;
++        }
++      }
++      next = target;
++      return false;
++    };
++
++    switch (in.id) {
++      //=======================================================================
++      // Arithmetic (arithmetic.cpp)
++      //=======================================================================
++      case PPC_INST_ADD:
++        Gpr(ctx, op[0]).u64 = Gpr(ctx, op[1]).u64 + Gpr(ctx, op[2]).u64;
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_ADDE: {
++        uint32_t a = Gpr(ctx, op[1]).u32, b = Gpr(ctx, op[2]).u32;
++        uint8_t ca = ctx.xer.ca;
++        uint8_t temp = uint8_t((uint32_t(a + b) < a) | (uint32_t(a + b + ca) < uint32_t(ca)));
++        Gpr(ctx, op[0]).u64 = Gpr(ctx, op[1]).u64 + Gpr(ctx, op[2]).u64 + ca;
++        ctx.xer.ca = temp;
++        RecordForm(ctx, in);
++        break;
++      }
++      case PPC_INST_ADDI:
++        Gpr(ctx, op[0]).u64 = (op[1] != 0 ? Gpr(ctx, op[1]).u64 : 0) + uint64_t(int64_t(int32_t(op[2])));
++        break;
++      case PPC_INST_ADDIC:
++        ctx.xer.ca = Gpr(ctx, op[1]).u32 > uint32_t(~op[2]);
++        Gpr(ctx, op[0]).u64 = Gpr(ctx, op[1]).u64 + uint64_t(int64_t(int32_t(op[2])));
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_ADDIS:
++        Gpr(ctx, op[0]).u64 =
++            (op[1] != 0 ? Gpr(ctx, op[1]).u64 : 0) + uint64_t(int64_t(int32_t(op[2] << 16)));
++        break;
++      case PPC_INST_ADDZE: {
++        uint64_t temp = Gpr(ctx, op[1]).u64 + ctx.xer.ca;
++        ctx.xer.ca = uint32_t(temp) < Gpr(ctx, op[1]).u32;
++        Gpr(ctx, op[0]).u64 = temp;
++        RecordForm(ctx, in);
++        break;
++      }
++      case PPC_INST_ADDME: {
++        uint32_t a = Gpr(ctx, op[1]).u32;
++        uint8_t ca = ctx.xer.ca;
++        uint8_t temp = uint8_t((uint32_t(a + 0xFFFFFFFFu) < a) |
++                               (uint32_t(a + 0xFFFFFFFFu + ca) < uint32_t(ca)));
++        Gpr(ctx, op[0]).u64 = Gpr(ctx, op[1]).u64 + ca + 0xFFFFFFFFFFFFFFFFull;
++        ctx.xer.ca = temp;
++        RecordForm(ctx, in);
++        break;
++      }
++      case PPC_INST_ADDC: {
++        uint32_t a = Gpr(ctx, op[1]).u32;
++        ctx.xer.ca = uint32_t(a + Gpr(ctx, op[2]).u32) < a;
++        Gpr(ctx, op[0]).u64 = Gpr(ctx, op[1]).u64 + Gpr(ctx, op[2]).u64;
++        RecordForm(ctx, in);
++        break;
++      }
++      case PPC_INST_DIVD: {
++        int64_t a = Gpr(ctx, op[1]).s64, b = Gpr(ctx, op[2]).s64;
++        Gpr(ctx, op[0]).s64 = (b && !(a == INT64_MIN && b == -1)) ? a / b : 0;
++        RecordForm(ctx, in);
++        break;
++      }
++      case PPC_INST_DIVDU: {
++        uint64_t a = Gpr(ctx, op[1]).u64, b = Gpr(ctx, op[2]).u64;
++        Gpr(ctx, op[0]).u64 = b ? a / b : 0;
++        RecordForm(ctx, in);
++        break;
++      }
++      case PPC_INST_DIVW: {
++        int32_t a = Gpr(ctx, op[1]).s32, b = Gpr(ctx, op[2]).s32;
++        Gpr(ctx, op[0]).u64 = uint32_t((b && !(a == INT32_MIN && b == -1)) ? a / b : 0);
++        RecordForm(ctx, in);
++        break;
++      }
++      case PPC_INST_DIVWU: {
++        uint32_t a = Gpr(ctx, op[1]).u32, b = Gpr(ctx, op[2]).u32;
++        Gpr(ctx, op[0]).u64 = uint32_t(b ? a / b : 0);
++        RecordForm(ctx, in);
++        break;
++      }
++      case PPC_INST_MULHW:
++        Gpr(ctx, op[0]).s64 =
++            (int64_t(Gpr(ctx, op[1]).s32) * int64_t(Gpr(ctx, op[2]).s32)) >> 32;
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_MULHWU:
++        Gpr(ctx, op[0]).u64 =
++            (uint64_t(Gpr(ctx, op[1]).u32) * uint64_t(Gpr(ctx, op[2]).u32)) >> 32;
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_MULLD:
++        Gpr(ctx, op[0]).u64 = Gpr(ctx, op[1]).u64 * Gpr(ctx, op[2]).u64;
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_MULLI:
++        Gpr(ctx, op[0]).u64 = Gpr(ctx, op[1]).u64 * uint64_t(int64_t(int32_t(op[2])));
++        break;
++      case PPC_INST_MULLW:
++        Gpr(ctx, op[0]).s64 = int64_t(Gpr(ctx, op[1]).s32) * int64_t(Gpr(ctx, op[2]).s32);
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_MULHD:
++        Gpr(ctx, op[0]).s64 = int64_t((__int128(Gpr(ctx, op[1]).s64) *
++                                       __int128(Gpr(ctx, op[2]).s64)) >> 64);
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_MULHDU:
++        Gpr(ctx, op[0]).u64 = uint64_t((__uint128_t(Gpr(ctx, op[1]).u64) *
++                                        __uint128_t(Gpr(ctx, op[2]).u64)) >> 64);
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_NEG:
++        Gpr(ctx, op[0]).u64 = -Gpr(ctx, op[1]).u64;
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_SUBF:
++        Gpr(ctx, op[0]).u64 = Gpr(ctx, op[2]).u64 - Gpr(ctx, op[1]).u64;
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_SUBFC:
++        ctx.xer.ca = Gpr(ctx, op[2]).u32 >= Gpr(ctx, op[1]).u32;
++        Gpr(ctx, op[0]).u64 = Gpr(ctx, op[2]).u64 - Gpr(ctx, op[1]).u64;
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_SUBFE: {
++        uint32_t not_a = ~Gpr(ctx, op[1]).u32, b = Gpr(ctx, op[2]).u32;
++        uint8_t ca = ctx.xer.ca;
++        uint8_t temp = uint8_t((uint32_t(not_a + b) < not_a) |
++                               (uint32_t(not_a + b + ca) < uint32_t(ca)));
++        Gpr(ctx, op[0]).u64 = ~Gpr(ctx, op[1]).u64 + Gpr(ctx, op[2]).u64 + ca;
++        ctx.xer.ca = temp;
++        RecordForm(ctx, in);
++        break;
++      }
++      case PPC_INST_SUBFIC:
++        ctx.xer.ca = Gpr(ctx, op[1]).u32 <= op[2];
++        Gpr(ctx, op[0]).u64 = uint64_t(int64_t(int32_t(op[2]))) - Gpr(ctx, op[1]).u64;
++        break;
++      case PPC_INST_SUBFZE: {
++        uint32_t not_a = ~Gpr(ctx, op[1]).u32;
++        uint8_t ca = ctx.xer.ca;
++        uint8_t temp = uint8_t(uint32_t(not_a + ca) < not_a);
++        Gpr(ctx, op[0]).u64 = ~Gpr(ctx, op[1]).u64 + ca;
++        ctx.xer.ca = temp;
++        RecordForm(ctx, in);
++        break;
++      }
++      case PPC_INST_SUBFME: {
++        uint32_t not_a = ~Gpr(ctx, op[1]).u32;
++        uint8_t ca = ctx.xer.ca;
++        uint8_t temp = uint8_t((uint32_t(not_a + 0xFFFFFFFFu) < not_a) |
++                               (uint32_t(not_a + 0xFFFFFFFFu + ca) < uint32_t(ca)));
++        Gpr(ctx, op[0]).u64 = ~Gpr(ctx, op[1]).u64 + ca + 0xFFFFFFFFFFFFFFFFull;
++        ctx.xer.ca = temp;
++        RecordForm(ctx, in);
++        break;
++      }
++
++      //=======================================================================
++      // Logical, shifts and rotates (logical.cpp)
++      //=======================================================================
++      case PPC_INST_AND:
++        Gpr(ctx, op[0]).u64 = Gpr(ctx, op[1]).u64 & Gpr(ctx, op[2]).u64;
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_ANDC:
++        Gpr(ctx, op[0]).u64 = Gpr(ctx, op[1]).u64 & ~Gpr(ctx, op[2]).u64;
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_ANDI:
++        Gpr(ctx, op[0]).u64 = Gpr(ctx, op[1]).u64 & op[2];
++        ctx.cr0.compare<int32_t>(Gpr(ctx, op[0]).s32, 0, ctx.xer);
++        break;
++      case PPC_INST_ANDIS:
++        Gpr(ctx, op[0]).u64 = Gpr(ctx, op[1]).u64 & uint32_t(op[2] << 16);
++        ctx.cr0.compare<int32_t>(Gpr(ctx, op[0]).s32, 0, ctx.xer);
++        break;
++      case PPC_INST_NAND:
++        Gpr(ctx, op[0]).u64 = ~(Gpr(ctx, op[1]).u64 & Gpr(ctx, op[2]).u64);
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_NOR:
++        Gpr(ctx, op[0]).u64 = ~(Gpr(ctx, op[1]).u64 | Gpr(ctx, op[2]).u64);
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_NOT:
++        Gpr(ctx, op[0]).u64 = ~Gpr(ctx, op[1]).u64;
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_OR:
++        Gpr(ctx, op[0]).u64 = Gpr(ctx, op[1]).u64 | Gpr(ctx, op[2]).u64;
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_ORC:
++        Gpr(ctx, op[0]).u64 = Gpr(ctx, op[1]).u64 | ~Gpr(ctx, op[2]).u64;
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_ORI:
++        Gpr(ctx, op[0]).u64 = Gpr(ctx, op[1]).u64 | op[2];
++        break;
++      case PPC_INST_ORIS:
++        Gpr(ctx, op[0]).u64 = Gpr(ctx, op[1]).u64 | uint32_t(op[2] << 16);
++        break;
++      case PPC_INST_XOR:
++        Gpr(ctx, op[0]).u64 = Gpr(ctx, op[1]).u64 ^ Gpr(ctx, op[2]).u64;
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_XORI:
++        Gpr(ctx, op[0]).u64 = Gpr(ctx, op[1]).u64 ^ op[2];
++        break;
++      case PPC_INST_XORIS:
++        Gpr(ctx, op[0]).u64 = Gpr(ctx, op[1]).u64 ^ uint32_t(op[2] << 16);
++        break;
++      case PPC_INST_EQV:
++        Gpr(ctx, op[0]).u64 = ~(Gpr(ctx, op[1]).u64 ^ Gpr(ctx, op[2]).u64);
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_CNTLZD: {
++        uint64_t s = Gpr(ctx, op[1]).u64;
++        Gpr(ctx, op[0]).u64 = s == 0 ? 64 : __builtin_clzll(s);
++        RecordForm(ctx, in);
++        break;
++      }
++      case PPC_INST_CNTLZW: {
++        uint32_t s = Gpr(ctx, op[1]).u32;
++        Gpr(ctx, op[0]).u64 = s == 0 ? 32 : __builtin_clz(s);
++        RecordForm(ctx, in);
++        break;
++      }
++      case PPC_INST_EXTSB:
++        Gpr(ctx, op[0]).s64 = Gpr(ctx, op[1]).s8;
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_EXTSH:
++        Gpr(ctx, op[0]).s64 = Gpr(ctx, op[1]).s16;
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_EXTSW:
++        Gpr(ctx, op[0]).s64 = Gpr(ctx, op[1]).s32;
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_CLRLWI:
++        Gpr(ctx, op[0]).u64 = Gpr(ctx, op[1]).u32 & ((1ull << (32 - op[2])) - 1);
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_CLRLDI:
++        // The builder computes 1 << (64 - n) on the host, whose shifts take the amount modulo 64.
++        Gpr(ctx, op[0]).u64 = Gpr(ctx, op[1]).u64 & ((1ull << ((64 - op[2]) & 63)) - 1);
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_RLDICL:
++        Gpr(ctx, op[0]).u64 =
++            __builtin_rotateleft64(Gpr(ctx, op[1]).u64, op[2]) & ComputeMask(op[3], 63);
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_RLDICR:
++        Gpr(ctx, op[0]).u64 =
++            __builtin_rotateleft64(Gpr(ctx, op[1]).u64, op[2]) & ComputeMask(0, op[3]);
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_RLDIC: {
++        uint32_t sh = op[2];
++        uint64_t mask = ComputeMask(op[3], 63 - sh);
++        Gpr(ctx, op[0]).u64 =
++            (sh ? __builtin_rotateleft64(Gpr(ctx, op[1]).u64, sh) : Gpr(ctx, op[1]).u64) & mask;
++        RecordForm(ctx, in);
++        break;
++      }
++      case PPC_INST_RLDCL:
++        Gpr(ctx, op[0]).u64 =
++            __builtin_rotateleft64(Gpr(ctx, op[1]).u64, Gpr(ctx, op[2]).u8 & 0x3F) &
++            ComputeMask(op[3], 63);
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_RLDCR:
++        Gpr(ctx, op[0]).u64 =
++            __builtin_rotateleft64(Gpr(ctx, op[1]).u64, Gpr(ctx, op[2]).u8 & 0x3F) &
++            ComputeMask(0, op[3]);
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_RLDIMI: {
++        uint64_t mask = ComputeMask(op[3], ~op[2]);
++        Gpr(ctx, op[0]).u64 = (__builtin_rotateleft64(Gpr(ctx, op[1]).u64, op[2]) & mask) |
++                              (Gpr(ctx, op[0]).u64 & ~mask);
++        RecordForm(ctx, in);
++        break;
++      }
++      case PPC_INST_ROTLDI:
++        Gpr(ctx, op[0]).u64 = __builtin_rotateleft64(Gpr(ctx, op[1]).u64, op[2]);
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_RLWIMI: {
++        uint64_t mask = ComputeMask(op[3] + 32, op[4] + 32);
++        uint64_t s = Gpr(ctx, op[1]).u32 | (Gpr(ctx, op[1]).u64 << 32);
++        Gpr(ctx, op[0]).u64 =
++            (__builtin_rotateleft64(s, op[2]) & mask) | (Gpr(ctx, op[0]).u64 & ~mask);
++        RecordForm(ctx, in);
++        break;
++      }
++      case PPC_INST_RLWINM: {
++        uint64_t s = Gpr(ctx, op[1]).u32 | (Gpr(ctx, op[1]).u64 << 32);
++        Gpr(ctx, op[0]).u64 =
++            __builtin_rotateleft64(s, op[2]) & ComputeMask(op[3] + 32, op[4] + 32);
++        RecordForm(ctx, in);
++        break;
++      }
++      case PPC_INST_RLWNM: {
++        uint64_t s = Gpr(ctx, op[1]).u32 | (Gpr(ctx, op[1]).u64 << 32);
++        Gpr(ctx, op[0]).u64 = __builtin_rotateleft64(s, Gpr(ctx, op[2]).u8 & 0x1F) &
++                              ComputeMask(op[3] + 32, op[4] + 32);
++        RecordForm(ctx, in);
++        break;
++      }
++      case PPC_INST_ROTLW:
++        Gpr(ctx, op[0]).u64 =
++            __builtin_rotateleft32(Gpr(ctx, op[1]).u32, Gpr(ctx, op[2]).u8 & 0x1F);
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_ROTLWI:
++        Gpr(ctx, op[0]).u64 = __builtin_rotateleft32(Gpr(ctx, op[1]).u32, op[2]);
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_SLD: {
++        uint8_t n = Gpr(ctx, op[2]).u8;
++        Gpr(ctx, op[0]).u64 = (n & 0x40) ? 0 : (Gpr(ctx, op[1]).u64 << (n & 0x7F));
++        RecordForm(ctx, in);
++        break;
++      }
++      case PPC_INST_SLW: {
++        uint8_t n = Gpr(ctx, op[2]).u8;
++        Gpr(ctx, op[0]).u64 = (n & 0x20) ? 0 : uint32_t(Gpr(ctx, op[1]).u32 << (n & 0x3F));
++        RecordForm(ctx, in);
++        break;
++      }
++      case PPC_INST_SRAD: {
++        uint64_t n = Gpr(ctx, op[2]).u64 & 0x7F;
++        if (n > 0x3F) {
++          n = 0x3F;
++        }
++        int64_t s = Gpr(ctx, op[1]).s64;
++        ctx.xer.ca = (s < 0) & (((s >> n) << n) != s);
++        Gpr(ctx, op[0]).s64 = s >> n;
++        RecordForm(ctx, in);
++        break;
++      }
++      case PPC_INST_SRADI:
++        if (op[2] != 0) {
++          int64_t s = Gpr(ctx, op[1]).s64;
++          ctx.xer.ca = (s < 0) & ((Gpr(ctx, op[1]).u64 & ComputeMask(64 - op[2], 63)) != 0);
++          Gpr(ctx, op[0]).s64 = s >> op[2];
++        } else {
++          ctx.xer.ca = 0;
++          Gpr(ctx, op[0]).s64 = Gpr(ctx, op[1]).s64;
++        }
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_SRAW: {
++        uint32_t n = Gpr(ctx, op[2]).u32 & 0x3F;
++        if (n > 0x1F) {
++          n = 0x1F;
++        }
++        int32_t s = Gpr(ctx, op[1]).s32;
++        ctx.xer.ca = (s < 0) & (((s >> n) << n) != s);
++        Gpr(ctx, op[0]).s64 = s >> n;
++        RecordForm(ctx, in);
++        break;
++      }
++      case PPC_INST_SRAWI:
++        if (op[2] != 0) {
++          int32_t s = Gpr(ctx, op[1]).s32;
++          ctx.xer.ca = (s < 0) & ((Gpr(ctx, op[1]).u32 & ComputeMask(64 - op[2], 63)) != 0);
++          Gpr(ctx, op[0]).s64 = s >> op[2];
++        } else {
++          ctx.xer.ca = 0;
++          Gpr(ctx, op[0]).s64 = Gpr(ctx, op[1]).s32;
++        }
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_SRD: {
++        uint8_t n = Gpr(ctx, op[2]).u8;
++        Gpr(ctx, op[0]).u64 = (n & 0x40) ? 0 : (Gpr(ctx, op[1]).u64 >> (n & 0x7F));
++        RecordForm(ctx, in);
++        break;
++      }
++      case PPC_INST_SRW: {
++        uint8_t n = Gpr(ctx, op[2]).u8;
++        Gpr(ctx, op[0]).u64 = (n & 0x20) ? 0 : (Gpr(ctx, op[1]).u32 >> (n & 0x3F));
++        RecordForm(ctx, in);
++        break;
++      }
++
++      //=======================================================================
++      // Condition register logic (logical.cpp, emitCRBitOperation)
++      //=======================================================================
++      case PPC_INST_CRAND:
++        CrBit(ctx, op[0]) = uint8_t(CrBit(ctx, op[1]) & CrBit(ctx, op[2]));
++        break;
++      case PPC_INST_CRANDC:
++        CrBit(ctx, op[0]) = uint8_t(CrBit(ctx, op[1]) & !CrBit(ctx, op[2]));
++        break;
++      case PPC_INST_CREQV:
++        CrBit(ctx, op[0]) = !(CrBit(ctx, op[1]) ^ CrBit(ctx, op[2]));
++        break;
++      case PPC_INST_CRNAND:
++        CrBit(ctx, op[0]) = !(CrBit(ctx, op[1]) & CrBit(ctx, op[2]));
++        break;
++      case PPC_INST_CRNOR:
++        CrBit(ctx, op[0]) = !(CrBit(ctx, op[1]) | CrBit(ctx, op[2]));
++        break;
++      case PPC_INST_CROR:
++        CrBit(ctx, op[0]) = uint8_t(CrBit(ctx, op[1]) | CrBit(ctx, op[2]));
++        break;
++      case PPC_INST_CRORC:
++        CrBit(ctx, op[0]) = uint8_t(CrBit(ctx, op[1]) | !CrBit(ctx, op[2]));
++        break;
++      case PPC_INST_CRXOR:
++        CrBit(ctx, op[0]) = uint8_t(CrBit(ctx, op[1]) ^ CrBit(ctx, op[2]));
++        break;
++
++      //=======================================================================
++      // Compares (comparison.cpp)
++      //=======================================================================
++      case PPC_INST_CMPD:
++        Cr(ctx, op[0]).compare<int64_t>(Gpr(ctx, op[1]).s64, Gpr(ctx, op[2]).s64, ctx.xer);
++        break;
++      case PPC_INST_CMPDI:
++        Cr(ctx, op[0]).compare<int64_t>(Gpr(ctx, op[1]).s64, int32_t(op[2]), ctx.xer);
++        break;
++      case PPC_INST_CMPLD:
++        Cr(ctx, op[0]).compare<uint64_t>(Gpr(ctx, op[1]).u64, Gpr(ctx, op[2]).u64, ctx.xer);
++        break;
++      case PPC_INST_CMPLDI:
++        Cr(ctx, op[0]).compare<uint64_t>(Gpr(ctx, op[1]).u64, op[2], ctx.xer);
++        break;
++      case PPC_INST_CMPLW:
++        Cr(ctx, op[0]).compare<uint32_t>(Gpr(ctx, op[1]).u32, Gpr(ctx, op[2]).u32, ctx.xer);
++        break;
++      case PPC_INST_CMPLWI:
++        Cr(ctx, op[0]).compare<uint32_t>(Gpr(ctx, op[1]).u32, op[2], ctx.xer);
++        break;
++      case PPC_INST_CMPW:
++        Cr(ctx, op[0]).compare<int32_t>(Gpr(ctx, op[1]).s32, Gpr(ctx, op[2]).s32, ctx.xer);
++        break;
++      case PPC_INST_CMPWI:
++        Cr(ctx, op[0]).compare<int32_t>(Gpr(ctx, op[1]).s32, int32_t(op[2]), ctx.xer);
++        break;
++
++      //=======================================================================
++      // Integer loads and stores (memory.cpp). D-form: rD, d, rA; X-form: rD, rA, rB; rA = 0
++      // means the literal 0 except in the update forms.
++      //=======================================================================
++      case PPC_INST_LI:
++        Gpr(ctx, op[0]).s64 = int32_t(op[1]);
++        break;
++      case PPC_INST_LIS:
++        Gpr(ctx, op[0]).s64 = int32_t(op[1] << 16);
++        break;
++
++#define REX_D_EA() ((op[2] != 0 ? Gpr(ctx, op[2]).u32 : 0u) + uint32_t(int32_t(op[1])))
++#define REX_X_EA() ((op[1] != 0 ? Gpr(ctx, op[1]).u32 : 0u) + Gpr(ctx, op[2]).u32)
++#define REX_D_UPDATE_EA() (uint32_t(int32_t(op[1])) + Gpr(ctx, op[2]).u32)
++#define REX_X_UPDATE_EA() (Gpr(ctx, op[1]).u32 + Gpr(ctx, op[2]).u32)
++
++      case PPC_INST_LBZ:
++        Gpr(ctx, op[0]).u64 = Load8(base, REX_D_EA());
++        break;
++      case PPC_INST_LBZX:
++        Gpr(ctx, op[0]).u64 = Load8(base, REX_X_EA());
++        break;
++      case PPC_INST_LBZU: {
++        uint32_t ea = REX_D_UPDATE_EA();
++        Gpr(ctx, op[0]).u64 = Load8(base, ea);
++        Gpr(ctx, op[2]).u32 = ea;
++        break;
++      }
++      case PPC_INST_LBZUX: {
++        uint32_t ea = REX_X_UPDATE_EA();
++        Gpr(ctx, op[0]).u64 = Load8(base, ea);
++        Gpr(ctx, op[1]).u32 = ea;
++        break;
++      }
++      case PPC_INST_LHZ:
++        Gpr(ctx, op[0]).u64 = Load16(base, REX_D_EA());
++        break;
++      case PPC_INST_LHZX:
++        Gpr(ctx, op[0]).u64 = Load16(base, REX_X_EA());
++        break;
++      case PPC_INST_LHZU: {
++        uint32_t ea = REX_D_UPDATE_EA();
++        Gpr(ctx, op[0]).u64 = Load16(base, ea);
++        Gpr(ctx, op[2]).u32 = ea;
++        break;
++      }
++      case PPC_INST_LHZUX: {
++        uint32_t ea = REX_X_UPDATE_EA();
++        Gpr(ctx, op[0]).u64 = Load16(base, ea);
++        Gpr(ctx, op[1]).u32 = ea;
++        break;
++      }
++      case PPC_INST_LHA:
++        Gpr(ctx, op[0]).s64 = int16_t(Load16(base, REX_D_EA()));
++        break;
++      case PPC_INST_LHAX:
++        Gpr(ctx, op[0]).s64 = int16_t(Load16(base, REX_X_EA()));
++        break;
++      case PPC_INST_LHAU: {
++        uint32_t ea = REX_D_UPDATE_EA();
++        Gpr(ctx, op[0]).s64 = int16_t(Load16(base, ea));
++        Gpr(ctx, op[2]).u32 = ea;
++        break;
++      }
++      case PPC_INST_LHAUX: {
++        uint32_t ea = REX_X_UPDATE_EA();
++        Gpr(ctx, op[0]).s64 = int16_t(Load16(base, ea));
++        Gpr(ctx, op[1]).u32 = ea;
++        break;
++      }
++      case PPC_INST_LHBRX:
++        Gpr(ctx, op[0]).u64 = __builtin_bswap16(Load16(base, REX_X_EA()));
++        break;
++      case PPC_INST_LWZ:
++        Gpr(ctx, op[0]).u64 = Load32(base, REX_D_EA());
++        break;
++      case PPC_INST_LWZX:
++        Gpr(ctx, op[0]).u64 = Load32(base, REX_X_EA());
++        break;
++      case PPC_INST_LWZU: {
++        uint32_t ea = REX_D_UPDATE_EA();
++        Gpr(ctx, op[0]).u64 = Load32(base, ea);
++        Gpr(ctx, op[2]).u32 = ea;
++        break;
++      }
++      case PPC_INST_LWZUX: {
++        uint32_t ea = REX_X_UPDATE_EA();
++        Gpr(ctx, op[0]).u64 = Load32(base, ea);
++        Gpr(ctx, op[1]).u32 = ea;
++        break;
++      }
++      case PPC_INST_LWA:
++        Gpr(ctx, op[0]).s64 = int32_t(Load32(base, REX_D_EA()));
++        break;
++      case PPC_INST_LWAX:
++        Gpr(ctx, op[0]).s64 = int32_t(Load32(base, REX_X_EA()));
++        break;
++      case PPC_INST_LWAUX: {
++        uint32_t ea = REX_X_UPDATE_EA();
++        Gpr(ctx, op[0]).s64 = int32_t(Load32(base, ea));
++        Gpr(ctx, op[1]).u32 = ea;
++        break;
++      }
++      case PPC_INST_LWBRX:
++        Gpr(ctx, op[0]).u64 = __builtin_bswap32(Load32(base, REX_X_EA()));
++        break;
++      case PPC_INST_LD:
++        Gpr(ctx, op[0]).u64 = Load64(base, REX_D_EA());
++        break;
++      case PPC_INST_LDX:
++        Gpr(ctx, op[0]).u64 = Load64(base, REX_X_EA());
++        break;
++      case PPC_INST_LDU: {
++        uint32_t ea = REX_D_UPDATE_EA();
++        Gpr(ctx, op[0]).u64 = Load64(base, ea);
++        Gpr(ctx, op[2]).u32 = ea;
++        break;
++      }
++      case PPC_INST_LDUX: {
++        uint32_t ea = REX_X_UPDATE_EA();
++        Gpr(ctx, op[0]).u64 = Load64(base, ea);
++        Gpr(ctx, op[1]).u32 = ea;
++        break;
++      }
++      case PPC_INST_LWARX: {
++        // The reservation holds memory as it is (big-endian); stwcx. compares it raw.
++        uint32_t ea = REX_X_EA();
++        ctx.reserved.u32 = *reinterpret_cast<uint32_t*>(RawAddress(base, ea));
++        Gpr(ctx, op[0]).u64 = __builtin_bswap32(ctx.reserved.u32);
++        break;
++      }
++      case PPC_INST_LDARX: {
++        uint32_t ea = REX_X_EA();
++        ctx.reserved.u64 = *reinterpret_cast<uint64_t*>(RawAddress(base, ea));
++        Gpr(ctx, op[0]).u64 = __builtin_bswap64(ctx.reserved.u64);
++        break;
++      }
++
++      case PPC_INST_STB:
++        Store8(base, REX_D_EA(), Gpr(ctx, op[0]).u8);
++        break;
++      case PPC_INST_STBX:
++        Store8(base, REX_X_EA(), Gpr(ctx, op[0]).u8);
++        break;
++      case PPC_INST_STBU: {
++        uint32_t ea = REX_D_UPDATE_EA();
++        Store8(base, ea, Gpr(ctx, op[0]).u8);
++        Gpr(ctx, op[2]).u32 = ea;
++        break;
++      }
++      case PPC_INST_STBUX: {
++        uint32_t ea = REX_X_UPDATE_EA();
++        Store8(base, ea, Gpr(ctx, op[0]).u8);
++        Gpr(ctx, op[1]).u32 = ea;
++        break;
++      }
++      case PPC_INST_STH:
++        Store16(base, REX_D_EA(), Gpr(ctx, op[0]).u16);
++        break;
++      case PPC_INST_STHX:
++        Store16(base, REX_X_EA(), Gpr(ctx, op[0]).u16);
++        break;
++      case PPC_INST_STHU: {
++        uint32_t ea = REX_D_UPDATE_EA();
++        Store16(base, ea, Gpr(ctx, op[0]).u16);
++        Gpr(ctx, op[2]).u32 = ea;
++        break;
++      }
++      case PPC_INST_STHUX: {
++        uint32_t ea = REX_X_UPDATE_EA();
++        Store16(base, ea, Gpr(ctx, op[0]).u16);
++        Gpr(ctx, op[1]).u32 = ea;
++        break;
++      }
++      case PPC_INST_STHBRX:
++        Store16(base, REX_X_EA(), __builtin_bswap16(Gpr(ctx, op[0]).u16));
++        break;
++      case PPC_INST_STW:
++        Store32(base, REX_D_EA(), Gpr(ctx, op[0]).u32);
++        break;
++      case PPC_INST_STWX:
++        Store32(base, REX_X_EA(), Gpr(ctx, op[0]).u32);
++        break;
++      case PPC_INST_STWU: {
++        uint32_t ea = REX_D_UPDATE_EA();
++        Store32(base, ea, Gpr(ctx, op[0]).u32);
++        Gpr(ctx, op[2]).u32 = ea;
++        break;
++      }
++      case PPC_INST_STWUX: {
++        uint32_t ea = REX_X_UPDATE_EA();
++        Store32(base, ea, Gpr(ctx, op[0]).u32);
++        Gpr(ctx, op[1]).u32 = ea;
++        break;
++      }
++      case PPC_INST_STWBRX:
++        Store32(base, REX_X_EA(), __builtin_bswap32(Gpr(ctx, op[0]).u32));
++        break;
++      case PPC_INST_STD:
++        Store64(base, REX_D_EA(), Gpr(ctx, op[0]).u64);
++        break;
++      case PPC_INST_STDX:
++        Store64(base, REX_X_EA(), Gpr(ctx, op[0]).u64);
++        break;
++      case PPC_INST_STDU: {
++        uint32_t ea = REX_D_UPDATE_EA();
++        Store64(base, ea, Gpr(ctx, op[0]).u64);
++        Gpr(ctx, op[2]).u32 = ea;
++        break;
++      }
++      case PPC_INST_STDUX: {
++        uint32_t ea = REX_X_UPDATE_EA();
++        Store64(base, ea, Gpr(ctx, op[0]).u64);
++        Gpr(ctx, op[1]).u32 = ea;
++        break;
++      }
++      case PPC_INST_STMW: {
++        uint32_t ea = REX_D_EA();
++        for (uint32_t i = op[0]; i <= 31; ++i) {
++          Store32(base, ea + (i - op[0]) * 4, Gpr(ctx, i).u32);
++        }
++        break;
++      }
++      case PPC_INST_STWCX: {
++        uint32_t ea = REX_X_EA();
++        ctx.cr0.lt = 0;
++        ctx.cr0.gt = 0;
++        ctx.cr0.eq = __sync_bool_compare_and_swap(
++            reinterpret_cast<uint32_t*>(RawAddress(base, ea)), uint32_t(ctx.reserved.s32),
++            __builtin_bswap32(Gpr(ctx, op[0]).u32));
++        ctx.cr0.so = ctx.xer.so;
++        break;
++      }
++      case PPC_INST_STDCX: {
++        uint32_t ea = REX_X_EA();
++        ctx.cr0.lt = 0;
++        ctx.cr0.gt = 0;
++        ctx.cr0.eq = __sync_bool_compare_and_swap(
++            reinterpret_cast<uint64_t*>(RawAddress(base, ea)), uint64_t(ctx.reserved.s64),
++            __builtin_bswap64(Gpr(ctx, op[0]).u64));
++        ctx.cr0.so = ctx.xer.so;
++        break;
++      }
++
++#undef REX_D_EA
++#undef REX_X_EA
++#undef REX_D_UPDATE_EA
++#undef REX_X_UPDATE_EA
++
++      //=======================================================================
++      // System, cache and special registers (system.cpp)
++      //=======================================================================
++      case PPC_INST_NOP:
++      case PPC_INST_ATTN:
++      case PPC_INST_EIEIO:
++      case PPC_INST_DB16CYC:
++      case PPC_INST_CCTPL:
++      case PPC_INST_CCTPM:
++      case PPC_INST_CCTPH:
++      case PPC_INST_DCBF:
++      case PPC_INST_DCBT:
++      case PPC_INST_DCBTST:
++      case PPC_INST_DCBST:
++        break;
++      case PPC_INST_SYNC:
++        std::atomic_thread_fence(std::memory_order_seq_cst);
++        break;
++      case PPC_INST_LWSYNC:
++        std::atomic_thread_fence(std::memory_order_acq_rel);
++        break;
++      case PPC_INST_DCBZ: {
++        uint32_t ea = ((op[0] != 0 ? Gpr(ctx, op[0]).u32 : 0u) + Gpr(ctx, op[1]).u32) & ~31u;
++        std::memset(RawAddress(base, ea), 0, 32);
++        break;
++      }
++      case PPC_INST_DCBZL: {
++        uint32_t ea = ((op[0] != 0 ? Gpr(ctx, op[0]).u32 : 0u) + Gpr(ctx, op[1]).u32) & ~127u;
++        std::memset(RawAddress(base, ea), 0, 128);
++        break;
++      }
++
++      // Traps take their fields from the word, so the generic and simplified forms (tweq, ...)
++      // share one implementation, as they share one builder.
++      case PPC_INST_TDI:
++      case PPC_INST_TDLGTI:
++      case PPC_INST_TDLLTI:
++      case PPC_INST_TDEQI:
++      case PPC_INST_TDLGEI:
++      case PPC_INST_TDLNLI:
++      case PPC_INST_TDLLEI:
++      case PPC_INST_TDLNGI:
++      case PPC_INST_TDGTI:
++      case PPC_INST_TDGEI:
++      case PPC_INST_TDNLI:
++      case PPC_INST_TDLTI:
++      case PPC_INST_TDLEI:
++      case PPC_INST_TDNGI:
++      case PPC_INST_TDNEI: {
++        uint32_t to = (in.word >> 21) & 0x1F;
++        PPCRegister& a = Gpr(ctx, (in.word >> 16) & 0x1F);
++        int64_t simm = int16_t(in.word & 0xFFFF);
++        ConditionalTrap<int64_t, uint64_t>(ctx, base, to, a.s64, a.u64, simm, uint64_t(simm));
++        break;
++      }
++      case PPC_INST_TWI:
++      case PPC_INST_TWLGTI:
++      case PPC_INST_TWLLTI:
++      case PPC_INST_TWEQI:
++      case PPC_INST_TWLGEI:
++      case PPC_INST_TWLNLI:
++      case PPC_INST_TWLLEI:
++      case PPC_INST_TWLNGI:
++      case PPC_INST_TWGTI:
++      case PPC_INST_TWGEI:
++      case PPC_INST_TWNLI:
++      case PPC_INST_TWLTI:
++      case PPC_INST_TWLEI:
++      case PPC_INST_TWNGI:
++      case PPC_INST_TWNEI: {
++        uint32_t to = (in.word >> 21) & 0x1F;
++        uint32_t ra = (in.word >> 16) & 0x1F;
++        int32_t simm = int16_t(in.word & 0xFFFF);
++        if (to == 0x1F && ra == 0) {
++          // twi 31, r0, <code>: an unconditional trap with a service code.
++          Trap(ctx, base, uint16_t(simm));
++          break;
++        }
++        PPCRegister& a = Gpr(ctx, ra);
++        ConditionalTrap<int32_t, uint32_t>(ctx, base, to, a.s32, a.u32, simm, uint32_t(simm));
++        break;
++      }
++      case PPC_INST_TD:
++      case PPC_INST_TDGE:
++      case PPC_INST_TDGT:
++      case PPC_INST_TDLE:
++      case PPC_INST_TDLT:
++      case PPC_INST_TDEQ:
++      case PPC_INST_TDNE:
++      case PPC_INST_TDLGE:
++      case PPC_INST_TDLGT:
++      case PPC_INST_TDLLE:
++      case PPC_INST_TDLLT: {
++        uint32_t to = (in.word >> 21) & 0x1F;
++        PPCRegister& a = Gpr(ctx, (in.word >> 16) & 0x1F);
++        PPCRegister& b = Gpr(ctx, (in.word >> 11) & 0x1F);
++        ConditionalTrap<int64_t, uint64_t>(ctx, base, to, a.s64, a.u64, b.s64, b.u64);
++        break;
++      }
++      case PPC_INST_TW:
++      case PPC_INST_TWGE:
++      case PPC_INST_TWGT:
++      case PPC_INST_TWLE:
++      case PPC_INST_TWLT:
++      case PPC_INST_TWEQ:
++      case PPC_INST_TWNE:
++      case PPC_INST_TWLGE:
++      case PPC_INST_TWLGT:
++      case PPC_INST_TWLLE:
++      case PPC_INST_TWLLT: {
++        uint32_t to = (in.word >> 21) & 0x1F;
++        PPCRegister& a = Gpr(ctx, (in.word >> 16) & 0x1F);
++        PPCRegister& b = Gpr(ctx, (in.word >> 11) & 0x1F);
++        ConditionalTrap<int32_t, uint32_t>(ctx, base, to, a.s32, a.u32, b.s32, b.u32);
++        break;
++      }
++
++      case PPC_INST_MR:
++        Gpr(ctx, op[0]).u64 = Gpr(ctx, op[1]).u64;
++        RecordForm(ctx, in);
++        break;
++      case PPC_INST_MCRF:
++        Cr(ctx, op[0]) = Cr(ctx, op[1]);
++        break;
++      case PPC_INST_MFXER:
++        // The builder shifts the bytes as int: so << 31 is negative and sign-extends.
++        Gpr(ctx, op[0]).u64 = uint64_t(int64_t(int32_t(
++            (uint32_t(ctx.xer.so) << 31) | (uint32_t(ctx.xer.ov) << 30) |
++            (uint32_t(ctx.xer.ca) << 29))));
++        break;
++      case PPC_INST_MFCTR:
++        Gpr(ctx, op[0]).u64 = ctx.ctr.u64;
++        break;
++      case PPC_INST_MFCR: {
++        uint32_t value = 0;
++        for (uint32_t i = 0; i < 32; ++i) {
++          value |= CrBit(ctx, i) ? (1u << (31 - i)) : 0;
++        }
++        Gpr(ctx, op[0]).u64 = value;
++        break;
++      }
++      case PPC_INST_MFOCRF: {
++        uint32_t fxm = op[1];
++        uint32_t field = 0;
++        for (uint32_t i = 0; i < 8; ++i) {
++          if (fxm & (0x80u >> i)) {
++            field = i;
++            break;
++          }
++        }
++        uint32_t shift = 28 - 4 * field;
++        const PPCCRRegister& cr = Cr(ctx, field);
++        // Shifted as int, like mfxer: lt of cr0 lands in bit 31 and sign-extends.
++        Gpr(ctx, op[0]).u64 = uint64_t(int64_t(int32_t(
++            (uint32_t(cr.lt) << (shift + 3)) | (uint32_t(cr.gt) << (shift + 2)) |
++            (uint32_t(cr.eq) << (shift + 1)) | (uint32_t(cr.so) << shift))));
++        break;
++      }
++      case PPC_INST_MFLR:
++        Gpr(ctx, op[0]).u64 = ctx.lr;
++        break;
++      case PPC_INST_MFTB:
++        Gpr(ctx, op[0]).u64 = rex::chrono::Clock::QueryGuestTickCount();
++        break;
++      case PPC_INST_MFTBU:
++        Gpr(ctx, op[0]).u64 = rex::chrono::Clock::QueryGuestTickCount() >> 32;
++        break;
++      case PPC_INST_MTCR: {
++        uint32_t value = Gpr(ctx, op[0]).u32;
++        for (uint32_t i = 0; i < 32; ++i) {
++          CrBit(ctx, i) = (value & (1u << (31 - i))) != 0;
++        }
++        break;
++      }
++      case PPC_INST_MTCRF:
++      case PPC_INST_MTOCRF: {
++        uint32_t fxm = op[0];
++        uint32_t value = Gpr(ctx, op[1]).u32;
++        for (uint32_t field = 0; field < 8; ++field) {
++          if (fxm & (0x80u >> field)) {
++            uint32_t base_bit = 28 - 4 * field;
++            for (uint32_t b = 0; b < 4; ++b) {
++              CrBit(ctx, field * 4 + b) = (value & (1u << (base_bit + 3 - b))) != 0;
++            }
++          }
++        }
++        break;
++      }
++      case PPC_INST_MTCTR:
++        ctx.ctr.u64 = Gpr(ctx, op[0]).u64;
++        break;
++      case PPC_INST_MTLR:
++        ctx.lr = Gpr(ctx, op[0]).u64;
++        break;
++      case PPC_INST_MTXER: {
++        uint64_t value = Gpr(ctx, op[0]).u64;
++        ctx.xer.so = (value & 0x80000000) != 0;
++        ctx.xer.ov = (value & 0x40000000) != 0;
++        ctx.xer.ca = (value & 0x20000000) != 0;
++        break;
++      }
++
++      //=======================================================================
++      // Branches (control_flow.cpp). The generated code returns to its C++ caller on blr
++      // whatever lr holds, and continues after a call when the callee returns; so does the
++      // interpreter.
++      //=======================================================================
++      case PPC_INST_B:
++        if (branch(op[0])) {
++          return {};
++        }
++        break;
++      case PPC_INST_BL: {
++        uint32_t target = op[0];
++        ctx.lr = next;
++        if (PPCFunc* function = Resolve(target)) {
++          function(ctx, base);
++        } else if (target != next) {
++          InterpreterResult result = Run(ctx, base, target);
++          if (result.status != InterpreterStatus::kReturned) {
++            return result;
++          }
++        }
++        // bl to the next instruction only reads the program counter into lr.
++        break;
++      }
++      case PPC_INST_BLR:
++        return {};
++      case PPC_INST_BLRL: {
++        uint64_t old_lr = ctx.lr;
++        ctx.lr = next;
++        InterpreterResult result = CallIndirect(ctx, base, uint32_t(old_lr));
++        if (result.status != InterpreterStatus::kReturned) {
++          return result;
++        }
++        break;
++      }
++      case PPC_INST_BCTR: {
++        // A recompiled function is a tail call; anything else is a jump, which covers the jump
++        // tables the generated code turns into a switch.
++        uint32_t target = ctx.ctr.u32;
++        if (PPCFunc* function = Resolve(target)) {
++          function(ctx, base);
++          return {};
++        }
++        next = target;
++        break;
++      }
++      case PPC_INST_BCTRL: {
++        ctx.lr = next;
++        InterpreterResult result = CallIndirect(ctx, base, ctx.ctr.u32);
++        if (result.status != InterpreterStatus::kReturned) {
++          return result;
++        }
++        break;
++      }
++      case PPC_INST_BNECTR:
++        if (!Cr(ctx, op[0]).eq) {
++          return CallIndirect(ctx, base, ctx.ctr.u32);
++        }
++        break;
++
++      case PPC_INST_BDZ:
++        --ctx.ctr.u64;
++        if (ctx.ctr.u32 == 0 && branch(op[0])) {
++          return {};
++        }
++        break;
++      case PPC_INST_BDNZ:
++        --ctx.ctr.u64;
++        if (ctx.ctr.u32 != 0 && branch(op[0])) {
++          return {};
++        }
++        break;
++      case PPC_INST_BDZLR:
++        --ctx.ctr.u64;
++        if (ctx.ctr.u32 == 0) {
++          return {};
++        }
++        break;
++      case PPC_INST_BDNZLR:
++        --ctx.ctr.u64;
++        if (ctx.ctr.u32 != 0) {
++          return {};
++        }
++        break;
++      case PPC_INST_BDNZF:
++        --ctx.ctr.u64;
++        if (ctx.ctr.u32 != 0 && !CrBit(ctx, op[0]) && branch(op[1])) {
++          return {};
++        }
++        break;
++      case PPC_INST_BDNZT:
++        --ctx.ctr.u64;
++        if (ctx.ctr.u32 != 0 && CrBit(ctx, op[0]) && branch(op[1])) {
++          return {};
++        }
++        break;
++      case PPC_INST_BDZF:
++        --ctx.ctr.u64;
++        if (ctx.ctr.u32 == 0 && !CrBit(ctx, op[0]) && branch(op[1])) {
++          return {};
++        }
++        break;
++
++#define REX_CONDITIONAL_BRANCH(id, condition)        \
++  case id:                                           \
++    if ((condition) && branch(op[1])) {              \
++      return {};                                     \
++    }                                                \
++    break;
++#define REX_CONDITIONAL_RETURN(id, condition) \
++  case id:                                    \
++    if (condition) {                          \
++      return {};                              \
++    }                                         \
++    break;
++
++        REX_CONDITIONAL_BRANCH(PPC_INST_BEQ, Cr(ctx, op[0]).eq)
++        REX_CONDITIONAL_BRANCH(PPC_INST_BNE, !Cr(ctx, op[0]).eq)
++        REX_CONDITIONAL_BRANCH(PPC_INST_BLT, Cr(ctx, op[0]).lt)
++        REX_CONDITIONAL_BRANCH(PPC_INST_BGE, !Cr(ctx, op[0]).lt)
++        REX_CONDITIONAL_BRANCH(PPC_INST_BGT, Cr(ctx, op[0]).gt)
++        REX_CONDITIONAL_BRANCH(PPC_INST_BLE, !Cr(ctx, op[0]).gt)
++        REX_CONDITIONAL_BRANCH(PPC_INST_BSO, Cr(ctx, op[0]).so)
++        REX_CONDITIONAL_BRANCH(PPC_INST_BNS, !Cr(ctx, op[0]).so)
++        REX_CONDITIONAL_RETURN(PPC_INST_BEQLR, Cr(ctx, op[0]).eq)
++        REX_CONDITIONAL_RETURN(PPC_INST_BNELR, !Cr(ctx, op[0]).eq)
++        REX_CONDITIONAL_RETURN(PPC_INST_BLTLR, Cr(ctx, op[0]).lt)
++        REX_CONDITIONAL_RETURN(PPC_INST_BGELR, !Cr(ctx, op[0]).lt)
++        REX_CONDITIONAL_RETURN(PPC_INST_BGTLR, Cr(ctx, op[0]).gt)
++        REX_CONDITIONAL_RETURN(PPC_INST_BLELR, !Cr(ctx, op[0]).gt)
++        REX_CONDITIONAL_RETURN(PPC_INST_BSOLR, Cr(ctx, op[0]).so)
++        REX_CONDITIONAL_RETURN(PPC_INST_BNSLR, !Cr(ctx, op[0]).so)
++
++#undef REX_CONDITIONAL_BRANCH
++#undef REX_CONDITIONAL_RETURN
++
++      default:
++        // Not implemented yet, not built by the code generator either, or not decodable.
++        return {in.id ? InterpreterStatus::kUnsupported : InterpreterStatus::kInvalid, pc,
++                in.word};
++    }
++    pc = next;
++  }
 +}
 +
 +}  // namespace
 +
 +InterpreterResult InterpretFunction(PPCContext& ctx, uint8_t* base, uint32_t address) {
-+  (void)ctx;
-+  uint32_t pc = address;
-+  uint32_t instruction = FetchInstruction(base, pc);
-+  ppc_insn insn;
-+  if (!tDecoder.Decode(pc, instruction, insn)) {
-+    return {InterpreterStatus::kInvalid, pc, instruction};
++  return Run(ctx, base, address);
++}
++
++void SetGuestFunctionResolver(GuestFunctionResolver resolver) {
++  gResolver = resolver ? resolver : &FindGuestFunction;
++  tResolved.clear();
++}
++
++void InterpretMissingFunction(PPCContext& ctx, uint8_t* base) {
++  uint32_t address = ctx.last_indirect_target;
++  {
++    static std::mutex mutex;
++    static std::unordered_set<uint32_t> logged;
++    std::lock_guard<std::mutex> lock(mutex);
++    if (logged.insert(address).second) {
++      REXCPU_WARN(
++          "Interpreting guest function 0x{:08X} (called from 0x{:08X}), which the code generator "
++          "did not find; add it to the manifest's function hints to recompile it",
++          address, uint32_t(ctx.lr));
++    }
 +  }
-+  // No form is implemented yet.
-+  return {InterpreterStatus::kUnsupported, pc, instruction};
++  InterpreterResult result = InterpretFunction(ctx, base, address);
++  if (result.status != InterpreterStatus::kReturned) {
++    REX_FATAL("The PowerPC interpreter cannot run {} at 0x{:08X} ({}), in guest function 0x{:08X}",
++              result.status == InterpreterStatus::kInvalid ? "the unknown instruction"
++                                                           : "the unsupported instruction",
++              result.address, DescribeInstruction(result.address, result.instruction), address);
++  }
 +}
 +
 +std::string DescribeInstruction(uint32_t address, uint32_t instruction) {
@@ -860,16 +2398,16 @@ index 0000000..61b84c4
 +)
 diff --git a/tests/interp_bench/bench_case.h b/tests/interp_bench/bench_case.h
 new file mode 100644
-index 0000000..b509f17
+index 0000000..b1a52c1
 --- /dev/null
 +++ b/tests/interp_bench/bench_case.h
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,79 @@
 +/**
 + * @file        tests/interp_bench/bench_case.h
 + * @brief       The cases of the PowerPC interpreter's differential bench
 + *
-+ * `rexglue interp-bench-gen` writes a table of these: one instruction word per case, followed by
-+ * `blr` at the case's address, and the code generator's function for it.
++ * `rexglue interp-bench-gen` writes a table of these: the instruction under test at the start of
++ * each case's code, and the code generator's function for that code.
 + *
 + * @license     BSD 3-Clause License
 + *              See LICENSE file in the project root for full license text.
@@ -893,6 +2431,15 @@ index 0000000..b509f17
 +  kXForm,
 +};
 +
++// What the bench sets up before a branch case.
++enum class BenchSetup : uint8_t {
++  kNone,
++  // bctr, bctrl, bnectr: CTR holds the callee's address.
++  kCtrToCallee,
++  // blrl: LR holds the callee's address.
++  kLrToCallee,
++};
++
 +struct BenchCase {
 +  uint32_t address;
 +  uint32_t instruction;
@@ -908,20 +2455,38 @@ index 0000000..b509f17
 +  // For stwcx. and stdcx.: size of the reservation, which the bench sometimes makes match memory
 +  // so that the store happens.
 +  uint8_t reserve_size;
++  BenchSetup setup;
 +  // The code generator emitted a trap for this instruction (operand values its builder does not
 +  // handle): the interpreter must stop on it rather than run it.
 +  bool recompiled_traps;
 +  PPCFunc* recompiled;
 +};
 +
++// The guest code of all cases, which the interpreter fetches from guest memory: a callee, a
++// recompiled function the branch cases call and jump to, then the cases.
++struct BenchImage {
++  uint32_t base;
++  // Size the recompiled code was configured with; the table of functions for indirect calls
++  // starts right after it (REX_LOOKUP_FUNC).
++  uint32_t size;
++  size_t word_count;
++  const uint32_t* words;
++  struct {
++    uint32_t address;
++    PPCFunc* function;
++  } callee;
++};
++
 +extern const BenchCase* const kBenchCases[];
 +extern const size_t kBenchCaseCount;
++extern const BenchImage kBenchImage;
++extern const uint32_t kBenchImageWords[];
 diff --git a/tests/interp_bench/bench_main.cpp b/tests/interp_bench/bench_main.cpp
 new file mode 100644
-index 0000000..a58114e
+index 0000000..8a5e710
 --- /dev/null
 +++ b/tests/interp_bench/bench_main.cpp
-@@ -0,0 +1,727 @@
+@@ -0,0 +1,755 @@
 +/**
 + * @file        tests/interp_bench/bench_main.cpp
 + * @brief       Differential bench of the PowerPC interpreter
@@ -1022,22 +2587,31 @@ index 0000000..a58114e
 +  return true;
 +}
 +
-+// Writes each case's instruction and the blr after it where the interpreter fetches them.
++// Writes the cases' code where the interpreter fetches it, and the callee into the table of
++// functions the recompiled code's indirect calls look up (REX_LOOKUP_FUNC: two bytes of table per
++// byte of code, right after the image).
 +bool WriteCode() {
-+  if (kBenchCaseCount == 0) {
-+    return true;
-+  }
-+  uint32_t first = kBenchCases[0]->address;
-+  uint32_t last = kBenchCases[kBenchCaseCount - 1]->address + 8;
-+  if (!MakeAccessible(first, last - first)) {
++  const BenchImage& image = kBenchImage;
++  if (!MakeAccessible(image.base, image.word_count * 4)) {
 +    return false;
 +  }
-+  for (size_t i = 0; i < kBenchCaseCount; ++i) {
-+    uint32_t words[2] = {__builtin_bswap32(kBenchCases[i]->instruction),
-+                         __builtin_bswap32(0x4E800020u)};
-+    std::memcpy(gBase + kBenchCases[i]->address, words, sizeof(words));
++  for (size_t i = 0; i < image.word_count; ++i) {
++    uint32_t big_endian = __builtin_bswap32(image.words[i]);
++    std::memcpy(gBase + image.base + i * 4, &big_endian, 4);
 +  }
++  uint64_t table = uint64_t(image.base) + image.size;
++  if (!MakeAccessible(table, uint64_t(image.size) * 2)) {
++    return false;
++  }
++  PPCFunc* callee = image.callee.function;
++  std::memcpy(gBase + table + uint64_t(image.callee.address - image.base) * 2, &callee,
++              sizeof(callee));
 +  return true;
++}
++
++// The interpreter finds the callee as the dispatcher would find a recompiled function.
++PPCFunc* ResolveBenchFunction(uint32_t address) {
++  return address == kBenchImage.callee.address ? kBenchImage.callee.function : nullptr;
 +}
 +
 +//=============================================================================
@@ -1114,6 +2688,16 @@ index 0000000..a58114e
 +      default:
 +        return Next();
 +    }
++  }
++
++  // Counter values: decrementing branches compare the low word with zero, so small counts with and
++  // without an upper half matter most.
++  uint64_t Ctr() {
++    if (Chance(2)) {
++      return Gpr();
++    }
++    uint64_t count = Below(4);
++    return Chance(2) ? count : (Next() << 32) | count;
 +  }
 +
 +  // Doubles: zeros, infinities, quiet and signaling NaNs, denormals, values a single holds
@@ -1232,7 +2816,7 @@ index 0000000..a58114e
 +    cr.so = random.Below(2);
 +  }
 +  ctx.lr = random.Next();
-+  ctx.ctr.u64 = random.Gpr();
++  ctx.ctr.u64 = random.Ctr();
 +  ctx.xer.so = random.Below(2);
 +  ctx.xer.ov = random.Below(2);
 +  ctx.xer.ca = random.Below(2);
@@ -1278,6 +2862,14 @@ index 0000000..a58114e
 +      ctx.reserved.u64 = 0;
 +      std::memcpy(&ctx.reserved.u64, memory, c.reserve_size);
 +    }
++  }
++
++  // Indirect branches go to the callee; only the low word of CTR and LR is the address.
++  uint64_t callee = kBenchImage.callee.address | (random.Chance(4) ? random.Next() << 32 : 0);
++  if (c.setup == BenchSetup::kCtrToCallee) {
++    ctx.ctr.u64 = callee;
++  } else if (c.setup == BenchSetup::kLrToCallee) {
++    ctx.lr = callee;
 +  }
 +  return state;
 +}
@@ -1591,6 +3183,7 @@ index 0000000..a58114e
 +    std::fprintf(stderr, "Cannot set up guest memory\n");
 +    return 2;
 +  }
++  rex::runtime::SetGuestFunctionResolver(&ResolveBenchFunction);
 +  InstallFaultHandlers();
 +
 +  auto start = std::chrono::steady_clock::now();
