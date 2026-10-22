@@ -506,14 +506,14 @@ index a744375..92724c2 100644
    if (!count_remaining) {
      REXGPU_ERROR("{}: Packet too small, can't read VGT_DRAW_INITIATOR", opcode_name);
 diff --git a/src/graphics/flags.cpp b/src/graphics/flags.cpp
-index e2983a4..7e919de 100644
+index e2983a4..ad10b87 100644
 --- a/src/graphics/flags.cpp
 +++ b/src/graphics/flags.cpp
 @@ -25,6 +25,18 @@ REXCVAR_DEFINE_BOOL(gamma_render_target_as_unorm16, true, "GPU",
                      "Use R16G16B16A16_UNORM for gamma render targets (more accurate than sRGB)")
      .lifecycle(rex::cvar::Lifecycle::kHotReload);
  REXCVAR_DEFINE_STRING(dump_shaders, "", "GPU", "Path to dump shaders to");
-+REXCVAR_DEFINE_STRING(shader_compiler, "translator", "GPU",
++REXCVAR_DEFINE_STRING(shader_compiler, "xsc", "GPU",
 +                      "Shader compiler: translator (the SPIR-V translator, through SPIRV-Cross on "
 +                      "Metal) or xsc (the Xenos shader compiler, on Metal and on Vulkan with host "
 +                      "render targets; what it does not support yet goes to the translator)")
