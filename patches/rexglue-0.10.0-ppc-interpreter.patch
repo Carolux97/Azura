@@ -1,0 +1,1651 @@
+diff --git a/include/rex/ppc/context_access.h b/include/rex/ppc/context_access.h
+new file mode 100644
+index 0000000..d9d2d1a
+--- /dev/null
++++ b/include/rex/ppc/context_access.h
+@@ -0,0 +1,72 @@
++/**
++ * @file        rex/ppc/context_access.h
++ * @brief       Register access by number in PPCContext
++ *
++ * PPCContext names every register as a field of its own (r0..r31, f0..f31, v0..v127, cr0..cr7)
++ * because the recompiled code addresses them by name. Code that picks a register from an
++ * instruction's operand at run time (the interpreter, its differential bench) goes through these
++ * tables instead.
++ *
++ * @license     BSD 3-Clause License
++ *              See LICENSE file in the project root for full license text.
++ */
++
++#pragma once
++
++#include <array>
++#include <cstddef>
++#include <cstdint>
++
++#include <rex/ppc/context.h>
++
++namespace rex::ppc {
++
++namespace detail {
++
++template <typename T, size_t N>
++using MemberTable = std::array<T PPCContext::*, N>;
++
++inline constexpr MemberTable<PPCRegister, 32> kGprs = {
++    &PPCContext::r0,  &PPCContext::r1,  &PPCContext::r2,  &PPCContext::r3,  &PPCContext::r4,
++    &PPCContext::r5,  &PPCContext::r6,  &PPCContext::r7,  &PPCContext::r8,  &PPCContext::r9,
++    &PPCContext::r10, &PPCContext::r11, &PPCContext::r12, &PPCContext::r13, &PPCContext::r14,
++    &PPCContext::r15, &PPCContext::r16, &PPCContext::r17, &PPCContext::r18, &PPCContext::r19,
++    &PPCContext::r20, &PPCContext::r21, &PPCContext::r22, &PPCContext::r23, &PPCContext::r24,
++    &PPCContext::r25, &PPCContext::r26, &PPCContext::r27, &PPCContext::r28, &PPCContext::r29,
++    &PPCContext::r30, &PPCContext::r31};
++
++inline constexpr MemberTable<PPCRegister, 32> kFprs = {
++    &PPCContext::f0,  &PPCContext::f1,  &PPCContext::f2,  &PPCContext::f3,  &PPCContext::f4,
++    &PPCContext::f5,  &PPCContext::f6,  &PPCContext::f7,  &PPCContext::f8,  &PPCContext::f9,
++    &PPCContext::f10, &PPCContext::f11, &PPCContext::f12, &PPCContext::f13, &PPCContext::f14,
++    &PPCContext::f15, &PPCContext::f16, &PPCContext::f17, &PPCContext::f18, &PPCContext::f19,
++    &PPCContext::f20, &PPCContext::f21, &PPCContext::f22, &PPCContext::f23, &PPCContext::f24,
++    &PPCContext::f25, &PPCContext::f26, &PPCContext::f27, &PPCContext::f28, &PPCContext::f29,
++    &PPCContext::f30, &PPCContext::f31};
++
++inline constexpr MemberTable<PPCCRRegister, 8> kCrs = {
++    &PPCContext::cr0, &PPCContext::cr1, &PPCContext::cr2, &PPCContext::cr3,
++    &PPCContext::cr4, &PPCContext::cr5, &PPCContext::cr6, &PPCContext::cr7};
++
++}  // namespace detail
++
++inline PPCRegister& Gpr(PPCContext& ctx, uint32_t index) {
++  return ctx.*detail::kGprs[index & 31];
++}
++
++inline PPCRegister& Fpr(PPCContext& ctx, uint32_t index) {
++  return ctx.*detail::kFprs[index & 31];
++}
++
++inline PPCCRRegister& Cr(PPCContext& ctx, uint32_t index) {
++  return ctx.*detail::kCrs[index & 7];
++}
++
++// v0..v127 are consecutive fields of the same type, so they are indexed from v0.
++inline PPCVRegister& Vr(PPCContext& ctx, uint32_t index) {
++  static_assert(offsetof(PPCContext, v127) - offsetof(PPCContext, v0) ==
++                127 * sizeof(PPCVRegister));
++  return (&ctx.v0)[index & 127];
++}
++
++}  // namespace rex::ppc
+diff --git a/include/rex/system/ppc_interpreter.h b/include/rex/system/ppc_interpreter.h
+new file mode 100644
+index 0000000..bb74823
+--- /dev/null
++++ b/include/rex/system/ppc_interpreter.h
+@@ -0,0 +1,47 @@
++/**
++ * @file        rex/system/ppc_interpreter.h
++ * @brief       PowerPC interpreter for guest functions the code generator did not find
++ *
++ * The recompiled code covers the functions the code generator found ahead of time. A call to any
++ * other guest code (a pointer to a function the analysis never saw) is run here, from the original
++ * instructions in guest memory, with the same semantics and calling convention as the recompiled
++ * code. See docs/ppc-interpreter-design.md in the project for the design.
++ *
++ * @license     BSD 3-Clause License
++ *              See LICENSE file in the project root for full license text.
++ */
++
++#pragma once
++
++#include <cstdint>
++#include <string>
++
++#include <rex/ppc/context.h>
++
++namespace rex::runtime {
++
++// Why the interpreter stopped.
++enum class InterpreterStatus : uint8_t {
++  // The function returned to its caller (`blr` at its own level).
++  kReturned,
++  // An instruction the interpreter does not implement yet.
++  kUnsupported,
++  // A word the decoder does not know.
++  kInvalid,
++};
++
++struct InterpreterResult {
++  InterpreterStatus status = InterpreterStatus::kReturned;
++  // The instruction that stopped the interpreter, when it did not return.
++  uint32_t address = 0;
++  uint32_t instruction = 0;
++};
++
++// Runs the guest function at `address` until it returns to its caller, as a recompiled function
++// would: registers in `ctx`, guest memory at `base`.
++InterpreterResult InterpretFunction(PPCContext& ctx, uint8_t* base, uint32_t address);
++
++// The instruction word as the decoder prints it ("addi r3,r1,16"), for reports.
++std::string DescribeInstruction(uint32_t address, uint32_t instruction);
++
++}  // namespace rex::runtime
+diff --git a/src/codegen/builders.h b/src/codegen/builders.h
+index 24894f2..0ebd353 100644
+--- a/src/codegen/builders.h
++++ b/src/codegen/builders.h
+@@ -24,6 +24,12 @@ struct BuilderContext;
+  */
+ bool DispatchInstruction(int id, BuilderContext& ctx);
+ 
++/**
++ * Whether the dispatch table has a builder for a PPC instruction ID (PPC_INST_*). IDs without one
++ * are emitted as REX_UNIMPLEMENTED.
++ */
++bool IsInstructionImplemented(int id);
++
+ //=============================================================================
+ // Comparison Builders (CMP*, CMPL*)
+ //=============================================================================
+diff --git a/src/codegen/instruction_dispatch.cpp b/src/codegen/instruction_dispatch.cpp
+index 40ae269..510f463 100644
+--- a/src/codegen/instruction_dispatch.cpp
++++ b/src/codegen/instruction_dispatch.cpp
+@@ -638,6 +638,10 @@ static const std::unordered_map<int, Builder>& GetDispatchTable() {
+   return table;
+ }
+ 
++bool IsInstructionImplemented(int id) {
++  return GetDispatchTable().contains(id);
++}
++
+ bool DispatchInstruction(int id, BuilderContext& ctx) {
+   // VUPKHSB128/VUPKLSB128 misidentification fixup (moved from recompiler.cpp).
+   // Only fires when operands[2]==0x60; table entries for *128 variants
+diff --git a/src/codegen/ppc/disasm.cpp b/src/codegen/ppc/disasm.cpp
+index c7fe10b..77f3e57 100644
+--- a/src/codegen/ppc/disasm.cpp
++++ b/src/codegen/ppc/disasm.cpp
+@@ -13,15 +13,6 @@
+ 
+ namespace rex::codegen::ppc {
+ 
+-// Binutils PPC_OPCODE_* dialect bits (see thirdparty/disasm/ppc-dis.c)
+-constexpr uintptr_t kXenonDialect = 0x1          // PPC
+-                                    | 0x4        // 64
+-                                    | 0x4000     // POWER4
+-                                    | 0x8000000  // CELL
+-                                    | 0x200      // ALTIVEC
+-                                    | 0x1000000  // VMX_128
+-                                    | 0x10000;   // CLASSIC
+-
+ thread_local DisassemblerEngine gBigEndianDisassembler{BFD_ENDIAN_BIG, nullptr};
+ 
+ DisassemblerEngine::DisassemblerEngine(bfd_endian endian, const char* options) {
+diff --git a/src/codegen/ppc/disasm.h b/src/codegen/ppc/disasm.h
+index b1823e7..660fa09 100644
+--- a/src/codegen/ppc/disasm.h
++++ b/src/codegen/ppc/disasm.h
+@@ -16,6 +16,16 @@
+ 
+ namespace rex::codegen::ppc {
+ 
++// Binutils PPC_OPCODE_* dialect bits (see thirdparty/disasm/ppc-dis.c): the instructions the
++// Xenon CPU has. An opcode table entry is part of the dialect when its flags share a bit with it.
++constexpr uintptr_t kXenonDialect = 0x1          // PPC
++                                    | 0x4        // 64
++                                    | 0x4000     // POWER4
++                                    | 0x8000000  // CELL
++                                    | 0x200      // ALTIVEC
++                                    | 0x1000000  // VMX_128
++                                    | 0x10000;   // CLASSIC
++
+ //=============================================================================
+ // Low-level Disassembler Engine (binutils wrapper)
+ //=============================================================================
+diff --git a/src/rexglue/CMakeLists.txt b/src/rexglue/CMakeLists.txt
+index 5de4b70..24468d5 100644
+--- a/src/rexglue/CMakeLists.txt
++++ b/src/rexglue/CMakeLists.txt
+@@ -7,6 +7,7 @@ add_executable(rexglue
+     commands/codegen_command.cpp
+     commands/init_command.cpp
+     commands/test_recompiler.cpp
++    commands/interp_bench.cpp
+     commands/project_scan.cpp
+ )
+ 
+@@ -42,3 +43,7 @@ if(WIN32)
+ endif()
+ 
+ add_executable(rex::rexglue ALIAS rexglue)
++
++# Differential bench of the PowerPC interpreter, whose recompiled side this executable writes. Its
++# targets build only when asked for.
++add_subdirectory(${REXGLUE_ROOT}/tests/interp_bench ${CMAKE_CURRENT_BINARY_DIR}/interp_bench)
+diff --git a/src/rexglue/commands/interp_bench.cpp b/src/rexglue/commands/interp_bench.cpp
+new file mode 100644
+index 0000000..d1753a1
+--- /dev/null
++++ b/src/rexglue/commands/interp_bench.cpp
+@@ -0,0 +1,404 @@
++/**
++ * @file        rexglue/commands/interp_bench.cpp
++ * @brief       Case generator of the PowerPC interpreter's differential bench
++ *
++ * Every instruction form the code generator builds is run through the recompiled code and through
++ * the interpreter from the same state, and the results must match bit for bit (see
++ * tests/interp_bench). This command writes the recompiled side: for each form of the decoder's
++ * opcode table, a few instruction words with random operand fields, each followed by `blr` and
++ * recompiled by the real code generator as a function of its own, plus the table of cases the bench
++ * runs. No assembler is needed: a word belongs to a form when the decoder decodes it to that form.
++ *
++ * @license     BSD 3-Clause License
++ */
++
++#include "interp_bench.h"
++#include "../ui/ui.h"
++
++#include <algorithm>
++#include <array>
++#include <cstring>
++#include <filesystem>
++#include <fstream>
++#include <map>
++#include <memory>
++#include <random>
++#include <set>
++#include <string>
++#include <unordered_set>
++#include <vector>
++
++#include <CLI/CLI.hpp>
++#include <fmt/format.h>
++#include <nlohmann/json.hpp>
++
++#include <rex/codegen/binary_view.h>
++#include <rex/codegen/codegen_context.h>
++#include <rex/codegen/function_graph.h>
++#include <rex/codegen/template_registry.h>
++#include <rex/codegen/test_support.h>
++#include <rex/logging.h>
++
++#include "codegen/builders.h"
++#include "codegen/ppc/disasm.h"
++#include "codegen/template_registry_internal.h"
++
++// The decoder's opcode table (thirdparty/disasm/ppc-dis.c).
++extern "C" {
++extern const struct powerpc_opcode powerpc_opcodes[];
++extern const int powerpc_num_opcodes;
++}
++
++namespace rexglue::cli {
++
++namespace {
++
++namespace fs = std::filesystem;
++namespace codegen = rex::codegen;
++
++// Where the cases are linked, as for the recompiler tests. Each case takes 8 bytes: the
++// instruction, then `blr`.
++constexpr uint32_t kBenchBaseAddress = 0x82010000;
++constexpr uint32_t kBlr = 0x4E800020;
++// The generated functions are split over this many source files, so they compile in parallel.
++constexpr int kFunctionChunks = 8;
++// Random words tried per form before giving up on finding more cases for it.
++constexpr int kAttemptsPerForm = 4000;
++
++// How the bench must set up registers so that a memory access lands in its windows of guest
++// memory. Mirrors BenchAddressing in tests/interp_bench/bench_case.h.
++enum class Addressing { kNone, kDForm, kXForm };
++
++struct MemoryForm {
++  Addressing addressing;
++  // D-form instructions whose displacement's two low bits are part of the opcode (DS-form).
++  bool ds_form = false;
++  // Alignment the effective address needs on the host (atomic accesses).
++  uint8_t align = 1;
++  // Size of the reservation stwcx./stdcx. compare with memory.
++  uint8_t reserve_size = 0;
++  // Forms that write the effective address back to rA, where rA = 0 is an invalid form that the
++  // recompiled code reads as r0 rather than as the literal 0.
++  bool update = false;
++};
++
++// Instructions that access memory, by how their effective address is formed.
++const std::map<int, MemoryForm>& MemoryForms() {
++  static const std::map<int, MemoryForm> forms = [] {
++    std::map<int, MemoryForm> m;
++    for (int id : {PPC_INST_LBZ,  PPC_INST_LBZU,  PPC_INST_LHA,  PPC_INST_LHAU, PPC_INST_LHZ,
++                   PPC_INST_LHZU, PPC_INST_LWZ,   PPC_INST_LWZU, PPC_INST_LFD,  PPC_INST_LFDU,
++                   PPC_INST_LFS,  PPC_INST_LFSU,  PPC_INST_STB,  PPC_INST_STBU, PPC_INST_STH,
++                   PPC_INST_STHU, PPC_INST_STW,   PPC_INST_STWU, PPC_INST_STMW, PPC_INST_STFD,
++                   PPC_INST_STFDU, PPC_INST_STFS, PPC_INST_STFSU}) {
++      m[id] = {Addressing::kDForm};
++    }
++    for (int id : {PPC_INST_LWA, PPC_INST_LD, PPC_INST_LDU, PPC_INST_STD, PPC_INST_STDU}) {
++      m[id] = {Addressing::kDForm, true};
++    }
++    for (int id :
++         {PPC_INST_LBZX,    PPC_INST_LBZUX,    PPC_INST_LHAX,     PPC_INST_LHAUX,   PPC_INST_LHBRX,
++          PPC_INST_LHZX,    PPC_INST_LHZUX,    PPC_INST_LWAX,     PPC_INST_LWAUX,   PPC_INST_LWZX,
++          PPC_INST_LWZUX,   PPC_INST_LWBRX,    PPC_INST_LDX,      PPC_INST_LDUX,    PPC_INST_LFDX,
++          PPC_INST_LFDUX,   PPC_INST_LFSX,     PPC_INST_LFSUX,    PPC_INST_STBX,    PPC_INST_STBUX,
++          PPC_INST_STHBRX,  PPC_INST_STHX,     PPC_INST_STHUX,    PPC_INST_STWX,    PPC_INST_STWUX,
++          PPC_INST_STWBRX,  PPC_INST_STDX,     PPC_INST_STDUX,    PPC_INST_STFDX,   PPC_INST_STFDUX,
++          PPC_INST_STFIWX,  PPC_INST_STFSX,    PPC_INST_STFSUX,   PPC_INST_LVX,     PPC_INST_LVX128,
++          PPC_INST_LVXL,    PPC_INST_LVXL128,  PPC_INST_LVLX,     PPC_INST_LVLX128, PPC_INST_LVRX,
++          PPC_INST_LVRX128, PPC_INST_LVSL,     PPC_INST_LVSR,     PPC_INST_LVEBX,   PPC_INST_LVEHX,
++          PPC_INST_LVEWX,   PPC_INST_LVEWX128, PPC_INST_STVEBX,   PPC_INST_STVEHX,  PPC_INST_STVEWX,
++          PPC_INST_STVEWX128, PPC_INST_STVLX,  PPC_INST_STVLX128, PPC_INST_STVLXL128,
++          PPC_INST_STVRX,   PPC_INST_STVRX128, PPC_INST_STVX,     PPC_INST_STVX128, PPC_INST_STVXL,
++          PPC_INST_DCBF,    PPC_INST_DCBT,     PPC_INST_DCBTST,   PPC_INST_DCBZ,    PPC_INST_DCBZL,
++          PPC_INST_DCBST}) {
++      m[id] = {Addressing::kXForm};
++    }
++    for (int id : {PPC_INST_LBZUX, PPC_INST_LHAUX, PPC_INST_LHZUX, PPC_INST_LWAUX, PPC_INST_LWZUX,
++                   PPC_INST_LDUX, PPC_INST_LFDUX, PPC_INST_LFSUX, PPC_INST_STBUX, PPC_INST_STHUX,
++                   PPC_INST_STWUX, PPC_INST_STDUX, PPC_INST_STFDUX, PPC_INST_STFSUX}) {
++      m[id].update = true;
++    }
++    m[PPC_INST_LWARX] = {Addressing::kXForm, false, 8, 0};
++    m[PPC_INST_LDARX] = {Addressing::kXForm, false, 8, 0};
++    m[PPC_INST_STWCX] = {Addressing::kXForm, false, 8, 4};
++    m[PPC_INST_STDCX] = {Addressing::kXForm, false, 8, 8};
++    return m;
++  }();
++  return forms;
++}
++
++// Why a form of the opcode table has no cases.
++enum class Exclusion { kNone, kDialect, kNotBuilt, kBranch, kNondeterministic };
++
++// Branches change the program counter and are tested with layouts of their own. The time base
++// differs between two runs, and mtmsrd takes and releases the global lock.
++Exclusion ExcludeForm(const powerpc_opcode& form) {
++  if ((form.flags & codegen::ppc::kXenonDialect) == 0) {
++    return Exclusion::kDialect;
++  }
++  if (!codegen::IsInstructionImplemented(form.id)) {
++    return Exclusion::kNotBuilt;
++  }
++  uint32_t primary = uint32_t(form.opcode) >> 26;
++  uint32_t extended = (uint32_t(form.opcode) >> 1) & 0x3FF;
++  if (primary == 16 || primary == 18 || (primary == 19 && (extended == 16 || extended == 528))) {
++    return Exclusion::kBranch;
++  }
++  if (form.id == PPC_INST_MFTB || form.id == PPC_INST_MFTBU || form.id == PPC_INST_MTMSRD) {
++    return Exclusion::kNondeterministic;
++  }
++  return Exclusion::kNone;
++}
++
++struct Case {
++  uint32_t word;
++  const powerpc_opcode* form;
++  std::string text;
++  Addressing addressing = Addressing::kNone;
++  uint32_t ra = 0;
++  uint32_t rb = 0;
++  int32_t displacement = 0;
++  uint8_t align = 1;
++  uint8_t reserve_size = 0;
++};
++
++// Builders emit a debug trap for operand values they do not handle (some vpkd3d128 and vupkd3d128
++// types); the interpreter must stop on those too.
++bool RecompiledCodeTraps(const std::string& code) {
++  return code.find("__builtin_debugtrap") != std::string::npos ||
++         code.find("__builtin_trap") != std::string::npos ||
++         code.find("REX_UNIMPLEMENTED") != std::string::npos;
++}
++
++// Fills the addressing of a memory case from its word. Returns false for words the bench cannot
++// point at its windows: a D-form access without a base register (an absolute address), an X-form
++// access adding a register to itself, or an update form with rA = 0.
++bool SetAddressing(Case& c) {
++  auto it = MemoryForms().find(c.form->id);
++  if (it == MemoryForms().end()) {
++    return true;
++  }
++  const MemoryForm& memory = it->second;
++  c.addressing = memory.addressing;
++  c.align = memory.align;
++  c.reserve_size = memory.reserve_size;
++  c.ra = (c.word >> 16) & 0x1F;
++  c.rb = (c.word >> 11) & 0x1F;
++  if (memory.addressing == Addressing::kDForm) {
++    c.displacement = int16_t(c.word & (memory.ds_form ? 0xFFFC : 0xFFFF));
++    return c.ra != 0;
++  }
++  if (c.ra == 0) {
++    return !memory.update;
++  }
++  return c.ra != c.rb;
++}
++
++// A service trap reads a string from guest memory at r3 to log it, which no case sets up.
++bool IsServiceTrap(const Case& c) {
++  uint32_t to = (c.word >> 21) & 0x1F;
++  uint32_t ra = (c.word >> 16) & 0x1F;
++  uint16_t code = uint16_t(c.word & 0xFFFF);
++  return (c.word >> 26) == 3 && to == 0x1F && ra == 0 && (code == 20 || code == 26);
++}
++
++std::string CppString(std::string_view text) {
++  std::string out = "\"";
++  for (char ch : text) {
++    if (ch == '"' || ch == '\\') {
++      out += '\\';
++    }
++    out += ch;
++  }
++  return out + "\"";
++}
++
++const char* AddressingName(Addressing addressing) {
++  switch (addressing) {
++    case Addressing::kDForm:
++      return "BenchAddressing::kDForm";
++    case Addressing::kXForm:
++      return "BenchAddressing::kXForm";
++    default:
++      return "BenchAddressing::kNone";
++  }
++}
++
++bool GenerateInterpBench(const std::string& outDir, int casesPerForm, uint64_t seed) {
++  std::array<ui::KeyValueRow, 3> header_rows = {{
++      {"Output dir", outDir},
++      {"Cases per form", std::to_string(casesPerForm)},
++      {"Seed", std::to_string(seed)},
++  }};
++  ui::KeyValueBlock("Generating the interpreter bench cases:", header_rows);
++  fs::create_directories(outDir);
++
++  std::mt19937_64 rng(seed);
++  std::vector<Case> cases;
++  std::map<Exclusion, int> excluded;
++  std::vector<std::string> unreachable;
++  int forms_with_cases = 0;
++
++  for (int i = 0; i < powerpc_num_opcodes; ++i) {
++    const powerpc_opcode& form = powerpc_opcodes[i];
++    Exclusion exclusion = ExcludeForm(form);
++    if (exclusion != Exclusion::kNone) {
++      ++excluded[exclusion];
++      continue;
++    }
++    // Operand fields are the bits outside the form's mask. The decoder takes the first table
++    // entry that matches, so a word only counts for this form if it decodes to this entry.
++    std::unordered_set<uint32_t> words;
++    int found = 0;
++    for (int attempt = 0; attempt < kAttemptsPerForm && found < casesPerForm; ++attempt) {
++      uint32_t word = uint32_t(form.opcode) | (uint32_t(rng()) & ~uint32_t(form.mask));
++      if (!words.insert(word).second) {
++        continue;
++      }
++      uint32_t address = kBenchBaseAddress + uint32_t(cases.size()) * 8;
++      uint32_t big_endian = __builtin_bswap32(word);
++      ppc_insn insn;
++      if (codegen::ppc::Disassemble(&big_endian, 4, address, insn) != 4 || insn.opcode != &form) {
++        continue;
++      }
++      Case c{word, &form, fmt::format("{} {}", form.name, insn.op_str)};
++      if (!SetAddressing(c) || IsServiceTrap(c)) {
++        continue;
++      }
++      cases.push_back(std::move(c));
++      ++found;
++    }
++    if (found) {
++      ++forms_with_cases;
++    } else {
++      unreachable.push_back(form.name);
++    }
++  }
++
++  // The test binary: each case's word followed by blr, big-endian, with a test_ symbol per case
++  // so AnalyzeTestBinary makes each one a function.
++  std::vector<uint8_t> image(cases.size() * 8);
++  std::map<size_t, std::string> symbols;
++  for (size_t i = 0; i < cases.size(); ++i) {
++    uint32_t words[2] = {__builtin_bswap32(cases[i].word), __builtin_bswap32(kBlr)};
++    std::memcpy(image.data() + i * 8, words, 8);
++    symbols[kBenchBaseAddress + i * 8] = fmt::format("test_{}", i);
++  }
++
++  codegen::TestModule module;
++  module.Load(kBenchBaseAddress, image.data(), image.size());
++  module.set_name("bench");
++  codegen::RecompilerConfig config;
++  config.outDirectoryPath = outDir;
++  auto ctx =
++      codegen::CodegenContext::Create(codegen::BinaryView::fromModule(module), std::move(config));
++  codegen::AnalyzeTestBinary(ctx, "bench", symbols, kBenchBaseAddress, image.data(), image.size());
++  codegen::EmitContext emitCtx{ctx.binary(), ctx.Config(), ctx.graph, 0, nullptr};
++
++  std::array<std::string, kFunctionChunks> chunks;
++  std::string table;
++  size_t emitted = 0;
++  for (size_t i = 0; i < cases.size(); ++i) {
++    uint32_t address = kBenchBaseAddress + uint32_t(i) * 8;
++    const codegen::FunctionNode* fn = ctx.graph.getFunction(address);
++    std::string code = fn ? fn->emitCpp(emitCtx) : std::string();
++    if (code.empty()) {
++      REXLOG_WARN("No code emitted for case {} ({})", i, cases[i].text);
++      continue;
++    }
++    std::string name = fmt::format("bench_{:X}", address);
++    chunks[i * kFunctionChunks / cases.size()] += code + "\n";
++    const Case& c = cases[i];
++    table += fmt::format("REX_EXTERN({});\n", name);
++    table += fmt::format(
++        "static const BenchCase kCase{} = {{0x{:08X}, 0x{:08X}, {}, {}, {}, {}, {}, {}, {}, {}, "
++        "{}, {}}};\n",
++        i, address, c.word, CppString(c.form->name), CppString(c.text), AddressingName(c.addressing),
++        c.ra, c.rb, c.displacement, c.align, c.reserve_size, RecompiledCodeTraps(code), name);
++    ++emitted;
++  }
++
++  // The configuration header recompiled test code expects, with the bench's image.
++  codegen::TemplateRegistry registry;
++  nlohmann::json templateData;
++  templateData["image_base"] = fmt::format("{:X}", kBenchBaseAddress);
++  templateData["image_size"] = fmt::format("{:X}", std::max<size_t>(image.size(), 0x1000));
++  templateData["code_base"] = fmt::format("{:X}", kBenchBaseAddress);
++  templateData["code_size"] = fmt::format("{:X}", std::max<size_t>(image.size(), 0x1000));
++  {
++    std::ofstream out(fmt::format("{}/ppc_config.h", outDir));
++    out << codegen::renderWithJson(registry, "test/ppc_config_h", templateData);
++  }
++
++  for (int chunk = 0; chunk < kFunctionChunks; ++chunk) {
++    std::ofstream out(fmt::format("{}/bench_functions_{}.cpp", outDir, chunk));
++    out << "// Generated by rexglue interp-bench-gen\n\n"
++        << "#include \"ppc_config.h\"\n#include <rex/ppc.h>\n#include <rex/logging.h>\n\n"
++        << chunks[chunk];
++  }
++
++  {
++    std::ofstream out(fmt::format("{}/bench_cases.cpp", outDir));
++    out << "// Generated by rexglue interp-bench-gen\n\n"
++        << "#include <rex/ppc.h>\n\n#include \"bench_case.h\"\n\n"
++        << table << "\nconst BenchCase* const kBenchCases[] = {\n";
++    for (size_t i = 0; i < cases.size(); ++i) {
++      if (ctx.graph.getFunction(kBenchBaseAddress + uint32_t(i) * 8)) {
++        out << fmt::format("    &kCase{},\n", i);
++      }
++    }
++    out << "};\nconst size_t kBenchCaseCount = sizeof(kBenchCases) / sizeof(kBenchCases[0]);\n";
++  }
++
++  std::array<ui::KeyValueRow, 7> summary = {{
++      {"Forms with cases", std::to_string(forms_with_cases)},
++      {"Cases", std::to_string(emitted)},
++      {"Unreachable forms", std::to_string(unreachable.size())},
++      {"Excluded: other dialects", std::to_string(excluded[Exclusion::kDialect])},
++      {"Excluded: no builder", std::to_string(excluded[Exclusion::kNotBuilt])},
++      {"Excluded: branches", std::to_string(excluded[Exclusion::kBranch])},
++      {"Excluded: nondeterministic", std::to_string(excluded[Exclusion::kNondeterministic])},
++  }};
++  ui::KeyValueBlock("Interpreter bench cases:", summary);
++  if (!unreachable.empty()) {
++    // Forms another table entry always decodes first (aliases), or whose valid words this
++    // generator does not produce.
++    std::string list;
++    for (const auto& name : unreachable) {
++      list += (list.empty() ? "" : " ") + name;
++    }
++    REXLOG_INFO("Forms without cases: {}", list);
++  }
++  return emitted > 0;
++}
++
++struct InterpBenchArgs {
++  std::string output;
++  int cases_per_form = 6;
++  uint64_t seed = 1;
++};
++
++}  // namespace
++
++void RegisterInterpBenchGen(CLI::App& parent, const CliContext& ctx, DeferredAction& pending) {
++  (void)ctx;
++  auto args = std::make_shared<InterpBenchArgs>();
++  auto* sub = parent
++                  .add_subcommand("interp-bench-gen",
++                                  "Generate the recompiled side of the PPC interpreter bench")
++                  ->fallthrough();
++  sub->add_option("--output", args->output, "Output directory")->type_name("PATH")->required();
++  sub->add_option("--cases-per-form", args->cases_per_form, "Instruction words per form")
++      ->type_name("N");
++  sub->add_option("--seed", args->seed, "Seed of the random operand fields")->type_name("N");
++  sub->callback([args, &pending]() {
++    pending = [args]() -> rex::Result<void> {
++      if (!GenerateInterpBench(args->output, args->cases_per_form, args->seed)) {
++        return Err<void>(rex::ErrorCategory::Validation, "Interpreter bench generation failed");
++      }
++      return rex::Ok();
++    };
++  });
++}
++
++}  // namespace rexglue::cli
+diff --git a/src/rexglue/commands/interp_bench.h b/src/rexglue/commands/interp_bench.h
+new file mode 100644
+index 0000000..56a8f13
+--- /dev/null
++++ b/src/rexglue/commands/interp_bench.h
+@@ -0,0 +1,20 @@
++/**
++ * @file        rexglue/commands/interp_bench.h
++ * @brief       Case generator of the PowerPC interpreter's differential bench
++ *
++ * @license     BSD 3-Clause License
++ */
++
++#pragma once
++
++#include "../cli_utils.h"
++
++namespace CLI {
++class App;
++}
++
++namespace rexglue::cli {
++
++void RegisterInterpBenchGen(CLI::App& parent, const CliContext& ctx, DeferredAction& pending);
++
++}  // namespace rexglue::cli
+diff --git a/src/rexglue/main.cpp b/src/rexglue/main.cpp
+index 201b623..0bf4d41 100644
+--- a/src/rexglue/main.cpp
++++ b/src/rexglue/main.cpp
+@@ -9,6 +9,7 @@
+ #include "cli_utils.h"
+ #include "commands/codegen_command.h"
+ #include "commands/init_command.h"
++#include "commands/interp_bench.h"
+ #include "commands/test_recompiler.h"
+ #include "ui/ui.h"
+ 
+@@ -82,6 +83,7 @@ int main(int argc, char** argv) {
+   rexglue::cli::RegisterCodegen(app, ctx, pending);
+   rexglue::cli::RegisterInit(app, ctx, pending);
+   rexglue::cli::RegisterRecompileTests(app, ctx, pending);
++  rexglue::cli::RegisterInterpBenchGen(app, ctx, pending);
+ 
+   rex::cvar::RegisterCliOptions(app);
+ 
+diff --git a/src/system/CMakeLists.txt b/src/system/CMakeLists.txt
+index fc46d86..0a25c46 100644
+--- a/src/system/CMakeLists.txt
++++ b/src/system/CMakeLists.txt
+@@ -42,6 +42,7 @@ set(REXSYSTEM_SOURCES
+     map_parser.cpp
+     module.cpp
+     function_dispatcher.cpp
++    ppc_interpreter.cpp
+     gpu_plugin_loader.cpp
+     thread.cpp
+     thread_state.cpp
+@@ -88,6 +89,8 @@ target_link_libraries(rexruntime
+         aes128
+         mspack
+         xxHash::xxhash
++        # The code generator's PowerPC decoder, for the interpreter.
++        disasm
+ )
+ 
+ if(REXGLUE_ENABLE_TRACY)
+diff --git a/src/system/ppc_interpreter.cpp b/src/system/ppc_interpreter.cpp
+new file mode 100644
+index 0000000..9f33f5e
+--- /dev/null
++++ b/src/system/ppc_interpreter.cpp
+@@ -0,0 +1,91 @@
++/**
++ * @file        system/ppc_interpreter.cpp
++ * @brief       PowerPC interpreter for guest functions the code generator did not find
++ *
++ * Instructions are decoded by the code generator's own decoder (binutils, thirdparty/disasm), so
++ * the forms and operands are the ones the code generator's builders see. Each implemented form
++ * follows its builder in src/codegen/builders/; the differential bench (tests/interp_bench) runs
++ * both on the same states and requires the same result bit for bit.
++ *
++ * @license     BSD 3-Clause License
++ *              See LICENSE file in the project root for full license text.
++ */
++
++#include <rex/system/ppc_interpreter.h>
++
++#include <cstdio>
++#include <cstring>
++
++#include <fmt/format.h>
++
++#include <dis-asm.h>
++#include <ppc.h>
++
++namespace rex::runtime {
++
++namespace {
++
++// Binutils PPC_OPCODE_* dialect bits of the Xenon CPU, the same set the code generator decodes
++// with (kXenonDialect in src/codegen/ppc/disasm.h).
++constexpr uintptr_t kXenonDialect = 0x1          // PPC
++                                    | 0x4        // 64
++                                    | 0x4000     // POWER4
++                                    | 0x8000000  // CELL
++                                    | 0x200      // ALTIVEC
++                                    | 0x1000000  // VMX_128
++                                    | 0x10000;   // CLASSIC
++
++// The binutils decoder keeps its configuration in a disassemble_info, one per thread.
++struct Decoder {
++  disassemble_info info{};
++
++  Decoder() {
++    INIT_DISASSEMBLE_INFO(info, stdout, fprintf);
++    info.arch = bfd_arch_powerpc;
++    info.endian = BFD_ENDIAN_BIG;
++    info.private_data = reinterpret_cast<void*>(kXenonDialect);
++  }
++
++  // Decodes one instruction word. Returns false for a word no form of the dialect matches.
++  bool Decode(uint32_t address, uint32_t instruction, ppc_insn& out) {
++    uint32_t big_endian = __builtin_bswap32(instruction);
++    info.buffer = reinterpret_cast<bfd_byte*>(&big_endian);
++    info.buffer_vma = address;
++    info.buffer_length = 4;
++    out.opcode = nullptr;
++    return decode_insn_ppc(address, &info, &out) == 4 && out.opcode != nullptr;
++  }
++};
++
++thread_local Decoder tDecoder;
++
++uint32_t FetchInstruction(const uint8_t* base, uint32_t address) {
++  uint32_t big_endian;
++  std::memcpy(&big_endian, base + address, sizeof(big_endian));
++  return __builtin_bswap32(big_endian);
++}
++
++}  // namespace
++
++InterpreterResult InterpretFunction(PPCContext& ctx, uint8_t* base, uint32_t address) {
++  (void)ctx;
++  uint32_t pc = address;
++  uint32_t instruction = FetchInstruction(base, pc);
++  ppc_insn insn;
++  if (!tDecoder.Decode(pc, instruction, insn)) {
++    return {InterpreterStatus::kInvalid, pc, instruction};
++  }
++  // No form is implemented yet.
++  return {InterpreterStatus::kUnsupported, pc, instruction};
++}
++
++std::string DescribeInstruction(uint32_t address, uint32_t instruction) {
++  ppc_insn insn;
++  if (!tDecoder.Decode(address, instruction, insn)) {
++    return fmt::format(".long 0x{:08X}", instruction);
++  }
++  return insn.op_str[0] ? fmt::format("{} {}", insn.opcode->name, insn.op_str)
++                        : std::string(insn.opcode->name);
++}
++
++}  // namespace rex::runtime
+diff --git a/tests/interp_bench/CMakeLists.txt b/tests/interp_bench/CMakeLists.txt
+new file mode 100644
+index 0000000..61b84c4
+--- /dev/null
++++ b/tests/interp_bench/CMakeLists.txt
+@@ -0,0 +1,56 @@
++# Differential bench of the PowerPC interpreter (src/system/ppc_interpreter.cpp): every instruction
++# form the code generator builds runs through its recompiled code and through the interpreter from
++# the same random states, and the results must match bit for bit. Not part of the normal build:
++#   cmake --build <build dir> --target ppc_interp_bench
++#   <bin dir>/ppc_interp_bench [--seeds N] [--filter TEXT] [--report FILE] [--verbose]
++
++set(INTERP_BENCH_GEN_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
++set(INTERP_BENCH_FUNCTION_SOURCES "")
++foreach(chunk RANGE 0 7)
++    list(APPEND INTERP_BENCH_FUNCTION_SOURCES ${INTERP_BENCH_GEN_DIR}/bench_functions_${chunk}.cpp)
++endforeach()
++
++# The recompiled side, written by the real code generator.
++add_custom_command(
++    OUTPUT ${INTERP_BENCH_GEN_DIR}/ppc_config.h
++           ${INTERP_BENCH_GEN_DIR}/bench_cases.cpp
++           ${INTERP_BENCH_FUNCTION_SOURCES}
++    COMMAND $<TARGET_FILE:rexglue> interp-bench-gen --output=${INTERP_BENCH_GEN_DIR}
++    DEPENDS rexglue
++    COMMENT "Generating the interpreter bench cases with rexglue"
++    VERBATIM
++)
++
++add_executable(ppc_interp_bench EXCLUDE_FROM_ALL
++    bench_main.cpp
++    ${INTERP_BENCH_GEN_DIR}/bench_cases.cpp
++    ${INTERP_BENCH_FUNCTION_SOURCES}
++)
++
++# The game's generated code is compiled without the SDK's strict floating point model (see
++# REXGLUE_RECOMP_OPTIONS in the generated rexglue.cmake), so the compiler may fuse a multiply and an
++# add there. The bench compiles its recompiled side the same way, so the interpreter is compared
++# with what the game actually runs.
++set_source_files_properties(${INTERP_BENCH_FUNCTION_SOURCES}
++    PROPERTIES COMPILE_OPTIONS "-ffp-model=precise;-O2")
++
++target_include_directories(ppc_interp_bench PRIVATE
++    ${REXGLUE_ROOT}/include
++    ${CMAKE_CURRENT_SOURCE_DIR}
++    ${INTERP_BENCH_GEN_DIR}
++)
++
++target_link_libraries(ppc_interp_bench PRIVATE
++    simde
++    rexruntime
++    fmt::fmt
++)
++
++target_compile_options(ppc_interp_bench PRIVATE
++    -UTRACY_ENABLE -UREXGLUE_ENABLE_PROFILING
++    -UREXGLUE_ENABLE_PERF_COUNTERS -UREXGLUE_PROFILE_GUEST_FUNCTIONS
++)
++
++set_target_properties(ppc_interp_bench PROPERTIES
++    RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>
++)
+diff --git a/tests/interp_bench/bench_case.h b/tests/interp_bench/bench_case.h
+new file mode 100644
+index 0000000..b509f17
+--- /dev/null
++++ b/tests/interp_bench/bench_case.h
+@@ -0,0 +1,52 @@
++/**
++ * @file        tests/interp_bench/bench_case.h
++ * @brief       The cases of the PowerPC interpreter's differential bench
++ *
++ * `rexglue interp-bench-gen` writes a table of these: one instruction word per case, followed by
++ * `blr` at the case's address, and the code generator's function for it.
++ *
++ * @license     BSD 3-Clause License
++ *              See LICENSE file in the project root for full license text.
++ */
++
++#pragma once
++
++#include <cstddef>
++#include <cstdint>
++
++#include <rex/ppc/func.h>
++
++// How the bench sets up registers so that the case's memory access lands in its windows of guest
++// memory.
++enum class BenchAddressing : uint8_t {
++  // No memory access.
++  kNone,
++  // (rA) + displacement, rA != 0.
++  kDForm,
++  // (rA|0) + (rB), rA != rB.
++  kXForm,
++};
++
++struct BenchCase {
++  uint32_t address;
++  uint32_t instruction;
++  // The decoder's name of the form ("add."), and the instruction as it prints it.
++  const char* form;
++  const char* text;
++  BenchAddressing addressing;
++  uint8_t ra;
++  uint8_t rb;
++  int32_t displacement;
++  // Alignment the effective address needs (atomic accesses).
++  uint8_t align;
++  // For stwcx. and stdcx.: size of the reservation, which the bench sometimes makes match memory
++  // so that the store happens.
++  uint8_t reserve_size;
++  // The code generator emitted a trap for this instruction (operand values its builder does not
++  // handle): the interpreter must stop on it rather than run it.
++  bool recompiled_traps;
++  PPCFunc* recompiled;
++};
++
++extern const BenchCase* const kBenchCases[];
++extern const size_t kBenchCaseCount;
+diff --git a/tests/interp_bench/bench_main.cpp b/tests/interp_bench/bench_main.cpp
+new file mode 100644
+index 0000000..a58114e
+--- /dev/null
++++ b/tests/interp_bench/bench_main.cpp
+@@ -0,0 +1,727 @@
++/**
++ * @file        tests/interp_bench/bench_main.cpp
++ * @brief       Differential bench of the PowerPC interpreter
++ *
++ * Runs every case through the code generator's function for it and through the interpreter, from
++ * the same random state, and compares every field of PPCContext, the host floating point control
++ * register and the touched guest memory bit for bit.
++ *
++ * Usage: ppc_interp_bench [--seeds N] [--seed S] [--filter TEXT] [--report FILE] [--verbose]
++ *                         [--self-check]
++ *
++ * --self-check runs the recompiled code on both sides instead of the interpreter: every run must
++ * match, which shows the bench itself (states, memory windows, host floating point state) is
++ * deterministic.
++ *
++ * @license     BSD 3-Clause License
++ *              See LICENSE file in the project root for full license text.
++ */
++
++#include <algorithm>
++#include <array>
++#include <chrono>
++#include <csetjmp>
++#include <csignal>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <exception>
++#include <fstream>
++#include <limits>
++#include <map>
++#include <random>
++#include <string>
++#include <vector>
++
++#include <sys/mman.h>
++#include <unistd.h>
++
++#include <fmt/format.h>
++
++#include <rex/logging.h>
++#include <rex/ppc/context.h>
++#include <rex/ppc/context_access.h>
++#include <rex/system/ppc_interpreter.h>
++
++#include "bench_case.h"
++
++namespace {
++
++using rex::runtime::InterpreterResult;
++using rex::runtime::InterpreterStatus;
++
++//=============================================================================
++// Guest memory
++//=============================================================================
++
++// Guest memory is a 4 GB reservation, inaccessible except for the cases' code and two windows the
++// memory cases are pointed at: one at an ordinary address and one in the physical range at
++// 0xE0000000 and above, which the recompiled code maps 0x1000 bytes further on the host. An access
++// anywhere else faults, and the fault is reported for the case.
++constexpr uint64_t kGuestReserve = 0x100000000ull + 0x10000;
++constexpr uint32_t kWindowSize = 0x2000;
++
++struct Window {
++  uint32_t guest;
++  uint32_t host_offset;
++};
++
++constexpr std::array<Window, 2> kWindows = {{{0x40000000u, 0}, {0xE0010000u, 0x1000}}};
++
++uint8_t* gBase = nullptr;
++
++uint8_t* HostWindow(const Window& window) {
++  return gBase + window.guest + window.host_offset;
++}
++
++// Opens [offset, offset + size) of the reservation, rounded out to host pages (16 KB on Apple
++// silicon, so the physical window's 0x1000 shift is not page aligned).
++bool MakeAccessible(uint64_t offset, uint64_t size) {
++  uint64_t page = uint64_t(getpagesize());
++  uint64_t begin = offset & ~(page - 1);
++  uint64_t end = (offset + size + page - 1) & ~(page - 1);
++  return mprotect(gBase + begin, end - begin, PROT_READ | PROT_WRITE) == 0;
++}
++
++bool ReserveGuestMemory() {
++  void* reserved = mmap(nullptr, kGuestReserve, PROT_NONE, MAP_PRIVATE | MAP_ANON | MAP_NORESERVE,
++                        -1, 0);
++  if (reserved == MAP_FAILED) {
++    return false;
++  }
++  gBase = static_cast<uint8_t*>(reserved);
++  for (const Window& window : kWindows) {
++    if (!MakeAccessible(uint64_t(window.guest) + window.host_offset, kWindowSize)) {
++      return false;
++    }
++  }
++  return true;
++}
++
++// Writes each case's instruction and the blr after it where the interpreter fetches them.
++bool WriteCode() {
++  if (kBenchCaseCount == 0) {
++    return true;
++  }
++  uint32_t first = kBenchCases[0]->address;
++  uint32_t last = kBenchCases[kBenchCaseCount - 1]->address + 8;
++  if (!MakeAccessible(first, last - first)) {
++    return false;
++  }
++  for (size_t i = 0; i < kBenchCaseCount; ++i) {
++    uint32_t words[2] = {__builtin_bswap32(kBenchCases[i]->instruction),
++                         __builtin_bswap32(0x4E800020u)};
++    std::memcpy(gBase + kBenchCases[i]->address, words, sizeof(words));
++  }
++  return true;
++}
++
++//=============================================================================
++// Faults
++//=============================================================================
++
++// A fault inside a case (a stray memory access, an illegal instruction) jumps back to the bench,
++// which reports it for that case and carries on.
++sigjmp_buf gFaultJump;
++volatile sig_atomic_t gInCase = 0;
++
++void OnFault(int signal) {
++  if (gInCase) {
++    gInCase = 0;
++    siglongjmp(gFaultJump, signal);
++  }
++  std::signal(signal, SIG_DFL);
++  std::raise(signal);
++}
++
++void InstallFaultHandlers() {
++  struct sigaction action {};
++  action.sa_handler = OnFault;
++  sigemptyset(&action.sa_mask);
++  for (int signal : {SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGTRAP}) {
++    sigaction(signal, &action, nullptr);
++  }
++}
++
++//=============================================================================
++// State
++//=============================================================================
++
++struct State {
++  PPCContext ctx;
++  std::array<std::array<uint8_t, kWindowSize>, kWindows.size()> windows;
++  // The host floating point control register after the case ran.
++  uint32_t host_fpcr = 0;
++};
++
++class Random {
++ public:
++  explicit Random(uint64_t seed) : engine_(seed) {}
++
++  uint64_t Next() { return engine_(); }
++  uint32_t Below(uint32_t n) { return uint32_t(engine_() % n); }
++  bool Chance(uint32_t one_in) { return Below(one_in) == 0; }
++
++  // Integer register values: small numbers, sign- and zero-extended words, full doublewords and
++  // the edges of the signed and unsigned ranges.
++  uint64_t Gpr() {
++    static constexpr uint64_t kEdges[] = {0,
++                                          1,
++                                          ~0ull,
++                                          0x7FFFFFFFull,
++                                          0x80000000ull,
++                                          0xFFFFFFFFull,
++                                          0xFFFFFFFF80000000ull,
++                                          0x7FFFFFFFFFFFFFFFull,
++                                          0x8000000000000000ull,
++                                          0x7FFFull,
++                                          0x8000ull,
++                                          0xFFFFull,
++                                          0x100000000ull};
++    switch (Below(6)) {
++      case 0:
++        return uint64_t(int64_t(int32_t(Below(33)) - 16));
++      case 1:
++        return uint64_t(int64_t(int32_t(uint32_t(Next()))));
++      case 2:
++        return uint32_t(Next());
++      case 3:
++        return kEdges[Below(std::size(kEdges))];
++      default:
++        return Next();
++    }
++  }
++
++  // Doubles: zeros, infinities, quiet and signaling NaNs, denormals, values a single holds
++  // exactly, integers around the conversion limits, and random bits.
++  uint64_t Fpr() {
++    static constexpr double kSpecials[] = {0.0,
++                                           -0.0,
++                                           1.0,
++                                           -1.0,
++                                           0.5,
++                                           std::numeric_limits<double>::infinity(),
++                                           -std::numeric_limits<double>::infinity(),
++                                           std::numeric_limits<double>::max(),
++                                           std::numeric_limits<double>::denorm_min(),
++                                           std::numeric_limits<double>::min(),
++                                           2147483647.0,
++                                           2147483648.0,
++                                           -2147483648.0,
++                                           -2147483649.0,
++                                           4294967295.0,
++                                           9223372036854775807.0,
++                                           -9223372036854775808.0,
++                                           1.5,
++                                           2.5,
++                                           -2.5,
++                                           3.4028234663852886e38,
++                                           1.1754943508222875e-38,
++                                           1.401298464324817e-45};
++    switch (Below(8)) {
++      case 0: {
++        static constexpr uint64_t kNans[] = {0x7FF8000000000000ull, 0xFFF8000000000000ull,
++                                             0x7FF0000000000001ull, 0x7FF4000000000000ull,
++                                             0xFFFFFFFFFFFFFFFFull};
++        return kNans[Below(std::size(kNans))];
++      }
++      case 1:
++      case 2: {
++        double value = kSpecials[Below(std::size(kSpecials))];
++        uint64_t bits;
++        std::memcpy(&bits, &value, sizeof(bits));
++        return bits;
++      }
++      case 3: {
++        // A random single, widened.
++        uint32_t single_bits = uint32_t(Next());
++        float single;
++        std::memcpy(&single, &single_bits, sizeof(single));
++        double value = single;
++        uint64_t bits;
++        std::memcpy(&bits, &value, sizeof(bits));
++        return bits;
++      }
++      case 4: {
++        // An ordinary number of moderate magnitude.
++        double value = double(int64_t(Next() % 2000001) - 1000000) / double(1 + Below(1000));
++        uint64_t bits;
++        std::memcpy(&bits, &value, sizeof(bits));
++        return bits;
++      }
++      default:
++        return Next();
++    }
++  }
++
++  // Vector lanes: random bits, float specials, small integers and bytes.
++  void Vr(PPCVRegister& v) {
++    for (int lane = 0; lane < 4; ++lane) {
++      switch (Below(6)) {
++        case 0: {
++          static constexpr uint32_t kFloats[] = {
++              0x00000000, 0x80000000, 0x3F800000, 0xBF800000, 0x7F800000, 0xFF800000,
++              0x7FC00000, 0xFFC00000, 0x7F800001, 0x00000001, 0x007FFFFF, 0x00800000,
++              0x7F7FFFFF, 0x4F000000, 0xCF000000, 0x3F000000, 0x40490FDB};
++          v.u32[lane] = kFloats[Below(std::size(kFloats))];
++          break;
++        }
++        case 1: {
++          float value = float(int32_t(Below(2001)) - 1000) / float(1 + Below(100));
++          std::memcpy(&v.u32[lane], &value, sizeof(value));
++          break;
++        }
++        case 2:
++          v.u32[lane] = uint32_t(int32_t(Below(65)) - 32);
++          break;
++        default:
++          v.u32[lane] = uint32_t(Next());
++          break;
++      }
++    }
++  }
++
++ private:
++  std::mt19937_64 engine_;
++};
++
++// The host floating point control register when the bench starts, with the host's exception
++// policy (PPCFPSCRRegister::InitHost); cases start from it with the guest's bits randomized.
++uint32_t gHostFpcr = 0;
++
++State MakeState(const BenchCase& c, uint64_t seed) {
++  Random random(seed);
++  State state;
++  PPCContext& ctx = state.ctx;
++  for (uint32_t i = 0; i < 32; ++i) {
++    rex::ppc::Gpr(ctx, i).u64 = random.Gpr();
++    rex::ppc::Fpr(ctx, i).u64 = random.Fpr();
++  }
++  for (uint32_t i = 0; i < 128; ++i) {
++    random.Vr(rex::ppc::Vr(ctx, i));
++  }
++  for (uint32_t i = 0; i < 8; ++i) {
++    PPCCRRegister& cr = rex::ppc::Cr(ctx, i);
++    cr.lt = random.Below(2);
++    cr.gt = random.Below(2);
++    cr.eq = random.Below(2);
++    cr.so = random.Below(2);
++  }
++  ctx.lr = random.Next();
++  ctx.ctr.u64 = random.Gpr();
++  ctx.xer.so = random.Below(2);
++  ctx.xer.ov = random.Below(2);
++  ctx.xer.ca = random.Below(2);
++  ctx.reserved.u64 = random.Next();
++  ctx.msr = random.Chance(2) ? 0x200A000u : uint32_t(random.Next());
++  ctx.vscr_sat = random.Below(2);
++  ctx.last_indirect_target = uint32_t(random.Next());
++  // Rounding mode and flush-to-zero are the guest's bits of the host register.
++  uint32_t guest_bits = 0;
++  guest_bits |= PPCFPSCRRegister::Platform::GuestToHost[random.Below(4)];
++  if (random.Chance(2)) {
++    guest_bits |= uint32_t(PPCFPSCRRegister::FlushMask);
++  }
++  ctx.fpscr.csr = (gHostFpcr & ~PPCFPSCRRegister::GuestMask) | guest_bits;
++
++  for (auto& window : state.windows) {
++    for (size_t i = 0; i < window.size(); i += 8) {
++      uint64_t bits = random.Next();
++      std::memcpy(window.data() + i, &bits, 8);
++    }
++  }
++
++  // Point the access at the middle of a window, leaving room for the largest one (stmw, dcbzl).
++  if (c.addressing != BenchAddressing::kNone) {
++    size_t window_index = random.Below(kWindows.size());
++    const Window& window = kWindows[window_index];
++    uint32_t offset = (0x800 + random.Below(0x800)) & ~uint32_t(c.align - 1);
++    uint32_t ea = window.guest + offset;
++    // The effective address is 32 bits; the upper half of a base register does not take part.
++    uint64_t upper = random.Chance(4) ? (random.Next() << 32) : 0;
++    if (c.addressing == BenchAddressing::kDForm) {
++      rex::ppc::Gpr(ctx, c.ra).u64 = upper | uint32_t(ea - uint32_t(c.displacement));
++    } else if (c.ra == 0) {
++      rex::ppc::Gpr(ctx, c.rb).u64 = upper | ea;
++    } else {
++      int32_t index = int32_t(random.Below(0x201)) - 0x100;
++      rex::ppc::Gpr(ctx, c.rb).u64 = uint64_t(int64_t(index));
++      rex::ppc::Gpr(ctx, c.ra).u64 = upper | uint32_t(ea - uint32_t(index));
++    }
++    // The reservation holds memory as loaded (big-endian); matching it lets the store happen.
++    if (c.reserve_size && random.Chance(2)) {
++      const uint8_t* memory = state.windows[window_index].data() + offset;
++      ctx.reserved.u64 = 0;
++      std::memcpy(&ctx.reserved.u64, memory, c.reserve_size);
++    }
++  }
++  return state;
++}
++
++//=============================================================================
++// Running a side
++//=============================================================================
++
++struct Outcome {
++  // Signal of a fault, or 0.
++  int fault = 0;
++  std::string exception;
++  InterpreterResult interpreter;
++};
++
++void LoadWindows(const State& state) {
++  for (size_t i = 0; i < kWindows.size(); ++i) {
++    std::memcpy(HostWindow(kWindows[i]), state.windows[i].data(), kWindowSize);
++  }
++}
++
++void StoreWindows(State& state) {
++  for (size_t i = 0; i < kWindows.size(); ++i) {
++    std::memcpy(state.windows[i].data(), HostWindow(kWindows[i]), kWindowSize);
++  }
++}
++
++// Runs one side on `state` in place: memory and the host register are set from it before, and
++// read back into it after.
++template <typename Body>
++Outcome RunSide(State& state, Body&& body) {
++  Outcome outcome;
++  LoadWindows(state);
++  PPCFPSCRRegister::Platform::setcsr(state.ctx.fpscr.csr);
++  int fault = sigsetjmp(gFaultJump, 1);
++  if (fault == 0) {
++    gInCase = 1;
++    try {
++      body(state.ctx, outcome);
++    } catch (const std::exception& e) {
++      outcome.exception = e.what();
++    }
++    gInCase = 0;
++  } else {
++    outcome.fault = fault;
++  }
++  state.host_fpcr = PPCFPSCRRegister::Platform::getcsr();
++  PPCFPSCRRegister::Platform::setcsr(gHostFpcr);
++  StoreWindows(state);
++  return outcome;
++}
++
++//=============================================================================
++// Comparison
++//=============================================================================
++
++struct Field {
++  std::string name;
++  size_t offset;
++  size_t size;
++};
++
++std::vector<Field> ContextFields() {
++  std::vector<Field> fields;
++  PPCContext probe;
++  auto offset = [&](const void* field) {
++    return size_t(static_cast<const uint8_t*>(field) - reinterpret_cast<const uint8_t*>(&probe));
++  };
++  for (uint32_t i = 0; i < 32; ++i) {
++    fields.push_back({fmt::format("r{}", i), offset(&rex::ppc::Gpr(probe, i)), 8});
++  }
++  fields.push_back({"lr", offset(&probe.lr), 8});
++  fields.push_back({"ctr", offset(&probe.ctr), 8});
++  fields.push_back({"xer.so", offset(&probe.xer.so), 1});
++  fields.push_back({"xer.ov", offset(&probe.xer.ov), 1});
++  fields.push_back({"xer.ca", offset(&probe.xer.ca), 1});
++  fields.push_back({"reserved", offset(&probe.reserved), 8});
++  fields.push_back({"msr", offset(&probe.msr), 4});
++  for (uint32_t i = 0; i < 8; ++i) {
++    PPCCRRegister& cr = rex::ppc::Cr(probe, i);
++    fields.push_back({fmt::format("cr{}.lt", i), offset(&cr.lt), 1});
++    fields.push_back({fmt::format("cr{}.gt", i), offset(&cr.gt), 1});
++    fields.push_back({fmt::format("cr{}.eq", i), offset(&cr.eq), 1});
++    fields.push_back({fmt::format("cr{}.so", i), offset(&cr.so), 1});
++  }
++  fields.push_back({"fpscr.csr", offset(&probe.fpscr.csr), 4});
++  fields.push_back({"vscr_sat", offset(&probe.vscr_sat), 1});
++  fields.push_back({"last_indirect_target", offset(&probe.last_indirect_target), 4});
++  for (uint32_t i = 0; i < 32; ++i) {
++    fields.push_back({fmt::format("f{}", i), offset(&rex::ppc::Fpr(probe, i)), 8});
++  }
++  for (uint32_t i = 0; i < 128; ++i) {
++    fields.push_back({fmt::format("v{}", i), offset(&rex::ppc::Vr(probe, i)), 16});
++  }
++  return fields;
++}
++
++const std::vector<Field>& Fields() {
++  static const std::vector<Field> fields = ContextFields();
++  return fields;
++}
++
++std::string Hex(const uint8_t* bytes, size_t size) {
++  // Registers are little-endian host values: print them most significant byte first.
++  std::string out = "0x";
++  for (size_t i = size; i-- > 0;) {
++    out += fmt::format("{:02X}", bytes[i]);
++  }
++  return out;
++}
++
++// The first difference between the two sides' results, or an empty string.
++std::string Compare(const State& recompiled, const State& interpreted) {
++  auto* a = reinterpret_cast<const uint8_t*>(&recompiled.ctx);
++  auto* b = reinterpret_cast<const uint8_t*>(&interpreted.ctx);
++  for (const Field& field : Fields()) {
++    if (std::memcmp(a + field.offset, b + field.offset, field.size) != 0) {
++      return fmt::format("{}: recompiled {}, interpreted {}", field.name,
++                         Hex(a + field.offset, field.size), Hex(b + field.offset, field.size));
++    }
++  }
++  if (recompiled.host_fpcr != interpreted.host_fpcr) {
++    return fmt::format("host FPCR: recompiled 0x{:08X}, interpreted 0x{:08X}",
++                       recompiled.host_fpcr, interpreted.host_fpcr);
++  }
++  for (size_t w = 0; w < kWindows.size(); ++w) {
++    const auto& ma = recompiled.windows[w];
++    const auto& mb = interpreted.windows[w];
++    auto diff = std::mismatch(ma.begin(), ma.end(), mb.begin());
++    if (diff.first != ma.end()) {
++      size_t at = size_t(diff.first - ma.begin());
++      return fmt::format("memory 0x{:08X}: recompiled {:02X}, interpreted {:02X}",
++                         kWindows[w].guest + uint32_t(at), *diff.first, *diff.second);
++    }
++  }
++  return {};
++}
++
++//=============================================================================
++// Bench
++//=============================================================================
++
++struct Options {
++  int seeds = 32;
++  uint64_t seed = 1;
++  std::string filter;
++  std::string report;
++  bool verbose = false;
++  bool self_check = false;
++};
++
++struct FormStats {
++  int cases = 0;
++  int runs = 0;
++  int passed = 0;
++  int mismatched = 0;
++  int unsupported = 0;
++  int invalid = 0;
++  // Cases where the recompiled code traps and the interpreter stopped too.
++  int stopped = 0;
++  // Faults or exceptions in the recompiled code: a problem of the bench's setup, not of the
++  // interpreter.
++  int recompiled_failed = 0;
++  int interpreter_failed = 0;
++  std::string first_failure;
++};
++
++std::string DescribeFault(const Outcome& outcome) {
++  if (outcome.fault) {
++    return fmt::format("signal {}", outcome.fault);
++  }
++  return fmt::format("exception: {}", outcome.exception);
++}
++
++// A case whose recompiled code traps is not run there: the interpreter must refuse it.
++void RunTrappingCase(const BenchCase& c, FormStats& stats) {
++  ++stats.runs;
++  State state = MakeState(c, 0);
++  Outcome outcome = RunSide(state, [&](PPCContext& ctx, Outcome& o) {
++    o.interpreter = rex::runtime::InterpretFunction(ctx, gBase, c.address);
++  });
++  if (!outcome.fault && outcome.exception.empty() &&
++      outcome.interpreter.status != InterpreterStatus::kReturned) {
++    ++stats.stopped;
++    return;
++  }
++  ++stats.interpreter_failed;
++  if (stats.first_failure.empty()) {
++    stats.first_failure = fmt::format("{}: the recompiled code traps, the interpreter {}", c.text,
++                                      outcome.fault || !outcome.exception.empty()
++                                          ? DescribeFault(outcome)
++                                          : std::string("ran it"));
++  }
++}
++
++void RunCase(const BenchCase& c, const Options& options, FormStats& stats) {
++  ++stats.cases;
++  if (c.recompiled_traps) {
++    if (!options.self_check) {
++      RunTrappingCase(c, stats);
++    }
++    return;
++  }
++  for (int s = 0; s < options.seeds; ++s) {
++    uint64_t seed = options.seed * 0x9E3779B97F4A7C15ull + uint64_t(c.address) * 1000003u + s;
++    State initial = MakeState(c, seed);
++    ++stats.runs;
++
++    State recompiled = initial;
++    Outcome a = RunSide(recompiled, [&](PPCContext& ctx, Outcome&) { c.recompiled(ctx, gBase); });
++    if (a.fault || !a.exception.empty()) {
++      ++stats.recompiled_failed;
++      if (stats.first_failure.empty()) {
++        stats.first_failure =
++            fmt::format("{} (seed {}): recompiled code failed, {}", c.text, seed, DescribeFault(a));
++      }
++      continue;
++    }
++
++    State interpreted = initial;
++    Outcome b = RunSide(interpreted, [&](PPCContext& ctx, Outcome& outcome) {
++      if (options.self_check) {
++        c.recompiled(ctx, gBase);
++      } else {
++        outcome.interpreter = rex::runtime::InterpretFunction(ctx, gBase, c.address);
++      }
++    });
++    if (b.fault || !b.exception.empty()) {
++      ++stats.interpreter_failed;
++      if (stats.first_failure.empty()) {
++        stats.first_failure =
++            fmt::format("{} (seed {}): interpreter failed, {}", c.text, seed, DescribeFault(b));
++      }
++      continue;
++    }
++    if (b.interpreter.status == InterpreterStatus::kUnsupported) {
++      // The rest of the seeds would say the same.
++      ++stats.unsupported;
++      return;
++    }
++    if (b.interpreter.status == InterpreterStatus::kInvalid) {
++      ++stats.invalid;
++      if (stats.first_failure.empty()) {
++        stats.first_failure = fmt::format("{}: the interpreter cannot decode 0x{:08X} at 0x{:08X}",
++                                          c.text, b.interpreter.instruction, b.interpreter.address);
++      }
++      return;
++    }
++    std::string difference = Compare(recompiled, interpreted);
++    if (difference.empty()) {
++      ++stats.passed;
++      continue;
++    }
++    ++stats.mismatched;
++    if (stats.first_failure.empty()) {
++      stats.first_failure = fmt::format("{} (seed {}): {}", c.text, seed, difference);
++    }
++  }
++}
++
++bool ParseOptions(int argc, char** argv, Options& options) {
++  for (int i = 1; i < argc; ++i) {
++    std::string arg = argv[i];
++    auto value = [&]() -> const char* { return i + 1 < argc ? argv[++i] : nullptr; };
++    if (arg == "--seeds") {
++      const char* v = value();
++      if (!v) return false;
++      options.seeds = std::max(1, std::atoi(v));
++    } else if (arg == "--seed") {
++      const char* v = value();
++      if (!v) return false;
++      options.seed = std::strtoull(v, nullptr, 0);
++    } else if (arg == "--filter") {
++      const char* v = value();
++      if (!v) return false;
++      options.filter = v;
++    } else if (arg == "--report") {
++      const char* v = value();
++      if (!v) return false;
++      options.report = v;
++    } else if (arg == "--verbose") {
++      options.verbose = true;
++    } else if (arg == "--self-check") {
++      options.self_check = true;
++    } else {
++      return false;
++    }
++  }
++  return true;
++}
++
++}  // namespace
++
++int main(int argc, char** argv) {
++  Options options;
++  if (!ParseOptions(argc, argv, options)) {
++    std::fprintf(stderr,
++                 "Usage: %s [--seeds N] [--seed S] [--filter TEXT] [--report FILE] [--verbose] "
++                 "[--self-check]\n",
++                 argv[0]);
++    return 2;
++  }
++  // Only errors: the cases' traps log a warning each.
++  rex::InitLogging(nullptr, spdlog::level::err);
++  {
++    PPCFPSCRRegister host{};
++    host.InitHost();
++    gHostFpcr = host.csr;
++  }
++  if (!ReserveGuestMemory() || !WriteCode()) {
++    std::fprintf(stderr, "Cannot set up guest memory\n");
++    return 2;
++  }
++  InstallFaultHandlers();
++
++  auto start = std::chrono::steady_clock::now();
++  // Forms in the order of the opcode table, as the cases are.
++  std::vector<std::string> order;
++  std::map<std::string, FormStats> forms;
++  for (size_t i = 0; i < kBenchCaseCount; ++i) {
++    const BenchCase& c = *kBenchCases[i];
++    if (!options.filter.empty() && std::string(c.form).find(options.filter) == std::string::npos) {
++      continue;
++    }
++    auto [it, inserted] = forms.try_emplace(c.form);
++    if (inserted) {
++      order.push_back(c.form);
++    }
++    RunCase(c, options, it->second);
++  }
++  double seconds =
++      std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
++
++  int forms_passed = 0, forms_unsupported = 0, forms_failed = 0;
++  int cases = 0, runs = 0, runs_passed = 0;
++  std::ofstream report;
++  if (!options.report.empty()) {
++    report.open(options.report);
++    report << "form\tcases\truns\tpassed\tmismatched\tunsupported\tinvalid\tstopped\t"
++              "recompiled_failed\tinterpreter_failed\tfirst_failure\n";
++  }
++  for (const std::string& name : order) {
++    const FormStats& s = forms[name];
++    cases += s.cases;
++    runs += s.runs;
++    runs_passed += s.passed;
++    bool failed = s.mismatched || s.invalid || s.recompiled_failed || s.interpreter_failed;
++    if (failed) {
++      ++forms_failed;
++    } else if (s.unsupported && !s.passed) {
++      ++forms_unsupported;
++    } else {
++      ++forms_passed;
++    }
++    if (failed || options.verbose) {
++      std::printf("%-12s %s\n", name.c_str(),
++                  s.first_failure.empty() ? "ok" : s.first_failure.c_str());
++    }
++    if (report.is_open()) {
++      report << fmt::format("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n", name, s.cases,
++                            s.runs, s.passed, s.mismatched, s.unsupported, s.invalid, s.stopped,
++                            s.recompiled_failed, s.interpreter_failed, s.first_failure);
++    }
++  }
++  std::printf(
++      "Forms: %zu (passed %d, unsupported %d, failed %d). Cases: %d. Runs: %d, %d passed. "
++      "%.2f s.\n",
++      order.size(), forms_passed, forms_unsupported, forms_failed, cases, runs, runs_passed,
++      seconds);
++  return forms_failed ? 1 : 0;
++}

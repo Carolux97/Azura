@@ -141,6 +141,7 @@ apply_patch "${SDK_SRC}" "${ROOT}/patches/rexglue-0.10.0-edram-sample-space.patc
 apply_patch "${SDK_SRC}" "${ROOT}/patches/rexglue-0.10.0-input-race.patch"
 apply_patch "${SDK_SRC}" "${ROOT}/patches/rexglue-0.10.0-metal-backend.patch"
 apply_patch "${SDK_SRC}" "${ROOT}/patches/rexglue-0.10.0-xenos-shader-compiler.patch"
+apply_patch "${SDK_SRC}" "${ROOT}/patches/rexglue-0.10.0-ppc-interpreter.patch"
 apply_patch "${SDK_SRC}/thirdparty/utfcpp" "${ROOT}/patches/rexglue-0.10.0-utfcpp.patch"
 
 # On macOS, ensure the patched MoltenVK dylib is built and installed in the SDK before
