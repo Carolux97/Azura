@@ -42,6 +42,19 @@ index da8e432..b8c8cbd 100644
  
    uint32_t primary_buffer_ptr_ = 0;
    uint32_t primary_buffer_size_ = 0;
+diff --git a/include/rex/graphics/flags.h b/include/rex/graphics/flags.h
+index 2cf24c4..272c7e1 100644
+--- a/include/rex/graphics/flags.h
++++ b/include/rex/graphics/flags.h
+@@ -72,6 +72,8 @@ REXCVAR_DECLARE(bool, use_fuzzy_alpha_epsilon);
+ 
+ // GPU Shader Translation
+ REXCVAR_DECLARE(std::string, dump_shaders);
++REXCVAR_DECLARE(std::string, shader_compiler);
++REXCVAR_DECLARE(bool, xsc_debug_color_range);
+ REXCVAR_DECLARE(std::string, swap_post_effect);
+ 
+ #if REX_HAS_VULKAN
 diff --git a/include/rex/graphics/pipeline/render_target/cache.h b/include/rex/graphics/pipeline/render_target/cache.h
 index b246319..d57e36f 100644
 --- a/include/rex/graphics/pipeline/render_target/cache.h
@@ -58,11 +71,114 @@ index b246319..d57e36f 100644
    // Updates ownership_ranges_, adds the transfers needed for the ownership
    // change to transfers_append_out if it's not null.
    void ChangeOwnership(RenderTargetKey dest, uint32_t start_tiles_base_relative,
+diff --git a/include/rex/graphics/pipeline/shader/spirv.h b/include/rex/graphics/pipeline/shader/spirv.h
+index dd90ef7..6169777 100644
+--- a/include/rex/graphics/pipeline/shader/spirv.h
++++ b/include/rex/graphics/pipeline/shader/spirv.h
+@@ -19,6 +19,10 @@
+ 
+ namespace rex::graphics {
+ 
++namespace xsc {
++class XscShaderTranslator;
++}  // namespace xsc
++
+ class SpirvShader : public Shader {
+  public:
+   class SpirvTranslation : public Translation {
+@@ -63,6 +67,9 @@ class SpirvShader : public Shader {
+ 
+  private:
+   friend class SpirvShaderTranslator;
++  // The Xenos shader compiler fills the same bindings, so the backends bind its shaders the same
++  // way.
++  friend class xsc::XscShaderTranslator;
+ 
+   std::atomic_flag bindings_setup_entered_ = ATOMIC_FLAG_INIT;
+   std::vector<TextureBinding> texture_bindings_;
+diff --git a/include/rex/graphics/pipeline/shader/translator.h b/include/rex/graphics/pipeline/shader/translator.h
+index 340ced5..67eafaa 100644
+--- a/include/rex/graphics/pipeline/shader/translator.h
++++ b/include/rex/graphics/pipeline/shader/translator.h
+@@ -66,6 +66,9 @@ class ShaderTranslator {
+ 
+   // Emits a translation error that will be passed back in the result.
+   virtual void EmitTranslationError(const char* message, bool is_fatal = true);
++  // Records a translation error in the result without logging it, for translators that report
++  // the cause themselves (such as a shader feature a translator does not support yet).
++  void RecordTranslationError(const char* message, bool is_fatal = true);
+ 
+   // Handles the start of translation.
+   // At this point the vertex and texture bindings have been gathered.
+diff --git a/include/rex/graphics/vulkan/command_processor.h b/include/rex/graphics/vulkan/command_processor.h
+index 373f8dd..1dd1620 100644
+--- a/include/rex/graphics/vulkan/command_processor.h
++++ b/include/rex/graphics/vulkan/command_processor.h
+@@ -445,6 +445,11 @@ class VulkanCommandProcessor : public CommandProcessor {
+   void DestroyScratchBuffer();
+   bool InitializeOcclusionQueryResources();
+   void ShutdownOcclusionQueryResources();
++
++  // host_gpu_time_us: a pair of timestamps around each submission, read when it completes.
++  void InitializeGpuTimeQueries();
++  void ShutdownGpuTimeQueries();
++  void AccountGpuTimeOfCompletedSubmissions(uint64_t first_submission, uint64_t last_submission);
+   bool BeginGuestOcclusionQuery(uint32_t sample_count_address);
+   bool EndGuestOcclusionQuery(uint32_t sample_count_address);
+   bool AcquireOcclusionQueryIndex(uint32_t& host_index_out);
+@@ -738,6 +743,12 @@ class VulkanCommandProcessor : public CommandProcessor {
+   uint64_t scratch_buffer_last_usage_submission_ = 0;
+   bool scratch_buffer_used_ = false;
+ 
++  // Timestamp slots for host_gpu_time_us, two per submission, indexed by the submission number
++  // modulo the slot count (far more than the submissions that can be in flight).
++  static constexpr uint32_t kGpuTimeQuerySubmissionSlots = 1024;
++  VkQueryPool gpu_time_query_pool_ = VK_NULL_HANDLE;
++  uint64_t gpu_time_last_end_ticks_ = 0;
++
+   static constexpr uint32_t kMaxOcclusionQueries = 8192;
+   VkQueryPool occlusion_query_pool_ = VK_NULL_HANDLE;
+   VkBuffer occlusion_query_readback_buffer_ = VK_NULL_HANDLE;
+diff --git a/include/rex/graphics/vulkan/pipeline_cache.h b/include/rex/graphics/vulkan/pipeline_cache.h
+index 7b938b9..d091212 100644
+--- a/include/rex/graphics/vulkan/pipeline_cache.h
++++ b/include/rex/graphics/vulkan/pipeline_cache.h
+@@ -39,6 +39,10 @@
+ #include <rex/graphics/xenos.h>
+ #include <rex/ui/vulkan/api.h>
+ 
++namespace rex::graphics::xsc {
++class XscShaderTranslator;
++}  // namespace rex::graphics::xsc
++
+ namespace rex::graphics::vulkan {
+ 
+ class VulkanCommandProcessor;
+@@ -328,7 +332,8 @@ class VulkanPipelineCache {
+   VulkanShader* LoadShader(xenos::ShaderType shader_type, const uint32_t* host_address,
+                            uint32_t dword_count, uint64_t data_hash);
+ 
+-  // Can be called from multiple threads.
++  // Can be called from multiple threads. Shaders go to xsc_translator_ first if it exists, and to
++  // `translator` if it does not support them.
+   bool TranslateAnalyzedShader(SpirvShaderTranslator& translator,
+                                VulkanShader::VulkanTranslation& translation);
+ 
+@@ -380,6 +385,9 @@ class VulkanPipelineCache {
+   string::StringBuffer ucode_disasm_buffer_;
+   // Reusable shader translator on the command processor thread.
+   std::unique_ptr<SpirvShaderTranslator> shader_translator_;
++  // The Xenos shader compiler, if shader_compiler is xsc (and the host render target path is
++  // used), tried before shader_translator_.
++  std::unique_ptr<xsc::XscShaderTranslator> xsc_translator_;
+ 
+   struct LayoutUID {
+     size_t uid;
 diff --git a/include/rex/perf/counter.h b/include/rex/perf/counter.h
-index 83f0dff..d57ba20 100644
+index 83f0dff..e0a0c06 100644
 --- a/include/rex/perf/counter.h
 +++ b/include/rex/perf/counter.h
-@@ -24,6 +24,16 @@ enum class CounterId : uint16_t {
+@@ -24,6 +24,26 @@ enum class CounterId : uint16_t {
    kFrameTimeUs,
    kFps,
  
@@ -76,14 +192,59 @@ index 83f0dff..d57ba20 100644
 +  kRenderTargetTransfers,      // Transfers (tile ranges copied from one render target to another)
 +  kRenderTargetTransferTiles,  // EDRAM tiles they copy
 +
++  // Host draws by what limits hidden surface removal on tile-based GPUs (Metal backend)
++  kHostDrawsEarlyDepth,   // Pixel shader with early depth and stencil tests
++  kHostDrawsAlphaTested,  // Coverage from alpha (alpha test or alpha to coverage), may discard
++  kHostDrawsShaderKill,   // Pixel shader with kill instructions
++  kHostDrawsBlended,      // Blending on a written color target
++
++  // GPU busy time of the guest submissions that completed during the frame, overlaps counted
++  // once (Metal: command buffer GPU start and end times; Vulkan: timestamp queries)
++  kHostGpuTimeUs,
++
    // GPU
    kDrawCalls,
    kCommandBufferStalls,
+diff --git a/include/rex/ui/vulkan/device.h b/include/rex/ui/vulkan/device.h
+index 947817f..23e4d04 100644
+--- a/include/rex/ui/vulkan/device.h
++++ b/include/rex/ui/vulkan/device.h
+@@ -93,6 +93,10 @@ class VulkanDevice {
+     VkDeviceSize optimalBufferCopyOffsetAlignment = 1;
+     VkDeviceSize optimalBufferCopyRowPitchAlignment = 1;
+     VkDeviceSize nonCoherentAtomSize = 256;
++    // Nanoseconds per timestamp tick, and the valid bits of the timestamps written on the graphics
++    // and compute queue (0 if it does not support timestamps).
++    float timestampPeriod = 1.0f;
++    uint32_t timestampValidBitsGraphicsCompute = 0;
+ 
+     bool robustBufferAccess = false;
+     bool fullDrawIndexUint32 = false;
+diff --git a/include/rex/ui/vulkan/functions/device_1_0.inc b/include/rex/ui/vulkan/functions/device_1_0.inc
+index aa55a4a..c8bb914 100644
+--- a/include/rex/ui/vulkan/functions/device_1_0.inc
++++ b/include/rex/ui/vulkan/functions/device_1_0.inc
+@@ -32,6 +32,7 @@ XE_UI_VULKAN_FUNCTION(vkCmdSetStencilCompareMask)
+ XE_UI_VULKAN_FUNCTION(vkCmdSetStencilReference)
+ XE_UI_VULKAN_FUNCTION(vkCmdSetStencilWriteMask)
+ XE_UI_VULKAN_FUNCTION(vkCmdSetViewport)
++XE_UI_VULKAN_FUNCTION(vkCmdWriteTimestamp)
+ XE_UI_VULKAN_FUNCTION(vkCreateBuffer)
+ XE_UI_VULKAN_FUNCTION(vkCreateBufferView)
+ XE_UI_VULKAN_FUNCTION(vkCreateCommandPool)
+@@ -72,6 +73,7 @@ XE_UI_VULKAN_FUNCTION(vkGetBufferMemoryRequirements)
+ XE_UI_VULKAN_FUNCTION(vkGetDeviceQueue)
+ XE_UI_VULKAN_FUNCTION(vkGetFenceStatus)
+ XE_UI_VULKAN_FUNCTION(vkGetImageMemoryRequirements)
++XE_UI_VULKAN_FUNCTION(vkGetQueryPoolResults)
+ XE_UI_VULKAN_FUNCTION(vkInvalidateMappedMemoryRanges)
+ XE_UI_VULKAN_FUNCTION(vkMapMemory)
+ XE_UI_VULKAN_FUNCTION(vkResetCommandPool)
 diff --git a/src/core/perf/counter.cpp b/src/core/perf/counter.cpp
-index d3f26eb..2932566 100644
+index d3f26eb..92570e3 100644
 --- a/src/core/perf/counter.cpp
 +++ b/src/core/perf/counter.cpp
-@@ -46,6 +46,12 @@ std::array<std::atomic<int64_t>, kNumCounters> g_snapshot{};
+@@ -46,6 +46,17 @@ std::array<std::atomic<int64_t>, kNumCounters> g_snapshot{};
  constexpr const char* kCounterNames[] = {
      "frame_time_us",
      "fps",
@@ -93,10 +254,15 @@ index d3f26eb..2932566 100644
 +    "guest_waits",
 +    "render_target_transfers",
 +    "render_target_transfer_tiles",
++    "host_draws_early_depth",
++    "host_draws_alpha_tested",
++    "host_draws_shader_kill",
++    "host_draws_blended",
++    "host_gpu_time_us",
      "draw_calls",
      "command_buffer_stalls",
      "vertices_processed",
-@@ -94,6 +100,12 @@ static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must matc
+@@ -94,6 +105,17 @@ static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must matc
  constexpr bool kIsGauge[] = {
      false,  // kFrameTimeUs       (set each frame)
      false,  // kFps               (set each frame)
@@ -106,14 +272,38 @@ index d3f26eb..2932566 100644
 +    false,  // kGuestWaits
 +    false,  // kRenderTargetTransfers
 +    false,  // kRenderTargetTransferTiles
++    false,  // kHostDrawsEarlyDepth
++    false,  // kHostDrawsAlphaTested
++    false,  // kHostDrawsShaderKill
++    false,  // kHostDrawsBlended
++    false,  // kHostGpuTimeUs
      false,  // kDrawCalls
      false,  // kCommandBufferStalls
      false,  // kVerticesProcessed
 diff --git a/src/graphics/CMakeLists.txt b/src/graphics/CMakeLists.txt
-index 0d8f8af..ae491ad 100644
+index 0d8f8af..8168f54 100644
 --- a/src/graphics/CMakeLists.txt
 +++ b/src/graphics/CMakeLists.txt
-@@ -54,6 +54,21 @@ set(REXGPU_XENOS_VULKAN_SOURCES
+@@ -41,6 +41,18 @@ set(REXGPU_XENOS_SPIRV_SOURCES
+     pipeline/shader/spirv_translator_rb.cpp
+ )
+ 
++# Xenos shader compiler (XSC): our own compiler from Xenos microcode, with MSL and SPIR-V
++# emitters, for the Metal and the Vulkan backends.
++set(REXGPU_XENOS_XSC_SOURCES
++    pipeline/shader/xsc/xsc_translator.cpp
++    pipeline/shader/xsc/xsc_translator_alu.cpp
++    pipeline/shader/xsc/xsc_translator_fetch.cpp
++    pipeline/shader/xsc/xsc_translator_ps.cpp
++    pipeline/shader/xsc/xsc_translator_vs.cpp
++    pipeline/shader/xsc/xsc_msl.cpp
++    pipeline/shader/xsc/xsc_spirv.cpp
++)
++
+ # Vulkan backend
+ set(REXGPU_XENOS_VULKAN_SOURCES
+     vulkan/graphics_system.cpp
+@@ -54,6 +66,21 @@ set(REXGPU_XENOS_VULKAN_SOURCES
      vulkan/texture_cache.cpp
  )
  
@@ -135,24 +325,27 @@ index 0d8f8af..ae491ad 100644
  # D3D12 backend
  if(REXGLUE_USE_D3D12)
      # DXBC third-party dependency
-@@ -89,6 +104,16 @@ if(REXGLUE_USE_VULKAN)
-     list(APPEND REXGPU_XENOS_SOURCES ${REXGPU_XENOS_SPIRV_SOURCES} ${REXGPU_XENOS_VULKAN_SOURCES})
+@@ -86,7 +113,18 @@ if(REXGLUE_USE_D3D12)
  endif()
  
+ if(REXGLUE_USE_VULKAN)
+-    list(APPEND REXGPU_XENOS_SOURCES ${REXGPU_XENOS_SPIRV_SOURCES} ${REXGPU_XENOS_VULKAN_SOURCES})
++    list(APPEND REXGPU_XENOS_SOURCES ${REXGPU_XENOS_SPIRV_SOURCES} ${REXGPU_XENOS_VULKAN_SOURCES}
++         ${REXGPU_XENOS_XSC_SOURCES})
++endif()
++
 +if(REXGLUE_USE_METAL)
 +    if(NOT REXGLUE_USE_VULKAN)
-+        list(APPEND REXGPU_XENOS_SOURCES ${REXGPU_XENOS_SPIRV_SOURCES})
++        list(APPEND REXGPU_XENOS_SOURCES ${REXGPU_XENOS_SPIRV_SOURCES} ${REXGPU_XENOS_XSC_SOURCES})
 +    endif()
 +    list(APPEND REXGPU_XENOS_SOURCES ${REXGPU_XENOS_METAL_SOURCES})
 +    set_source_files_properties(${REXGPU_XENOS_METAL_SOURCES} PROPERTIES
 +        COMPILE_OPTIONS "-fobjc-arc;-include;${CMAKE_CURRENT_SOURCE_DIR}/metal/metal_vulkan_headers.h"
 +        SKIP_PRECOMPILE_HEADERS ON)
-+endif()
-+
+ endif()
+ 
  if(REXGLUE_USE_D3D12)
-     list(APPEND REXGPU_XENOS_SOURCES
-         ${REXGPU_XENOS_DXBC_THIRDPARTY_SOURCES}
-@@ -151,6 +176,56 @@ if(REXGLUE_USE_VULKAN)
+@@ -151,6 +189,90 @@ if(REXGLUE_USE_VULKAN)
      )
  endif()
  
@@ -204,6 +397,40 @@ index 0d8f8af..ae491ad 100644
 +    if(NOT REXGLUE_USE_VULKAN)
 +        target_link_libraries(rexgpu-xenos PRIVATE glslang::SPIRV)
 +    endif()
++
++    # Offline bench of the Xenos shader compiler (xsc/bench/xsc_bench.mm): translates the game's
++    # dumped shaders with each translator and compares them on the Metal device. Built on demand
++    # (cmake --build ... --target xsc-bench), not with the plugin.
++    set(XSC_BENCH_SOURCES
++        flags.cpp
++        pipeline/shader/shader.cpp
++        format/ucode.cpp
++        pipeline/shader/translator.cpp
++        pipeline/shader/translator_disasm.cpp
++        util/draw.cpp
++        register_file.cpp
++        registers.cpp
++        ${REXGPU_XENOS_SPIRV_SOURCES}
++        ${REXGPU_XENOS_XSC_SOURCES}
++        metal/metal_spirv.mm
++        pipeline/shader/xsc/bench/xsc_bench.mm
++    )
++    add_executable(xsc-bench EXCLUDE_FROM_ALL ${XSC_BENCH_SOURCES})
++    set_source_files_properties(pipeline/shader/xsc/bench/xsc_bench.mm
++        PROPERTIES
++        COMPILE_OPTIONS "-fobjc-arc;-include;${CMAKE_CURRENT_SOURCE_DIR}/metal/metal_vulkan_headers.h")
++    target_compile_definitions(xsc-bench PRIVATE REX_HAS_METAL=1)
++    target_link_libraries(xsc-bench PRIVATE
++        rexruntime
++        xxHash::xxhash
++        Vulkan::Headers
++        glslang::SPIRV
++        spirv-cross-msl
++        spirv-cross-glsl
++        spirv-cross-core
++        "-framework Metal"
++        "-framework Foundation"
++    )
 +endif()
 +
  if(REXGLUE_USE_D3D12)
@@ -278,12 +505,35 @@ index a744375..92724c2 100644
    assert_not_zero(count_remaining);
    if (!count_remaining) {
      REXGPU_ERROR("{}: Packet too small, can't read VGT_DRAW_INITIATOR", opcode_name);
+diff --git a/src/graphics/flags.cpp b/src/graphics/flags.cpp
+index e2983a4..ad10b87 100644
+--- a/src/graphics/flags.cpp
++++ b/src/graphics/flags.cpp
+@@ -25,6 +25,18 @@ REXCVAR_DEFINE_BOOL(gamma_render_target_as_unorm16, true, "GPU",
+                     "Use R16G16B16A16_UNORM for gamma render targets (more accurate than sRGB)")
+     .lifecycle(rex::cvar::Lifecycle::kHotReload);
+ REXCVAR_DEFINE_STRING(dump_shaders, "", "GPU", "Path to dump shaders to");
++REXCVAR_DEFINE_STRING(shader_compiler, "xsc", "GPU",
++                      "Shader compiler: translator (the SPIR-V translator, through SPIRV-Cross on "
++                      "Metal) or xsc (the Xenos shader compiler, on Metal and on Vulkan with host "
++                      "render targets; what it does not support yet goes to the translator)")
++    .allowed({"translator", "xsc"})
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++REXCVAR_DEFINE_BOOL(xsc_debug_color_range, false, "GPU",
++                    "Debugging aid for shader_compiler = xsc on Metal: paint pixel shader color "
++                    "outputs magenta when NaN or infinite, and for a 7e3 render target cyan above "
++                    "31.875 and yellow below 0 (values the Xbox 360 render target could not "
++                    "hold, before they are clamped), and log the shaders that write them")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+ REXCVAR_DEFINE_BOOL(use_fuzzy_alpha_epsilon, false, "GPU",
+                     "Use approximate compare for alpha test values to prevent "
+                     "flickering on NVIDIA graphics cards");
 diff --git a/src/graphics/metal/metal_command_processor.h b/src/graphics/metal/metal_command_processor.h
 new file mode 100644
-index 0000000..c6fb6e4
+index 0000000..5c957ab
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.h
-@@ -0,0 +1,282 @@
+@@ -0,0 +1,316 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.h
 + * @brief       Xenos command processing with Metal
@@ -520,6 +770,40 @@ index 0000000..c6fb6e4
 +  std::atomic<uint32_t> completion_handlers_in_flight_{0};
 +  bool device_lost_ = false;
 +
++  // xsc_debug_color_range: the per-shader counters of out-of-range pixel shader colors, written by
++  // the GPU and logged by the command processor every kXscDebugCounterLogFrames frames.
++  static constexpr uint64_t kXscDebugCounterLogFrames = 300;
++  void LogXscDebugCounters();
++  id<MTLBuffer> xsc_debug_counters_ = nil;
++
++  // metal_gpu_capture_frames: a Metal GPU capture of the next frames when the bound key is pressed
++  // (requested from the UI thread, started and stopped at frame boundaries).
++  void UpdateGpuCapture();
++  std::atomic<bool> gpu_capture_requested_{false};
++  uint32_t gpu_capture_frames_remaining_ = 0;
++
++  // metal_frame_history_frames: the last guest front buffers kept in a ring of textures, saved as
++  // images when the bound key is pressed (after something was seen on screen).
++  void RecordFrameHistory(id<MTLTexture> swap_texture, uint32_t width, uint32_t height);
++  void SaveFrameHistory();
++  std::vector<id<MTLTexture>> frame_history_;
++  std::vector<uint64_t> frame_history_guest_frames_;
++  uint32_t frame_history_next_ = 0;
++  std::atomic<bool> frame_history_save_requested_{false};
++
++  // metal_pixel_history: in the frame after bind_metal_frame_history, after every draw, a grid of
++  // render target 0 is sampled, and the state of the draw is logged, to find which draw changes a
++  // region of the screen.
++  void RecordPixelHistory(const MetalRenderPass& render_pass, const Shader* vertex_shader,
++                          const Shader* pixel_shader, uint32_t normalized_color_mask);
++  void SavePixelHistory();
++  enum class PixelHistoryState { kOff, kArmed, kRecording };
++  PixelHistoryState pixel_history_state_ = PixelHistoryState::kOff;
++  id<MTLComputePipelineState> pixel_history_pipeline_ = nil;
++  id<MTLBuffer> pixel_history_buffer_ = nil;
++  uint32_t pixel_history_draws_ = 0;
++  std::string pixel_history_log_;
++
 +  // Frames.
 +  bool frame_open_ = false;
 +  uint64_t frame_current_ = 1;
@@ -568,10 +852,10 @@ index 0000000..c6fb6e4
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_command_processor.mm b/src/graphics/metal/metal_command_processor.mm
 new file mode 100644
-index 0000000..fbd5247
+index 0000000..f0061ae
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.mm
-@@ -0,0 +1,1791 @@
+@@ -0,0 +1,2270 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.mm
 + * @brief       Xenos command processing with Metal
@@ -584,8 +868,12 @@ index 0000000..fbd5247
 +
 +#include <algorithm>
 +#include <chrono>
++#include <cstdio>
++#include <ctime>
++#include <filesystem>
 +#include <cstring>
 +#include <functional>
++#include <mutex>
 +#include <utility>
 +
 +#include <rex/assert.h>
@@ -599,11 +887,32 @@ index 0000000..fbd5247
 +#include <rex/math.h>
 +#include <rex/memory/utils.h>
 +#include <rex/thread.h>
++#include <rex/ui/keybinds.h>
 +
 +#include "metal_graphics_system.h"
 +#include "metal_presenter.h"
 +#include "metal_provider.h"
 +#include "metal_spirv.h"
++
++REXCVAR_DEFINE_INT32(metal_gpu_capture_frames, 0, "GPU/Metal",
++                     "Debugging aid: with more than 0, the key bind_metal_gpu_capture (RBracket, two "
++                     "keys right of P) saves a Metal GPU capture of that many frames as a "
++                     ".gputrace document for Xcode, in metal_gpu_capture_path")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++REXCVAR_DEFINE_STRING(metal_gpu_capture_path, "", "GPU/Metal",
++                      "Folder for the Metal GPU captures of metal_gpu_capture_frames and the frame "
++                      "histories of metal_frame_history_frames")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++REXCVAR_DEFINE_BOOL(metal_pixel_history, false, "GPU/Metal",
++                    "Debugging aid: with metal_frame_history_frames, the frame after "
++                    "bind_metal_frame_history samples a grid of render target 0 after every draw "
++                    "and logs the state of the draws, saved next to the frame history")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++REXCVAR_DEFINE_INT32(metal_frame_history_frames, 0, "GPU/Metal",
++                     "Debugging aid: with more than 0, that many of the last guest front buffers are "
++                     "kept, and the key bind_metal_frame_history (LBracket, the key right of P) "
++                     "saves them as images in metal_gpu_capture_path")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 +
 +REXCVAR_DEFINE_BOOL(metal_gpu_accurate_fences, true, "GPU/Metal",
 +                    "Write the fences the game waits on when the GPU has finished the work before "
@@ -628,6 +937,27 @@ index 0000000..fbd5247
 +constexpr uint32_t kSwapTextureSource = 1;
 +constexpr uint32_t kSwapTextureDestination = 2;
 +constexpr uint32_t kSwapBufferConstants = 0;
++
++// Pixel history (metal_pixel_history): a grid of points of a render target, read after a draw.
++constexpr uint32_t kPixelHistoryGridWidth = 64;
++constexpr uint32_t kPixelHistoryGridHeight = 36;
++constexpr uint32_t kPixelHistoryMaxDraws = 8192;
++NSString* const kPixelHistoryShaderSource = @R"MSL(
++#include <metal_stdlib>
++using namespace metal;
++// params: render target width and height, grid width and height.
++kernel void pixel_history_sample(uint2 point [[thread_position_in_grid]],
++                                 constant uint4& params [[buffer(0)]],
++                                 device half4* samples [[buffer(1)]],
++                                 texture2d<float, access::read> source [[texture(0)]]) {
++  if (point.x >= params.z || point.y >= params.w) {
++    return;
++  }
++  uint2 pixel = uint2((point.x * 2 + 1) * params.x / (params.z * 2),
++                      (point.y * 2 + 1) * params.y / (params.w * 2));
++  samples[point.y * params.z + point.x] = half4(source.read(pixel));
++}
++)MSL";
 +
 +// FXAA 3.11 console-style filter over the gamma-corrected output, with the luma of each pixel in
 +// alpha, with the constants of the Vulkan backend's FXAA so both look the same. Colors and lumas
@@ -690,6 +1020,20 @@ index 0000000..fbd5247
 +}
 +)MSL";
 +
++// Adds the GPU time of a completed command buffer to the host_gpu_time_us counter, counting the
++// part that overlaps the previous completed command buffers once. Called from Metal's completion
++// handler threads.
++void AccountGpuTime(CFTimeInterval start, CFTimeInterval end) {
++  static std::mutex mutex;
++  static CFTimeInterval last_end = 0;
++  std::lock_guard<std::mutex> lock(mutex);
++  start = std::max(start, last_end);
++  if (end > start) {
++    PERF_counter_add(kHostGpuTimeUs, int64_t((end - start) * 1e6));
++  }
++  last_end = std::max(last_end, end);
++}
++
 +NSString* GetEncoderLabel(rex::perf::CounterId reason) {
 +  switch (reason) {
 +    case rex::perf::CounterId::kRenderPassEndsResolve:
@@ -701,6 +1045,26 @@ index 0000000..fbd5247
 +    default:
 +      return @"Other";
 +  }
++}
++
++// Label of a pass of guest draws for GPU captures and traces: the render targets it draws to, by
++// the names of their textures (the render target keys), so the cost of each pass of the game's
++// frame can be told apart.
++NSString* GetGuestDrawsLabel(const MetalRenderPass& render_pass) {
++  NSMutableString* label = [NSMutableString stringWithString:@"Guest draws:"];
++  auto append = [label](id<MTLTexture> texture) {
++    id<MTLTexture> named = texture.parentTexture ? texture.parentTexture : texture;
++    [label appendFormat:@" [%@]", named.label ? named.label : @"?"];
++  };
++  for (id<MTLTexture> color : render_pass.color) {
++    if (color) {
++      append(color);
++    }
++  }
++  if (render_pass.depth_stencil) {
++    append(render_pass.depth_stencil);
++  }
++  return label;
 +}
 +
 +}  // namespace
@@ -815,6 +1179,32 @@ index 0000000..fbd5247
 +    REXGPU_ERROR("Metal: failed to initialize the pipeline cache");
 +    return false;
 +  }
++  if (REXCVAR_GET(metal_gpu_capture_frames) > 0) {
++    if (![[MTLCaptureManager sharedCaptureManager]
++            supportsDestination:MTLCaptureDestinationGPUTraceDocument]) {
++      REXGPU_ERROR("Metal: GPU capture to a document is not available (MTL_CAPTURE_ENABLED)");
++    } else {
++      rex::ui::RegisterBind("bind_metal_gpu_capture", "RBracket",
++                            "Save a Metal GPU capture of the next metal_gpu_capture_frames frames",
++                            [this] { gpu_capture_requested_.store(true); });
++      REXGPU_INFO("Metal: GPU capture of {} frames on bind_metal_gpu_capture, into {}",
++                  REXCVAR_GET(metal_gpu_capture_frames), REXCVAR_GET(metal_gpu_capture_path));
++    }
++  }
++  if (REXCVAR_GET(metal_frame_history_frames) > 0) {
++    rex::ui::RegisterBind("bind_metal_frame_history", "LBracket",
++                          "Save the last metal_frame_history_frames guest frames as images",
++                          [this] { frame_history_save_requested_.store(true); });
++    REXGPU_INFO("Metal: the last {} frames are kept, saved on bind_metal_frame_history into {}",
++                REXCVAR_GET(metal_frame_history_frames), REXCVAR_GET(metal_gpu_capture_path));
++  }
++  if (pipeline_cache_->xsc_translator() && REXCVAR_GET(xsc_debug_color_range)) {
++    size_t size = sizeof(uint32_t) * xsc::XscShaderTranslator::kDebugCountersPerShader *
++                  xsc::XscShaderTranslator::kDebugCounterMaxShaders;
++    xsc_debug_counters_ = [device_ newBufferWithLength:size options:MTLResourceStorageModeShared];
++    std::memset(xsc_debug_counters_.contents, 0, size);
++    xsc_debug_counters_.label = @"XSC debug counters";
++  }
 +
 +  texture_cache_ = MetalTextureCache::Create(*register_file_, *shared_memory_,
 +                                             draw_resolution_scale_x, draw_resolution_scale_y,
@@ -881,6 +1271,22 @@ index 0000000..fbd5247
 +    REXGPU_ERROR("Metal: failed to create the FXAA pipelines: {}",
 +                 error ? error.localizedDescription.UTF8String : "unknown error");
 +  }
++  if (REXCVAR_GET(metal_pixel_history)) {
++    id<MTLLibrary> pixel_history_library =
++        [device_ newLibraryWithSource:kPixelHistoryShaderSource options:nil error:&error];
++    id<MTLFunction> function =
++        [pixel_history_library newFunctionWithName:@"pixel_history_sample"];
++    pixel_history_pipeline_ =
++        function ? [device_ newComputePipelineStateWithFunction:function error:&error] : nil;
++    pixel_history_buffer_ =
++        [device_ newBufferWithLength:size_t(kPixelHistoryMaxDraws) * kPixelHistoryGridWidth *
++                                     kPixelHistoryGridHeight * 8
++                             options:MTLResourceStorageModeShared];
++    if (!pixel_history_pipeline_ || !pixel_history_buffer_) {
++      REXGPU_ERROR("Metal: failed to create the pixel history pipeline: {}",
++                   error ? error.localizedDescription.UTF8String : "unknown error");
++    }
++  }
 +  MTLSamplerDescriptor* sampler_descriptor = [MTLSamplerDescriptor new];
 +  sampler_descriptor.minFilter = MTLSamplerMinMagFilterLinear;
 +  sampler_descriptor.magFilter = MTLSamplerMinMagFilterLinear;
@@ -891,6 +1297,17 @@ index 0000000..fbd5247
 +}
 +
 +void MetalCommandProcessor::ShutdownContext() {
++  if (REXCVAR_GET(metal_frame_history_frames) > 0) {
++    rex::ui::UnregisterBind("bind_metal_frame_history");
++  }
++  frame_history_.clear();
++  if (REXCVAR_GET(metal_gpu_capture_frames) > 0) {
++    rex::ui::UnregisterBind("bind_metal_gpu_capture");
++    if (gpu_capture_frames_remaining_) {
++      [[MTLCaptureManager sharedCaptureManager] stopCapture];
++      gpu_capture_frames_remaining_ = 0;
++    }
++  }
 +  AwaitSubmission(UINT64_MAX);
 +  // Completion handlers may still be finishing after the command buffers report completion.
 +  while (completion_handlers_in_flight_.load(std::memory_order_acquire)) {
@@ -920,6 +1337,7 @@ index 0000000..fbd5247
 +  compute_encoder_ = nil;
 +  blit_encoder_ = nil;
 +  queue_ = nil;
++  xsc_debug_counters_ = nil;
 +  device_ = nil;
 +}
 +
@@ -1135,6 +1553,9 @@ index 0000000..fbd5247
 +        completion_handlers_in_flight_.fetch_sub(1, std::memory_order_release);
 +      }];
 +    }
++    [command_buffer_ addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
++      AccountGpuTime(buffer.GPUStartTime, buffer.GPUEndTime);
++    }];
 +    [command_buffer_ commit];
 +    PERF_counter_inc(kHostSubmissions);
 +    submissions_in_flight_.emplace_back(submission_current_, command_buffer_);
@@ -1149,6 +1570,25 @@ index 0000000..fbd5247
 +    frame_open_ = false;
 +    closed_frame_submissions_[(frame_current_++) % kMaxFramesInFlight] = submission_current_ - 1;
 +
++    if (xsc_debug_counters_ && frame_current_ % kXscDebugCounterLogFrames == 0) {
++      LogXscDebugCounters();
++    }
++    UpdateGpuCapture();
++    if (pixel_history_state_ == PixelHistoryState::kRecording) {
++      pixel_history_state_ = PixelHistoryState::kOff;
++      SavePixelHistory();
++    } else if (pixel_history_state_ == PixelHistoryState::kArmed) {
++      pixel_history_state_ = PixelHistoryState::kRecording;
++      pixel_history_draws_ = 0;
++      pixel_history_log_.clear();
++    }
++    if (frame_history_save_requested_.exchange(false)) {
++      SaveFrameHistory();
++      if (pixel_history_pipeline_ && pixel_history_state_ == PixelHistoryState::kOff) {
++        pixel_history_state_ = PixelHistoryState::kArmed;
++      }
++    }
++
 +    if (cache_clear_requested_) {
 +      cache_clear_requested_ = false;
 +      AwaitSubmission(UINT64_MAX);
@@ -1158,6 +1598,284 @@ index 0000000..fbd5247
 +  }
 +
 +  return true;
++}
++
++void MetalCommandProcessor::RecordFrameHistory(id<MTLTexture> swap_texture, uint32_t width,
++                                               uint32_t height) {
++  uint32_t count = uint32_t(REXCVAR_GET(metal_frame_history_frames));
++  if (frame_history_.size() != count || !frame_history_[0] ||
++      frame_history_[0].pixelFormat != swap_texture.pixelFormat ||
++      frame_history_[0].width != width || frame_history_[0].height != height) {
++    // Shared storage, read by the CPU when saving.
++    MTLTextureDescriptor* descriptor =
++        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:swap_texture.pixelFormat
++                                                           width:width
++                                                          height:height
++                                                       mipmapped:NO];
++    descriptor.storageMode = MTLStorageModeShared;
++    descriptor.usage = MTLTextureUsageShaderRead;
++    frame_history_.assign(count, nil);
++    frame_history_guest_frames_.assign(count, 0);
++    for (size_t i = 0; i < frame_history_.size(); ++i) {
++      frame_history_[i] = [device_ newTextureWithDescriptor:descriptor];
++    }
++    frame_history_next_ = 0;
++  }
++  id<MTLBlitCommandEncoder> blit = GetBlitEncoder(rex::perf::CounterId::kRenderPassEndsOther);
++  [blit copyFromTexture:swap_texture
++            sourceSlice:0
++            sourceLevel:0
++           sourceOrigin:MTLOriginMake(0, 0, 0)
++             sourceSize:MTLSizeMake(width, height, 1)
++              toTexture:frame_history_[frame_history_next_]
++       destinationSlice:0
++       destinationLevel:0
++      destinationOrigin:MTLOriginMake(0, 0, 0)];
++  frame_history_guest_frames_[frame_history_next_] = frame_current_;
++  frame_history_next_ = (frame_history_next_ + 1) % count;
++}
++
++void MetalCommandProcessor::SaveFrameHistory() {
++  if (frame_history_.empty()) {
++    return;
++  }
++  // Everything recorded must have reached the textures.
++  AwaitSubmission(UINT64_MAX);
++  auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
++  char name[64];
++  std::strftime(name, sizeof(name), "frames_%Y%m%d-%H%M%S", std::localtime(&now));
++  std::filesystem::path folder = std::filesystem::path(REXCVAR_GET(metal_gpu_capture_path)) / name;
++  std::error_code error_code;
++  std::filesystem::create_directories(folder, error_code);
++  uint32_t count = uint32_t(frame_history_.size());
++  uint32_t saved = 0;
++  std::vector<uint8_t> texels, rgb;
++  for (uint32_t i = 0; i < count; ++i) {
++    // Oldest first.
++    uint32_t slot = (frame_history_next_ + i) % count;
++    id<MTLTexture> texture = frame_history_[slot];
++    if (!frame_history_guest_frames_[slot]) {
++      continue;
++    }
++    uint32_t width = uint32_t(texture.width), height = uint32_t(texture.height);
++    texels.resize(size_t(width) * height * 4);
++    [texture getBytes:texels.data()
++          bytesPerRow:width * 4
++           fromRegion:MTLRegionMake2D(0, 0, width, height)
++          mipmapLevel:0];
++    rgb.resize(size_t(width) * height * 3);
++    MTLPixelFormat format = texture.pixelFormat;
++    for (size_t p = 0; p < size_t(width) * height; ++p) {
++      const uint8_t* t = &texels[p * 4];
++      uint8_t* o = &rgb[p * 3];
++      uint32_t packed;
++      std::memcpy(&packed, t, sizeof(packed));
++      switch (format) {
++        case MTLPixelFormatBGRA8Unorm:
++        case MTLPixelFormatBGRA8Unorm_sRGB:
++          o[0] = t[2], o[1] = t[1], o[2] = t[0];
++          break;
++        case MTLPixelFormatRGB10A2Unorm:
++          o[0] = uint8_t((packed & 0x3FF) >> 2);
++          o[1] = uint8_t(((packed >> 10) & 0x3FF) >> 2);
++          o[2] = uint8_t(((packed >> 20) & 0x3FF) >> 2);
++          break;
++        case MTLPixelFormatBGR10A2Unorm:
++          o[2] = uint8_t((packed & 0x3FF) >> 2);
++          o[1] = uint8_t(((packed >> 10) & 0x3FF) >> 2);
++          o[0] = uint8_t(((packed >> 20) & 0x3FF) >> 2);
++          break;
++        default:
++          // RGBA8 and anything else with 8-bit RGB first.
++          o[0] = t[0], o[1] = t[1], o[2] = t[2];
++          break;
++      }
++    }
++    // Binary PPM: no image library needed; sips or Preview convert it.
++    char file_name[64];
++    std::snprintf(file_name, sizeof(file_name), "frame_%03u_%llu.ppm", i,
++                  (unsigned long long)frame_history_guest_frames_[slot]);
++    FILE* file = std::fopen((folder / file_name).c_str(), "wb");
++    if (!file) {
++      continue;
++    }
++    std::fprintf(file, "P6\n%u %u\n255\n", width, height);
++    std::fwrite(rgb.data(), 1, rgb.size(), file);
++    std::fclose(file);
++    ++saved;
++  }
++  REXGPU_INFO("Metal: saved {} frames (pixel format {}) to {}", saved,
++              uint32_t(frame_history_[0].pixelFormat), folder.string());
++}
++
++void MetalCommandProcessor::RecordPixelHistory(const MetalRenderPass& render_pass,
++                                               const Shader* vertex_shader,
++                                               const Shader* pixel_shader,
++                                               uint32_t normalized_color_mask) {
++  if (pixel_history_draws_ >= kPixelHistoryMaxDraws) {
++    return;
++  }
++  const RegisterFile& regs = *register_file_;
++  uint32_t draw = pixel_history_draws_++;
++  id<MTLTexture> target = render_pass.color[0];
++  // Only single-sampled 2D float and normalized targets can be read as float.
++  bool sampled = false;
++  if (target && target.textureType == MTLTextureType2D && target.sampleCount == 1) {
++    switch (target.pixelFormat) {
++      case MTLPixelFormatRGBA8Unorm:
++      case MTLPixelFormatBGRA8Unorm:
++      case MTLPixelFormatRGB10A2Unorm:
++      case MTLPixelFormatRGBA16Float:
++      case MTLPixelFormatRGBA16Unorm:
++      case MTLPixelFormatRGBA16Snorm:
++      case MTLPixelFormatRG16Float:
++      case MTLPixelFormatR32Float:
++      case MTLPixelFormatRG32Float:
++      case MTLPixelFormatRGBA32Float:
++      case MTLPixelFormatRG11B10Float:
++        sampled = true;
++        break;
++      default:
++        break;
++    }
++  }
++  if (sampled) {
++    // Ends the render pass: the next draw starts a new one, loading what this one stored.
++    id<MTLComputeCommandEncoder> compute =
++        GetComputeEncoder(rex::perf::CounterId::kRenderPassEndsOther);
++    // Host render targets are as tall as the EDRAM allows; the grid covers the 16:9 top of it,
++    // where this game's screen-sized targets are.
++    uint32_t params[4] = {render_pass.width,
++                          std::min(render_pass.height, render_pass.width * 9 / 16),
++                          kPixelHistoryGridWidth, kPixelHistoryGridHeight};
++    [compute setComputePipelineState:pixel_history_pipeline_];
++    [compute setBytes:params length:sizeof(params) atIndex:0];
++    [compute setBuffer:pixel_history_buffer_
++                offset:size_t(draw) * kPixelHistoryGridWidth * kPixelHistoryGridHeight * 8
++               atIndex:1];
++    [compute setTexture:target atIndex:0];
++    [compute dispatchThreads:MTLSizeMake(kPixelHistoryGridWidth, kPixelHistoryGridHeight, 1)
++        threadsPerThreadgroup:MTLSizeMake(8, 4, 1)];
++  }
++  auto color_info = regs.Get<reg::RB_COLOR_INFO>(reg::RB_COLOR_INFO::rt_register_indices[0]);
++  auto blend_control =
++      regs.Get<reg::RB_BLENDCONTROL>(reg::RB_BLENDCONTROL::rt_register_indices[0]);
++  auto depth_control = regs.Get<reg::RB_DEPTHCONTROL>();
++  pixel_history_log_ += fmt::format(
++      "draw {} sampled {} rt0 {}x{} fmt {} base {} colormask {:04X} blend {:08X} depth {:08X} "
++      "vs {:016X} ps {:016X}",
++      draw, sampled ? 1 : 0, render_pass.width, render_pass.height,
++      uint32_t(color_info.color_format), uint32_t(color_info.color_base),
++      normalized_color_mask & 0xFFFF, blend_control.value, depth_control.value,
++      vertex_shader->ucode_data_hash(), pixel_shader ? pixel_shader->ucode_data_hash() : 0);
++  if (pixel_shader) {
++    for (const Shader::TextureBinding& binding : pixel_shader->texture_bindings()) {
++      xenos::xe_gpu_texture_fetch_t fetch = regs.GetTextureFetch(binding.fetch_constant);
++      // exp: the result exponent bias; lod: the LOD bias in 1/32.
++      pixel_history_log_ += fmt::format(
++          " tex{}:fmt{},addr{:08X},{}x{},dim{},tiled{},exp{},lod{}", binding.fetch_constant,
++          uint32_t(fetch.format), fetch.base_address << 12, fetch.size_2d.width + 1,
++          fetch.size_2d.height + 1, uint32_t(fetch.dimension), uint32_t(fetch.tiled),
++          int32_t(fetch.exp_adjust), int32_t(fetch.lod_bias));
++    }
++  }
++  pixel_history_log_ += '\n';
++}
++
++void MetalCommandProcessor::SavePixelHistory() {
++  AwaitSubmission(UINT64_MAX);
++  auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
++  char name[64];
++  std::strftime(name, sizeof(name), "pixels_%Y%m%d-%H%M%S", std::localtime(&now));
++  std::filesystem::path base = std::filesystem::path(REXCVAR_GET(metal_gpu_capture_path)) / name;
++  // Draw log, and the grids as raw half4 (64x36 per draw, in draw order).
++  if (FILE* file = std::fopen((base.string() + ".txt").c_str(), "wb")) {
++    std::fwrite(pixel_history_log_.data(), 1, pixel_history_log_.size(), file);
++    std::fclose(file);
++  }
++  if (FILE* file = std::fopen((base.string() + ".half4").c_str(), "wb")) {
++    std::fwrite(pixel_history_buffer_.contents, 1,
++                size_t(pixel_history_draws_) * kPixelHistoryGridWidth * kPixelHistoryGridHeight * 8,
++                file);
++    std::fclose(file);
++  }
++  REXGPU_INFO("Metal: saved the pixel history of {} draws to {}", pixel_history_draws_,
++              base.string());
++}
++
++void MetalCommandProcessor::UpdateGpuCapture() {
++  MTLCaptureManager* capture_manager = [MTLCaptureManager sharedCaptureManager];
++  if (gpu_capture_frames_remaining_) {
++    if (--gpu_capture_frames_remaining_ == 0) {
++      [capture_manager stopCapture];
++      REXGPU_INFO("Metal: GPU capture finished");
++    }
++    return;
++  }
++  if (!gpu_capture_requested_.exchange(false)) {
++    return;
++  }
++  // Between frames: every command buffer of the next frames is in the capture.
++  std::filesystem::path folder(REXCVAR_GET(metal_gpu_capture_path));
++  std::error_code error_code;
++  std::filesystem::create_directories(folder, error_code);
++  auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
++  char name[64];
++  std::strftime(name, sizeof(name), "azura_%Y%m%d-%H%M%S.gputrace", std::localtime(&now));
++  std::filesystem::path path = folder / name;
++  MTLCaptureDescriptor* descriptor = [MTLCaptureDescriptor new];
++  descriptor.captureObject = queue_;
++  descriptor.destination = MTLCaptureDestinationGPUTraceDocument;
++  descriptor.outputURL = [NSURL fileURLWithPath:@(path.c_str())];
++  NSError* error = nil;
++  if (![capture_manager startCaptureWithDescriptor:descriptor error:&error]) {
++    REXGPU_ERROR("Metal: failed to start the GPU capture: {}",
++                 error ? error.localizedDescription.UTF8String : "unknown error");
++    return;
++  }
++  gpu_capture_frames_remaining_ = uint32_t(REXCVAR_GET(metal_gpu_capture_frames));
++  REXGPU_INFO("Metal: GPU capture of {} frames started: {}", gpu_capture_frames_remaining_,
++              path.string());
++}
++
++void MetalCommandProcessor::LogXscDebugCounters() {
++  using Translator = xsc::XscShaderTranslator;
++  const std::vector<Translator::DebugCounterShader>& shaders =
++      pipeline_cache_->xsc_translator()->debug_counter_shaders();
++  // The GPU may still be adding to the counters: a debugging aid, the counts are approximate.
++  auto* counters = static_cast<uint32_t*>(xsc_debug_counters_.contents);
++  struct Entry {
++    size_t slot;
++    uint32_t out_of_range;
++  };
++  std::vector<Entry> entries;
++  for (size_t slot = 0; slot < shaders.size(); ++slot) {
++    const uint32_t* slot_counters = counters + slot * Translator::kDebugCountersPerShader;
++    uint32_t out_of_range = slot_counters[Translator::kDebugCounterNonFinite] +
++                            slot_counters[Translator::kDebugCounterAbove7e3] +
++                            slot_counters[Translator::kDebugCounterNegative7e3];
++    if (out_of_range) {
++      entries.push_back({slot, out_of_range});
++    }
++  }
++  std::sort(entries.begin(), entries.end(),
++            [](const Entry& a, const Entry& b) { return a.out_of_range > b.out_of_range; });
++  if (!entries.empty()) {
++    REXGPU_INFO("XSC color range: {} pixel shaders wrote out-of-range colors in the last {} frames",
++                entries.size(), kXscDebugCounterLogFrames);
++  }
++  for (size_t i = 0; i < std::min(entries.size(), size_t(16)); ++i) {
++    const uint32_t* slot_counters = counters + entries[i].slot * Translator::kDebugCountersPerShader;
++    const Translator::DebugCounterShader& shader = shaders[entries[i].slot];
++    REXGPU_INFO(
++        "XSC color range: ps {:016X} modification {:016X}: non-finite {}, above 31.875 {}, "
++        "negative {}, of {} pixels on 7e3 render targets",
++        shader.ucode_data_hash, shader.modification, slot_counters[Translator::kDebugCounterNonFinite],
++        slot_counters[Translator::kDebugCounterAbove7e3],
++        slot_counters[Translator::kDebugCounterNegative7e3],
++        slot_counters[Translator::kDebugCounter7e3]);
++  }
++  std::memset(counters, 0, xsc_debug_counters_.length);
 +}
 +
 +void MetalCommandProcessor::OnSubmissionCompletedByGpu(uint64_t submission) {
@@ -1518,7 +2236,7 @@ index 0000000..fbd5247
 +  id<MTLRenderCommandEncoder> encoder =
 +      BeginRenderPass(render_pass, rex::perf::CounterId::kRenderPassEndsTargetChange);
 +  if (encoder.label == nil) {
-+    encoder.label = @"Guest draws";
++    encoder.label = GetGuestDrawsLabel(render_pass);
 +  }
 +
 +  // Viewport, scissor and the rest of the dynamic state, in host pixels: with sample-space render
@@ -1584,6 +2302,35 @@ index 0000000..fbd5247
 +  PROFILE_DRAW_CALL();
 +  PROFILE_VERTICES(primitive_processing_result.host_draw_vertex_count);
 +  PERF_counter_inc(kHostDraws);
++  if (pixel_shader) {
++    if (pixel_shader_modification.pixel.depth_stencil_mode ==
++        SpirvShaderTranslator::Modification::DepthStencilMode::kEarlyHint) {
++      PERF_counter_inc(kHostDrawsEarlyDepth);
++    }
++    if ((normalized_color_mask & 0b1111) &&
++        draw_util::DoesCoverageDependOnAlpha(regs.Get<reg::RB_COLORCONTROL>())) {
++      PERF_counter_inc(kHostDrawsAlphaTested);
++    }
++    if (pixel_shader->kills_pixels()) {
++      PERF_counter_inc(kHostDrawsShaderKill);
++    }
++    for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
++      if (!((normalized_color_mask >> (4 * i)) & 0b1111)) {
++        continue;
++      }
++      auto blend_control =
++          regs.Get<reg::RB_BLENDCONTROL>(reg::RB_BLENDCONTROL::rt_register_indices[i]);
++      if (blend_control.color_srcblend != xenos::BlendFactor::kOne ||
++          blend_control.color_destblend != xenos::BlendFactor::kZero ||
++          blend_control.color_comb_fcn != xenos::BlendOp::kAdd ||
++          blend_control.alpha_srcblend != xenos::BlendFactor::kOne ||
++          blend_control.alpha_destblend != xenos::BlendFactor::kZero ||
++          blend_control.alpha_comb_fcn != xenos::BlendOp::kAdd) {
++        PERF_counter_inc(kHostDrawsBlended);
++        break;
++      }
++    }
++  }
 +  if (primitive_processing_result.index_buffer_type ==
 +      PrimitiveProcessor::ProcessedIndexBufferType::kNone) {
 +    [encoder drawPrimitives:draw_state.primitive_type
@@ -1617,6 +2364,10 @@ index 0000000..fbd5247
 +                                       : MTLIndexTypeUInt32
 +                       indexBuffer:index_buffer.first
 +                 indexBufferOffset:index_buffer.second];
++  }
++
++  if (pixel_history_state_ == PixelHistoryState::kRecording) {
++    RecordPixelHistory(render_pass, vertex_shader, pixel_shader, normalized_color_mask);
 +  }
 +
 +  // Invalidate textures in memexported memory and watch for changes.
@@ -2001,6 +2752,11 @@ index 0000000..fbd5247
 +        UINT32_C(0x3F800000) + (color_exp_bias << 23);
 +    dirty |= system_constants_.color_exp_bias[i] != color_exp_bias_scale;
 +    system_constants_.color_exp_bias[i] = color_exp_bias_scale;
++    // Metal has no pixel shader interlock path; XSC pixel shaders read the render target formats
++    // to clamp the color to the range of a 7e3 render target.
++    uint32_t format_flags = RenderTargetCache::AddPSIColorFormatFlags(color_info.color_format);
++    dirty |= system_constants_.edram_rt_format_flags[i] != format_flags;
++    system_constants_.edram_rt_format_flags[i] = format_flags;
 +  }
 +
 +  if (dirty) {
@@ -2154,6 +2910,10 @@ index 0000000..fbd5247
 +    }
 +  }
 +
++  if (xsc_debug_counters_ && pixel_translation && pixel_translation->is_xsc()) {
++    [encoder setFragmentBuffer:xsc_debug_counters_ offset:0 atIndex:kMetalBufferXscDebugCounters];
++  }
++
 +  // Textures and samplers.
 +  for (uint32_t stage = 0; stage < 2; ++stage) {
 +    const MetalShader* shader = stage ? pixel_shader : vertex_shader;
@@ -2242,6 +3002,9 @@ index 0000000..fbd5247
 +  uint32_t guest_output_height = frontbuffer_height
 +                                     ? std::min(frontbuffer_height, frontbuffer_height_scaled)
 +                                     : frontbuffer_height_scaled;
++  if (REXCVAR_GET(metal_frame_history_frames) > 0) {
++    RecordFrameHistory(swap_texture, guest_output_width, guest_output_height);
++  }
 +
 +  system::X_VIDEO_MODE video_mode;
 +  kernel::xboxkrnl::VdQueryVideoMode(&video_mode);
@@ -2441,10 +3204,10 @@ index 0000000..e650748
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_pipeline_cache.h b/src/graphics/metal/metal_pipeline_cache.h
 new file mode 100644
-index 0000000..2aeec57
+index 0000000..0590f78
 --- /dev/null
 +++ b/src/graphics/metal/metal_pipeline_cache.h
-@@ -0,0 +1,169 @@
+@@ -0,0 +1,180 @@
 +/**
 + * @file        graphics/metal/metal_pipeline_cache.h
 + * @brief       Guest shader translation and render pipeline states for the Metal backend
@@ -2473,6 +3236,7 @@ index 0000000..2aeec57
 +
 +#import <Metal/Metal.h>
 +
++#include "../pipeline/shader/xsc/xsc_translator.h"
 +#include "metal_spirv.h"
 +
 +namespace rex::graphics::metal {
@@ -2485,6 +3249,8 @@ index 0000000..2aeec57
 +// The five constant buffers follow, in SpirvShaderTranslator::ConstantBuffer order.
 +constexpr uint32_t kMetalBufferConstantsFirst = 1;
 +// SPIRV-Cross's buffer of runtime array sizes, when a shader needs it, is at kMslBufferSizesIndex.
++// The debug counters of XSC pixel shaders with xsc_debug_color_range.
++constexpr uint32_t kMetalBufferXscDebugCounters = 6;
 +
 +class MetalShader : public SpirvShader {
 + public:
@@ -2497,12 +3263,16 @@ index 0000000..2aeec57
 +    id<MTLFunction> GetOrCreateFunction(id<MTLDevice> device, bool rasterization_disabled = false);
 +    // Whether the function reads buffer sizes at kMslBufferSizesIndex (valid after creation).
 +    bool needs_buffer_sizes() const { return needs_buffer_sizes_; }
++    // Whether the translated binary is MSL from the Xenos shader compiler rather than SPIR-V.
++    bool is_xsc() const { return is_xsc_; }
++    void set_is_xsc(bool is_xsc) { is_xsc_ = is_xsc; }
 +
 +   private:
 +    // Indexed by whether rasterization is disabled.
 +    id<MTLFunction> functions_[2] = {nil, nil};
 +    bool functions_failed_[2] = {false, false};
 +    bool needs_buffer_sizes_ = false;
++    bool is_xsc_ = false;
 +  };
 +
 +  MetalShader(xenos::ShaderType shader_type, uint64_t ucode_data_hash,
@@ -2549,6 +3319,8 @@ index 0000000..2aeec57
 +  void AnalyzeShaderUcode(Shader& shader) {
 +    shader.AnalyzeUcode(ucode_disasm_buffer_);
 +  }
++  // The Xenos shader compiler, or nullptr if shader_compiler is not xsc.
++  const xsc::XscShaderTranslator* xsc_translator() const { return xsc_translator_.get(); }
 +
 +  SpirvShaderTranslator::Modification GetCurrentVertexShaderModification(
 +      const Shader& shader, Shader::HostVertexShaderType host_vertex_shader_type,
@@ -2606,6 +3378,8 @@ index 0000000..2aeec57
 +  MetalRenderTargetCache& render_target_cache_;
 +
 +  std::unique_ptr<SpirvShaderTranslator> shader_translator_;
++  // The Xenos shader compiler, if shader_compiler is xsc.
++  std::unique_ptr<xsc::XscShaderTranslator> xsc_translator_;
 +  rex::string::StringBuffer ucode_disasm_buffer_;
 +
 +  std::unordered_map<uint64_t, MetalShader*> shaders_;
@@ -2616,10 +3390,10 @@ index 0000000..2aeec57
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_pipeline_cache.mm b/src/graphics/metal/metal_pipeline_cache.mm
 new file mode 100644
-index 0000000..8b0efc0
+index 0000000..d1850f8
 --- /dev/null
 +++ b/src/graphics/metal/metal_pipeline_cache.mm
-@@ -0,0 +1,585 @@
+@@ -0,0 +1,638 @@
 +/**
 + * @file        graphics/metal/metal_pipeline_cache.mm
 + * @brief       Guest shader translation and render pipeline states for the Metal backend
@@ -2636,6 +3410,8 @@ index 0000000..8b0efc0
 +#include <fmt/format.h>
 +#include <xxhash.h>
 +
++#include <rex/cvar.h>
++#include <rex/graphics/flags.h>
 +#include <rex/graphics/util/draw.h>
 +#include <rex/logging.h>
 +#include <rex/math.h>
@@ -2762,21 +3538,55 @@ index 0000000..8b0efc0
 +    functions_failed_[variant] = true;
 +    return nil;
 +  }
-+  const std::vector<uint8_t>& spirv = translated_binary();
 +  MslShader msl;
-+  MslStage stage =
-+      metal_shader.type() == xenos::ShaderType::kVertex ? MslStage::kVertex : MslStage::kFragment;
-+  std::string name = fmt::format("{} {:016X} modification {:016X}{}",
-+                                 stage == MslStage::kVertex ? "vertex shader" : "pixel shader",
-+                                 metal_shader.ucode_data_hash(), modification(),
-+                                 variant ? " without rasterization" : "");
-+  if (!SpirvToMsl(reinterpret_cast<const uint32_t*>(spirv.data()), spirv.size() / sizeof(uint32_t),
-+                  stage, GetGuestShaderBindings(metal_shader), msl, variant != 0)) {
-+    REXGPU_ERROR("Metal: failed to convert the {} to MSL", name);
-+    functions_failed_[variant] = true;
-+    return nil;
++  std::string name;
++  if (is_xsc_) {
++    // The Xenos shader compiler's binary is the MSL source, with a second entry point for vertex
++    // shaders in pipelines without rasterization.
++    const std::vector<uint8_t>& source = translated_binary();
++    msl.source.assign(source.begin(), source.end());
++    msl.entry_point = xsc::XscShaderTranslator::GetEntryPointName(metal_shader, modification());
++    if (variant) {
++      msl.entry_point += "_norast";
++    }
++    name = msl.entry_point;
++  } else {
++    const std::vector<uint8_t>& spirv = translated_binary();
++    MslStage stage =
++        metal_shader.type() == xenos::ShaderType::kVertex ? MslStage::kVertex : MslStage::kFragment;
++    name = fmt::format("{} {:016X} modification {:016X}{}",
++                       stage == MslStage::kVertex ? "vertex shader" : "pixel shader",
++                       metal_shader.ucode_data_hash(), modification(),
++                       variant ? " without rasterization" : "");
++    // Named by the guest shader and its modification, as in the Metal traces and GPU captures.
++    // Pixel shaders also carry what affects hidden surface removal: e (early depth and stencil
++    // tests), k (kill instructions), z (depth written by the shader).
++    std::string flags;
++    if (stage == MslStage::kFragment) {
++      if (SpirvShaderTranslator::Modification(modification()).pixel.depth_stencil_mode ==
++          SpirvShaderTranslator::Modification::DepthStencilMode::kEarlyHint) {
++        flags += 'e';
++      }
++      if (metal_shader.kills_pixels()) {
++        flags += 'k';
++      }
++      if (metal_shader.writes_depth()) {
++        flags += 'z';
++      }
++    }
++    std::string entry_point_name =
++        fmt::format("{}_{:016x}_{:016x}{}{}{}", stage == MslStage::kVertex ? "vs" : "ps",
++                    metal_shader.ucode_data_hash(), modification(), flags.empty() ? "" : "_", flags,
++                    variant ? "_norast" : "");
++    if (!SpirvToMsl(reinterpret_cast<const uint32_t*>(spirv.data()), spirv.size() / sizeof(uint32_t),
++                    stage, GetGuestShaderBindings(metal_shader), msl, variant != 0,
++                    entry_point_name)) {
++      REXGPU_ERROR("Metal: failed to convert the {} to MSL", name);
++      functions_failed_[variant] = true;
++      return nil;
++    }
++    needs_buffer_sizes_ = needs_buffer_sizes_ || msl.needs_buffer_sizes;
 +  }
-+  needs_buffer_sizes_ = needs_buffer_sizes_ || msl.needs_buffer_sizes;
 +  functions_[variant] = CompileMslFunction(device, msl, name.c_str());
 +  if (!functions_[variant]) {
 +    functions_failed_[variant] = true;
@@ -2808,6 +3618,17 @@ index 0000000..8b0efc0
 +  shader_translator_ = std::make_unique<SpirvShaderTranslator>(
 +      features, true, true, false, render_target_cache_.draw_resolution_scale_x(),
 +      render_target_cache_.draw_resolution_scale_y());
++  if (REXCVAR_GET(shader_compiler) == "xsc") {
++    xsc_translator_ = std::make_unique<xsc::XscShaderTranslator>(
++        xsc::XscShaderTranslator::Target::kMsl, features, true,
++        render_target_cache_.draw_resolution_scale_x(),
++        render_target_cache_.draw_resolution_scale_y());
++    if (REXCVAR_GET(xsc_debug_color_range)) {
++      xsc_translator_->set_debug_color_range(true);
++      REXGPU_INFO("Metal: XSC paints out-of-range pixel shader colors (xsc_debug_color_range)");
++    }
++    REXGPU_INFO("Metal: shaders translated by the Xenos shader compiler (XSC)");
++  }
 +  return true;
 +}
 +
@@ -2819,6 +3640,7 @@ index 0000000..8b0efc0
 +  }
 +  shaders_.clear();
 +  shader_translator_.reset();
++  xsc_translator_.reset();
 +}
 +
 +MetalShader* MetalPipelineCache::LoadShader(xenos::ShaderType shader_type,
@@ -2918,7 +3740,12 @@ index 0000000..8b0efc0
 +    }
 +    if (!translation->is_translated()) {
 +      translation->shader().AnalyzeUcode(ucode_disasm_buffer_);
-+      if (!shader_translator_->TranslateAnalyzedShader(*translation)) {
++      // The Xenos shader compiler first if enabled; what it does not support yet goes to the
++      // SPIR-V translator. Both fill the same texture and sampler bindings.
++      bool translated_by_xsc =
++          xsc_translator_ && xsc_translator_->TranslateAnalyzedShader(*translation);
++      translation->set_is_xsc(translated_by_xsc);
++      if (!translated_by_xsc && !shader_translator_->TranslateAnalyzedShader(*translation)) {
 +        REXGPU_ERROR("Metal: shader {:016X} translation failed",
 +                     translation->shader().ucode_data_hash());
 +        return false;
@@ -3787,10 +4614,10 @@ index 0000000..7e1267d
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_provider.mm b/src/graphics/metal/metal_provider.mm
 new file mode 100644
-index 0000000..314dec0
+index 0000000..5b3c1ff
 --- /dev/null
 +++ b/src/graphics/metal/metal_provider.mm
-@@ -0,0 +1,42 @@
+@@ -0,0 +1,51 @@
 +/**
 + * @file        graphics/metal/metal_provider.mm
 + * @brief       Metal graphics provider
@@ -3801,13 +4628,22 @@ index 0000000..314dec0
 +
 +#include "metal_provider.h"
 +
++#include <cstdlib>
++
++#include <rex/cvar.h>
 +#include <rex/logging.h>
 +
 +#include "metal_presenter.h"
 +
++REXCVAR_DECLARE(int32_t, metal_gpu_capture_frames);
++
 +namespace rex::graphics::metal {
 +
 +std::unique_ptr<MetalProvider> MetalProvider::Create() {
++  // GPU captures to a document outside Xcode need this before the device is created.
++  if (REXCVAR_GET(metal_gpu_capture_frames) > 0) {
++    setenv("MTL_CAPTURE_ENABLED", "1", 1);
++  }
 +  auto provider = std::unique_ptr<MetalProvider>(new MetalProvider());
 +  provider->device_ = MTLCreateSystemDefaultDevice();
 +  if (!provider->device_) {
@@ -4399,10 +5235,10 @@ index 0000000..e975405
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_render_target_cache.mm b/src/graphics/metal/metal_render_target_cache.mm
 new file mode 100644
-index 0000000..52f996f
+index 0000000..d3ff0ca
 --- /dev/null
 +++ b/src/graphics/metal/metal_render_target_cache.mm
-@@ -0,0 +1,3757 @@
+@@ -0,0 +1,3758 @@
 +/**
 + * @file        graphics/metal/metal_render_target_cache.mm
 + * @brief       EDRAM emulation with sample-space host render targets for the Metal backend
@@ -7587,7 +8423,8 @@ index 0000000..52f996f
 +  id<MTLFunction> function = nil;
 +  MslShader msl;
 +  if (SpirvToMsl(reinterpret_cast<const uint32_t*>(shader_code.data()), shader_code.size(),
-+                 MslStage::kFragment, bindings, msl)) {
++                 MslStage::kFragment, bindings, msl, false,
++                 fmt::format("transfer_{:08x}", key.key))) {
 +    function = CompileMslFunction(command_processor_.device(), msl, name.c_str());
 +  }
 +  if (!function) {
@@ -8327,10 +9164,10 @@ index 0000000..b09177b
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_spirv.h b/src/graphics/metal/metal_spirv.h
 new file mode 100644
-index 0000000..7c53f9d
+index 0000000..10c6138
 --- /dev/null
 +++ b/src/graphics/metal/metal_spirv.h
-@@ -0,0 +1,71 @@
+@@ -0,0 +1,72 @@
 +/**
 + * @file        graphics/metal/metal_spirv.h
 + * @brief       SPIR-V to Metal Shading Language conversion for the Metal backend
@@ -8385,10 +9222,11 @@ index 0000000..7c53f9d
 +
 +// Converts SPIR-V to MSL. Returns false and logs the reason on failure. A vertex function for a
 +// pipeline without rasterization (only memory export side effects) must return void in Metal,
-+// which disable_rasterization produces.
++// which disable_rasterization produces. A non-empty entry_point_name replaces SPIRV-Cross's
++// "main0", so GPU captures and the shader profiler of Metal traces tell the functions apart.
 +bool SpirvToMsl(const uint32_t* words, size_t word_count, MslStage stage,
 +                const std::vector<MslBinding>& bindings, MslShader& shader_out,
-+                bool disable_rasterization = false);
++                bool disable_rasterization = false, const std::string& entry_point_name = {});
 +
 +#ifdef __OBJC__
 +// Compiles MSL source and returns the function named entry_point, or nil (logging the error).
@@ -8404,10 +9242,10 @@ index 0000000..7c53f9d
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_spirv.mm b/src/graphics/metal/metal_spirv.mm
 new file mode 100644
-index 0000000..3f426ed
+index 0000000..be82093
 --- /dev/null
 +++ b/src/graphics/metal/metal_spirv.mm
-@@ -0,0 +1,161 @@
+@@ -0,0 +1,205 @@
 +/**
 + * @file        graphics/metal/metal_spirv.mm
 + * @brief       SPIR-V to Metal Shading Language conversion for the Metal backend
@@ -8422,11 +9260,46 @@ index 0000000..3f426ed
 +// pulls the SPIR-V headers of glslang or SPIRV-Tools.
 +#include <spirv_msl.hpp>
 +
++#include <cctype>
++#include <filesystem>
++#include <fstream>
++
++#include <rex/cvar.h>
 +#include <rex/logging.h>
++
++REXCVAR_DEFINE_STRING(metal_shader_dump_path, "", "GPU",
++                      "Folder to write the MSL source of every shader the Metal backend compiles "
++                      "to, one file per function (profiling and debugging)");
 +
 +namespace rex::graphics::metal {
 +
 +namespace {
++
++// A Metal function name from a debug name: letters, digits and underscores only.
++std::string GetFunctionName(const char* prefix, const char* debug_name) {
++  std::string name = prefix;
++  for (const char* c = debug_name; c && *c; ++c) {
++    name += std::isalnum(static_cast<unsigned char>(*c)) ? *c : '_';
++  }
++  return name;
++}
++
++// Writes the MSL source to metal_shader_dump_path, if it is set, as <entry point>.metal.
++void DumpMsl(const MslShader& shader) {
++  std::string dump_path = REXCVAR_GET(metal_shader_dump_path);
++  if (dump_path.empty()) {
++    return;
++  }
++  std::error_code error;
++  std::filesystem::create_directories(dump_path, error);
++  std::filesystem::path file_path =
++      std::filesystem::path(dump_path) / (shader.entry_point + ".metal");
++  if (std::filesystem::exists(file_path, error)) {
++    return;
++  }
++  std::ofstream file(file_path);
++  file << shader.source;
++}
 +
 +spv::ExecutionModel GetExecutionModel(MslStage stage) {
 +  switch (stage) {
@@ -8444,7 +9317,7 @@ index 0000000..3f426ed
 +
 +bool SpirvToMsl(const uint32_t* words, size_t word_count, MslStage stage,
 +                const std::vector<MslBinding>& bindings, MslShader& shader_out,
-+                bool disable_rasterization) {
++                bool disable_rasterization, const std::string& entry_point_name) {
 +  try {
 +    SPIRV_CROSS_NAMESPACE::CompilerMSL compiler(words, word_count);
 +
@@ -8470,6 +9343,13 @@ index 0000000..3f426ed
 +    compiler.set_common_options(common_options);
 +
 +    spv::ExecutionModel model = GetExecutionModel(stage);
++    if (!entry_point_name.empty()) {
++      auto original_entry_points = compiler.get_entry_points_and_stages();
++      if (!original_entry_points.empty()) {
++        compiler.rename_entry_point(original_entry_points[0].name, entry_point_name,
++                                    original_entry_points[0].execution_model);
++      }
++    }
 +    for (const MslBinding& binding : bindings) {
 +      SPIRV_CROSS_NAMESPACE::MSLResourceBinding resource_binding;
 +      resource_binding.stage = model;
@@ -8520,6 +9400,7 @@ index 0000000..3f426ed
 +
 +id<MTLFunction> CompileMslFunction(id<MTLDevice> device, const MslShader& shader,
 +                                   const char* debug_name) {
++  DumpMsl(shader);
 +  MTLCompileOptions* options = [MTLCompileOptions new];
 +  options.languageVersion = MTLLanguageVersion3_0;
 +  options.mathMode = MTLMathModeSafe;
@@ -8547,7 +9428,8 @@ index 0000000..3f426ed
 +    const std::vector<MslBinding>& bindings, const char* debug_name,
 +    std::array<uint32_t, 3>* threadgroup_size_out) {
 +  MslShader shader;
-+  if (!SpirvToMsl(words, word_count, MslStage::kCompute, bindings, shader)) {
++  if (!SpirvToMsl(words, word_count, MslStage::kCompute, bindings, shader, false,
++                  GetFunctionName("cs_", debug_name))) {
 +    return nil;
 +  }
 +  id<MTLFunction> function = CompileMslFunction(device, shader, debug_name);
@@ -10456,6 +11338,67 @@ index bd0019c..ca62abd 100644
                  }
                }
              }
+diff --git a/src/graphics/pipeline/shader/spirv_translator_fetch.cpp b/src/graphics/pipeline/shader/spirv_translator_fetch.cpp
+index 9ce3bb4..edacf18 100644
+--- a/src/graphics/pipeline/shader/spirv_translator_fetch.cpp
++++ b/src/graphics/pipeline/shader/spirv_translator_fetch.cpp
+@@ -1409,8 +1409,7 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
+             builder_->createUnaryOp(spv::OpLogicalNot, type_bool_, is_all_signed);
+ 
+         // Load the fetch constant word 4, needed unconditionally for LOD
+-        // biasing, for result exponent biasing, and conditionally for stacked
+-        // texture filtering.
++        // biasing, and conditionally for stacked texture filtering.
+         id_vector_temp_.clear();
+         id_vector_temp_.push_back(const_int_0_);
+         id_vector_temp_.push_back(
+@@ -2030,10 +2029,22 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
+         }
+ 
+         // Apply the exponent bias from the bits 13:18 of the fetch constant
+-        // word 4.
++        // word 3 (exp_adjust).
++        id_vector_temp_.clear();
++        id_vector_temp_.push_back(const_int_0_);
++        id_vector_temp_.push_back(
++            builder_->makeIntConstant(int((fetch_constant_word_0_index + 3) >> 2)));
++        id_vector_temp_.push_back(
++            builder_->makeIntConstant(int((fetch_constant_word_0_index + 3) & 3)));
++        spv::Id fetch_constant_word_3_signed = builder_->createUnaryOp(
++            spv::OpBitcast, type_int_,
++            builder_->createLoad(builder_->createAccessChain(spv::StorageClassUniform,
++                                                             uniform_fetch_constants_,
++                                                             id_vector_temp_),
++                                 spv::NoPrecision));
+         spv::Id result_exponent_bias = builder_->createBinBuiltinCall(
+             type_float_, ext_inst_glsl_std_450_, GLSLstd450Ldexp, const_float_1_,
+-            builder_->createTriOp(spv::OpBitFieldSExtract, type_int_, fetch_constant_word_4_signed,
++            builder_->createTriOp(spv::OpBitFieldSExtract, type_int_, fetch_constant_word_3_signed,
+                                   builder_->makeUintConstant(13), builder_->makeUintConstant(6)));
+         {
+           uint32_t result_remaining_components = used_result_nonzero_components;
+diff --git a/src/graphics/pipeline/shader/translator.cpp b/src/graphics/pipeline/shader/translator.cpp
+index e472251..21f81dc 100644
+--- a/src/graphics/pipeline/shader/translator.cpp
++++ b/src/graphics/pipeline/shader/translator.cpp
+@@ -672,12 +672,16 @@ bool ShaderTranslator::TranslateAnalyzedShader(Shader::Translation& translation)
+ }
+ 
+ void ShaderTranslator::EmitTranslationError(const char* message, bool is_fatal) {
++  RecordTranslationError(message, is_fatal);
++  REXGPU_ERROR("Shader translation {}error: {}", is_fatal ? "fatal " : "", message);
++}
++
++void ShaderTranslator::RecordTranslationError(const char* message, bool is_fatal) {
+   Shader::Error error;
+   error.is_fatal = is_fatal;
+   error.message = message;
+   // TODO(benvanik): location information.
+   errors_.push_back(std::move(error));
+-  REXGPU_ERROR("Shader translation {}error: {}", is_fatal ? "fatal " : "", message);
+ }
+ 
+ void ShaderTranslator::TranslateControlFlowInstruction(const ControlFlowInstruction& cf) {
 diff --git a/src/graphics/plugin_main.cpp b/src/graphics/plugin_main.cpp
 index ec756d3..6e16b00 100644
 --- a/src/graphics/plugin_main.cpp
@@ -10499,3 +11442,216 @@ index ec756d3..6e16b00 100644
  #if REX_HAS_D3D12
    if (backend == "any" || backend == "d3d12") {
      return new rex::graphics::d3d12::D3D12GraphicsSystem();
+diff --git a/src/graphics/vulkan/command_processor.cpp b/src/graphics/vulkan/command_processor.cpp
+index 34330f6..b8816db 100644
+--- a/src/graphics/vulkan/command_processor.cpp
++++ b/src/graphics/vulkan/command_processor.cpp
+@@ -1896,6 +1896,7 @@ bool VulkanCommandProcessor::SetupContext() {
+   }
+ 
+   occlusion_query_resources_available_ = InitializeOcclusionQueryResources();
++  InitializeGpuTimeQueries();
+ 
+   // Just not to expose uninitialized memory.
+   std::memset(&system_constants_, 0, sizeof(system_constants_));
+@@ -1907,6 +1908,7 @@ void VulkanCommandProcessor::ShutdownContext() {
+   AwaitAllQueueOperationsCompletion();
+   InvalidateAllVertexBufferResidency();
+   ShutdownOcclusionQueryResources();
++  ShutdownGpuTimeQueries();
+ 
+   const ui::vulkan::VulkanDevice* const vulkan_device = GetVulkanDevice();
+   const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
+@@ -4847,6 +4849,68 @@ void VulkanCommandProcessor::EvictOldReadbackBuffers(
+   }
+ }
+ 
++void VulkanCommandProcessor::InitializeGpuTimeQueries() {
++  gpu_time_query_pool_ = VK_NULL_HANDLE;
++  gpu_time_last_end_ticks_ = 0;
++  const ui::vulkan::VulkanDevice* vulkan_device = GetVulkanDevice();
++  if (!vulkan_device->properties().timestampValidBitsGraphicsCompute) {
++    REXGPU_INFO("VulkanCommandProcessor: the queue has no timestamps, host_gpu_time_us stays 0");
++    return;
++  }
++  const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
++  VkQueryPoolCreateInfo pool_info = {};
++  pool_info.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
++  pool_info.queryType = VK_QUERY_TYPE_TIMESTAMP;
++  pool_info.queryCount = kGpuTimeQuerySubmissionSlots * 2;
++  if (dfn.vkCreateQueryPool(vulkan_device->device(), &pool_info, nullptr,
++                            &gpu_time_query_pool_) != VK_SUCCESS) {
++    REXGPU_WARN("VulkanCommandProcessor: failed to create the GPU time query pool");
++    gpu_time_query_pool_ = VK_NULL_HANDLE;
++  }
++}
++
++void VulkanCommandProcessor::ShutdownGpuTimeQueries() {
++  if (gpu_time_query_pool_ != VK_NULL_HANDLE) {
++    const ui::vulkan::VulkanDevice* vulkan_device = GetVulkanDevice();
++    vulkan_device->functions().vkDestroyQueryPool(vulkan_device->device(), gpu_time_query_pool_,
++                                                  nullptr);
++    gpu_time_query_pool_ = VK_NULL_HANDLE;
++  }
++}
++
++void VulkanCommandProcessor::AccountGpuTimeOfCompletedSubmissions(uint64_t first_submission,
++                                                                  uint64_t last_submission) {
++  if (gpu_time_query_pool_ == VK_NULL_HANDLE) {
++    return;
++  }
++  const ui::vulkan::VulkanDevice* vulkan_device = GetVulkanDevice();
++  const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
++  uint32_t valid_bits = vulkan_device->properties().timestampValidBitsGraphicsCompute;
++  uint64_t mask = valid_bits >= 64 ? ~uint64_t(0) : (uint64_t(1) << valid_bits) - 1;
++  double period_us = double(vulkan_device->properties().timestampPeriod) * 0.001;
++  for (uint64_t submission = first_submission; submission <= last_submission; ++submission) {
++    uint32_t first_query = uint32_t(submission % kGpuTimeQuerySubmissionSlots) * 2;
++    uint64_t timestamps[2];
++    // The submission's fence has signalled, so the results are available without waiting.
++    if (dfn.vkGetQueryPoolResults(vulkan_device->device(), gpu_time_query_pool_, first_query, 2,
++                                  sizeof(timestamps), timestamps, sizeof(uint64_t),
++                                  VK_QUERY_RESULT_64_BIT) != VK_SUCCESS) {
++      continue;
++    }
++    uint64_t start = timestamps[0] & mask;
++    uint64_t end = timestamps[1] & mask;
++    if (end < start) {
++      continue;
++    }
++    // Count the part overlapping the previous submissions once.
++    start = std::max(start, gpu_time_last_end_ticks_);
++    if (end > start) {
++      PERF_counter_add(kHostGpuTimeUs, int64_t(double(end - start) * period_us));
++    }
++    gpu_time_last_end_ticks_ = std::max(gpu_time_last_end_ticks_, end);
++  }
++}
++
+ bool VulkanCommandProcessor::InitializeOcclusionQueryResources() {
+   active_occlusion_query_ = {};
+   occlusion_query_cursor_ = 0;
+@@ -5140,6 +5204,8 @@ void VulkanCommandProcessor::CheckSubmissionFenceAndDeviceLoss(uint64_t await_su
+                       submissions_in_flight_fences_awaited_end);
+   submissions_in_flight_fences_.erase(submissions_in_flight_fences_.cbegin(),
+                                       submissions_in_flight_fences_awaited_end);
++  AccountGpuTimeOfCompletedSubmissions(submission_completed_ + 1,
++                                       submission_completed_ + fences_awaited);
+   submission_completed_ += fences_awaited;
+ 
+   // Reclaim semaphores.
+@@ -5512,7 +5578,19 @@ bool VulkanCommandProcessor::EndSubmission(bool is_swap) {
+       REXGPU_ERROR("Failed to begin a Vulkan command buffer");
+       return false;
+     }
++    uint32_t gpu_time_first_query =
++        uint32_t(GetCurrentSubmission() % kGpuTimeQuerySubmissionSlots) * 2;
++    if (gpu_time_query_pool_ != VK_NULL_HANDLE) {
++      dfn.vkCmdResetQueryPool(command_buffer.buffer, gpu_time_query_pool_, gpu_time_first_query,
++                              2);
++      dfn.vkCmdWriteTimestamp(command_buffer.buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
++                              gpu_time_query_pool_, gpu_time_first_query);
++    }
+     deferred_command_buffer_.Execute(command_buffer.buffer);
++    if (gpu_time_query_pool_ != VK_NULL_HANDLE) {
++      dfn.vkCmdWriteTimestamp(command_buffer.buffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
++                              gpu_time_query_pool_, gpu_time_first_query + 1);
++    }
+     if (dfn.vkEndCommandBuffer(command_buffer.buffer) != VK_SUCCESS) {
+       REXGPU_ERROR("Failed to end a Vulkan command buffer");
+       return false;
+@@ -6386,6 +6464,13 @@ void VulkanCommandProcessor::UpdateSystemConstantValues(
+         UINT32_C(0x3F800000) + (color_exp_bias << 23);
+     dirty |= system_constants_.color_exp_bias[i] != color_exp_bias_scale;
+     system_constants_.color_exp_bias[i] = color_exp_bias_scale;
++    if (!edram_fragment_shader_interlock) {
++      // XSC pixel shaders read the render target formats to clamp the color to the range of a
++      // 7e3 render target.
++      uint32_t format_flags = RenderTargetCache::AddPSIColorFormatFlags(color_info.color_format);
++      dirty |= system_constants_.edram_rt_format_flags[i] != format_flags;
++      system_constants_.edram_rt_format_flags[i] = format_flags;
++    }
+     if (edram_fragment_shader_interlock) {
+       dirty |= system_constants_.edram_rt_keep_mask[i][0] != rt_keep_masks[i][0];
+       system_constants_.edram_rt_keep_mask[i][0] = rt_keep_masks[i][0];
+diff --git a/src/graphics/vulkan/pipeline_cache.cpp b/src/graphics/vulkan/pipeline_cache.cpp
+index 4e7ad78..3217c36 100644
+--- a/src/graphics/vulkan/pipeline_cache.cpp
++++ b/src/graphics/vulkan/pipeline_cache.cpp
+@@ -41,6 +41,8 @@
+ #include <rex/graphics/util/draw.h>
+ #include <rex/graphics/vulkan/command_processor.h>
+ #include <rex/graphics/vulkan/pipeline_cache.h>
++
++#include "../pipeline/shader/xsc/xsc_translator.h"
+ #include <rex/graphics/vulkan/shader.h>
+ #include <rex/graphics/xenos.h>
+ #include <rex/hash.h>
+@@ -297,6 +299,22 @@ bool VulkanPipelineCache::Initialize() {
+       render_target_cache_.msaa_2x_no_attachments_supported(), edram_fragment_shader_interlock,
+       render_target_cache_.draw_resolution_scale_x(),
+       render_target_cache_.draw_resolution_scale_y());
++  // XSC writes the pixel shader outputs to host render targets: the pixel shader interlock path,
++  // which does the render target logic in the shader, stays with the SPIR-V translator.
++  if (REXCVAR_GET(shader_compiler) == "xsc") {
++    if (edram_fragment_shader_interlock) {
++      REXGPU_INFO(
++          "Vulkan: shader_compiler = xsc is not used with the fragment shader interlock render "
++          "target path");
++    } else {
++      xsc_translator_ = std::make_unique<xsc::XscShaderTranslator>(
++          xsc::XscShaderTranslator::Target::kSpirv, SpirvShaderTranslator::Features(vulkan_device),
++          render_target_cache_.msaa_2x_attachments_supported(),
++          render_target_cache_.draw_resolution_scale_x(),
++          render_target_cache_.draw_resolution_scale_y());
++      REXGPU_INFO("Vulkan: shaders translated by the Xenos shader compiler (XSC)");
++    }
++  }
+ 
+   if (edram_fragment_shader_interlock) {
+     std::vector<uint8_t> depth_only_fragment_shader_code =
+@@ -876,6 +894,7 @@ void VulkanPipelineCache::Shutdown() {
+   texture_binding_layouts_.clear();
+ 
+   // Shut down shader translation.
++  xsc_translator_.reset();
+   shader_translator_.reset();
+ }
+ 
+@@ -1244,9 +1263,12 @@ bool VulkanPipelineCache::TranslateAnalyzedShader(SpirvShaderTranslator& transla
+                                                   VulkanShader::VulkanTranslation& translation) {
+   VulkanShader& shader = static_cast<VulkanShader&>(translation.shader());
+ 
+-  // Perform translation.
++  // Perform translation, with XSC first if enabled (what it does not support yet goes to the
++  // SPIR-V translator; both fill the same texture and sampler bindings).
+   // If this fails the shader will be marked as invalid and ignored later.
+-  if (!translator.TranslateAnalyzedShader(translation)) {
++  bool translated_by_xsc =
++      xsc_translator_ && xsc_translator_->TranslateAnalyzedShader(translation);
++  if (!translated_by_xsc && !translator.TranslateAnalyzedShader(translation)) {
+     REXGPU_ERROR("Shader {:016X} translation failed; marking as ignored", shader.ucode_data_hash());
+     return false;
+   }
+diff --git a/src/ui/vulkan/vulkan_device.cpp b/src/ui/vulkan/vulkan_device.cpp
+index 8197bb4..7838036 100644
+--- a/src/ui/vulkan/vulkan_device.cpp
++++ b/src/ui/vulkan/vulkan_device.cpp
+@@ -478,6 +478,9 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
+     device->queue_family_sparse_binding_ = first_queue_family_sparse_binding;
+   }
+ 
++  device->properties_.timestampValidBitsGraphicsCompute =
++      queue_families[device->queue_family_graphics_compute_].timestampValidBits;
++
+   device->queue_families_[device->queue_family_graphics_compute_].queues.resize(std::max(
+       size_t(1), device->queue_families_[device->queue_family_graphics_compute_].queues.size()));
+   if (device->queue_family_sparse_binding_ != UINT32_MAX) {
+@@ -625,6 +628,7 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
+   XE_UI_VULKAN_LIMIT(optimalBufferCopyOffsetAlignment)
+   XE_UI_VULKAN_LIMIT(optimalBufferCopyRowPitchAlignment)
+   XE_UI_VULKAN_LIMIT(nonCoherentAtomSize)
++  XE_UI_VULKAN_LIMIT(timestampPeriod)
+ 
+   if (with_gpu_emulation) {
+     XE_UI_VULKAN_FEATURE(robustBufferAccess)
