@@ -156,7 +156,7 @@ by draw; the interface is changed afterwards, together with the backend, in phas
 
 ## 7. Selection and fallback
 
-- `shader_compiler = "translator" | "xsc"` (default `translator` until phase 5), read by the
+- `shader_compiler = "translator" | "xsc"` (default `xsc` since phase 5), read by the
   Metal and Vulkan pipeline caches.
 - The choice is made per shader (ucode hash) at its first translation and kept for all its
   variants, because the texture and sampler bindings are stored per shader.
@@ -400,7 +400,26 @@ intro, campaign, room with light shafts) and Metal System Traces.
   - Dropping `NoContraction` in the SPIR-V for Vulkan: measurable only on Linux, and it changes
     the results (fused multiply-add instead of the Xenos rounding), so not without a reason.
 
-## 16. Risks
+## 16. Phase 5: on by default
+
+- `shader_compiler` defaults to `xsc` (the cvar and `runtime/config/azura.default.toml`);
+  `shader_compiler = "translator"` in `azura.toml` goes back to the SPIR-V translator.
+- **Checked in the game** (22 October 2026, base M4):
+  - Metal: 11.8 minutes from the menus past the room with light shafts, no visual difference
+    besides the known white flashes; GPU time per frame median 12.3 ms, p90 16.3 ms, p99 22.4 ms
+    (baseline 18.9, 23.1 and 30.2 ms). Only the expected shaders fell back (rectangle lists and
+    memory export).
+  - Vulkan (MoltenVK), windowed: no visual difference. At the 3x3 draw resolution scale the title
+    screen takes ~91 ms of GPU per frame with either compiler (~12.6 ms at 1x): the scale, not XSC
+    (MoltenVK turns both SPIR-V modules into MSL with SPIRV-Cross, `NoContraction` included).
+  - Vulkan in fullscreen on macOS shows a black screen with either compiler: a separate issue.
+- **Linux:** pending, docs/linux-gpu-measurement.md (section 3).
+- **White flashes, more ruled out:** blending in the fixed-point 16-bit render targets (stored
+  divided by 32: a float16 mode with their real values left the flashes, and was removed), and the
+  depth precision (`depth_float24_convert_in_pixel_shader` left the flashes; the option also
+  breaks the picture on Metal, with the SPIR-V translator, which takes those shaders).
+
+## 17. Risks
 
 - Visual differences in shaders the bench does not reach with random constants (branches the
   game never takes in the bench, special texture formats): the in-game captures cover the main
