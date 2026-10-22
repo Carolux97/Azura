@@ -26,6 +26,7 @@ set(AZURA_SOURCES
     src/class_dump.cpp
     src/render_queue.cpp
     src/relaunch.cpp
+    src/shader_compile_overlay.cpp
     src/menu/coalesced.cpp
     src/menu/menu_patches.cpp
     src/menu/pc_options.cpp
@@ -134,6 +135,9 @@ add_custom_command(TARGET azura POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${CMAKE_CURRENT_SOURCE_DIR}/assets/azura-icon.icns
             $<TARGET_FILE_DIR:azura>/assets/azura-icon.icns
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts
+            $<TARGET_FILE_DIR:azura>/assets/fonts
     COMMENT "Installing azura.default.toml, gamecontrollerdb.txt and assets beside the executable")
 if(APPLE)
     add_custom_command(TARGET azura POST_BUILD
