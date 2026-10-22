@@ -964,10 +964,10 @@ index 1fb0d77..30f8007 100644
    // Rebind the active guest thread for cross-module callbacks.
 diff --git a/src/system/ppc_interpreter.cpp b/src/system/ppc_interpreter.cpp
 new file mode 100644
-index 0000000..69dd428
+index 0000000..0746703
 --- /dev/null
 +++ b/src/system/ppc_interpreter.cpp
-@@ -0,0 +1,1366 @@
+@@ -0,0 +1,1573 @@
 +/**
 + * @file        system/ppc_interpreter.cpp
 + * @brief       PowerPC interpreter for guest functions the code generator did not find
@@ -986,6 +986,7 @@ index 0000000..69dd428
 +
 +#include <atomic>
 +#include <climits>
++#include <cmath>
 +#include <cstdio>
 +#include <cstring>
 +#include <mutex>
@@ -1007,6 +1008,7 @@ index 0000000..69dd428
 +namespace {
 +
 +using rex::ppc::Cr;
++using rex::ppc::Fpr;
 +using rex::ppc::Gpr;
 +
 +//=============================================================================
@@ -1939,10 +1941,215 @@ index 0000000..69dd428
 +        break;
 +      }
 +
++      //=======================================================================
++      // Floating point loads and stores (memory.cpp). Like every floating point builder, they
++      // first make sure flush-to-zero is off: the Xenon's FPU keeps denormals. The generated
++      // code skips the switch when it knows the mode from an earlier instruction of the same
++      // block; switching only when the bit differs, as here, ends in the same state.
++      //=======================================================================
++      case PPC_INST_LFD:
++        ctx.fpscr.disableFlushMode();
++        Fpr(ctx, op[0]).u64 = Load64(base, REX_D_EA());
++        break;
++      case PPC_INST_LFDX:
++        ctx.fpscr.disableFlushMode();
++        Fpr(ctx, op[0]).u64 = Load64(base, REX_X_EA());
++        break;
++      case PPC_INST_LFDU: {
++        ctx.fpscr.disableFlushMode();
++        uint32_t ea = REX_D_UPDATE_EA();
++        Fpr(ctx, op[0]).u64 = Load64(base, ea);
++        Gpr(ctx, op[2]).u32 = ea;
++        break;
++      }
++      case PPC_INST_LFDUX: {
++        ctx.fpscr.disableFlushMode();
++        uint32_t ea = REX_X_UPDATE_EA();
++        Fpr(ctx, op[0]).u64 = Load64(base, ea);
++        Gpr(ctx, op[1]).u32 = ea;
++        break;
++      }
++      case PPC_INST_LFS: {
++        ctx.fpscr.disableFlushMode();
++        PPCRegister temp;
++        temp.u32 = Load32(base, REX_D_EA());
++        Fpr(ctx, op[0]).f64 = double(temp.f32);
++        break;
++      }
++      case PPC_INST_LFSX: {
++        ctx.fpscr.disableFlushMode();
++        PPCRegister temp;
++        temp.u32 = Load32(base, REX_X_EA());
++        Fpr(ctx, op[0]).f64 = double(temp.f32);
++        break;
++      }
++      case PPC_INST_LFSU: {
++        ctx.fpscr.disableFlushMode();
++        uint32_t ea = REX_D_UPDATE_EA();
++        PPCRegister temp;
++        temp.u32 = Load32(base, ea);
++        Fpr(ctx, op[0]).f64 = double(temp.f32);
++        Gpr(ctx, op[2]).u32 = ea;
++        break;
++      }
++      case PPC_INST_LFSUX: {
++        ctx.fpscr.disableFlushMode();
++        uint32_t ea = REX_X_UPDATE_EA();
++        PPCRegister temp;
++        temp.u32 = Load32(base, ea);
++        Fpr(ctx, op[0]).f64 = double(temp.f32);
++        Gpr(ctx, op[1]).u32 = ea;
++        break;
++      }
++      case PPC_INST_STFD:
++        ctx.fpscr.disableFlushMode();
++        Store64(base, REX_D_EA(), Fpr(ctx, op[0]).u64);
++        break;
++      case PPC_INST_STFDX:
++        ctx.fpscr.disableFlushMode();
++        Store64(base, REX_X_EA(), Fpr(ctx, op[0]).u64);
++        break;
++      case PPC_INST_STFDU: {
++        ctx.fpscr.disableFlushMode();
++        uint32_t ea = REX_D_UPDATE_EA();
++        Store64(base, ea, Fpr(ctx, op[0]).u64);
++        Gpr(ctx, op[2]).u32 = ea;
++        break;
++      }
++      case PPC_INST_STFDUX: {
++        ctx.fpscr.disableFlushMode();
++        uint32_t ea = REX_X_UPDATE_EA();
++        Store64(base, ea, Fpr(ctx, op[0]).u64);
++        Gpr(ctx, op[1]).u32 = ea;
++        break;
++      }
++      case PPC_INST_STFIWX:
++        ctx.fpscr.disableFlushMode();
++        Store32(base, REX_X_EA(), Fpr(ctx, op[0]).u32);
++        break;
++      case PPC_INST_STFS: {
++        ctx.fpscr.disableFlushMode();
++        PPCRegister temp;
++        temp.f32 = float(Fpr(ctx, op[0]).f64);
++        Store32(base, REX_D_EA(), temp.u32);
++        break;
++      }
++      case PPC_INST_STFSX: {
++        ctx.fpscr.disableFlushMode();
++        PPCRegister temp;
++        temp.f32 = float(Fpr(ctx, op[0]).f64);
++        Store32(base, REX_X_EA(), temp.u32);
++        break;
++      }
++      case PPC_INST_STFSU: {
++        ctx.fpscr.disableFlushMode();
++        uint32_t ea = REX_D_UPDATE_EA();
++        PPCRegister temp;
++        temp.f32 = float(Fpr(ctx, op[0]).f64);
++        Store32(base, ea, temp.u32);
++        Gpr(ctx, op[2]).u32 = ea;
++        break;
++      }
++      case PPC_INST_STFSUX: {
++        ctx.fpscr.disableFlushMode();
++        PPCRegister temp;
++        temp.f32 = float(Fpr(ctx, op[0]).f64);
++        uint32_t ea = REX_X_UPDATE_EA();
++        Store32(base, ea, temp.u32);
++        Gpr(ctx, op[1]).u32 = ea;
++        break;
++      }
++
 +#undef REX_D_EA
 +#undef REX_X_EA
 +#undef REX_D_UPDATE_EA
 +#undef REX_X_UPDATE_EA
++
++      //=======================================================================
++      // Floating point arithmetic (floating_point.cpp). Record forms (fadd., ...) do not update
++      // cr1 in the generated code, so they do not here either.
++      //=======================================================================
++#define REX_FPU(id, statement)        \
++  case id: {                          \
++    ctx.fpscr.disableFlushMode();     \
++    PPCRegister& d = Fpr(ctx, op[0]); \
++    const double a = Fpr(ctx, op[1]).f64; \
++    statement;                        \
++    break;                            \
++  }
++#define REX_FB() Fpr(ctx, op[2]).f64
++#define REX_FC() Fpr(ctx, op[3]).f64
++
++        REX_FPU(PPC_INST_FABS, d.u64 = Fpr(ctx, op[1]).u64 & ~0x8000000000000000ull; (void)a)
++        REX_FPU(PPC_INST_FNABS, d.u64 = Fpr(ctx, op[1]).u64 | 0x8000000000000000ull; (void)a)
++        REX_FPU(PPC_INST_FNEG, d.u64 = Fpr(ctx, op[1]).u64 ^ 0x8000000000000000ull; (void)a)
++        REX_FPU(PPC_INST_FMR, d.f64 = a)
++        REX_FPU(PPC_INST_FCFID, d.f64 = double(Fpr(ctx, op[1]).s64); (void)a)
++        REX_FPU(PPC_INST_FCTID,
++                d.s64 = std::isnan(a)              ? int64_t(0x8000000000000000ULL)
++                        : (a > double(LLONG_MAX)) ? LLONG_MAX
++                                                  : simde_mm_cvtsd_si64(simde_mm_load_sd(&a)))
++        REX_FPU(PPC_INST_FCTIDZ,
++                d.s64 = std::isnan(a)              ? int64_t(0x8000000000000000ULL)
++                        : (a > double(LLONG_MAX)) ? LLONG_MAX
++                                                  : simde_mm_cvttsd_si64(simde_mm_load_sd(&a)))
++        REX_FPU(PPC_INST_FCTIW,
++                d.s64 = std::isnan(a)             ? int64_t(0x80000000U)
++                        : (a >= double(INT_MAX)) ? INT_MAX
++                                                 : simde_mm_cvtsd_si32(simde_mm_load_sd(&a)))
++        REX_FPU(PPC_INST_FCTIWZ,
++                d.s64 = std::isnan(a)             ? int64_t(0x80000000U)
++                        : (a >= double(INT_MAX)) ? INT_MAX
++                                                 : simde_mm_cvttsd_si32(simde_mm_load_sd(&a)))
++        REX_FPU(PPC_INST_FRSP, d.f64 = double(float(a)))
++        REX_FPU(PPC_INST_FCMPU, Cr(ctx, op[0]).compare(a, REX_FB()); (void)d)
++        REX_FPU(PPC_INST_FCMPO, Cr(ctx, op[0]).compare(a, REX_FB()); (void)d)
++        REX_FPU(PPC_INST_FADD, d.f64 = a + REX_FB())
++        REX_FPU(PPC_INST_FADDS, d.f64 = double(float(a + REX_FB())))
++        REX_FPU(PPC_INST_FSUB, d.f64 = a - REX_FB())
++        REX_FPU(PPC_INST_FSUBS, d.f64 = double(float(a - REX_FB())))
++        REX_FPU(PPC_INST_FMUL, d.f64 = a * REX_FB())
++        REX_FPU(PPC_INST_FMULS, d.f64 = double(float(a * REX_FB())))
++        REX_FPU(PPC_INST_FDIV, d.f64 = a / REX_FB())
++        REX_FPU(PPC_INST_FDIVS, d.f64 = double(float(a / REX_FB())))
++        REX_FPU(PPC_INST_FMADD, d.f64 = std::fma(a, REX_FB(), REX_FC()))
++        REX_FPU(PPC_INST_FMADDS, d.f64 = double(float(std::fma(a, REX_FB(), REX_FC()))))
++        REX_FPU(PPC_INST_FMSUB, d.f64 = std::fma(a, REX_FB(), -REX_FC()))
++        REX_FPU(PPC_INST_FMSUBS, d.f64 = double(float(std::fma(a, REX_FB(), -REX_FC()))))
++        REX_FPU(PPC_INST_FNMADD, d.f64 = -std::fma(a, REX_FB(), REX_FC()))
++        REX_FPU(PPC_INST_FNMADDS, d.f64 = double(float(-std::fma(a, REX_FB(), REX_FC()))))
++        REX_FPU(PPC_INST_FNMSUB, d.f64 = -std::fma(a, REX_FB(), -REX_FC()))
++        REX_FPU(PPC_INST_FNMSUBS, d.f64 = double(float(-std::fma(a, REX_FB(), -REX_FC()))))
++        REX_FPU(PPC_INST_FRES, d.f64 = double(float(1.0 / a)))
++        REX_FPU(PPC_INST_FRSQRTE, d.f64 = double(float(1.0 / std::sqrt(a))))
++        REX_FPU(PPC_INST_FSQRT, d.f64 = std::sqrt(a))
++        REX_FPU(PPC_INST_FSQRTS, d.f64 = double(float(std::sqrt(a))))
++        REX_FPU(PPC_INST_FSEL, d.f64 = a >= 0.0 ? REX_FB() : REX_FC())
++
++#undef REX_FPU
++#undef REX_FB
++#undef REX_FC
++
++      // FPSCR (system.cpp): only the rounding mode is kept, in the host register.
++      case PPC_INST_MFFS:
++        Fpr(ctx, op[0]).u64 = ctx.fpscr.loadFromHost();
++        break;
++      case PPC_INST_MTFSF: {
++        uint32_t fm = op[0];
++        uint32_t mask = 0;
++        for (int j = 0; j < 8; ++j) {
++          if (fm & (1 << (7 - j))) {
++            mask |= 0xFu << (4 * j);
++          }
++        }
++        if (mask == 0xFFFFFFFF) {
++          ctx.fpscr.storeFromGuest(Fpr(ctx, op[1]).u32);
++        } else {
++          ctx.fpscr.storeFromGuest(uint32_t((ctx.fpscr.loadFromHost() & ~mask) |
++                                            (Fpr(ctx, op[1]).u32 & mask)));
++        }
++        break;
++      }
 +
 +      //=======================================================================
 +      // System, cache and special registers (system.cpp)
