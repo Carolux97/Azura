@@ -234,3 +234,7 @@ and they write into `metal_gpu_capture_path`. The keys are bound by physical pos
   bias). It saves `pixels_<time>.txt` and `pixels_<time>.half4`;
   `scripts/pixel_history.py` lists the draws that change each part of the screen, the history of
   one grid point, and the grid after any draw as an image. That frame is slow.
+
+The frame and pixel histories found the cause of the white flashes and the dark sky cards (the
+texture exponent bias, docs/shader-compiler-design.md section 17) where a GPU capture could not:
+the flashes are random, and finding one draw among ~2,500 by hand in Xcode was too slow.

@@ -57,10 +57,10 @@ scripts/gpu_baseline.sh start linux-fbo-xsc render_target_path_vulkan=fbo shader
 scripts/gpu_baseline.sh finish
 ```
 
-While playing with `fbo`, also note whether bright white flashes appear on walls, in light
-reflections or when Jack cloaks. They happen on macOS (Metal and Vulkan, both on host render
-targets) and not with `fsi` on Linux, and these sessions tell whether `fbo` brings them on Linux
-too.
+While playing, also note any bright white flash on some objects (walls, light reflections, Jack
+cloaking) or dark rectangle over the sky. On macOS they came from the texture exponent bias,
+which both translators read from the wrong word of the fetch constant
+(docs/shader-compiler-design.md, section 17); with that fixed none is expected.
 
 With `shader_compiler=xsc` the log says `Vulkan: shaders translated by the Xenos shader compiler
 (XSC)` at the start; a line `XSC: shader ... translated by the SPIR-V translator` names a shader
