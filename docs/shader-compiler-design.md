@@ -263,8 +263,9 @@ intro, campaign, room with light shafts) and Metal System Traces.
 - **Contraction, measured.** With `MTLMathModeSafe`, the Metal compiler fuses `a * b + c` written
   in one expression but not across statements, and `fma(a, b, 0)` stays exact. The MSL emitter
   writes every operation as its own statement, so no `[[clang::optnone]]` is needed.
-- **Kill.** A Xenos kill keeps the pixel running for its neighbours' derivatives: XSC marks the
-  pixel and calls `discard_fragment()` at the end of the shader.
+- **Kill.** A Xenos kill keeps the pixel running for its neighbours' derivatives. Phase 1 marked
+  the pixel and called `discard_fragment()` at the end of the shader; phase 4 discards at once,
+  since `discard_fragment()` has demote semantics from MSL 2.3 (section 15).
 - **Inherited rules to check later in the game** (kept as they are for parity, they look like
   errors of the SPIR-V translator):
   - linear filtering between the layers of a stacked texture computes
@@ -363,7 +364,43 @@ intro, campaign, room with light shafts) and Metal System Traces.
   XSC for both stages, no GPU error, only the rectangle list and memory export shaders fall back.
   Pending: a play session on each backend, and the measurements.
 
-## 15. Risks
+## 15. Phase 4: measured optimizations
+
+- **Method.** `xsc-bench --mode perf`: every pixel shader variant drawn 20 times at 512x512 with
+  the same inputs, the GPU time per draw from the command buffer. One draw per translation was
+  too noisy (the same shader varied by 24% from run to run, median); each translation is now drawn
+  in 5 rounds alternating the translations, keeping the minimum: the SPIR-V translator, the
+  control, then varies by 0.8% from run to run (median), 2.6% (p90). The bench only measures
+  pixel shaders in isolation: the game's GPU time also has render passes, transfers and vertex
+  work, and is measured in the game (perf_log_csv and traces) and on Linux.
+- **Baseline of phase 4** (958 pixel shader variants, sum of the GPU time per draw): SPIR-V
+  translator 251 ms, XSC 93 ms.
+- **Kept: discard at once.** `discard_fragment()` has demote semantics since MSL 2.3 (the pixel
+  stops writing but keeps running for its neighbours' derivatives; SPIRV-Cross writes the SPIR-V
+  translator's demote that way), so the kill no longer waits for the end of the shader: the 279
+  kill variants 22.1 to 20.4 ms (-8%), up to 3 times faster each (0.15 to 0.05 ms), the others
+  unchanged; still bit for bit the SPIR-V translator in the comparison.
+- **Removed, no gain:** the constant buffers as structures of a known size instead of pointers
+  (89.2 to 89.4 ms), and declaring only the buffers a shader reads (no change on the shaders it
+  should have helped).
+- **Found, left as is:** 85 shaders are slower with XSC, in total 1.8 ms of 89 ms, almost all of
+  them tiny shaders whose output depends only on constants (0.07 to 0.19 ms each here). Bisected
+  with `XSC_BENCH_MSL_OVERRIDE` (hand-edited MSL in place of XSC's): the SPIR-V translator's MSL
+  is fast because its `[[clang::optnone]]` multiplication hides that the output is the same for
+  every pixel; written as a plain multiplication, even in the SPIR-V translator's MSL, the same
+  shader takes 2.6 times longer. How Metal handles such shaders is not known (no documentation
+  found); the cost is small in total, so XSC is not changed for it.
+- **Not done yet, need the game to be measured:**
+  - Control flow structurization (section 4): 375 of the 958 pixel shaders and 120 of the 516
+    vertex shaders run in the dispatch loop over labels (guest loops and jumps); the others are
+    straight code already. Its gain can only be told in the game's own scenes.
+  - Specialization (section 5) of the per-draw state read from the system constants (texture
+    signs, output gamma, alpha test, 7e3 clamp): it would multiply the pipelines and compile
+    shaders while playing, which already causes hitches; to be measured with a trace first.
+  - Dropping `NoContraction` in the SPIR-V for Vulkan: measurable only on Linux, and it changes
+    the results (fused multiply-add instead of the Xenos rounding), so not without a reason.
+
+## 16. Risks
 
 - Visual differences in shaders the bench does not reach with random constants (branches the
   game never takes in the bench, special texture formats): the in-game captures cover the main
