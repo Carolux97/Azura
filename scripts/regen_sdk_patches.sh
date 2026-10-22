@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
-# Regenerates the two SDK patches that hold our GPU work from the working SDK tree:
-# - patches/rexglue-0.10.0-metal-backend.patch: every change to the SDK's files (the Metal
-#   backend, and the changes to common and Vulkan files it and the shader compiler need);
+# Regenerates the SDK patches that hold our own work from the working SDK tree:
+# - patches/rexglue-0.10.0-metal-backend.patch: every change to the SDK's files not listed below
+#   (the Metal backend, and the changes to common and Vulkan files it and the shader compiler
+#   need);
 # - patches/rexglue-0.10.0-xenos-shader-compiler.patch: the new files of the Xenos shader
-#   compiler (src/graphics/pipeline/shader/xsc/).
-# The base is the SDK commit with the patches that come before them, rebuilt in a temporary
-# folder, so nothing outside the repository is needed. Both patches are checked to apply in
-# reverse to the working tree afterwards. Usage: scripts/regen_sdk_patches.sh
+#   compiler (src/graphics/pipeline/shader/xsc/);
+# - patches/rexglue-0.10.0-ppc-interpreter.patch: the PowerPC interpreter for functions the code
+#   generator did not find, its differential bench, and the code generator changes they need (the
+#   files in INTERP_PATHS).
+# Each changed file goes to exactly one patch, so the patches apply in any order. The base is the
+# SDK commit with the patches that come before them, rebuilt in a temporary folder, so nothing
+# outside the repository is needed. Every patch is checked to apply in reverse to the working tree
+# afterwards. Usage: scripts/regen_sdk_patches.sh
 
 set -euo pipefail
 
@@ -15,6 +20,30 @@ SDK="${ROOT}/sdk/rexglue-0.10.0-src"
 METAL_PATCH="${ROOT}/patches/rexglue-0.10.0-metal-backend.patch"
 XSC_PATCH="${ROOT}/patches/rexglue-0.10.0-xenos-shader-compiler.patch"
 XSC_DIR="src/graphics/pipeline/shader/xsc"
+INTERP_PATCH="${ROOT}/patches/rexglue-0.10.0-ppc-interpreter.patch"
+# Files and folders of the interpreter patch.
+INTERP_PATHS=(
+  include/rex/ppc/context_access.h
+  include/rex/system/ppc_interpreter.h
+  src/system/ppc_interpreter.cpp
+  src/system/ppc_interpreter_vector.inc
+  src/system/function_dispatcher.cpp
+  src/system/CMakeLists.txt
+  src/codegen/builders.h
+  src/codegen/builders/builder_context.h
+  src/codegen/builders/context.cpp
+  src/codegen/builders/control_flow.cpp
+  src/codegen/codegen_writer.cpp
+  src/codegen/phase_validate.cpp
+  src/codegen/instruction_dispatch.cpp
+  src/codegen/ppc/disasm.cpp
+  src/codegen/ppc/disasm.h
+  src/rexglue/CMakeLists.txt
+  src/rexglue/main.cpp
+  src/rexglue/commands/interp_bench.cpp
+  src/rexglue/commands/interp_bench.h
+  tests/interp_bench
+)
 # The patches build.sh applies before these two, on top of the SDK commit.
 EARLIER_PATCHES=(
   rexglue-0.10.0-thread-cpu.patch
@@ -41,10 +70,22 @@ echo "==> Diffing"
 changed=$({ diff -rq "${WORK}/base" "${SDK}" -x .git -x out -x thirdparty -x build || true; } | \
   sed -n "s|^Files ${WORK}/base/\(.*\) and .* differ$|\1|p; s|^Only in ${SDK}/\(.*\): \(.*\)$|\1/\2|p" | \
   sed 's|^/||')
-mkdir -p "${WORK}/metal/a" "${WORK}/metal/b" "${WORK}/xsc/a" "${WORK}/xsc/b"
+mkdir -p "${WORK}/metal/a" "${WORK}/metal/b" "${WORK}/xsc/a" "${WORK}/xsc/b" \
+  "${WORK}/interp/a" "${WORK}/interp/b"
+is_interp() {
+  local path
+  for path in "${INTERP_PATHS[@]}"; do
+    if [[ "$1" == "${path}" || "$1" == "${path}/"* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
 for f in ${changed}; do
   if [[ "${f}" == "${XSC_DIR}"* ]]; then
     side="${WORK}/xsc"
+  elif is_interp "${f}"; then
+    side="${WORK}/interp"
   else
     side="${WORK}/metal"
   fi
@@ -61,11 +102,14 @@ for f in ${changed}; do
 done
 (cd "${WORK}/metal" && git diff --no-index --no-prefix a b > "${METAL_PATCH}" || true)
 (cd "${WORK}/xsc" && git diff --no-index --no-prefix a b > "${XSC_PATCH}" || true)
+(cd "${WORK}/interp" && git diff --no-index --no-prefix a b > "${INTERP_PATCH}" || true)
 # git diff --no-index names new files "b/<path>"; the patches use plain paths like the others.
-sed -i.bak 's|^diff --git b/|diff --git a/|' "${METAL_PATCH}" "${XSC_PATCH}"
-rm -f "${METAL_PATCH}.bak" "${XSC_PATCH}.bak"
+sed -i.bak 's|^diff --git b/|diff --git a/|' "${METAL_PATCH}" "${XSC_PATCH}" "${INTERP_PATCH}"
+rm -f "${METAL_PATCH}.bak" "${XSC_PATCH}.bak" "${INTERP_PATCH}.bak"
 
 git -C "${SDK}" apply --reverse --check "${METAL_PATCH}"
 git -C "${SDK}" apply --reverse --check "${XSC_PATCH}"
+git -C "${SDK}" apply --reverse --check "${INTERP_PATCH}"
 echo "==> metal backend patch: $(grep -c '^diff --git' "${METAL_PATCH}") files"
 echo "==> xenos shader compiler patch: $(grep -c '^diff --git' "${XSC_PATCH}") files"
+echo "==> ppc interpreter patch: $(grep -c '^diff --git' "${INTERP_PATCH}") files"
