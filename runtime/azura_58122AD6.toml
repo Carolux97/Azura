@@ -23,70 +23,12 @@ includes = []
 # left out: the locals already preserve the values.
 non_volatile_as_local = true
 
-# Jump tables that detection under-counts. Bink's video decoder dispatches through an 11-entry
-# table whose index is computed as (bits & 3) + 7, so detection only finds entries 0-3 and the
-# generated switch traps on the rest. Labels read from the table in game memory (0x82FDCF1C).
-[[entrypoint.switch_tables]]
-address = 0x82FDCF18
-register = 7
-labels = [0x82FDCF48, 0x82FDCF64, 0x82FDD0E4, 0x82FDD264, 0x82FDD3E4, 0x82FDD564, 0x82FDD6E4,
-          0x82FDD864, 0x82FDD9E4, 0x82FDDBB0, 0x82FDDD7C]
-
-# Function entry hints: addresses that the automatic function discovery misses. They are found by
-# running the game and reading the runtime log, and they only match the default.xex this manifest
-# is for (see versions.toml).
-[entrypoint.functions]
-# Targets of tail-call branches (`b`) that discovery misses because nothing calls them with `bl`.
-# Reported by codegen as UnresolvedCall.
-0x82DB80F0 = {}
-0x82DCE010 = {}
-
-# Indirect call targets (function pointers, vtables) that static discovery cannot see. Found by
-# running the game: the runtime stops with "Call to invalid or unregistered function at guest
-# address ...".
-0x82B21F30 = {}
-0x823D4F78 = {}
-0x82D057A8 = {}
-0x8271C710 = {}
-0x82D37198 = {}
-0x82B1BAC0 = {}
-0x82B222D8 = {}
-0x822CDF50 = {}
-0x82B22EC8 = {}
-0x82B82BA8 = {}
-0x82C690A0 = {}
-0x82C0AE58 = {}
-0x82C0AD80 = {}
-0x82C79B60 = {}
-0x82BA6280 = {}
-0x82BC9D98 = {}
-0x82D680F0 = {}
-0x82EDD3A0 = {}
-0x82E10A60 = {}
-0x822DC840 = {}
-0x82B26D60 = {}
-0x82B1BAA0 = {}
-0x823565B0 = {}
-0x82E10418 = {}
-0x82C0AE40 = {}
-0x82B8C670 = {}
-0x82DF5C28 = {}
-0x82E59CE8 = {}
-0x82E5BB58 = {}
-0x82466E48 = {}
-0x82E305D0 = {}
-0x82E305E0 = {}
-0x82458520 = {}
-0x82EDD390 = {}
-0x82EDD398 = {}
-0x823824E0 = {}
-0x82896C58 = {}
-0x8265B260 = {}
-0x823560C0 = {}
-0x829AD8B8 = {}
-0x824AD4A8 = {}
-0x824B8CF0 = {}
-
+# No function entry hints and no jump table entries: functions the automatic discovery misses
+# (indirect call targets, tail-call targets) and jump table cases it does not detect run in the
+# runtime's PowerPC interpreter (ppc_interpreter_fallback, docs/ppc-interpreter-design.md). The
+# runtime log names each function it interprets ("Interpreting guest function 0x..."); one can be
+# added here as `0xADDRESS = {}` under [entrypoint.functions] to recompile it, which is only worth
+# it if it costs noticeable time (the log also reports that every 10 seconds).
 
 # Mid-function hooks: calls into runtime/src code at a given guest address.
 

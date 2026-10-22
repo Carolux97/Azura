@@ -99,7 +99,7 @@ endif()
 
 # Post-codegen patch: codegen writes azura_register.cpp as one function of ~57,000 registration
 # calls, which takes clang close to ten minutes to compile (its cost grows faster than linearly
-# with function size), and codegen rewrites it whenever a function hint is added.
+# with function size), and codegen rewrites it whenever the set of functions changes.
 # tools/split_register.py splits it into small functions (seconds to compile) without changing
 # what is registered. It runs after every codegen, including the one the build itself re-runs, and
 # before the generated code compiles.

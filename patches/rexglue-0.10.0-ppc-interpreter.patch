@@ -438,10 +438,10 @@ index 5de4b70..24468d5 100644
 +add_subdirectory(${REXGLUE_ROOT}/tests/interp_bench ${CMAKE_CURRENT_BINARY_DIR}/interp_bench)
 diff --git a/src/rexglue/commands/interp_bench.cpp b/src/rexglue/commands/interp_bench.cpp
 new file mode 100644
-index 0000000..0c9bf0c
+index 0000000..02b27bf
 --- /dev/null
 +++ b/src/rexglue/commands/interp_bench.cpp
-@@ -0,0 +1,1007 @@
+@@ -0,0 +1,959 @@
 +/**
 + * @file        rexglue/commands/interp_bench.cpp
 + * @brief       Case generator of the PowerPC interpreter's differential bench
@@ -485,12 +485,7 @@ index 0000000..0c9bf0c
 +#include <rex/codegen/function_graph.h>
 +#include <rex/codegen/template_registry.h>
 +#include <rex/codegen/test_support.h>
-+#include <rex/kernel/init.h>
 +#include <rex/logging.h>
-+#include <rex/runtime.h>
-+#include <rex/system/kernel_state.h>
-+#include <rex/system/user_module.h>
-+#include <rex/system/xex_module.h>
 +
 +#include "codegen/builders.h"
 +#include "codegen/builders/builder_context.h"
@@ -1352,36 +1347,6 @@ index 0000000..0c9bf0c
 +  return true;
 +}
 +
-+//=============================================================================
-+// Section dump, to look for code pointers in data
-+//=============================================================================
-+
-+// Loads an XEX as codegen does and writes each section of the image to <output>/<name>_<base>.bin,
-+// so the data can be scanned for pointers to code the analysis did not find.
-+bool DumpSections(const std::string& xexPath, const std::string& outDir) {
-+  using rex::X_STATUS;  // X_STATUS_SUCCESS names it unqualified.
-+  fs::path xex = fs::canonical(xexPath);
-+  auto runtime = std::make_unique<rex::Runtime>(xex.parent_path().string());
-+  if (runtime->Setup(rex::RuntimeConfig{.kernel_init = rex::kernel::InitializeKernel,
-+                                        .tool_mode = true}) != X_STATUS_SUCCESS ||
-+      runtime->LoadXexImage("game:\\" + xex.filename().string()) != X_STATUS_SUCCESS) {
-+    REXLOG_ERROR("Cannot load {}", xexPath);
-+    return false;
-+  }
-+  auto binary = codegen::BinaryView::fromModule(
-+      *runtime->kernel_state()->GetExecutableModule()->xex_module());
-+  fs::create_directories(outDir);
-+  for (const auto& section : binary.sections()) {
-+    std::string name(section.name);
-+    std::replace(name.begin(), name.end(), '.', '_');
-+    std::ofstream out(fmt::format("{}/{}_{:08X}{}.bin", outDir, name, section.baseAddress,
-+                                  section.executable ? "_x" : ""),
-+                      std::ios::binary);
-+    out.write(reinterpret_cast<const char*>(section.data), section.size);
-+  }
-+  return true;
-+}
-+
 +struct InterpVectorArgs {
 +  std::string output;
 +  bool check = false;
@@ -1397,19 +1362,6 @@ index 0000000..0c9bf0c
 +
 +void RegisterInterpBenchGen(CLI::App& parent, const CliContext& ctx, DeferredAction& pending) {
 +  (void)ctx;
-+  auto dump_args = std::make_shared<std::pair<std::string, std::string>>();
-+  auto* dump = parent.add_subcommand("dump-sections", "Write each section of an XEX image to a file")
-+                   ->fallthrough();
-+  dump->add_option("--xex", dump_args->first, "XEX file")->type_name("PATH")->required();
-+  dump->add_option("--output", dump_args->second, "Output directory")->type_name("PATH")->required();
-+  dump->callback([dump_args, &pending]() {
-+    pending = [dump_args]() -> rex::Result<void> {
-+      if (!DumpSections(dump_args->first, dump_args->second)) {
-+        return Err<void>(rex::ErrorCategory::IO, "Section dump failed");
-+      }
-+      return rex::Ok();
-+    };
-+  });
 +  auto vector_args = std::make_shared<InterpVectorArgs>();
 +  auto* vector = parent
 +                     .add_subcommand("interp-vector-gen",
@@ -1517,7 +1469,7 @@ index fc46d86..0a25c46 100644
  
  if(REXGLUE_ENABLE_TRACY)
 diff --git a/src/system/function_dispatcher.cpp b/src/system/function_dispatcher.cpp
-index 1fb0d77..5565a17 100644
+index 1fb0d77..58db8ef 100644
 --- a/src/system/function_dispatcher.cpp
 +++ b/src/system/function_dispatcher.cpp
 @@ -14,6 +14,7 @@
@@ -1535,7 +1487,7 @@ index 1fb0d77..5565a17 100644
 +#include <rex/system/ppc_interpreter.h>
  #include <rex/system/thread_state.h>
  
-+REXCVAR_DEFINE_BOOL(ppc_interpreter_fallback, false, "Kernel",
++REXCVAR_DEFINE_BOOL(ppc_interpreter_fallback, true, "Kernel",
 +                    "Run guest functions the code generator did not find with the PowerPC "
 +                    "interpreter instead of stopping");
 +

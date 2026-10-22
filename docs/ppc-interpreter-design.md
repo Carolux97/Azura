@@ -54,7 +54,7 @@ recompiled code today, what an interpreter has to match, how it plugs in, and ho
 
 - **Where.** `rex::runtime::ResolveIndirectFunction` and `FunctionDispatcher::Execute` return
   `InterpretMissingFunction` instead of `InvalidFunctionTrap` when the setting
-  `ppc_interpreter_fallback` is on (off until phase 5). It has the `PPCFunc` signature and reads
+  `ppc_interpreter_fallback` is on (the default; `azura.default.toml` sets it too). It has the `PPCFunc` signature and reads
   its guest address from `ctx.last_indirect_target`, which the caller set right before (`Execute`
   sets it too). It logs each function once, with the address that called it, so it can be added
   to the manifest as a hint, and stops the game with the instruction it could not run.
@@ -224,6 +224,18 @@ sdk/rexglue-0.10.0-src/out/mac-arm64/RelWithDebInfo/ppc_interp_bench [--seeds N]
    instruction, against about 1 ns per call of a one-instruction recompiled function
    (`ppc_interp_bench --speed`: 9.2 ns interpreted, 1.0 ns recompiled).
 5. On by default, documentation, and the decision on a data pointer scan in the code generator.
+   `ppc_interpreter_fallback` is on by default, and the manifest has no function hints and no
+   jump table entries any more: what discovery misses runs in the interpreter, and the log names
+   it. On the scan: a dump of default.xex's sections shows 276,892 aligned words in `.rdata` and
+   `.data` pointing at function entries discovery already finds, and 583 pointing at other code
+   addresses; 317 of those, at 161 distinct addresses, point at what looks like a function start
+   (right after a `blr`, a `bctr`, padding or an unconditional branch). 0x824B8CF0 is among them, stored in `.data` at 0x83398BAC: it is a
+   virtual call thunk (`lwz`, `lwz`, `mtctr`, `bctr`) that follows another one. But a case label
+   of a jump table also follows a `bctr`, so the list mixes functions with labels, and registering
+   a label as a function would split the function that contains it, which breaks recompiled code
+   rather than leaving a gap the interpreter covers. Decided against it: the code generator gets
+   no data pointer scan. The interpreter costs about 0.5% of the game's time for everything
+   discovery misses, and a function worth recompiling can still be added as a hint by hand.
 
 ## 5. Risks
 
