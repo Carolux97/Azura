@@ -88,6 +88,18 @@ recompiled code today, what an interpreter has to match, how it plugs in, and ho
   for `lvx128`, whose rA the decoder does not mark as rA|0) and, for `vupkhsb128`/`vupklsb128`,
   whether operand 2 is 0x60, which the code generator's dispatch turns into the halfword forms.
   1,337 functions for 215 forms; building the bench fails if the file is stale.
+- **Branches to code no function covers.** The code generator used to stop on them (validation
+  error "UnresolvedCall") or emit `REX_FATAL`. Now `b`, `bl` and `bc` to such a target call it
+  through the dispatcher (`REX_CALL_INDIRECT_FUNC`), which interprets it, and they are reported as
+  warnings: the build no longer needs the manifest's hints for tail-call targets.
+- **Jump tables the detection under-counts.** The generated `switch` used to trap on a case it did
+  not know. Its `default` now writes the registers kept in C++ locals (r14-r31, f14-f31 and the
+  non-volatile vector registers with `non_volatile_as_local`) back to `ctx` and continues in the
+  interpreter from CTR, which holds the target at `bctr`; the function returns when the
+  interpreted rest of it does. Nothing reads the locals afterwards, so writing them back is all it
+  needs. Bink's video decoder table (11 cases, 4 detected) needs no manifest entry any more.
+- **Statistics.** The fallback logs, every 10 seconds while it runs anything, calls, instructions
+  and time per interpreted function (times include the recompiled functions it calls).
 - **Memory.** Plain big-endian accesses with the 0x1000 host offset of the physical range, exactly
   the `REX_LOAD_*`/`REX_STORE_*` macros. The generated code switches to `REX_MM_*` only where it
   recognises an MMIO base register; elsewhere an access to 0x7F000000-0x7FFFFFFF reaches the MMIO
@@ -154,6 +166,11 @@ sdk/rexglue-0.10.0-src/out/mac-arm64/RelWithDebInfo/ppc_interp_bench [--seeds N]
   float specials, small integers and random bits; CR and XER bits; the reservation (half the time
   equal to memory, so `stwcx.` and `stdcx.` store); the rounding mode and flush-to-zero bits of the
   host register; random window contents.
+- **Branches to code no function covers** are laid out against an orphan (`xori r6,r6,0x77; blr`
+  before the first function): the generated code calls it through the dispatcher, the bench's
+  fallback interprets it, and the interpreter jumps to it. `last_indirect_target` differs between
+  the two (only the dispatcher path sets it) and is not compared for those cases. A `bctr` whose
+  jump table is configured with only its first target tests the `switch` default.
 - **Coverage of immediates.** Six words per form leave most values of a large immediate untested
   (`vpermwi128` has 256). The CMake cache variable `INTERP_BENCH_CASES_PER_FORM` raises it; 64
   words per form gives 37,909 cases.
@@ -194,7 +211,18 @@ sdk/rexglue-0.10.0-src/out/mac-arm64/RelWithDebInfo/ppc_interp_bench [--seeds N]
    undefined shift. Swapping two vector operands in the interpreter makes 140 forms fail (all but
    the commutative ones).
 4. In the game, without the 0x824B8CF0 hint: the point where the game stopped is passed through the
-   interpreter, and the cost is measured.
+   interpreter, and the cost is measured. Two code generator changes came with it (section 2):
+   branches to code no function covers go through the dispatcher, and under-counted jump tables
+   continue in the interpreter. The bench covers both: 3,855 cases, 246,153 runs, no failures.
+   Measured in the game, with every function hint and the Bink jump table removed from the manifest
+   (the build of section 2), over three sessions: 47 guest functions the code generator does not
+   find were interpreted, among them 0x824B8CF0 (138 calls, from 0x828D3450, the call that used to
+   stop the game) and the eight that start the game, plus Bink's missing table cases (about
+   200 million instructions at 5.3-5.5 ns each while videos play). No interpreter error. In the
+   longest session (8 minutes, chapter 1) the fallback took 2.69 s of 490 s (0.55%); 1.10 s of it
+   is 0x822DC840 (477,066 calls) and 1.16 s Bink. Steady state costs 5-200 ns per interpreted
+   instruction, against about 1 ns per call of a one-instruction recompiled function
+   (`ppc_interp_bench --speed`: 9.2 ns interpreted, 1.0 ns recompiled).
 5. On by default, documentation, and the decision on a data pointer scan in the code generator.
 
 ## 5. Risks
