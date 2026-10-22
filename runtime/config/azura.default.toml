@@ -24,6 +24,12 @@ shader_compiler = "xsc"
 # cut the GPU time of render target transfers from ~10 to ~2 ms per frame.
 execute_unclipped_draw_vs_on_cpu = true
 
+# ---------- CPU ----------
+# Run guest functions the code generator did not find (indirect call targets it cannot see, jump
+# table cases it does not detect) with the PowerPC interpreter instead of stopping the game. The
+# log names each one and reports its cost every 10 seconds.
+ppc_interpreter_fallback = true
+
 # ---------- Display ----------
 fullscreen = false
 # Present the game in step with the display refresh (FIFO). The immediate and mailbox modes let
