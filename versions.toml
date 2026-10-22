@@ -32,7 +32,8 @@ manifest = "runtime/azura_58122AD6.toml"
 # To add another edition, hash its default.xex (`shasum -a 256 default.xex`) and compare it with
 # the World one (`cmp -l`). If every difference is in the header and the AES key matches, add an
 # entry pointing to an existing manifest; otherwise the code differs and it needs its own manifest
-# (copy runtime/azura_58122AD6.toml and start its function hints from scratch).
+# (copy runtime/azura_58122AD6.toml without its mid-function hooks, which are addresses of this
+# edition).
 
 # MoltenVK pin and verification hashes used by scripts/build_moltenvk.sh and scripts/build.sh.
 # ReXGlue SDK 0.10.0 ships MoltenVK 1.4.1 (`unpatched_sha256`), which has a swapchain recreation bug
