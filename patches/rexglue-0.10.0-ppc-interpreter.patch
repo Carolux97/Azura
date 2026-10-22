@@ -148,6 +148,157 @@ index 0000000..9d7c34a
 +std::string DescribeInstruction(uint32_t address, uint32_t instruction);
 +
 +}  // namespace rex::runtime
+diff --git a/src/codegen/builders/builder_context.h b/src/codegen/builders/builder_context.h
+index 33ac6d0..4cb4aa4 100644
+--- a/src/codegen/builders/builder_context.h
++++ b/src/codegen/builders/builder_context.h
+@@ -231,6 +231,18 @@ struct BuilderContext {
+    */
+   void emit_function_call(uint32_t address);
+ 
++  /// Call code no function covers through the dispatcher (REX_CALL_INDIRECT_FUNC), which runs it
++  /// with the PowerPC interpreter when ppc_interpreter_fallback is on.
++  void emit_unresolved_call(uint32_t address);
++
++  /// emit_unresolved_call for a taken conditional branch (bc) to code no function covers, as a
++  /// tail call.
++  void emit_unresolved_conditional_tail_call(bool not_, std::string_view cond, uint32_t target);
++
++  /// Write the registers kept in C++ locals back to ctx, before handing the rest of a function to
++  /// the interpreter.
++  void emit_spill_locals_to_context();
++
+   /**
+    * @brief Emit C++ code for a conditional branch.
+    * @param not_ If true, invert the condition
+diff --git a/src/codegen/builders/context.cpp b/src/codegen/builders/context.cpp
+index f78e0d8..c1163a5 100644
+--- a/src/codegen/builders/context.cpp
++++ b/src/codegen/builders/context.cpp
+@@ -262,18 +262,59 @@ void BuilderContext::emit_function_call(uint32_t address) {
+       return;
+     }
+ 
+-    // Unresolved target from graph
+-    REXCODEGEN_ERROR("Unresolved function 0x{:08X} from 0x{:08X}", address, base);
+-    println("\t// FATAL: unresolved function 0x{:08X}", address);
+-    println("\tREX_FATAL(\"Unresolved call from 0x{:08X} to 0x{:08X}\");", base, address);
++    // Unresolved target from graph: call it through the dispatcher.
++    REXCODEGEN_WARN("Unresolved function 0x{:08X} from 0x{:08X}", address, base);
++    emit_unresolved_call(address);
+     return;
+   }
+ 
+-  // No pre-resolved target found - this is an error
+-  REXCODEGEN_ERROR("Unresolved function 0x{:08X} from 0x{:08X} (no CallTarget in FunctionNode)",
+-                   address, base);
+-  println("\t// FATAL: unresolved function 0x{:08X} (no CallTarget in FunctionNode)", address);
+-  println("\tREX_FATAL(\"Unresolved call from 0x{:08X} to 0x{:08X}\");", base, address);
++  // No pre-resolved target: call it through the dispatcher.
++  REXCODEGEN_WARN("Unresolved function 0x{:08X} from 0x{:08X} (no CallTarget in FunctionNode)",
++                  address, base);
++  emit_unresolved_call(address);
++}
++
++void BuilderContext::emit_unresolved_conditional_tail_call(bool not_, std::string_view cond,
++                                                          uint32_t target) {
++  // The CSR state stays as it was on the path that does not branch.
++  CSRState state = csrState;
++  println("\tif ({}{}.{}) {{", not_ ? "!" : "", cr(insn.operands[0]), cond);
++  emit_unresolved_call(target);
++  println("\t\treturn;");
++  println("\t}}");
++  csrState = state;
++}
++
++void BuilderContext::emit_unresolved_call(uint32_t address) {
++  // No function covers the target, so it has no recompiled code: the dispatcher finds whatever
++  // a module registered there, or runs it with the PowerPC interpreter (ppc_interpreter_fallback).
++  println("\t// unresolved function 0x{:08X}: called through the dispatcher", address);
++  println("\tREX_CALL_INDIRECT_FUNC(0x{:08X}u);", address);
++  csrState = CSRState::Unknown;
++}
++
++void BuilderContext::emit_spill_locals_to_context() {
++  // Registers kept in C++ locals are written back to ctx, where interpreted code reads them.
++  for (size_t i = 0; i < 32; ++i) {
++    if (auto name = r(i); !name.starts_with("ctx."))
++      println("\tctx.r{} = {};", i, name);
++    if (auto name = f(i); !name.starts_with("ctx."))
++      println("\tctx.f{} = {};", i, name);
++  }
++  for (size_t i = 0; i < 128; ++i) {
++    if (auto name = v(i); !name.starts_with("ctx."))
++      println("\tctx.v{} = {};", i, name);
++  }
++  for (size_t i = 0; i < 8; ++i) {
++    if (auto name = cr(i); !name.starts_with("ctx."))
++      println("\tctx.cr{} = {};", i, name);
++  }
++  if (std::string_view name = ctr(); !name.starts_with("ctx."))
++    println("\tctx.ctr = {};", name);
++  if (std::string_view name = xer(); !name.starts_with("ctx."))
++    println("\tctx.xer = {};", name);
++  if (std::string_view name = reserved(); !name.starts_with("ctx."))
++    println("\tctx.reserved = {};", name);
+ }
+ 
+ void BuilderContext::emit_conditional_branch(bool not_, std::string_view cond) {
+@@ -313,18 +354,15 @@ void BuilderContext::emit_conditional_branch(bool not_, std::string_view cond) {
+           println("\t}}");
+         }
+       } else {
+-        REXCODEGEN_ERROR("Unresolved conditional branch to 0x{:08X} from 0x{:08X} (no CallTarget)",
+-                         target, base);
+-        println("\tif ({}{}.{}) REX_FATAL(\"Unresolved branch from 0x{:08X} to 0x{:08X}\");",
+-                not_ ? "!" : "", cr(insn.operands[0]), cond, base, target);
++        REXCODEGEN_WARN("Unresolved conditional branch to 0x{:08X} from 0x{:08X} (no CallTarget)",
++                        target, base);
++        emit_unresolved_conditional_tail_call(not_, cond, target);
+       }
+       break;
+ 
+     case TargetKind::Unknown:
+-      REXCODEGEN_ERROR("Unresolved conditional branch to 0x{:08X} from 0x{:08X}", target, base);
+-      println("\t// ERROR: conditional branch to unknown address 0x{:08X}", target);
+-      println("\tif ({}{}.{}) REX_FATAL(\"Unresolved branch from 0x{:08X} to 0x{:08X}\");",
+-              not_ ? "!" : "", cr(insn.operands[0]), cond, base, target);
++      REXCODEGEN_WARN("Unresolved conditional branch to 0x{:08X} from 0x{:08X}", target, base);
++      emit_unresolved_conditional_tail_call(not_, cond, target);
+       break;
+   }
+ }
+diff --git a/src/codegen/builders/control_flow.cpp b/src/codegen/builders/control_flow.cpp
+index 26957fc..ad6a453 100644
+--- a/src/codegen/builders/control_flow.cpp
++++ b/src/codegen/builders/control_flow.cpp
+@@ -83,9 +83,8 @@ bool build_bl(BuilderContext& ctx) {
+       break;
+ 
+     case TargetKind::Unknown:
+-      REXCODEGEN_ERROR("Unresolved bl target 0x{:08X} from 0x{:08X}", target, ctx.base);
+-      ctx.println("\t// ERROR: unresolved bl target 0x{:08X}", target);
+-      ctx.println("\tREX_FATAL(\"Unresolved call from 0x{:08X} to 0x{:08X}\");", ctx.base, target);
++      REXCODEGEN_WARN("Unresolved bl target 0x{:08X} from 0x{:08X}", target, ctx.base);
++      ctx.emit_unresolved_call(target);
+       break;
+   }
+   return true;
+@@ -167,8 +166,13 @@ bool build_bctr(BuilderContext& ctx) {
+       }
+     }
+ 
++    // A case the detection did not find: CTR holds the target, so the rest of the function runs
++    // in the interpreter (through the dispatcher) from there, with the locals written back first,
++    // and the function returns when it does.
+     ctx.println("\tdefault:");
+-    ctx.println("\t\t__builtin_trap(); // Switch case out of range");
++    ctx.emit_spill_locals_to_context();
++    ctx.println("\t\tREX_CALL_INDIRECT_FUNC({}.u32);", ctx.ctr());
++    ctx.println("\t\treturn;");
+     ctx.println("\t}}");
+ 
+     ctx.reset_switch_table();
 diff --git a/src/codegen/builders.h b/src/codegen/builders.h
 index 24894f2..0ebd353 100644
 --- a/src/codegen/builders.h
@@ -165,6 +316,25 @@ index 24894f2..0ebd353 100644
  //=============================================================================
  // Comparison Builders (CMP*, CMPL*)
  //=============================================================================
+diff --git a/src/codegen/codegen_writer.cpp b/src/codegen/codegen_writer.cpp
+index a0484fb..1b7d99d 100644
+--- a/src/codegen/codegen_writer.cpp
++++ b/src/codegen/codegen_writer.cpp
+@@ -168,9 +168,12 @@ bool CodegenWriter::write(bool force) {
+   unchangedFiles_.clear();
+ 
+   // --- Validation gate (from recompile.cpp) ---
+-  if (ctx_.errors.HasErrors() && !force) {
++  // Unresolved calls do not block: the generated code calls them through the dispatcher.
++  size_t blocking = ctx_.errors.Count() -
++                    ctx_.errors.Count(AnalysisErrors::Category::UnresolvedCall);
++  if (blocking && !force) {
+     REXCODEGEN_ERROR("Code generation blocked: {} validation errors. Use --force to override.",
+-                     ctx_.errors.Count());
++                     blocking);
+     return false;
+   }
+ 
 diff --git a/src/codegen/instruction_dispatch.cpp b/src/codegen/instruction_dispatch.cpp
 index 40ae269..510f463 100644
 --- a/src/codegen/instruction_dispatch.cpp
@@ -180,6 +350,31 @@ index 40ae269..510f463 100644
  bool DispatchInstruction(int id, BuilderContext& ctx) {
    // VUPKHSB128/VUPKLSB128 misidentification fixup (moved from recompiler.cpp).
    // Only fires when operands[2]==0x60; table entries for *128 variants
+diff --git a/src/codegen/phase_validate.cpp b/src/codegen/phase_validate.cpp
+index 0186e12..0c72fb4 100644
+--- a/src/codegen/phase_validate.cpp
++++ b/src/codegen/phase_validate.cpp
+@@ -192,12 +192,16 @@ VoidResult validateGraph(CodegenContext& ctx) {
+   REXCODEGEN_TRACE("Analyze: checked {} branches in {} functions, verified {} edges", callsChecked,
+                    functionsChecked, edgesVerified);
+ 
++  // Branches to code no function covers do not stop the build: the generated code calls their
++  // targets through the function dispatcher (REX_CALL_INDIRECT_FUNC), which runs them with the
++  // PowerPC interpreter when ppc_interpreter_fallback is on. They are reported so they can be
++  // added to the manifest as function hints.
+   if (errors.HasErrors()) {
+-    REXCODEGEN_ERROR("Analyze: found {} errors", errors.Count());
++    REXCODEGEN_WARN(
++        "Analyze: {} branches to code no function covers; the generated code calls them through "
++        "the dispatcher",
++        errors.Count(AnalysisErrors::Category::UnresolvedCall));
+     errors.PrintReport();
+-    return Err(ErrorCategory::Validation,
+-               fmt::format("Validation failed: {} unresolved calls",
+-                           errors.Count(AnalysisErrors::Category::UnresolvedCall)));
+   }
+ 
+   REXCODEGEN_TRACE("Analyze: all calls resolve");
 diff --git a/src/codegen/ppc/disasm.cpp b/src/codegen/ppc/disasm.cpp
 index c7fe10b..77f3e57 100644
 --- a/src/codegen/ppc/disasm.cpp
@@ -243,10 +438,10 @@ index 5de4b70..24468d5 100644
 +add_subdirectory(${REXGLUE_ROOT}/tests/interp_bench ${CMAKE_CURRENT_BINARY_DIR}/interp_bench)
 diff --git a/src/rexglue/commands/interp_bench.cpp b/src/rexglue/commands/interp_bench.cpp
 new file mode 100644
-index 0000000..9bf712c
+index 0000000..0c9bf0c
 --- /dev/null
 +++ b/src/rexglue/commands/interp_bench.cpp
-@@ -0,0 +1,915 @@
+@@ -0,0 +1,1007 @@
 +/**
 + * @file        rexglue/commands/interp_bench.cpp
 + * @brief       Case generator of the PowerPC interpreter's differential bench
@@ -290,7 +485,12 @@ index 0000000..9bf712c
 +#include <rex/codegen/function_graph.h>
 +#include <rex/codegen/template_registry.h>
 +#include <rex/codegen/test_support.h>
++#include <rex/kernel/init.h>
 +#include <rex/logging.h>
++#include <rex/runtime.h>
++#include <rex/system/kernel_state.h>
++#include <rex/system/user_module.h>
++#include <rex/system/xex_module.h>
 +
 +#include "codegen/builders.h"
 +#include "codegen/builders/builder_context.h"
@@ -319,9 +519,11 @@ index 0000000..9bf712c
 +namespace fs = std::filesystem;
 +namespace codegen = rex::codegen;
 +
-+// Where the image is linked, as for the recompiler tests: the callee, then the cases.
++// Where the image is linked, as for the recompiler tests: the orphan, the callee, then the cases.
 +constexpr uint32_t kBenchBaseAddress = 0x82010000;
 +constexpr uint32_t kBlr = 0x4E800020;
++// The index register of the switch cases' jump tables (BenchSetup::kSwitch sets it).
++constexpr uint8_t kSwitchIndexRegister = 4;
 +// The generated functions are split over this many source files, so they compile in parallel.
 +constexpr int kFunctionChunks = 8;
 +// Random words tried per form before giving up on finding more cases for it.
@@ -465,7 +667,7 @@ index 0000000..9bf712c
 +}
 +
 +// What the bench sets up before a branch case. Mirrors BenchSetup in tests/interp_bench.
-+enum class Setup { kNone, kCtrToCallee, kLrToCallee };
++enum class Setup { kNone, kCtrToCallee, kLrToCallee, kSwitch };
 +
 +struct Case {
 +  uint32_t address = 0;
@@ -482,6 +684,11 @@ index 0000000..9bf712c
 +  Setup setup = Setup::kNone;
 +  // A b or bc to the callee, which the code generator emits as a tail call.
 +  bool tail_call = false;
++  // A branch to code no function covers, which the generated code calls through the dispatcher.
++  bool unresolved = false;
++  // A bctr whose jump table is configured with only its first target, so the generated switch
++  // hands the other one to the interpreter.
++  bool switch_table = false;
 +};
 +
 +// Builders emit a debug trap for operand values they do not handle (some vpkd3d128 and vupkd3d128
@@ -550,10 +757,13 @@ index 0000000..9bf712c
 +  return 0x38600000u | uint16_t(value);
 +}
 +
-+// Lays out a branch case at `address`. `variant` picks between the two layouts of a kind. Returns
-+// false when the patched word no longer decodes to the form (the displacement can change which
-+// table entry matches, through the branch prediction hint).
-+bool BranchLayout(Case& c, Branch kind, uint32_t address, uint32_t callee, bool variant) {
++// Lays out a branch case at `address`. `variant` (0-2) picks between the layouts of a kind:
++// an internal label, the callee (a recompiled function), or the orphan (code no function covers,
++// which the generated code calls through the dispatcher). Returns false when the patched word no
++// longer decodes to the form (the displacement can change which table entry matches, through the
++// branch prediction hint).
++bool BranchLayout(Case& c, Branch kind, uint32_t address, uint32_t callee, uint32_t orphan,
++                  int variant) {
 +  uint32_t word = c.words[0];
 +  auto to = [&](uint32_t target) {
 +    return WithDisplacement(word, int32_t(target - address));
@@ -561,10 +771,14 @@ index 0000000..9bf712c
 +  switch (kind) {
 +    case Branch::kConditional:
 +    case Branch::kCounterConditional:
-+      // A bc reaches 32 KB either way; past that, the callee layout is not possible.
-+      if (variant && kind == Branch::kConditional && int64_t(address) - callee < 0x8000) {
++      // A bc reaches 32 KB either way; past that, only the internal layout is possible.
++      if (variant == 1 && kind == Branch::kConditional && int64_t(address) - callee < 0x8000) {
 +        c.words = {to(callee), LoadImmediateR3(1), kBlr};
 +        c.tail_call = true;
++      } else if (variant == 2 && kind == Branch::kConditional &&
++                 int64_t(address) - orphan < 0x8000) {
++        c.words = {to(orphan), LoadImmediateR3(1), kBlr};
++        c.unresolved = true;
 +      } else {
 +        c.words = {to(address + 12), LoadImmediateR3(1), kBlr, LoadImmediateR3(2), kBlr};
 +      }
@@ -578,19 +792,34 @@ index 0000000..9bf712c
 +      break;
 +    case Branch::kCounter:
 +    case Branch::kCounterAndLink:
-+      c.words = {word, LoadImmediateR3(1), kBlr};
-+      c.setup = Setup::kCtrToCallee;
++      if (variant == 2 && c.form->id == PPC_INST_BCTR) {
++        c.words = {word, LoadImmediateR3(1), kBlr, LoadImmediateR3(2), kBlr};
++        c.setup = Setup::kSwitch;
++        c.switch_table = true;
++        c.unresolved = true;
++      } else {
++        c.words = {word, LoadImmediateR3(1), kBlr};
++        c.setup = Setup::kCtrToCallee;
++      }
 +      break;
 +    case Branch::kBranch:
-+      if (variant) {
++      if (variant == 1) {
 +        c.words = {to(callee), kBlr};
 +        c.tail_call = true;
++      } else if (variant == 2) {
++        c.words = {to(orphan), kBlr};
++        c.unresolved = true;
 +      } else {
 +        c.words = {to(address + 8), LoadImmediateR3(1), LoadImmediateR3(2), kBlr};
 +      }
 +      break;
 +    case Branch::kBranchAndLink:
-+      c.words = {to(callee), LoadImmediateR3(1), kBlr};
++      if (variant == 2) {
++        c.words = {to(orphan), LoadImmediateR3(1), kBlr};
++        c.unresolved = true;
++      } else {
++        c.words = {to(callee), LoadImmediateR3(1), kBlr};
++      }
 +      break;
 +    case Branch::kNone:
 +      break;
@@ -631,6 +860,8 @@ index 0000000..9bf712c
 +      return "BenchSetup::kCtrToCallee";
 +    case Setup::kLrToCallee:
 +      return "BenchSetup::kLrToCallee";
++    case Setup::kSwitch:
++      return "BenchSetup::kSwitch";
 +    default:
 +      return "BenchSetup::kNone";
 +  }
@@ -645,8 +876,12 @@ index 0000000..9bf712c
 +  ui::KeyValueBlock("Generating the interpreter bench cases:", header_rows);
 +  fs::create_directories(outDir);
 +
-+  // The callee, a recompiled function the branch cases call and jump to: xori r5,r5,0x1234; blr.
-+  const uint32_t callee = kBenchBaseAddress;
++  // The orphan, code no function covers (it has no symbol, and precedes the first one):
++  // xori r6,r6,0x77; blr. Then the callee, a recompiled function the branch cases call and jump
++  // to: xori r5,r5,0x1234; blr.
++  const uint32_t orphan = kBenchBaseAddress;
++  const std::vector<uint32_t> orphan_words = {0x68C60077, kBlr};
++  const uint32_t callee = orphan + uint32_t(orphan_words.size()) * 4;
 +  const std::vector<uint32_t> callee_words = {0x68A51234, kBlr};
 +
 +  std::mt19937_64 rng(seed);
@@ -670,7 +905,8 @@ index 0000000..9bf712c
 +    int found = 0;
 +    for (int attempt = 0; attempt < kAttemptsPerForm && found < casesPerForm; ++attempt) {
 +      uint32_t word = uint32_t(form.opcode) | (uint32_t(rng()) & ~uint32_t(form.mask));
-+      if (!words.insert(word).second || IsServiceTrap(word)) {
++      // A branch form may have a single word (bctr); its cases differ in their layout instead.
++      if ((branch == Branch::kNone && !words.insert(word).second) || IsServiceTrap(word)) {
 +        continue;
 +      }
 +      auto text = DecodesTo(word, next_address, form);
@@ -683,7 +919,7 @@ index 0000000..9bf712c
 +      c.form = &form;
 +      c.text = *text;
 +      if (branch != Branch::kNone) {
-+        if (!BranchLayout(c, branch, c.address, callee, found % 2 == 1)) {
++        if (!BranchLayout(c, branch, c.address, callee, orphan, found % 3)) {
 +          continue;
 +        }
 +      } else if (!SetAddressing(c)) {
@@ -702,7 +938,8 @@ index 0000000..9bf712c
 +
 +  // The test binary, big-endian, with a test_ symbol per function so AnalyzeTestBinary makes
 +  // each one a function: the callee, then the cases.
-+  std::vector<uint32_t> image_words = callee_words;
++  std::vector<uint32_t> image_words = orphan_words;
++  image_words.insert(image_words.end(), callee_words.begin(), callee_words.end());
 +  std::map<size_t, std::string> symbols;
 +  symbols[callee] = "test_callee";
 +  for (size_t i = 0; i < cases.size(); ++i) {
@@ -720,6 +957,13 @@ index 0000000..9bf712c
 +  module.set_name("bench");
 +  codegen::RecompilerConfig config;
 +  config.outDirectoryPath = outDir;
++  // The jump tables of the switch cases list only the first target (address + 4); the other one
++  // (address + 12) is a case the detection would have missed.
++  for (const Case& c : cases) {
++    if (c.switch_table) {
++      config.switchTables[c.address] = {c.address, 0, kSwitchIndexRegister, {c.address + 4}};
++    }
++  }
 +  auto ctx =
 +      codegen::CodegenContext::Create(codegen::BinaryView::fromModule(module), std::move(config));
 +  codegen::AnalyzeTestBinary(ctx, "bench", symbols, kBenchBaseAddress, image.data(), image.size());
@@ -750,10 +994,10 @@ index 0000000..9bf712c
 +    table += fmt::format("REX_EXTERN({});\n", name);
 +    table += fmt::format(
 +        "static const BenchCase kCase{} = {{0x{:08X}, 0x{:08X}, {}, {}, {}, {}, {}, {}, {}, {}, "
-+        "{}, {}, {}}};\n",
++        "{}, {}, {}, {}}};\n",
 +        i, c.address, c.words[0], CppString(c.form->name), CppString(c.text),
 +        AddressingName(c.addressing), c.ra, c.rb, c.displacement, c.align, c.reserve_size,
-+        SetupName(c.setup), RecompiledCodeTraps(code), name);
++        SetupName(c.setup), c.unresolved, RecompiledCodeTraps(code), name);
 +    emitted.push_back(i);
 +  }
 +
@@ -1108,6 +1352,36 @@ index 0000000..9bf712c
 +  return true;
 +}
 +
++//=============================================================================
++// Section dump, to look for code pointers in data
++//=============================================================================
++
++// Loads an XEX as codegen does and writes each section of the image to <output>/<name>_<base>.bin,
++// so the data can be scanned for pointers to code the analysis did not find.
++bool DumpSections(const std::string& xexPath, const std::string& outDir) {
++  using rex::X_STATUS;  // X_STATUS_SUCCESS names it unqualified.
++  fs::path xex = fs::canonical(xexPath);
++  auto runtime = std::make_unique<rex::Runtime>(xex.parent_path().string());
++  if (runtime->Setup(rex::RuntimeConfig{.kernel_init = rex::kernel::InitializeKernel,
++                                        .tool_mode = true}) != X_STATUS_SUCCESS ||
++      runtime->LoadXexImage("game:\\" + xex.filename().string()) != X_STATUS_SUCCESS) {
++    REXLOG_ERROR("Cannot load {}", xexPath);
++    return false;
++  }
++  auto binary = codegen::BinaryView::fromModule(
++      *runtime->kernel_state()->GetExecutableModule()->xex_module());
++  fs::create_directories(outDir);
++  for (const auto& section : binary.sections()) {
++    std::string name(section.name);
++    std::replace(name.begin(), name.end(), '.', '_');
++    std::ofstream out(fmt::format("{}/{}_{:08X}{}.bin", outDir, name, section.baseAddress,
++                                  section.executable ? "_x" : ""),
++                      std::ios::binary);
++    out.write(reinterpret_cast<const char*>(section.data), section.size);
++  }
++  return true;
++}
++
 +struct InterpVectorArgs {
 +  std::string output;
 +  bool check = false;
@@ -1123,6 +1397,19 @@ index 0000000..9bf712c
 +
 +void RegisterInterpBenchGen(CLI::App& parent, const CliContext& ctx, DeferredAction& pending) {
 +  (void)ctx;
++  auto dump_args = std::make_shared<std::pair<std::string, std::string>>();
++  auto* dump = parent.add_subcommand("dump-sections", "Write each section of an XEX image to a file")
++                   ->fallthrough();
++  dump->add_option("--xex", dump_args->first, "XEX file")->type_name("PATH")->required();
++  dump->add_option("--output", dump_args->second, "Output directory")->type_name("PATH")->required();
++  dump->callback([dump_args, &pending]() {
++    pending = [dump_args]() -> rex::Result<void> {
++      if (!DumpSections(dump_args->first, dump_args->second)) {
++        return Err<void>(rex::ErrorCategory::IO, "Section dump failed");
++      }
++      return rex::Ok();
++    };
++  });
 +  auto vector_args = std::make_shared<InterpVectorArgs>();
 +  auto* vector = parent
 +                     .add_subcommand("interp-vector-gen",
@@ -1230,7 +1517,7 @@ index fc46d86..0a25c46 100644
  
  if(REXGLUE_ENABLE_TRACY)
 diff --git a/src/system/function_dispatcher.cpp b/src/system/function_dispatcher.cpp
-index 1fb0d77..30f8007 100644
+index 1fb0d77..5565a17 100644
 --- a/src/system/function_dispatcher.cpp
 +++ b/src/system/function_dispatcher.cpp
 @@ -14,6 +14,7 @@
@@ -1255,23 +1542,34 @@ index 1fb0d77..30f8007 100644
  namespace rex::runtime {
  
  namespace {
-@@ -50,7 +56,14 @@ PPCFunc* ResolveIndirectFunction(uint32_t guest_address) {
-     return func;
+@@ -42,15 +48,20 @@ static void InvalidFunctionTrap(PPCContext& ctx, uint8_t* /*base*/) {
+ 
+ PPCFunc* ResolveIndirectFunction(uint32_t guest_address) {
+   FunctionDispatcher* dispatcher = GetBoundFunctionDispatcher();
+-  if (!dispatcher) {
+-    return &InvalidFunctionTrap;
++  if (dispatcher) {
++    if (PPCFunc* func = dispatcher->GetFunction(guest_address)) {
++      return func;
++    }
    }
  
--  return &InvalidFunctionTrap;
+-  if (PPCFunc* func = dispatcher->GetFunction(guest_address)) {
+-    return func;
+-  }
 +  // The caller set ctx.last_indirect_target to guest_address, which is where the interpreter
 +  // starts.
 +  return REXCVAR_GET(ppc_interpreter_fallback) ? &InterpretMissingFunction : &InvalidFunctionTrap;
 +}
-+
+ 
+-  return &InvalidFunctionTrap;
 +PPCFunc* FindGuestFunction(uint32_t guest_address) {
 +  FunctionDispatcher* dispatcher = GetBoundFunctionDispatcher();
 +  return dispatcher ? dispatcher->GetFunction(guest_address) : nullptr;
  }
  
  FunctionDispatcher::FunctionDispatcher(rex::memory::Memory* memory, ExportResolver* export_resolver)
-@@ -62,13 +75,17 @@ bool FunctionDispatcher::Execute(ThreadState* thread_state, uint32_t address) {
+@@ -62,13 +73,17 @@ bool FunctionDispatcher::Execute(ThreadState* thread_state, uint32_t address) {
    SCOPE_profile_cpu_f("cpu");
    PROFILE_FUNCTION_DISPATCHED();
  
@@ -1294,10 +1592,10 @@ index 1fb0d77..30f8007 100644
    // Rebind the active guest thread for cross-module callbacks.
 diff --git a/src/system/ppc_interpreter.cpp b/src/system/ppc_interpreter.cpp
 new file mode 100644
-index 0000000..7df3596
+index 0000000..55b4fcf
 --- /dev/null
 +++ b/src/system/ppc_interpreter.cpp
-@@ -0,0 +1,1692 @@
+@@ -0,0 +1,1740 @@
 +/**
 + * @file        system/ppc_interpreter.cpp
 + * @brief       PowerPC interpreter for guest functions the code generator did not find
@@ -1316,13 +1614,14 @@ index 0000000..7df3596
 +
 +#include <algorithm>
 +#include <atomic>
++#include <chrono>
++#include <map>
 +#include <climits>
 +#include <cmath>
 +#include <cstdio>
 +#include <cstring>
 +#include <mutex>
 +#include <unordered_map>
-+#include <unordered_set>
 +
 +#include <fmt/format.h>
 +
@@ -1676,11 +1975,15 @@ index 0000000..7df3596
 +// The interpreter loop
 +//=============================================================================
 +
++// Instructions this thread has interpreted, for the statistics of InterpretMissingFunction.
++thread_local uint64_t tInstructions = 0;
++
 +// Runs guest code from `entry` until it returns to its caller. Each case follows the builder of
 +// the same name in src/codegen/builders/.
 +InterpreterResult Run(PPCContext& ctx, uint8_t* base, uint32_t entry) {
 +  uint32_t pc = entry;
 +  for (;;) {
++    ++tInstructions;
 +    const Instruction& in = Fetch(base, pc);
 +    const uint32_t* op = in.op;
 +    uint32_t next = pc + 4;
@@ -2958,20 +3261,63 @@ index 0000000..7df3596
 +  tResolved.clear();
 +}
 +
++namespace {
++
++// What the fallback has run, per guest function, reported to the log every 10 seconds while it
++// runs anything. Times include the recompiled functions an interpreted one calls.
++struct FallbackStats {
++  uint64_t calls = 0;
++  uint64_t instructions = 0;
++  uint64_t nanoseconds = 0;
++};
++
++std::mutex gFallbackMutex;
++std::map<uint32_t, FallbackStats> gFallbackStats;
++std::chrono::steady_clock::time_point gFallbackLastReport;
++
++// Logs a function the first time the fallback runs it, before running it.
++void AnnounceFallback(uint32_t address, uint32_t caller) {
++  std::lock_guard<std::mutex> lock(gFallbackMutex);
++  if (gFallbackStats.try_emplace(address).second) {
++    REXCPU_WARN(
++        "Interpreting guest function 0x{:08X} (called from 0x{:08X}), which the code generator "
++        "did not find; add it to the manifest's function hints to recompile it",
++        address, caller);
++  }
++}
++
++void RecordFallback(uint32_t address, uint64_t instructions, uint64_t nanoseconds) {
++  std::lock_guard<std::mutex> lock(gFallbackMutex);
++  auto it = gFallbackStats.try_emplace(address).first;
++  it->second.calls++;
++  it->second.instructions += instructions;
++  it->second.nanoseconds += nanoseconds;
++  auto now = std::chrono::steady_clock::now();
++  if (now - gFallbackLastReport < std::chrono::seconds(10)) {
++    return;
++  }
++  gFallbackLastReport = now;
++  for (const auto& [function, stats] : gFallbackStats) {
++    REXCPU_INFO(
++        "Interpreter: 0x{:08X}: {} calls, {} instructions, {:.3f} ms in total, {:.1f} ns per "
++        "instruction",
++        function, stats.calls, stats.instructions, stats.nanoseconds / 1e6,
++        stats.instructions ? double(stats.nanoseconds) / double(stats.instructions) : 0.0);
++  }
++}
++
++}  // namespace
++
 +void InterpretMissingFunction(PPCContext& ctx, uint8_t* base) {
 +  uint32_t address = ctx.last_indirect_target;
-+  {
-+    static std::mutex mutex;
-+    static std::unordered_set<uint32_t> logged;
-+    std::lock_guard<std::mutex> lock(mutex);
-+    if (logged.insert(address).second) {
-+      REXCPU_WARN(
-+          "Interpreting guest function 0x{:08X} (called from 0x{:08X}), which the code generator "
-+          "did not find; add it to the manifest's function hints to recompile it",
-+          address, uint32_t(ctx.lr));
-+    }
-+  }
++  AnnounceFallback(address, uint32_t(ctx.lr));
++  uint64_t instructions = tInstructions;
++  auto start = std::chrono::steady_clock::now();
 +  InterpreterResult result = InterpretFunction(ctx, base, address);
++  RecordFallback(address, tInstructions - instructions,
++                 uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
++                              std::chrono::steady_clock::now() - start)
++                              .count()));
 +  if (result.status != InterpreterStatus::kReturned) {
 +    REX_FATAL("The PowerPC interpreter cannot run {} at 0x{:08X} ({}), in guest function 0x{:08X}",
 +              result.status == InterpreterStatus::kInvalid ? "the unknown instruction"
@@ -14843,10 +15189,10 @@ index 0000000..f0bac44
 +)
 diff --git a/tests/interp_bench/bench_case.h b/tests/interp_bench/bench_case.h
 new file mode 100644
-index 0000000..b1a52c1
+index 0000000..f5234d8
 --- /dev/null
 +++ b/tests/interp_bench/bench_case.h
-@@ -0,0 +1,79 @@
+@@ -0,0 +1,87 @@
 +/**
 + * @file        tests/interp_bench/bench_case.h
 + * @brief       The cases of the PowerPC interpreter's differential bench
@@ -14883,6 +15229,10 @@ index 0000000..b1a52c1
 +  kCtrToCallee,
 +  // blrl: LR holds the callee's address.
 +  kLrToCallee,
++  // bctr with a jump table configured with only its first target: r4 is 0 with CTR at the case's
++  // address + 4, or 1 with CTR at address + 12, which the generated code hands to the
++  // interpreter.
++  kSwitch,
 +};
 +
 +struct BenchCase {
@@ -14901,6 +15251,10 @@ index 0000000..b1a52c1
 +  // so that the store happens.
 +  uint8_t reserve_size;
 +  BenchSetup setup;
++  // The branch goes to code no function covers, which the generated code calls through the
++  // dispatcher (setting last_indirect_target) and the interpreter jumps to: that field is not
++  // compared.
++  bool unresolved;
 +  // The code generator emitted a trap for this instruction (operand values its builder does not
 +  // handle): the interpreter must stop on it rather than run it.
 +  bool recompiled_traps;
@@ -14928,10 +15282,10 @@ index 0000000..b1a52c1
 +extern const uint32_t kBenchImageWords[];
 diff --git a/tests/interp_bench/bench_main.cpp b/tests/interp_bench/bench_main.cpp
 new file mode 100644
-index 0000000..8a5e710
+index 0000000..4ade11d
 --- /dev/null
 +++ b/tests/interp_bench/bench_main.cpp
-@@ -0,0 +1,755 @@
+@@ -0,0 +1,814 @@
 +/**
 + * @file        tests/interp_bench/bench_main.cpp
 + * @brief       Differential bench of the PowerPC interpreter
@@ -14941,11 +15295,12 @@ index 0000000..8a5e710
 + * register and the touched guest memory bit for bit.
 + *
 + * Usage: ppc_interp_bench [--seeds N] [--seed S] [--filter TEXT] [--report FILE] [--verbose]
-+ *                         [--self-check]
++ *                         [--self-check] [--speed]
 + *
 + * --self-check runs the recompiled code on both sides instead of the interpreter: every run must
 + * match, which shows the bench itself (states, memory windows, host floating point state) is
-+ * deterministic.
++ * deterministic. --speed then times the cases without memory accesses on both sides, to compare
++ * the interpreter's cost with the recompiled code's.
 + *
 + * @license     BSD 3-Clause License
 + *              See LICENSE file in the project root for full license text.
@@ -14972,6 +15327,7 @@ index 0000000..8a5e710
 +
 +#include <fmt/format.h>
 +
++#include <rex/cvar.h>
 +#include <rex/logging.h>
 +#include <rex/ppc/context.h>
 +#include <rex/ppc/context_access.h>
@@ -15315,6 +15671,11 @@ index 0000000..8a5e710
 +    ctx.ctr.u64 = callee;
 +  } else if (c.setup == BenchSetup::kLrToCallee) {
 +    ctx.lr = callee;
++  } else if (c.setup == BenchSetup::kSwitch) {
++    // The table's one target, or the case it misses.
++    uint32_t index = random.Below(2);
++    ctx.r4.u64 = index;
++    ctx.ctr.u64 = (random.Chance(4) ? random.Next() << 32 : 0) | (c.address + (index ? 12 : 4));
 +  }
 +  return state;
 +}
@@ -15426,11 +15787,15 @@ index 0000000..8a5e710
 +  return out;
 +}
 +
-+// The first difference between the two sides' results, or an empty string.
-+std::string Compare(const State& recompiled, const State& interpreted) {
++// The first difference between the two sides' results, or an empty string. last_indirect_target
++// is left out for branches to code no function covers (BenchCase::unresolved).
++std::string Compare(const State& recompiled, const State& interpreted, bool unresolved) {
 +  auto* a = reinterpret_cast<const uint8_t*>(&recompiled.ctx);
 +  auto* b = reinterpret_cast<const uint8_t*>(&interpreted.ctx);
 +  for (const Field& field : Fields()) {
++    if (unresolved && field.name == "last_indirect_target") {
++      continue;
++    }
 +    if (std::memcmp(a + field.offset, b + field.offset, field.size) != 0) {
 +      return fmt::format("{}: recompiled {}, interpreted {}", field.name,
 +                         Hex(a + field.offset, field.size), Hex(b + field.offset, field.size));
@@ -15464,6 +15829,7 @@ index 0000000..8a5e710
 +  std::string report;
 +  bool verbose = false;
 +  bool self_check = false;
++  bool speed = false;
 +};
 +
 +struct FormStats {
@@ -15563,7 +15929,7 @@ index 0000000..8a5e710
 +      }
 +      return;
 +    }
-+    std::string difference = Compare(recompiled, interpreted);
++    std::string difference = Compare(recompiled, interpreted, c.unresolved);
 +    if (difference.empty()) {
 +      ++stats.passed;
 +      continue;
@@ -15599,11 +15965,53 @@ index 0000000..8a5e710
 +      options.verbose = true;
 +    } else if (arg == "--self-check") {
 +      options.self_check = true;
++    } else if (arg == "--speed") {
++      options.speed = true;
 +    } else {
 +      return false;
 +    }
 +  }
 +  return true;
++}
++
++// Times the cases that touch no memory and need no setup, each run many times in a row from the
++// same state on each side. Instructions that keep changing their inputs (a shift of a register
++// into itself) do not matter for a timing.
++void MeasureSpeed() {
++  constexpr int kRepeats = 2000;
++  double recompiled_ns = 0, interpreted_ns = 0;
++  size_t timed = 0;
++  for (size_t i = 0; i < kBenchCaseCount; ++i) {
++    const BenchCase& c = *kBenchCases[i];
++    if (c.addressing != BenchAddressing::kNone || c.setup != BenchSetup::kNone ||
++        c.recompiled_traps) {
++      continue;
++    }
++    State state = MakeState(c, i);
++    if (rex::runtime::InterpretFunction(state.ctx, gBase, c.address).status !=
++        InterpreterStatus::kReturned) {
++      continue;
++    }
++    PPCFPSCRRegister::Platform::setcsr(state.ctx.fpscr.csr);
++    auto t0 = std::chrono::steady_clock::now();
++    for (int r = 0; r < kRepeats; ++r) {
++      c.recompiled(state.ctx, gBase);
++    }
++    auto t1 = std::chrono::steady_clock::now();
++    for (int r = 0; r < kRepeats; ++r) {
++      rex::runtime::InterpretFunction(state.ctx, gBase, c.address);
++    }
++    auto t2 = std::chrono::steady_clock::now();
++    PPCFPSCRRegister::Platform::setcsr(gHostFpcr);
++    recompiled_ns += std::chrono::duration<double, std::nano>(t1 - t0).count();
++    interpreted_ns += std::chrono::duration<double, std::nano>(t2 - t1).count();
++    ++timed;
++  }
++  double runs = double(timed) * kRepeats;
++  std::printf(
++      "Speed over %zu cases (an instruction and blr each): recompiled %.1f ns per call, "
++      "interpreted %.1f ns per call, %.1f times slower.\n",
++      timed, recompiled_ns / runs, interpreted_ns / runs, interpreted_ns / recompiled_ns);
 +}
 +
 +}  // namespace
@@ -15613,7 +16021,7 @@ index 0000000..8a5e710
 +  if (!ParseOptions(argc, argv, options)) {
 +    std::fprintf(stderr,
 +                 "Usage: %s [--seeds N] [--seed S] [--filter TEXT] [--report FILE] [--verbose] "
-+                 "[--self-check]\n",
++                 "[--self-check] [--speed]\n",
 +                 argv[0]);
 +    return 2;
 +  }
@@ -15629,6 +16037,8 @@ index 0000000..8a5e710
 +    return 2;
 +  }
 +  rex::runtime::SetGuestFunctionResolver(&ResolveBenchFunction);
++  // Branches to code no function covers reach the interpreter through the dispatcher's fallback.
++  rex::cvar::SetFlagByName("ppc_interpreter_fallback", "true");
 +  InstallFaultHandlers();
 +
 +  auto start = std::chrono::steady_clock::now();
@@ -15685,5 +16095,8 @@ index 0000000..8a5e710
 +      "%.2f s.\n",
 +      order.size(), forms_passed, forms_unsupported, forms_failed, cases, runs, runs_passed,
 +      seconds);
++  if (options.speed) {
++    MeasureSpeed();
++  }
 +  return forms_failed ? 1 : 0;
 +}
