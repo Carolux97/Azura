@@ -16,6 +16,9 @@
 # afterwards. Usage: scripts/regen_sdk_patches.sh
 
 set -euo pipefail
+# The diff output is parsed below: keep its messages ("Files ... differ", "Only in ...") in English
+# whatever the user's language.
+export LC_ALL=C
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SDK="${ROOT}/sdk/rexglue-0.10.0-src"
@@ -54,6 +57,8 @@ INTERP_PATHS=(
 )
 # The patches build.sh applies before these two, on top of the SDK commit.
 EARLIER_PATCHES=(
+  rexglue-0.10.0.patch
+  rexglue-0.10.0-exit-code.patch
   rexglue-0.10.0-thread-cpu.patch
   rexglue-0.10.0-gpu-profiling.patch
   rexglue-0.10.0-present-pipeline.patch
