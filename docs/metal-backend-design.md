@@ -149,7 +149,7 @@ at 30 FPS, so 33.3 ms is the floor.
 - In the room with light shafts the command processor waits ~32 ms per frame for the GPU, with
   ~60 render target transfers per frame: the next target for render pass reduction.
 - Not yet in the Metal backend: tessellation (domain shaders), resolution scaling, host
-  occlusion queries and the Dear ImGui overlays.
+  occlusion queries (added later, section 12) and the Dear ImGui overlays.
 - FXAA (the Antialiasing option of the game's Video menu) is a Metal shader written for Apple
   GPUs (half precision colors, quality as a function constant) after the gamma ramp pass with
   luma: ~0.18 ms more GPU time per frame at 1280x720 (0.32 vs 0.14 ms for the swap pass).
@@ -284,3 +284,30 @@ command processor thread.
 Found on the way: on macOS, `fopen` with "a+" leaves the read position at the end of the file
 (at the start on Linux), so the storage read nothing and was truncated at every start. Both this
 backend and the Vulkan one now seek to the start before reading.
+
+## 12. Occlusion queries
+
+Unreal Engine 3 draws a box around each object and light flare between the begin and the end of
+an occlusion query (`EVENT_WRITE_ZPD`), tested against a half-resolution copy of the scene depth,
+and hides what the GPU counts no samples for. With the fake results of the common command
+processor (always visible) light flares showed through walls; the SDK's Vulkan and D3D12 real
+queries turn themselves off for Gears 3, whose end sample counts are 0x20 bytes before the
+begin's.
+
+- **Counting.** `MetalCommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD` tells the begin from
+  the end by the 0xFFFFFEED marker the guest's driver writes at the end. Between them, each render
+  encoder counts the guest draws in a visibility result slot of its own
+  (`MTLVisibilityResultModeCounting`, the default reset result type), and the query's result, the
+  sum of its slots, replaces the marker when the submission with them completes.
+- **256 KiB of visibility results.** Metal writes visibility results only at offsets below 256 KiB
+  of the buffer: with a larger ring of slots, every query in the upper half read 0 (measured: 323
+  results at slots from 32768 up, none above 0) and objects vanished for seconds at a time. The
+  API validation rejects those offsets; without it the GPU writes nothing. The ring is 32768
+  slots, reused about every 100 frames.
+- **oDepth in float24 targets.** The host stores float24 depth in [0, 0.5] (the viewport maps the
+  guest's [0, 1] there, `full_float24_in_0_to_1`), but the viewport does not apply to depth written
+  by pixel shaders. The game makes the half-resolution depth with such a shader, so it held twice
+  the depth of the query boxes: ~80% of the queries read 0 whatever the scene, and objects kept
+  disappearing and coming back. Like the DXBC translator, XSC and the SPIR-V translator now halve
+  oDepth when `kSysFlag_DepthFloat24` is set. After both fixes, 28 to 84% of the queries read 0
+  depending on the scene, and no flickering is seen.

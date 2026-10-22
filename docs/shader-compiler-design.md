@@ -94,7 +94,8 @@ offline bench (section 8) compares the two translators on the game's own shaders
   instruction, signedness per component (unsigned, signed, biased, gamma), resolution scaling,
   and the getters (`getWeights`, `getGradients`, `getCubeMapFaceIndex`...).
 - **Exports.** Color with the exponent bias, the gamma conversion of render targets with gamma,
-  alpha test and alpha to coverage; depth (and the float24 conversion modes); interpolators,
+  alpha test and alpha to coverage; depth (and the float24 conversion modes; without them,
+  oDepth halved for float24 targets as the viewport does for rasterized depth); interpolators,
   position with the NDC scale and offset, point size, clip planes and vertex kill; memexport.
 - **Pixel position.** `param_gen` inputs (position, point coordinates, front facing) and the
   sample-space position of the Metal backend (host pixel divided by the samples per guest pixel).
