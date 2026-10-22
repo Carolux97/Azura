@@ -16,8 +16,9 @@ gpu_plugin = "xenos"
 gpu_backend = "any"
 # Shader compiler: "xsc" is our own compiler from the Xbox 360 shader microcode (MSL on Metal,
 # SPIR-V on Vulkan with host render targets), with what it does not support yet falling back to
-# "translator", the SPIR-V translator (through SPIRV-Cross on Metal) used before it.
-shader_compiler = "xsc"
+# "translator", the SPIR-V translator (through SPIRV-Cross on Metal) used before it. Not set here:
+# the default is "xsc" on macOS and "translator" on Linux, where XSC is not checked yet.
+# shader_compiler = "xsc"
 # Run the vertex shader of screen-space draws without clipping (full-screen clears and passes)
 # on the CPU to find how much of the EDRAM they really use. Without it such draws claim up to the
 # whole EDRAM, and every render target in the way is copied out and back: in the campaign this
