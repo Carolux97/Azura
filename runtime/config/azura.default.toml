@@ -11,6 +11,11 @@
 # GPU emulation plugin loaded at start-up. "xenos" translates the console GPU to the host's
 # graphics API.
 gpu_plugin = "xenos"
+# Vulkan host render targets in EDRAM sample space (one texel per EDRAM sample), as Metal always
+# does: switching an EDRAM region between MSAA modes needs no render target transfer. Without it
+# characters and floors on Linux show noise and blocky dark patches, and the copies cost more GPU
+# time.
+edram_sample_space = true
 # Host graphics API: "any" picks Metal on macOS and Vulkan on Linux; "vulkan" uses Vulkan on
 # macOS too (through MoltenVK).
 gpu_backend = "any"
