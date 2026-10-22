@@ -1,9 +1,9 @@
 diff --git a/src/graphics/pipeline/shader/xsc/bench/xsc_bench.mm b/src/graphics/pipeline/shader/xsc/bench/xsc_bench.mm
 new file mode 100644
-index 0000000..3bd78e6
+index 0000000..9289490
 --- /dev/null
 +++ b/src/graphics/pipeline/shader/xsc/bench/xsc_bench.mm
-@@ -0,0 +1,1340 @@
+@@ -0,0 +1,1382 @@
 +/**
 + * @file        graphics/pipeline/shader/xsc/bench/xsc_bench.mm
 + * @brief       Offline bench for the Xenos shader compiler: translates the game's real shaders
@@ -1007,6 +1007,15 @@ index 0000000..3bd78e6
 +  }
 +  const std::vector<uint8_t>& source = translation->translated_binary();
 +  translated.msl.source.assign(source.begin(), source.end());
++  // XSC_BENCH_MSL_OVERRIDE: a folder of hand-edited MSL for experiments, used instead of XSC's
++  // when a file is named after the variant.
++  if (const char* override_dir = std::getenv("XSC_BENCH_MSL_OVERRIDE")) {
++    std::ifstream file(fs::path(override_dir) / (variant.name + ".metal"));
++    if (file) {
++      translated.msl.source.assign(std::istreambuf_iterator<char>(file),
++                                   std::istreambuf_iterator<char>());
++    }
++  }
 +  translated.msl.entry_point =
 +      xsc::XscShaderTranslator::GetEntryPointName(shader, variant.modification);
 +  if (variant.type == xenos::ShaderType::kVertex && g_vertex_capture) {
@@ -1177,6 +1186,10 @@ index 0000000..3bd78e6
 +        continue;
 +      }
 +      if (variant.type == xenos::ShaderType::kVertex) {
++        if (options.mode == "perf") {
++          // Pixel shaders only.
++          continue;
++        }
 +        // Every translation run for the same vertices with the same inputs, compared with the
 +        // first one value by value.
 +        uint32_t vertex_count = options.size * options.size;
@@ -1235,7 +1248,37 @@ index 0000000..3bd78e6
 +      // Draw every translation with the same inputs and compare each with the first. Seeds whose
 +      // inputs make the first translation write no color value (kill instructions and the alpha
 +      // test can discard every pixel) are skipped, up to 8 tries per kept seed.
-+      uint32_t seeds_wanted = options.mode == "perf" ? 1 : options.seeds;
++      if (options.mode == "perf") {
++        // The GPU time of each translation varies a lot from one draw to the next (clocks), so
++        // each one is drawn in 5 rounds alternating the translations, keeping the minimum.
++        DrawInputs inputs = GenerateInputs(
++            device, translations[0].ok ? translations[0] : translations.back(), uint32_t(variant.hash));
++        std::vector<double> best(translations.size(), 0.0);
++        for (uint32_t round = 0; round < 5; ++round) {
++          for (size_t i = 0; i < translations.size(); ++i) {
++            if (!translations[i].ok) {
++              continue;
++            }
++            Output output = DrawPixelShader(device, queue, vertex_function, translations[i],
++                                            inputs, 512, 20);
++            if (output.ok && (!best[i] || output.gpu_ms < best[i])) {
++              best[i] = output.gpu_ms;
++            }
++          }
++        }
++        for (size_t i = 0; i < translations.size(); ++i) {
++          if (!best[i]) {
++            continue;
++          }
++          Totals& t = totals[options.translators[i]];
++          ++t.drawn;
++          t.gpu_ms += best[i];
++          std::printf("perf %s %s %.4f ms\n", variant.name.c_str(), options.translators[i].c_str(),
++                      best[i]);
++        }
++        continue;
++      }
++      uint32_t seeds_wanted = options.seeds;
 +      uint32_t seeds_kept = 0;
 +      for (uint32_t seed = 0; seeds_kept < seeds_wanted && seed < seeds_wanted * 8; ++seed) {
 +        bool last_try = seed + 1 >= seeds_wanted * 8;
@@ -1248,9 +1291,8 @@ index 0000000..3bd78e6
 +          DrawInputs inputs = GenerateInputs(device, translations[0].ok ? translations[0]
 +                                                                        : translations[i],
 +                                             uint32_t(variant.hash) ^ (seed * 7919));
-+          Output output = DrawPixelShader(
-+              device, queue, vertex_function, translations[i], inputs,
-+              options.mode == "perf" ? 512 : options.size, options.mode == "perf" ? 20 : 1);
++          Output output = DrawPixelShader(device, queue, vertex_function, translations[i], inputs,
++                                          options.size, 1);
 +          if (!output.ok) {
 +            std::printf("%s [%s] seed %u: %s\n", variant.name.c_str(),
 +                        options.translators[i].c_str(), seed, output.error.c_str());
@@ -1267,7 +1309,7 @@ index 0000000..3bd78e6
 +              written += value != -12345.0f && !std::isnan(value);
 +            }
 +          }
-+          if (i == 0 && total && !written && !last_try && options.mode != "perf") {
++          if (i == 0 && total && !written && !last_try) {
 +            // Try other inputs.
 +            break;
 +          }
@@ -2072,10 +2114,10 @@ index 0000000..6d2d864
 +}  // namespace rex::graphics::xsc
 diff --git a/src/graphics/pipeline/shader/xsc/xsc_msl.cpp b/src/graphics/pipeline/shader/xsc/xsc_msl.cpp
 new file mode 100644
-index 0000000..c43d650
+index 0000000..1c0bb7f
 --- /dev/null
 +++ b/src/graphics/pipeline/shader/xsc/xsc_msl.cpp
-@@ -0,0 +1,824 @@
+@@ -0,0 +1,812 @@
 +/**
 + * @file        graphics/pipeline/shader/xsc/xsc_msl.cpp
 + * @brief       MSL emitter of the Xenos shader compiler
@@ -2192,10 +2234,6 @@ index 0000000..c43d650
 +    WriteFragmentHeader();
 +    WriteLocals();
 +    WriteBody(program_.body, 1);
-+    if (uses_demote_) {
-+      // Demoted pixels are discarded once nothing needs their values for derivatives.
-+      out_ += "    if (xe_demoted)\n    {\n        discard_fragment();\n    }\n";
-+    }
 +    out_ += "    return out;\n}\n";
 +    return std::move(out_);
 +  }
@@ -2205,9 +2243,6 @@ index 0000000..c43d650
 +    for (const Node& node : body) {
 +      if (node.kind == Node::Kind::kInstruction && node.instruction.op == Op::kConstant) {
 +        constants_[node.instruction.result] = &node.instruction;
-+      }
-+      if (node.kind == Node::Kind::kInstruction && node.instruction.op == Op::kDemote) {
-+        uses_demote_ = true;
 +      }
 +      for (const Body& child : node.bodies) {
 +        CollectConstants(child);
@@ -2408,12 +2443,8 @@ index 0000000..c43d650
 +    out_ += "    XeOut out = {};\n";
 +  }
 +
-+  // The local variables: the demote flag and the function variables.
++  // The local variables: the function variables.
 +  void WriteLocals() {
-+    if (uses_demote_) {
-+      out_ += "    bool xe_demoted = false;\n";
-+    }
-+    // Function variables.
 +    for (const Variable& variable : program_.variables) {
 +      if (variable.storage != Storage::kFunction) {
 +        continue;
@@ -2853,11 +2884,11 @@ index 0000000..c43d650
 +                           options));
 +      } return;
 +      case Op::kDemote:
-+        // Metal's discard_fragment may stop the pixel, leaving the derivatives of its quad
-+        // neighbours undefined, while a Xenos kill keeps the pixel running for them: remember it
-+        // and discard at the end.
++        // Since MSL 2.3, discard_fragment demotes the pixel to a helper: it writes nothing but
++        // keeps running for the derivatives of its quad neighbours, as a Xenos kill does, and a
++        // quad discarded entirely stops early.
 +        Indent(depth);
-+        out_ += "xe_demoted = true;\n";
++        out_ += "discard_fragment();\n";
 +        return;
 +      case Op::kKill:
 +        Indent(depth);
@@ -2891,7 +2922,6 @@ index 0000000..c43d650
 +
 +  const Program& program_;
 +  std::vector<const Instruction*> constants_;
-+  bool uses_demote_ = false;
 +  std::string out_;
 +};
 +
