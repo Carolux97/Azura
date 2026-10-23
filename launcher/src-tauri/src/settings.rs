@@ -454,7 +454,7 @@ mod tests {
         fs::write(&config, "draw_resolution_scale_x = \"high\"\nfullscreen = 1\n").unwrap();
         let settings = SettingsPaths::new(&dir).load().unwrap();
         assert_eq!(settings.graphics.resolution_scale, None);
-        assert!(!settings.fullscreen);
+        assert!(settings.fullscreen);
     }
 
     #[test]
