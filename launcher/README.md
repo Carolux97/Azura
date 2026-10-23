@@ -36,12 +36,14 @@ own keys in `azura.toml`, keeping comments and anything the in-game menu wrote, 
 when its window regains focus.
 
 The launcher only edits the settings the runtime reads at start-up: the display mode and the
-graphics preset. A preset (Low, Medium, High, Auto) sets the runtime's render resolution scale,
-anisotropic filtering, anti-aliasing, image scaling and texture memory; `src/graphics.js` maps each
-one to its ReXGlue setting. The Advanced block exposes those values one by one, and any edit that
-matches no preset shows as Custom. The preset values are a first proposal, to be tuned once the
-game runs on Apple Silicon. Settings that apply live (frame rate limit, motion blur,
-anti-aliasing, mouse sensitivity, keyboard and controller bindings) are changed in game with F4.
+render resolution. The render resolution (`render_resolution`: Automatic, 1280x720, 2560x1440 or
+3840x2160) is the same setting as the Render resolution row of the game's Video menu; the runtime
+turns it into the draw resolution scale and the texture memory when the game starts, and resolves
+Automatic for the machine with the rule in `src/graphics.js` (2560x1440 on Pro, Max and Ultra chips
+with at least 16 GB, else 1280x720). Before the first launch after an update, a scale written by an
+older launcher (`draw_resolution_scale_x`, with `resolution_auto` in `launcher.toml`) becomes
+`render_resolution`. Everything else (frame rate limit, anti-aliasing, motion blur, filtering, image
+scaling, mouse sensitivity, bindings) is changed in the game's Options menu.
 Both sides read and write the same `azura.toml`.
 
 ## Layout

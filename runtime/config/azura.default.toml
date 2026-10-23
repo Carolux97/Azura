@@ -42,6 +42,12 @@ ppc_interpreter_fallback = true
 
 # ---------- Display ----------
 fullscreen = true
+# Resolution the game is drawn at (the Video menu's Render resolution): auto, 1280x720, 2560x1440
+# or 3840x2160. It sets draw_resolution_scale_x/y and the texture cache limits at start-up.
+render_resolution = "auto"
+# Extra sharpening of AMD CAS (and AMD FSR 1 with the FidelityFX SDK), from 0.0 (the effect's own)
+# to 1.0 (the most): the Video menu's Sharpness. It applies while the game runs.
+upscaling_sharpness = 0.0
 # Present the game in step with the display refresh (FIFO). The immediate and mailbox modes let
 # the presenter repaint the same frame hundreds of times per second, taking GPU time from the game.
 vulkan_allow_present_mode_immediate = false

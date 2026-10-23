@@ -167,6 +167,15 @@ void AchievementToast::Prepare(Display& display) {
   }
 }
 
+bool AchievementToast::NeedsContinuousPaint() const {
+  // current_ belongs to the UI thread, which is the one asking.
+  if (current_) {
+    return true;
+  }
+  std::lock_guard<std::mutex> lock(mutex_);
+  return !queue_.empty();
+}
+
 void AchievementToast::OnDraw(ImGuiIO& io) {
   Clock::time_point now = Clock::now();
   if (current_ &&

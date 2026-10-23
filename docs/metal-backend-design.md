@@ -365,6 +365,10 @@ or better on a 1080p display.
   GPU time median: 1x 12.1 / 13.3 ms and 12.0 ms, 2x 40.9 / 48.7 ms and 39.9 ms, 3x 78.5 / 89.9 ms
   and 78.3 ms (a 27-second run). The GPU limits every scale; 2x draws 4 times the pixels for 3.4
   times the time.
+- **Choosing it.** The Render resolution row of the game's Video menu (`render_resolution`:
+  Automatic, 1280x720, 2560x1440, 3840x2160), also shown by the launcher, sets the scale and the
+  texture cache limits when the game starts (`ApplyRenderResolution`, card 66). Automatic is 2x on
+  Pro, Max and Ultra chips with at least 16 GB of memory and 1x otherwise, the launcher's rule.
 
 ## 14. Upscaling: AMD CAS and Apple MetalFX
 
@@ -378,11 +382,50 @@ macOS bilinear, AMD CAS and Apple MetalFX; on Linux what its build has.
   MSL at start-up, with the chain the FidelityFX paint flow uses: sharpening when the guest output
   already has the window's size, otherwise resampling by up to 2x along each axis, the rest
   bilinear through an intermediate texture.
+- **Sharpness.** The Video menu's Sharpness slider (`upscaling_sharpness`, 0 to 1, card 66) sets
+  `present_cas_additional_sharpness` (and, with the FidelityFX SDK, lowers
+  `present_fsr_sharpness_reduction` from its default 0.2 to 0) and applies as the slider moves:
+  the row's live change callback (docs/reverse-engineering.md, "Live changes") has
+  `Presenter::RefreshGuestOutputSharpnessFromUIThread` take them again, and the next paint uses
+  them. MetalFX and bilinear have no sharpening, so the row only shows with CAS (or FSR).
 - **MetalFX** is `MTLFXSpatialScaler` from the guest output to the window size in one pass, into
   an intermediate texture copied to the drawable. It only upscales: a draw resolution scale above
   the window size stays bilinear.
 - **Cost on an M4 (10 GPU cores)**: MetalFX from 1280x720 to 3024x1964 took 1.34 ms of GPU time
   (measured alone); the CAS resample from 1280x720 to 2560x1440 took ~1.9 ms per present (Metal
-  System Trace, with the game keeping the GPU ~90% busy, so likely high). The presenter paints at
-  the display's rate (~177 presents per second on a 165 Hz display), whether or not the game sent
-  a new frame, which these effects make noticeable.
+  System Trace, with the game keeping the GPU ~90% busy, so likely high). The presenter painted at
+  the display's rate (~177 presents per second on a 165 Hz display) whether or not the game sent
+  a new frame, which these effects made noticeable; section 15 fixes that.
+
+## 15. Painting only for new frames
+
+The presenter paints on the UI thread when something asks for it: a new guest frame
+(`RefreshGuestOutput`), a resize or an exposed window, or a UI drawer. The ImGui drawer asked for
+the next paint at the end of every paint while any dialog existed, so that dialogs taking input
+or animating keep drawing. The achievement notice (Azura's, and the SDK's toast it replaces) is a
+dialog for the whole session, so the presenter painted continuously: each paint waited in
+`nextDrawable` for the display and presented the last guest frame again.
+
+`ImGuiDialog::NeedsContinuousPaint` (true by default) lets a dialog say it does not need that, and
+the drawer only asks for the next paint while some dialog does. Both achievement notices return
+true only while a notice is on screen or queued. Idle dialogs are still drawn on every paint the
+guest output or the window causes.
+
+Measured with Metal System Traces of the first 40 seconds after launch (Bink intro, which the game
+draws at 30 FPS, then the menus at the 120 FPS cap) on the built-in 120 Hz display of the M4,
+windowed unless stated, counting the "Present" command buffers and their GPU time:
+
+| present_effect | Intro (30 FPS): presents/s, GPU ms/s, before | after | Menus: presents/s before | after |
+|---|---|---|---|---|
+| bilinear | 120, 38.7 | 30, 7.5 | 106 | 100 |
+| cas | 120, 195.6 | 29, 40.7 | 102 | 37 (game ~64 FPS in that run) |
+| metalfx | 120, 415.0 | 30, 98.4 | 96 | 67 |
+| cas, full screen | 120, 207.8 | 30, 40.3 | 109 | 95 |
+
+The windowed CAS pair comes from an earlier run with the player's saves, the others from runs
+with an empty saves folder. At 30 FPS the presenter now paints once per game frame, a quarter of
+the GPU time or less with each effect. Open question: in the menus at ~120 FPS fewer frames reach
+the display than before, 67 presents per second against 96 with MetalFX and 95 against 109 with
+full screen CAS (bilinear 100 against 106), while the game makes ~110 to 120: more game frames are
+replaced in the mailbox before a paint takes them. Not explained yet; at the default 30 FPS limit
+it does not happen.
