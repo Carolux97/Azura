@@ -733,42 +733,7 @@ bool HandleOptionsButton(PPCContext& ctx, uint8_t* base, uint32_t function) {
   return true;
 }
 
-// Table of persistent maps for each of the 31 campaign chapters (from Xbox360-GearGame.ini)
-constexpr const char* const kChapterMaps[31] = {
-    "sp_nightmare_p",         // 0: Prólogo
-    "sp_ravens_p",            // 1: Acto 1, Cap 1
-    "sp_ravens2_p",           // 2: Acto 1, Cap 2
-    "sp_hanover_p",           // 3: Acto 1, Cap 3
-    "sp_warehouse_p",         // 4: Acto 1, Cap 4
-    "sp_stadium_p",           // 5: Acto 1, Cap 5
-    "sp_bridge_p",            // 6: Acto 1, Cap 6
-    "sp_wreckage_p",          // 7: Acto 2, Cap 1
-    "sp_badlands_p",          // 8: Acto 2, Cap 2
-    "sp_badlands_p",          // 9: Acto 2, Cap 3
-    "sp_badlands2_p",         // 10: Acto 2, Cap 4
-    "sp_badlands2_p",         // 11: Acto 2, Cap 5
-    "sp_blimp1_p",            // 12: Acto 2, Cap 6
-    "sp_blimp2_p",            // 13: Acto 2, Cap 7
-    "sp_fort_p",              // 14: Acto 3, Cap 1
-    "sp_fort_p",              // 15: Acto 3, Cap 2
-    "sp_convoy_p",            // 16: Acto 3, Cap 3
-    "sp_mercy_p",             // 17: Acto 3, Cap 4
-    "sp_mercy_p",             // 18: Acto 3, Cap 5
-    "sp_char_p",              // 19: Acto 4, Cap 1
-    "sp_char_p",              // 20: Acto 4, Cap 2
-    "sp_char_p",              // 21: Acto 4, Cap 3
-    "SP_Oldshipyard_Intro_P", // 22: Acto 4, Cap 4
-    "sp_oldshipyard_p",       // 23: Acto 4, Cap 5
-    "sp_maelstrom_p",         // 24: Acto 4, Cap 6
-    "sp_coast_p",             // 25: Acto 5, Cap 1
-    "sp_coast_p",             // 26: Acto 5, Cap 2
-    "SP_Azura_Intro_P",       // 27: Acto 5, Cap 3
-    "sp_azura2_p",            // 28: Acto 5, Cap 4
-    "sp_tower_p",             // 29: Acto 5, Cap 5
-    "SP_Rooftop_P",           // 30: Acto 5, Cap 6
-};
-
-// Several chapters are sections of the same persistent map; duplicate entries are intentional.
+// Removes every ?listen (or &listen) option from a travel URL.
 static void StripListenParam(std::string& s) {
   std::string lower = s;
   for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -798,8 +763,14 @@ static void StripListenParam(std::string& s) {
   }
 }
 
-// Intercepts campaign and menu travel URLs to prevent infinite socket/network stalls
-// and replaces GearGame_P with the chapter's real persistent level map from kChapterMaps.
+// Campaign travel URLs (GearGame_P?...?chapter=N) carry ?listen, which makes the game a network
+// host for co-op; on macOS the load then hangs, with the main and guest worker threads waiting on
+// each other. The option is removed so the chapter loads as single player. GearGame_P itself is
+// kept: it is the container map that stays loaded for the whole campaign, and each chapter's map
+// (sp_hanover_p, sp_warehouse_p...) is loaded into it. When one chapter flows into the next
+// without a loading screen, the game swaps those chapter maps inside GearGame_P with
+// PrepareMapChange and CommitMapChange, which cannot work if a chapter map is the main map.
+// This hook has no verified single-player/co-op discriminator, so it also affects a co-op host.
 bool PatchTravelURL(uint8_t* base, uint32_t fstring_addr) {
   if (!fstring_addr) return false;
   const uint32_t data = LoadU32(base, fstring_addr);
@@ -811,22 +782,7 @@ bool PatchTravelURL(uint8_t* base, uint32_t fstring_addr) {
     return false;
   }
 
-  auto write_url = [&](const std::string& value) {
-    if (value.size() >= max) {
-      REXLOG_WARN("[Azura travel] Rewritten URL needs {} TCHARs, but capacity is {}; URL left unchanged",
-                  value.size() + 1, max);
-      return false;
-    }
-    for (size_t i = 0; i < value.size(); ++i) {
-      base[data + i * 2] = 0;
-      base[data + i * 2 + 1] = static_cast<uint8_t>(value[i]);
-    }
-    base[data + value.size() * 2] = 0;
-    base[data + value.size() * 2 + 1] = 0;
-    StoreU32(base, fstring_addr + 4, static_cast<uint32_t>(value.size() + 1));
-    return true;
-  };
-
+  // FString: UTF-16BE characters and a terminating zero, counted in `count`.
   std::string url;
   url.reserve(count);
   for (uint32_t i = 0; i + 1 < count; ++i) {
@@ -836,84 +792,24 @@ bool PatchTravelURL(uint8_t* base, uint32_t fstring_addr) {
 
   std::string lower_url = url;
   for (char& c : lower_url) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-
   if (lower_url.rfind("geargame_p", 0) != 0) {
     return false;
   }
 
-  int chapter = -1;
-  size_t ch_pos = lower_url.find("chapter=");
-  if (ch_pos != std::string::npos) {
-    size_t num_start = ch_pos + 8;
-    size_t num_end = lower_url.find_first_not_of("0123456789", num_start);
-    std::string ch_str = lower_url.substr(num_start, num_end == std::string::npos ? std::string::npos : num_end - num_start);
-    if (!ch_str.empty()) {
-      try {
-        chapter = std::stoi(ch_str);
-      } catch (...) {}
-    }
-  }
-
-  if (chapter < 0 || chapter >= 31) {
-    REXLOG_WARN("[Azura campaign] GearGame_P requested but invalid chapter {}", chapter);
-    return false;
-  }
-
-  const char* real_map = kChapterMaps[chapter];
-  size_t qpos = url.find('?');
-  std::string new_url = std::string(real_map) + (qpos != std::string::npos ? url.substr(qpos) : "");
-
-  // This hook has no verified single-player/co-op discriminator; stripping listen may affect co-op.
+  std::string new_url = url;
   StripListenParam(new_url);
+  if (new_url == url) return false;
 
-  uint32_t new_count = static_cast<uint32_t>(new_url.size() + 1);
-
-  // If it still doesn't fit, strip package prefix "geargamecontent." from game class
-  if (new_count > max) {
-    size_t pkg_pos = new_url.find("geargamecontent.");
-    if (pkg_pos != std::string::npos) {
-      new_url.erase(pkg_pos, 16);
-    }
-    new_count = static_cast<uint32_t>(new_url.size() + 1);
+  // Removing characters only shortens the URL, so it always fits in the buffer.
+  for (size_t i = 0; i < new_url.size(); ++i) {
+    base[data + i * 2] = 0;
+    base[data + i * 2 + 1] = static_cast<uint8_t>(new_url[i]);
   }
-
-  // If it still doesn't fit, strip redundant ?chapter=X
-  if (new_count > max) {
-    size_t ch_p = new_url.find("?chapter=");
-    if (ch_p == std::string::npos) ch_p = new_url.find("&chapter=");
-    if (ch_p != std::string::npos) {
-      size_t next_q = new_url.find_first_of("?&", ch_p + 1);
-      new_url.erase(ch_p, next_q == std::string::npos ? std::string::npos : next_q - ch_p);
-    }
-    new_count = static_cast<uint32_t>(new_url.size() + 1);
-  }
-
-  // If it still doesn't fit, strip ?loadcheckpoint=0
-  if (new_count > max) {
-    size_t lc_pos = new_url.find("?loadcheckpoint=0");
-    if (lc_pos == std::string::npos) lc_pos = new_url.find("&loadcheckpoint=0");
-    if (lc_pos != std::string::npos) {
-      new_url.erase(lc_pos, 17);
-    }
-    new_count = static_cast<uint32_t>(new_url.size() + 1);
-  }
-
-  // Final fallback: just the persistent map name to ensure it never loads empty GearGame_P
-  if (new_count > max) {
-    new_url = real_map;
-    new_count = static_cast<uint32_t>(new_url.size() + 1);
-  }
-
-  if (new_count > max) {
-    REXLOG_WARN("[Azura campaign] Rewritten URL for chapter {} needs {} TCHARs, but capacity is {}; URL left unchanged",
-                chapter, new_count, max);
-    return false;
-  }
-
-  REXLOG_INFO("[Azura campaign] Remapped campaign map for chapter {}: '{}' -> '{}' (buffer count={}, max={})",
-              chapter, url, new_url, count, max);
-
-  return write_url(new_url);
+  base[data + new_url.size() * 2] = 0;
+  base[data + new_url.size() * 2 + 1] = 0;
+  StoreU32(base, fstring_addr + 4, static_cast<uint32_t>(new_url.size() + 1));
+  REXLOG_INFO("[Azura campaign] Travel URL without listen: '{}' -> '{}'", url, new_url);
+  return true;
 }
 
 // --- Rows that depend on other rows ---
