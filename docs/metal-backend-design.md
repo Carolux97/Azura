@@ -311,3 +311,13 @@ begin's.
   disappearing and coming back. Like the DXBC translator, XSC and the SPIR-V translator now halve
   oDepth when `kSysFlag_DepthFloat24` is set. After both fixes, 28 to 84% of the queries read 0
   depending on the scene, and no flickering is seen.
+- **Point sampling in the depth downsample.** UE3's half-resolution depth (pixel shader
+  9E098197F6FAC270) point-samples the scene depth with offsets (0,0) to (1,1) from the corner the
+  4 full-resolution texels under each half-resolution pixel share, exactly on a texel boundary.
+  The translators' rounding epsilon resolves such samples to the right/lower texel, which shifted
+  the block by a texel (measured: 100% of the half-resolution values were the block at (+1,+1)):
+  flat objects on distant floors failed their own query every other frame and flickered. The
+  epsilon goes to the left/upper texel for that shader only
+  (`SpirvShaderTranslator::GetPointSamplingRoundingOffset`); the coordinates themselves are
+  right (pixel centers at .5, no half-pixel offset), and public documentation does not say how
+  the Xenos rounds there.
