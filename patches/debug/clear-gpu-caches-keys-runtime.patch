@@ -1,0 +1,89 @@
+--- a/runtime/src/azura_app.h
++++ b/runtime/src/azura_app.h
+@@ -18,6 +18,8 @@
+ #include <rex/rex_app.h>
+ #include <rex/runtime.h>
+ #include <rex/system/flags.h>
++#include <rex/system/interfaces/graphics.h>
++#include <rex/ui/keybinds.h>
+ 
+ #include "menu/menu_patches.h"
+ #include "menu/pc_options.h"
+@@ -28,6 +30,8 @@
+ 
+ // Defined by the SDK (core/perf/counter.cpp), which never opens the file itself.
+ REXCVAR_DECLARE(std::string, perf_log_csv);
++// Defined in main.cpp.
++REXCVAR_DECLARE(bool, debug_clear_gpu_caches_key);
+ 
+ #if defined(__APPLE__)
+ #include "platform_mac.h"
+@@ -94,6 +98,19 @@
+           }
+         });
+       });
++      // Debugging aid for rendering artifacts: the keys drop GPU caches, so the next frame uploads
++      // their data again from guest memory. An artifact that goes away with all of them was a
++      // stale host copy of data the guest has right; one that stays is in guest memory itself.
++      // The keys for one part each tell which cache holds the wrong copy.
++      if (REXCVAR_GET(debug_clear_gpu_caches_key)) {
++        for (const ClearGpuCachesBind& bind : kClearGpuCachesBinds) {
++          rex::ui::RegisterBind(bind.name, bind.key, bind.description, [graphics_system, bind] {
++            REXLOG_INFO("[Azura] Clearing GPU caches: {} ({})", bind.description, bind.name);
++            graphics_system->ClearCacheParts(bind.parts);
++          });
++          REXLOG_INFO("[Azura] {} ({}): {}", bind.name, bind.key, bind.description);
++        }
++      }
+     }
+     azura::script::SetQuitHandler([this] {
+       app_context().CallInUIThread([this] {
+@@ -149,6 +166,11 @@
+   void OnShutdown() override {
+     button_prompts_.reset();
+     shutting_down_ = true;
++    if (REXCVAR_GET(debug_clear_gpu_caches_key)) {
++      for (const ClearGpuCachesBind& bind : kClearGpuCachesBinds) {
++        rex::ui::UnregisterBind(bind.name);
++      }
++    }
+     if (auto* graphics_system = runtime()->graphics_system()) {
+       graphics_system->SetShaderCompilationStartedCallback(nullptr);
+     }
+@@ -188,6 +210,24 @@
+   }
+ 
+  private:
++  // The keys of debug_clear_gpu_caches_key and the GPU caches each one drops.
++  struct ClearGpuCachesBind {
++    const char* name;
++    const char* key;
++    const char* description;
++    uint32_t parts;  // rex::system::IGraphicsSystem::CacheClearParts
++  };
++  static constexpr ClearGpuCachesBind kClearGpuCachesBinds[] = {
++      {"bind_clear_gpu_caches", "F9", "all GPU caches",
++       rex::system::IGraphicsSystem::kCacheClearAll},
++      {"bind_clear_gpu_textures", "F10", "textures only",
++       rex::system::IGraphicsSystem::kCacheClearTextures},
++      {"bind_clear_gpu_shared_memory", "F11", "shared memory only (and the textures over it)",
++       rex::system::IGraphicsSystem::kCacheClearSharedMemory},
++      {"bind_clear_gpu_other", "F12", "render targets, primitive and uniform buffers only",
++       rex::system::IGraphicsSystem::kCacheClearOther},
++  };
++
+   std::unique_ptr<azura::prompts::ButtonPrompts> button_prompts_;
+   std::filesystem::path exe_dir_;
+   rex::ui::ImGuiDrawer* dialog_drawer_ = nullptr;
+--- a/runtime/src/main.cpp
++++ b/runtime/src/main.cpp
+@@ -8,4 +8,9 @@
+ 
+ #include "azura_app.h"
+ 
++REXCVAR_DEFINE_BOOL(debug_clear_gpu_caches_key, false, "Azura/Debug",
++                    "Register keys that drop GPU caches so the next frame uploads their data again "
++                    "from guest memory: F9 all of them, F10 textures, F11 shared memory, F12 "
++                    "render targets and buffers");
++
+ REX_DEFINE_APP(azura, AzuraApp::Create)
