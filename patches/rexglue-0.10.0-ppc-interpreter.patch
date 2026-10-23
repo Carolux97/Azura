@@ -299,6 +299,116 @@ index 26957fc..ad6a453 100644
      ctx.println("\t}}");
  
      ctx.reset_switch_table();
+diff --git a/src/codegen/builders/vector.cpp b/src/codegen/builders/vector.cpp
+index cbdd7f7..034de03 100644
+--- a/src/codegen/builders/vector.cpp
++++ b/src/codegen/builders/vector.cpp
+@@ -847,13 +847,15 @@ bool build_vpermwi128(BuilderContext& ctx) {
+ }
+ 
+ bool build_vrlimi128(BuilderContext& ctx) {
++  // The 5-bit IMM field selects the elements to replace with one bit per element; only the low 4
++  // bits name an element (and _mm_blend_ps takes a 4-bit immediate on x86).
+   constexpr size_t shuffles[] = {SIMDE_MM_SHUFFLE(3, 2, 1, 0), SIMDE_MM_SHUFFLE(2, 1, 0, 3),
+                                  SIMDE_MM_SHUFFLE(1, 0, 3, 2), SIMDE_MM_SHUFFLE(0, 3, 2, 1)};
+   ctx.println(
+       "\tsimde_mm_store_ps({}.f32, simde_mm_blend_ps(simde_mm_load_ps({}.f32), "
+       "simde_mm_permute_ps(simde_mm_load_ps({}.f32), {}), {}));",
+       ctx.v(ctx.insn.operands[0]), ctx.v(ctx.insn.operands[0]), ctx.v(ctx.insn.operands[1]),
+-      shuffles[ctx.insn.operands[3]], ctx.insn.operands[2]);
++      shuffles[ctx.insn.operands[3]], ctx.insn.operands[2] & 0xF);
+   return true;
+ }
+ 
+@@ -1013,7 +1015,8 @@ bool build_vsrw(BuilderContext& ctx) {
+ 
+ bool build_vspltb(BuilderContext& ctx) {
+   // NOTE: accounting for full vector reversal here
+-  uint32_t perm = 15 - ctx.insn.operands[2];
++  // The hardware uses only the low 4 bits of the 5-bit UIMM field (16 elements).
++  uint32_t perm = 15 - (ctx.insn.operands[2] & 15);
+   ctx.println(
+       "\tsimde_mm_store_si128((simde__m128i*){}.u8, "
+       "simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*){}.u8), "
+@@ -1024,7 +1027,8 @@ bool build_vspltb(BuilderContext& ctx) {
+ 
+ bool build_vsplth(BuilderContext& ctx) {
+   // NOTE: accounting for full vector reversal here
+-  uint32_t perm = 7 - ctx.insn.operands[2];
++  // The hardware uses only the low 3 bits of the 5-bit UIMM field (8 elements).
++  uint32_t perm = 7 - (ctx.insn.operands[2] & 7);
+   perm = (perm * 2) | ((perm * 2 + 1) << 8);
+   ctx.println(
+       "\tsimde_mm_store_si128((simde__m128i*){}.u16, "
+@@ -1060,7 +1064,9 @@ bool build_vspltish(BuilderContext& ctx) {
+ 
+ bool build_vspltw(BuilderContext& ctx) {
+   // NOTE: accounting for full vector reversal here
+-  uint32_t perm = 3 - ctx.insn.operands[2];
++  // The hardware uses only the low 2 bits of the 5-bit UIMM field (4 elements); the rest would
++  // also make an immediate _mm_shuffle_epi32 rejects on x86.
++  uint32_t perm = 3 - (ctx.insn.operands[2] & 3);
+   perm |= (perm << 2) | (perm << 4) | (perm << 6);
+   ctx.println(
+       "\tsimde_mm_store_si128((simde__m128i*){}.u32, "
+@@ -1167,6 +1173,22 @@ bool build_vpkswus(BuilderContext& ctx) {
+   return true;
+ }
+ 
++// The destination u16 index of element i of a 64-bit vpkd3d128 pack (NORMSHORT4, FLOAT16_4), or
++// SIZE_MAX if the element is not written. With shift 0 to 2 the 64-bit value replaces two adjacent
++// words; with shift 3, pack 3 replaces only the guest's w word with the value's high half and the
++// other packs only the guest's x word with its low half (as Xenia's permute controls do).
++static size_t vpkd3d128_pack64_index(BuilderContext& ctx, size_t i) {
++  uint32_t pack = ctx.insn.operands[3];
++  uint32_t shift = ctx.insn.operands[4];
++  if (shift < 3) {
++    return (3 - i) + 2 * shift;
++  }
++  if (pack == 3) {
++    return i < 2 ? 1 - i : SIZE_MAX;
++  }
++  return i >= 2 ? 9 - i : SIZE_MAX;
++}
++
+ bool build_vpkd3d128(BuilderContext& ctx) {
+   // TODO(tomc): vectorize
+   // NOTE: handling vector reversal here too
+@@ -1308,10 +1330,13 @@ bool build_vpkd3d128(BuilderContext& ctx) {
+     {
+       // Pack 4 elements into 64 bits (2 words)
+       // Guest element 0 goes to highest 16-bit position, element 3 to lowest
+-      // Output u16 index = (3-i) + 2*shift for element i
++      // Output u16 index: vpkd3d128_pack64_index
+       for (size_t i = 0; i < 4; i++) {
+         size_t srcIdx = 3 - i;  // Guest element i is at host array index 3-i
+-        size_t dstIdx = (3 - i) + (2 * ctx.insn.operands[4]);  // Output also reversed
++        size_t dstIdx = vpkd3d128_pack64_index(ctx, i);  // Output also reversed
++        if (dstIdx == SIZE_MAX) {
++          continue;
++        }
+         ctx.println("\t{}.s32 = {}.s32[{}] - 0x40400000;", ctx.temp(), ctx.v(ctx.insn.operands[1]),
+                     srcIdx);
+         ctx.println("\t{}.s32 = {}.s32 > 32767 ? 32767 : ({}.s32 < -32767 ? -32767 : {}.s32);",
+@@ -1326,13 +1351,16 @@ bool build_vpkd3d128(BuilderContext& ctx) {
+     {
+       // Pack 4 elements into 64 bits (4 x 16-bit floats)
+       // Guest element 0 goes to highest 16-bit position, element 3 to lowest
+-      // Output u16 index = (3-i) + 2*shift for element i
++      // Output u16 index: vpkd3d128_pack64_index
+       if (ctx.insn.operands[3] != 2 || ctx.insn.operands[4] > 2)
+         REXCODEGEN_WARN("Unexpected float16_4 pack instruction at {:X}", ctx.base);
+ 
+       for (size_t i = 0; i < 4; i++) {
+         size_t srcIdx = 3 - i;  // Guest element i is at host array index 3-i
+-        size_t dstIdx = (3 - i) + (2 * ctx.insn.operands[4]);  // Output also reversed
++        size_t dstIdx = vpkd3d128_pack64_index(ctx, i);  // Output also reversed
++        if (dstIdx == SIZE_MAX) {
++          continue;
++        }
+         ctx.println("\t{}.u32 = ({}.u32[{}]&0x7FFFFFFF);", ctx.temp(), ctx.v(ctx.insn.operands[1]),
+                     srcIdx);
+         ctx.println(
 diff --git a/src/codegen/builders.h b/src/codegen/builders.h
 index 24894f2..0ebd353 100644
 --- a/src/codegen/builders.h
@@ -3290,10 +3400,10 @@ index 0000000..55b4fcf
 +}  // namespace rex::runtime
 diff --git a/src/system/ppc_interpreter_vector.inc b/src/system/ppc_interpreter_vector.inc
 new file mode 100644
-index 0000000..c87de58
+index 0000000..a74f416
 --- /dev/null
 +++ b/src/system/ppc_interpreter_vector.inc
-@@ -0,0 +1,11774 @@
+@@ -0,0 +1,11710 @@
 +// Generated by `rexglue interp-vector-gen` from the code generator's vector builders.
 +// DO NOT EDIT: regenerate it when the builders change; the interpreter bench checks
 +// that it is current.
@@ -5054,97 +5164,97 @@ index 0000000..c87de58
 +// vspltb
 +REX_VECTOR_FUNCTION(Vector275_10) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u8), simde_mm_set1_epi8(char(0xFFFFFFFF))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u8), simde_mm_set1_epi8(char(0xF))));
 +}
 +
 +// vspltb
 +REX_VECTOR_FUNCTION(Vector275_11) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u8), simde_mm_set1_epi8(char(0xFFFFFFFE))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u8), simde_mm_set1_epi8(char(0xE))));
 +}
 +
 +// vspltb
 +REX_VECTOR_FUNCTION(Vector275_12) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u8), simde_mm_set1_epi8(char(0xFFFFFFFD))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u8), simde_mm_set1_epi8(char(0xD))));
 +}
 +
 +// vspltb
 +REX_VECTOR_FUNCTION(Vector275_13) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u8), simde_mm_set1_epi8(char(0xFFFFFFFC))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u8), simde_mm_set1_epi8(char(0xC))));
 +}
 +
 +// vspltb
 +REX_VECTOR_FUNCTION(Vector275_14) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u8), simde_mm_set1_epi8(char(0xFFFFFFFB))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u8), simde_mm_set1_epi8(char(0xB))));
 +}
 +
 +// vspltb
 +REX_VECTOR_FUNCTION(Vector275_15) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u8), simde_mm_set1_epi8(char(0xFFFFFFFA))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u8), simde_mm_set1_epi8(char(0xA))));
 +}
 +
 +// vspltb
 +REX_VECTOR_FUNCTION(Vector275_16) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u8), simde_mm_set1_epi8(char(0xFFFFFFF9))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u8), simde_mm_set1_epi8(char(0x9))));
 +}
 +
 +// vspltb
 +REX_VECTOR_FUNCTION(Vector275_17) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u8), simde_mm_set1_epi8(char(0xFFFFFFF8))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u8), simde_mm_set1_epi8(char(0x8))));
 +}
 +
 +// vspltb
 +REX_VECTOR_FUNCTION(Vector275_18) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u8), simde_mm_set1_epi8(char(0xFFFFFFF7))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u8), simde_mm_set1_epi8(char(0x7))));
 +}
 +
 +// vspltb
 +REX_VECTOR_FUNCTION(Vector275_19) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u8), simde_mm_set1_epi8(char(0xFFFFFFF6))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u8), simde_mm_set1_epi8(char(0x6))));
 +}
 +
 +// vspltb
 +REX_VECTOR_FUNCTION(Vector275_1A) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u8), simde_mm_set1_epi8(char(0xFFFFFFF5))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u8), simde_mm_set1_epi8(char(0x5))));
 +}
 +
 +// vspltb
 +REX_VECTOR_FUNCTION(Vector275_1B) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u8), simde_mm_set1_epi8(char(0xFFFFFFF4))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u8), simde_mm_set1_epi8(char(0x4))));
 +}
 +
 +// vspltb
 +REX_VECTOR_FUNCTION(Vector275_1C) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u8), simde_mm_set1_epi8(char(0xFFFFFFF3))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u8), simde_mm_set1_epi8(char(0x3))));
 +}
 +
 +// vspltb
 +REX_VECTOR_FUNCTION(Vector275_1D) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u8), simde_mm_set1_epi8(char(0xFFFFFFF2))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u8), simde_mm_set1_epi8(char(0x2))));
 +}
 +
 +// vspltb
 +REX_VECTOR_FUNCTION(Vector275_1E) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u8), simde_mm_set1_epi8(char(0xFFFFFFF1))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u8), simde_mm_set1_epi8(char(0x1))));
 +}
 +
 +// vspltb
 +REX_VECTOR_FUNCTION(Vector275_1F) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u8), simde_mm_set1_epi8(char(0xFFFFFFF0))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u8), simde_mm_set1_epi8(char(0x0))));
 +}
 +
 +// vsplth
@@ -5198,145 +5308,145 @@ index 0000000..c87de58
 +// vsplth
 +REX_VECTOR_FUNCTION(Vector276_8) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0xFFFFFFFE))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0xF0E))));
 +}
 +
 +// vsplth
 +REX_VECTOR_FUNCTION(Vector276_9) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0xFFFFFFFC))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0xD0C))));
 +}
 +
 +// vsplth
 +REX_VECTOR_FUNCTION(Vector276_A) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0xFFFFFFFA))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0xB0A))));
 +}
 +
 +// vsplth
 +REX_VECTOR_FUNCTION(Vector276_B) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0xFFFFFFF8))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0x908))));
 +}
 +
 +// vsplth
 +REX_VECTOR_FUNCTION(Vector276_C) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0xFFFFFFF6))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0x706))));
 +}
 +
 +// vsplth
 +REX_VECTOR_FUNCTION(Vector276_D) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0xFFFFFFF4))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0x504))));
 +}
 +
 +// vsplth
 +REX_VECTOR_FUNCTION(Vector276_E) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0xFFFFFFF2))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0x302))));
 +}
 +
 +// vsplth
 +REX_VECTOR_FUNCTION(Vector276_F) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0xFFFFFFF0))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0x100))));
 +}
 +
 +// vsplth
 +REX_VECTOR_FUNCTION(Vector276_10) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0xFFFFFFEE))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0xF0E))));
 +}
 +
 +// vsplth
 +REX_VECTOR_FUNCTION(Vector276_11) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0xFFFFFFEC))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0xD0C))));
 +}
 +
 +// vsplth
 +REX_VECTOR_FUNCTION(Vector276_12) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0xFFFFFFEA))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0xB0A))));
 +}
 +
 +// vsplth
 +REX_VECTOR_FUNCTION(Vector276_13) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0xFFFFFFE8))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0x908))));
 +}
 +
 +// vsplth
 +REX_VECTOR_FUNCTION(Vector276_14) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0xFFFFFFE6))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0x706))));
 +}
 +
 +// vsplth
 +REX_VECTOR_FUNCTION(Vector276_15) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0xFFFFFFE4))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0x504))));
 +}
 +
 +// vsplth
 +REX_VECTOR_FUNCTION(Vector276_16) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0xFFFFFFE2))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0x302))));
 +}
 +
 +// vsplth
 +REX_VECTOR_FUNCTION(Vector276_17) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0xFFFFFFE0))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0x100))));
 +}
 +
 +// vsplth
 +REX_VECTOR_FUNCTION(Vector276_18) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0xFFFFFFDE))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0xF0E))));
 +}
 +
 +// vsplth
 +REX_VECTOR_FUNCTION(Vector276_19) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0xFFFFFFDC))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0xD0C))));
 +}
 +
 +// vsplth
 +REX_VECTOR_FUNCTION(Vector276_1A) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0xFFFFFFDA))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0xB0A))));
 +}
 +
 +// vsplth
 +REX_VECTOR_FUNCTION(Vector276_1B) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0xFFFFFFD8))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0x908))));
 +}
 +
 +// vsplth
 +REX_VECTOR_FUNCTION(Vector276_1C) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0xFFFFFFD6))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0x706))));
 +}
 +
 +// vsplth
 +REX_VECTOR_FUNCTION(Vector276_1D) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0xFFFFFFD4))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0x504))));
 +}
 +
 +// vsplth
 +REX_VECTOR_FUNCTION(Vector276_1E) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0xFFFFFFD2))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0x302))));
 +}
 +
 +// vsplth
 +REX_VECTOR_FUNCTION(Vector276_1F) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0xFFFFFFD0))));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u16, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u16), simde_mm_set1_epi16(short(0x100))));
 +}
 +
 +// vspltisb
@@ -5942,169 +6052,169 @@ index 0000000..c87de58
 +// vspltw
 +REX_VECTOR_FUNCTION(Vector280_4) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFF));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFF));
 +}
 +
 +// vspltw
 +REX_VECTOR_FUNCTION(Vector280_5) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFE));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xAA));
 +}
 +
 +// vspltw
 +REX_VECTOR_FUNCTION(Vector280_6) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFD));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0x55));
 +}
 +
 +// vspltw
 +REX_VECTOR_FUNCTION(Vector280_7) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFC));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0x0));
 +}
 +
 +// vspltw
 +REX_VECTOR_FUNCTION(Vector280_8) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFF));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFF));
 +}
 +
 +// vspltw
 +REX_VECTOR_FUNCTION(Vector280_9) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFA));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xAA));
 +}
 +
 +// vspltw
 +REX_VECTOR_FUNCTION(Vector280_A) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFD));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0x55));
 +}
 +
 +// vspltw
 +REX_VECTOR_FUNCTION(Vector280_B) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFF8));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0x0));
 +}
 +
 +// vspltw
 +REX_VECTOR_FUNCTION(Vector280_C) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFF));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFF));
 +}
 +
 +// vspltw
 +REX_VECTOR_FUNCTION(Vector280_D) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFE));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xAA));
 +}
 +
 +// vspltw
 +REX_VECTOR_FUNCTION(Vector280_E) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFF5));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0x55));
 +}
 +
 +// vspltw
 +REX_VECTOR_FUNCTION(Vector280_F) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFF4));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0x0));
 +}
 +
 +// vspltw
 +REX_VECTOR_FUNCTION(Vector280_10) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFF));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFF));
 +}
 +
 +// vspltw
 +REX_VECTOR_FUNCTION(Vector280_11) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFA));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xAA));
 +}
 +
 +// vspltw
 +REX_VECTOR_FUNCTION(Vector280_12) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFF5));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0x55));
 +}
 +
 +// vspltw
 +REX_VECTOR_FUNCTION(Vector280_13) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFF0));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0x0));
 +}
 +
 +// vspltw
 +REX_VECTOR_FUNCTION(Vector280_14) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFF));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFF));
 +}
 +
 +// vspltw
 +REX_VECTOR_FUNCTION(Vector280_15) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFE));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xAA));
 +}
 +
 +// vspltw
 +REX_VECTOR_FUNCTION(Vector280_16) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFD));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0x55));
 +}
 +
 +// vspltw
 +REX_VECTOR_FUNCTION(Vector280_17) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFC));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0x0));
 +}
 +
 +// vspltw
 +REX_VECTOR_FUNCTION(Vector280_18) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFF));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFF));
 +}
 +
 +// vspltw
 +REX_VECTOR_FUNCTION(Vector280_19) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFEA));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xAA));
 +}
 +
 +// vspltw
 +REX_VECTOR_FUNCTION(Vector280_1A) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFD));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0x55));
 +}
 +
 +// vspltw
 +REX_VECTOR_FUNCTION(Vector280_1B) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFE8));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0x0));
 +}
 +
 +// vspltw
 +REX_VECTOR_FUNCTION(Vector280_1C) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFF));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFF));
 +}
 +
 +// vspltw
 +REX_VECTOR_FUNCTION(Vector280_1D) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFE));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xAA));
 +}
 +
 +// vspltw
 +REX_VECTOR_FUNCTION(Vector280_1E) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFF5));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0x55));
 +}
 +
 +// vspltw
 +REX_VECTOR_FUNCTION(Vector280_1F) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFF4));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0x0));
 +}
 +
 +// vsr
@@ -10889,12 +10999,6 @@ index 0000000..c87de58
 +REX_VECTOR_FUNCTION(Vector363_30004) {
 +	REX_VECTOR_LOCALS;
 +	ctx.fpscr.enableFlushMode();
-+	temp.s32 = REX_OPERAND_V(1).s32[3] - 0x40400000;
-+	temp.s32 = temp.s32 > 32767 ? 32767 : (temp.s32 < -32767 ? -32767 : temp.s32);
-+	REX_OPERAND_V(0).u16[9] = uint16_t(temp.s32);
-+	temp.s32 = REX_OPERAND_V(1).s32[2] - 0x40400000;
-+	temp.s32 = temp.s32 > 32767 ? 32767 : (temp.s32 < -32767 ? -32767 : temp.s32);
-+	REX_OPERAND_V(0).u16[8] = uint16_t(temp.s32);
 +	temp.s32 = REX_OPERAND_V(1).s32[1] - 0x40400000;
 +	temp.s32 = temp.s32 > 32767 ? 32767 : (temp.s32 < -32767 ? -32767 : temp.s32);
 +	REX_OPERAND_V(0).u16[7] = uint16_t(temp.s32);
@@ -10907,16 +11011,6 @@ index 0000000..c87de58
 +REX_VECTOR_FUNCTION(Vector363_30005) {
 +	REX_VECTOR_LOCALS;
 +	ctx.fpscr.enableFlushMode();
-+	temp.u32 = (REX_OPERAND_V(1).u32[3]&0x7FFFFFFF);
-+	vTemp.u8[0] = (temp.f32 != temp.f32) || (temp.f32 > 65504.0f) ? 0xFF : ((REX_OPERAND_V(1).u32[3]&0x7f800000)>>23);
-+	temp.u16 = vTemp.u8[0] != 0xFF ? ((REX_OPERAND_V(1).u32[3]&0x7FE000)>>13) : 0x0;
-+	REX_OPERAND_V(0).u16[9] = vTemp.u8[0] != 0xFF ? (vTemp.u8[0] > 0x70 ? (((vTemp.u8[0]-0x70)<<10)+temp.u16) : (0x71-vTemp.u8[0] > 31 ? 0x0 : ((0x400+temp.u16)>>(0x71-vTemp.u8[0])))) : 0x7FFF;
-+	REX_OPERAND_V(0).u16[9] |= ((REX_OPERAND_V(1).u32[3]&0x80000000)>>16);
-+	temp.u32 = (REX_OPERAND_V(1).u32[2]&0x7FFFFFFF);
-+	vTemp.u8[0] = (temp.f32 != temp.f32) || (temp.f32 > 65504.0f) ? 0xFF : ((REX_OPERAND_V(1).u32[2]&0x7f800000)>>23);
-+	temp.u16 = vTemp.u8[0] != 0xFF ? ((REX_OPERAND_V(1).u32[2]&0x7FE000)>>13) : 0x0;
-+	REX_OPERAND_V(0).u16[8] = vTemp.u8[0] != 0xFF ? (vTemp.u8[0] > 0x70 ? (((vTemp.u8[0]-0x70)<<10)+temp.u16) : (0x71-vTemp.u8[0] > 31 ? 0x0 : ((0x400+temp.u16)>>(0x71-vTemp.u8[0])))) : 0x7FFF;
-+	REX_OPERAND_V(0).u16[8] |= ((REX_OPERAND_V(1).u32[2]&0x80000000)>>16);
 +	temp.u32 = (REX_OPERAND_V(1).u32[1]&0x7FFFFFFF);
 +	vTemp.u8[0] = (temp.f32 != temp.f32) || (temp.f32 > 65504.0f) ? 0xFF : ((REX_OPERAND_V(1).u32[1]&0x7f800000)>>23);
 +	temp.u16 = vTemp.u8[0] != 0xFF ? ((REX_OPERAND_V(1).u32[1]&0x7FE000)>>13) : 0x0;
@@ -11013,12 +11107,6 @@ index 0000000..c87de58
 +REX_VECTOR_FUNCTION(Vector363_30104) {
 +	REX_VECTOR_LOCALS;
 +	ctx.fpscr.enableFlushMode();
-+	temp.s32 = REX_OPERAND_V(1).s32[3] - 0x40400000;
-+	temp.s32 = temp.s32 > 32767 ? 32767 : (temp.s32 < -32767 ? -32767 : temp.s32);
-+	REX_OPERAND_V(0).u16[9] = uint16_t(temp.s32);
-+	temp.s32 = REX_OPERAND_V(1).s32[2] - 0x40400000;
-+	temp.s32 = temp.s32 > 32767 ? 32767 : (temp.s32 < -32767 ? -32767 : temp.s32);
-+	REX_OPERAND_V(0).u16[8] = uint16_t(temp.s32);
 +	temp.s32 = REX_OPERAND_V(1).s32[1] - 0x40400000;
 +	temp.s32 = temp.s32 > 32767 ? 32767 : (temp.s32 < -32767 ? -32767 : temp.s32);
 +	REX_OPERAND_V(0).u16[7] = uint16_t(temp.s32);
@@ -11031,16 +11119,6 @@ index 0000000..c87de58
 +REX_VECTOR_FUNCTION(Vector363_30105) {
 +	REX_VECTOR_LOCALS;
 +	ctx.fpscr.enableFlushMode();
-+	temp.u32 = (REX_OPERAND_V(1).u32[3]&0x7FFFFFFF);
-+	vTemp.u8[0] = (temp.f32 != temp.f32) || (temp.f32 > 65504.0f) ? 0xFF : ((REX_OPERAND_V(1).u32[3]&0x7f800000)>>23);
-+	temp.u16 = vTemp.u8[0] != 0xFF ? ((REX_OPERAND_V(1).u32[3]&0x7FE000)>>13) : 0x0;
-+	REX_OPERAND_V(0).u16[9] = vTemp.u8[0] != 0xFF ? (vTemp.u8[0] > 0x70 ? (((vTemp.u8[0]-0x70)<<10)+temp.u16) : (0x71-vTemp.u8[0] > 31 ? 0x0 : ((0x400+temp.u16)>>(0x71-vTemp.u8[0])))) : 0x7FFF;
-+	REX_OPERAND_V(0).u16[9] |= ((REX_OPERAND_V(1).u32[3]&0x80000000)>>16);
-+	temp.u32 = (REX_OPERAND_V(1).u32[2]&0x7FFFFFFF);
-+	vTemp.u8[0] = (temp.f32 != temp.f32) || (temp.f32 > 65504.0f) ? 0xFF : ((REX_OPERAND_V(1).u32[2]&0x7f800000)>>23);
-+	temp.u16 = vTemp.u8[0] != 0xFF ? ((REX_OPERAND_V(1).u32[2]&0x7FE000)>>13) : 0x0;
-+	REX_OPERAND_V(0).u16[8] = vTemp.u8[0] != 0xFF ? (vTemp.u8[0] > 0x70 ? (((vTemp.u8[0]-0x70)<<10)+temp.u16) : (0x71-vTemp.u8[0] > 31 ? 0x0 : ((0x400+temp.u16)>>(0x71-vTemp.u8[0])))) : 0x7FFF;
-+	REX_OPERAND_V(0).u16[8] |= ((REX_OPERAND_V(1).u32[2]&0x80000000)>>16);
 +	temp.u32 = (REX_OPERAND_V(1).u32[1]&0x7FFFFFFF);
 +	vTemp.u8[0] = (temp.f32 != temp.f32) || (temp.f32 > 65504.0f) ? 0xFF : ((REX_OPERAND_V(1).u32[1]&0x7f800000)>>23);
 +	temp.u16 = vTemp.u8[0] != 0xFF ? ((REX_OPERAND_V(1).u32[1]&0x7FE000)>>13) : 0x0;
@@ -11137,12 +11215,6 @@ index 0000000..c87de58
 +REX_VECTOR_FUNCTION(Vector363_30204) {
 +	REX_VECTOR_LOCALS;
 +	ctx.fpscr.enableFlushMode();
-+	temp.s32 = REX_OPERAND_V(1).s32[3] - 0x40400000;
-+	temp.s32 = temp.s32 > 32767 ? 32767 : (temp.s32 < -32767 ? -32767 : temp.s32);
-+	REX_OPERAND_V(0).u16[9] = uint16_t(temp.s32);
-+	temp.s32 = REX_OPERAND_V(1).s32[2] - 0x40400000;
-+	temp.s32 = temp.s32 > 32767 ? 32767 : (temp.s32 < -32767 ? -32767 : temp.s32);
-+	REX_OPERAND_V(0).u16[8] = uint16_t(temp.s32);
 +	temp.s32 = REX_OPERAND_V(1).s32[1] - 0x40400000;
 +	temp.s32 = temp.s32 > 32767 ? 32767 : (temp.s32 < -32767 ? -32767 : temp.s32);
 +	REX_OPERAND_V(0).u16[7] = uint16_t(temp.s32);
@@ -11155,16 +11227,6 @@ index 0000000..c87de58
 +REX_VECTOR_FUNCTION(Vector363_30205) {
 +	REX_VECTOR_LOCALS;
 +	ctx.fpscr.enableFlushMode();
-+	temp.u32 = (REX_OPERAND_V(1).u32[3]&0x7FFFFFFF);
-+	vTemp.u8[0] = (temp.f32 != temp.f32) || (temp.f32 > 65504.0f) ? 0xFF : ((REX_OPERAND_V(1).u32[3]&0x7f800000)>>23);
-+	temp.u16 = vTemp.u8[0] != 0xFF ? ((REX_OPERAND_V(1).u32[3]&0x7FE000)>>13) : 0x0;
-+	REX_OPERAND_V(0).u16[9] = vTemp.u8[0] != 0xFF ? (vTemp.u8[0] > 0x70 ? (((vTemp.u8[0]-0x70)<<10)+temp.u16) : (0x71-vTemp.u8[0] > 31 ? 0x0 : ((0x400+temp.u16)>>(0x71-vTemp.u8[0])))) : 0x7FFF;
-+	REX_OPERAND_V(0).u16[9] |= ((REX_OPERAND_V(1).u32[3]&0x80000000)>>16);
-+	temp.u32 = (REX_OPERAND_V(1).u32[2]&0x7FFFFFFF);
-+	vTemp.u8[0] = (temp.f32 != temp.f32) || (temp.f32 > 65504.0f) ? 0xFF : ((REX_OPERAND_V(1).u32[2]&0x7f800000)>>23);
-+	temp.u16 = vTemp.u8[0] != 0xFF ? ((REX_OPERAND_V(1).u32[2]&0x7FE000)>>13) : 0x0;
-+	REX_OPERAND_V(0).u16[8] = vTemp.u8[0] != 0xFF ? (vTemp.u8[0] > 0x70 ? (((vTemp.u8[0]-0x70)<<10)+temp.u16) : (0x71-vTemp.u8[0] > 31 ? 0x0 : ((0x400+temp.u16)>>(0x71-vTemp.u8[0])))) : 0x7FFF;
-+	REX_OPERAND_V(0).u16[8] |= ((REX_OPERAND_V(1).u32[2]&0x80000000)>>16);
 +	temp.u32 = (REX_OPERAND_V(1).u32[1]&0x7FFFFFFF);
 +	vTemp.u8[0] = (temp.f32 != temp.f32) || (temp.f32 > 65504.0f) ? 0xFF : ((REX_OPERAND_V(1).u32[1]&0x7f800000)>>23);
 +	temp.u16 = vTemp.u8[0] != 0xFF ? ((REX_OPERAND_V(1).u32[1]&0x7FE000)>>13) : 0x0;
@@ -11263,16 +11325,10 @@ index 0000000..c87de58
 +	ctx.fpscr.enableFlushMode();
 +	temp.s32 = REX_OPERAND_V(1).s32[3] - 0x40400000;
 +	temp.s32 = temp.s32 > 32767 ? 32767 : (temp.s32 < -32767 ? -32767 : temp.s32);
-+	REX_OPERAND_V(0).u16[9] = uint16_t(temp.s32);
++	REX_OPERAND_V(0).u16[1] = uint16_t(temp.s32);
 +	temp.s32 = REX_OPERAND_V(1).s32[2] - 0x40400000;
 +	temp.s32 = temp.s32 > 32767 ? 32767 : (temp.s32 < -32767 ? -32767 : temp.s32);
-+	REX_OPERAND_V(0).u16[8] = uint16_t(temp.s32);
-+	temp.s32 = REX_OPERAND_V(1).s32[1] - 0x40400000;
-+	temp.s32 = temp.s32 > 32767 ? 32767 : (temp.s32 < -32767 ? -32767 : temp.s32);
-+	REX_OPERAND_V(0).u16[7] = uint16_t(temp.s32);
-+	temp.s32 = REX_OPERAND_V(1).s32[0] - 0x40400000;
-+	temp.s32 = temp.s32 > 32767 ? 32767 : (temp.s32 < -32767 ? -32767 : temp.s32);
-+	REX_OPERAND_V(0).u16[6] = uint16_t(temp.s32);
++	REX_OPERAND_V(0).u16[0] = uint16_t(temp.s32);
 +}
 +
 +// vpkd3d128
@@ -11282,23 +11338,13 @@ index 0000000..c87de58
 +	temp.u32 = (REX_OPERAND_V(1).u32[3]&0x7FFFFFFF);
 +	vTemp.u8[0] = (temp.f32 != temp.f32) || (temp.f32 > 65504.0f) ? 0xFF : ((REX_OPERAND_V(1).u32[3]&0x7f800000)>>23);
 +	temp.u16 = vTemp.u8[0] != 0xFF ? ((REX_OPERAND_V(1).u32[3]&0x7FE000)>>13) : 0x0;
-+	REX_OPERAND_V(0).u16[9] = vTemp.u8[0] != 0xFF ? (vTemp.u8[0] > 0x70 ? (((vTemp.u8[0]-0x70)<<10)+temp.u16) : (0x71-vTemp.u8[0] > 31 ? 0x0 : ((0x400+temp.u16)>>(0x71-vTemp.u8[0])))) : 0x7FFF;
-+	REX_OPERAND_V(0).u16[9] |= ((REX_OPERAND_V(1).u32[3]&0x80000000)>>16);
++	REX_OPERAND_V(0).u16[1] = vTemp.u8[0] != 0xFF ? (vTemp.u8[0] > 0x70 ? (((vTemp.u8[0]-0x70)<<10)+temp.u16) : (0x71-vTemp.u8[0] > 31 ? 0x0 : ((0x400+temp.u16)>>(0x71-vTemp.u8[0])))) : 0x7FFF;
++	REX_OPERAND_V(0).u16[1] |= ((REX_OPERAND_V(1).u32[3]&0x80000000)>>16);
 +	temp.u32 = (REX_OPERAND_V(1).u32[2]&0x7FFFFFFF);
 +	vTemp.u8[0] = (temp.f32 != temp.f32) || (temp.f32 > 65504.0f) ? 0xFF : ((REX_OPERAND_V(1).u32[2]&0x7f800000)>>23);
 +	temp.u16 = vTemp.u8[0] != 0xFF ? ((REX_OPERAND_V(1).u32[2]&0x7FE000)>>13) : 0x0;
-+	REX_OPERAND_V(0).u16[8] = vTemp.u8[0] != 0xFF ? (vTemp.u8[0] > 0x70 ? (((vTemp.u8[0]-0x70)<<10)+temp.u16) : (0x71-vTemp.u8[0] > 31 ? 0x0 : ((0x400+temp.u16)>>(0x71-vTemp.u8[0])))) : 0x7FFF;
-+	REX_OPERAND_V(0).u16[8] |= ((REX_OPERAND_V(1).u32[2]&0x80000000)>>16);
-+	temp.u32 = (REX_OPERAND_V(1).u32[1]&0x7FFFFFFF);
-+	vTemp.u8[0] = (temp.f32 != temp.f32) || (temp.f32 > 65504.0f) ? 0xFF : ((REX_OPERAND_V(1).u32[1]&0x7f800000)>>23);
-+	temp.u16 = vTemp.u8[0] != 0xFF ? ((REX_OPERAND_V(1).u32[1]&0x7FE000)>>13) : 0x0;
-+	REX_OPERAND_V(0).u16[7] = vTemp.u8[0] != 0xFF ? (vTemp.u8[0] > 0x70 ? (((vTemp.u8[0]-0x70)<<10)+temp.u16) : (0x71-vTemp.u8[0] > 31 ? 0x0 : ((0x400+temp.u16)>>(0x71-vTemp.u8[0])))) : 0x7FFF;
-+	REX_OPERAND_V(0).u16[7] |= ((REX_OPERAND_V(1).u32[1]&0x80000000)>>16);
-+	temp.u32 = (REX_OPERAND_V(1).u32[0]&0x7FFFFFFF);
-+	vTemp.u8[0] = (temp.f32 != temp.f32) || (temp.f32 > 65504.0f) ? 0xFF : ((REX_OPERAND_V(1).u32[0]&0x7f800000)>>23);
-+	temp.u16 = vTemp.u8[0] != 0xFF ? ((REX_OPERAND_V(1).u32[0]&0x7FE000)>>13) : 0x0;
-+	REX_OPERAND_V(0).u16[6] = vTemp.u8[0] != 0xFF ? (vTemp.u8[0] > 0x70 ? (((vTemp.u8[0]-0x70)<<10)+temp.u16) : (0x71-vTemp.u8[0] > 31 ? 0x0 : ((0x400+temp.u16)>>(0x71-vTemp.u8[0])))) : 0x7FFF;
-+	REX_OPERAND_V(0).u16[6] |= ((REX_OPERAND_V(1).u32[0]&0x80000000)>>16);
++	REX_OPERAND_V(0).u16[0] = vTemp.u8[0] != 0xFF ? (vTemp.u8[0] > 0x70 ? (((vTemp.u8[0]-0x70)<<10)+temp.u16) : (0x71-vTemp.u8[0] > 31 ? 0x0 : ((0x400+temp.u16)>>(0x71-vTemp.u8[0])))) : 0x7FFF;
++	REX_OPERAND_V(0).u16[0] |= ((REX_OPERAND_V(1).u32[2]&0x80000000)>>16);
 +}
 +
 +// vpkd3d128
@@ -11460,97 +11506,97 @@ index 0000000..c87de58
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_10) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 228), 16));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 228), 0));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_11) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 228), 17));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 228), 1));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_12) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 228), 18));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 228), 2));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_13) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 228), 19));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 228), 3));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_14) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 228), 20));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 228), 4));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_15) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 228), 21));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 228), 5));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_16) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 228), 22));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 228), 6));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_17) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 228), 23));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 228), 7));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_18) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 228), 24));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 228), 8));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_19) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 228), 25));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 228), 9));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_1A) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 228), 26));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 228), 10));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_1B) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 228), 27));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 228), 11));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_1C) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 228), 28));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 228), 12));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_1D) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 228), 29));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 228), 13));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_1E) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 228), 30));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 228), 14));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_1F) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 228), 31));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 228), 15));
 +}
 +
 +// vrlimi128
@@ -11652,97 +11698,97 @@ index 0000000..c87de58
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_110) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 147), 16));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 147), 0));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_111) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 147), 17));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 147), 1));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_112) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 147), 18));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 147), 2));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_113) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 147), 19));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 147), 3));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_114) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 147), 20));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 147), 4));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_115) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 147), 21));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 147), 5));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_116) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 147), 22));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 147), 6));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_117) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 147), 23));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 147), 7));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_118) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 147), 24));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 147), 8));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_119) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 147), 25));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 147), 9));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_11A) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 147), 26));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 147), 10));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_11B) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 147), 27));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 147), 11));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_11C) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 147), 28));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 147), 12));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_11D) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 147), 29));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 147), 13));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_11E) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 147), 30));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 147), 14));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_11F) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 147), 31));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 147), 15));
 +}
 +
 +// vrlimi128
@@ -11844,97 +11890,97 @@ index 0000000..c87de58
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_210) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 78), 16));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 78), 0));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_211) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 78), 17));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 78), 1));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_212) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 78), 18));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 78), 2));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_213) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 78), 19));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 78), 3));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_214) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 78), 20));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 78), 4));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_215) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 78), 21));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 78), 5));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_216) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 78), 22));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 78), 6));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_217) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 78), 23));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 78), 7));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_218) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 78), 24));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 78), 8));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_219) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 78), 25));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 78), 9));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_21A) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 78), 26));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 78), 10));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_21B) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 78), 27));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 78), 11));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_21C) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 78), 28));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 78), 12));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_21D) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 78), 29));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 78), 13));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_21E) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 78), 30));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 78), 14));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_21F) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 78), 31));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 78), 15));
 +}
 +
 +// vrlimi128
@@ -12036,97 +12082,97 @@ index 0000000..c87de58
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_310) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 57), 16));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 57), 0));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_311) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 57), 17));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 57), 1));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_312) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 57), 18));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 57), 2));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_313) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 57), 19));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 57), 3));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_314) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 57), 20));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 57), 4));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_315) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 57), 21));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 57), 5));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_316) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 57), 22));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 57), 6));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_317) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 57), 23));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 57), 7));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_318) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 57), 24));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 57), 8));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_319) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 57), 25));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 57), 9));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_31A) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 57), 26));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 57), 10));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_31B) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 57), 27));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 57), 11));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_31C) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 57), 28));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 57), 12));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_31D) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 57), 29));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 57), 13));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_31E) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 57), 30));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 57), 14));
 +}
 +
 +// vrlimi128
 +REX_VECTOR_FUNCTION(Vector368_31F) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 57), 31));
++	simde_mm_store_ps(REX_OPERAND_V(0).f32, simde_mm_blend_ps(simde_mm_load_ps(REX_OPERAND_V(0).f32), simde_mm_permute_ps(simde_mm_load_ps(REX_OPERAND_V(1).f32), 57), 15));
 +}
 +
 +// vspltw128
@@ -12156,169 +12202,169 @@ index 0000000..c87de58
 +// vspltw128
 +REX_VECTOR_FUNCTION(Vector369_4) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFF));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFF));
 +}
 +
 +// vspltw128
 +REX_VECTOR_FUNCTION(Vector369_5) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFE));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xAA));
 +}
 +
 +// vspltw128
 +REX_VECTOR_FUNCTION(Vector369_6) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFD));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0x55));
 +}
 +
 +// vspltw128
 +REX_VECTOR_FUNCTION(Vector369_7) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFC));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0x0));
 +}
 +
 +// vspltw128
 +REX_VECTOR_FUNCTION(Vector369_8) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFF));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFF));
 +}
 +
 +// vspltw128
 +REX_VECTOR_FUNCTION(Vector369_9) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFA));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xAA));
 +}
 +
 +// vspltw128
 +REX_VECTOR_FUNCTION(Vector369_A) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFD));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0x55));
 +}
 +
 +// vspltw128
 +REX_VECTOR_FUNCTION(Vector369_B) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFF8));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0x0));
 +}
 +
 +// vspltw128
 +REX_VECTOR_FUNCTION(Vector369_C) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFF));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFF));
 +}
 +
 +// vspltw128
 +REX_VECTOR_FUNCTION(Vector369_D) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFE));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xAA));
 +}
 +
 +// vspltw128
 +REX_VECTOR_FUNCTION(Vector369_E) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFF5));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0x55));
 +}
 +
 +// vspltw128
 +REX_VECTOR_FUNCTION(Vector369_F) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFF4));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0x0));
 +}
 +
 +// vspltw128
 +REX_VECTOR_FUNCTION(Vector369_10) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFF));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFF));
 +}
 +
 +// vspltw128
 +REX_VECTOR_FUNCTION(Vector369_11) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFA));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xAA));
 +}
 +
 +// vspltw128
 +REX_VECTOR_FUNCTION(Vector369_12) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFF5));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0x55));
 +}
 +
 +// vspltw128
 +REX_VECTOR_FUNCTION(Vector369_13) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFF0));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0x0));
 +}
 +
 +// vspltw128
 +REX_VECTOR_FUNCTION(Vector369_14) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFF));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFF));
 +}
 +
 +// vspltw128
 +REX_VECTOR_FUNCTION(Vector369_15) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFE));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xAA));
 +}
 +
 +// vspltw128
 +REX_VECTOR_FUNCTION(Vector369_16) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFD));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0x55));
 +}
 +
 +// vspltw128
 +REX_VECTOR_FUNCTION(Vector369_17) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFC));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0x0));
 +}
 +
 +// vspltw128
 +REX_VECTOR_FUNCTION(Vector369_18) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFF));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFF));
 +}
 +
 +// vspltw128
 +REX_VECTOR_FUNCTION(Vector369_19) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFEA));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xAA));
 +}
 +
 +// vspltw128
 +REX_VECTOR_FUNCTION(Vector369_1A) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFD));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0x55));
 +}
 +
 +// vspltw128
 +REX_VECTOR_FUNCTION(Vector369_1B) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFE8));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0x0));
 +}
 +
 +// vspltw128
 +REX_VECTOR_FUNCTION(Vector369_1C) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFF));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFF));
 +}
 +
 +// vspltw128
 +REX_VECTOR_FUNCTION(Vector369_1D) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFFE));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xAA));
 +}
 +
 +// vspltw128
 +REX_VECTOR_FUNCTION(Vector369_1E) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFF5));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0x55));
 +}
 +
 +// vspltw128
 +REX_VECTOR_FUNCTION(Vector369_1F) {
 +	REX_VECTOR_LOCALS;
-+	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0xFFFFFFF4));
++	simde_mm_store_si128((simde__m128i*)REX_OPERAND_V(0).u32, simde_mm_shuffle_epi32(simde_mm_load_si128((simde__m128i*)REX_OPERAND_V(1).u32), 0x0));
 +}
 +
 +// vspltisw128
