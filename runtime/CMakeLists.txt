@@ -10,9 +10,18 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # `rexglue codegen` writes this file. It declares the generated sources and the
-# rexglue_setup_target() helper used below, so nothing can be configured before codegen has run.
+# rexglue_setup_target() helper used below, so the runtime cannot be configured before codegen has
+# run. On a first build, with the SDK built from source (REXSDK_DIR), only the SDK is configured:
+# scripts/build.sh builds the patched code generator (target rexglue) here, runs codegen with it
+# and configures again.
 set(AZURA_REXGLUE_CMAKE ${CMAKE_CURRENT_SOURCE_DIR}/generated/rexglue.cmake)
 if(NOT EXISTS ${AZURA_REXGLUE_CMAKE})
+    if(REXSDK_DIR)
+        add_subdirectory(${REXSDK_DIR} rexglue-sdk)
+        message(STATUS "generated/rexglue.cmake not found: only the SDK is configured, to build "
+                       "the code generator that writes it")
+        return()
+    endif()
     message(FATAL_ERROR
         "generated/rexglue.cmake not found. Put your default.xex in runtime/game/ and run "
         "scripts/build.sh, which runs `rexglue codegen` before configuring.")
