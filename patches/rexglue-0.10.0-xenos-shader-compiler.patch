@@ -6095,10 +6095,10 @@ index 0000000..bc45626
 +}  // namespace rex::graphics::xsc
 diff --git a/src/graphics/pipeline/shader/xsc/xsc_translator_fetch.cpp b/src/graphics/pipeline/shader/xsc/xsc_translator_fetch.cpp
 new file mode 100644
-index 0000000..765a9ac
+index 0000000..e91f6c2
 --- /dev/null
 +++ b/src/graphics/pipeline/shader/xsc/xsc_translator_fetch.cpp
-@@ -0,0 +1,1182 @@
+@@ -0,0 +1,1183 @@
 +/**
 + * @file        graphics/pipeline/shader/xsc/xsc_translator_fetch.cpp
 + * @brief       Xenos shader compiler: texture fetch instructions
@@ -6619,10 +6619,11 @@ index 0000000..765a9ac
 +    }
 +
 +    // Offsets applied to the coordinates before sampling, with the rounding epsilon of the
-+    // SPIR-V translator (1.5/4 of the 8-bit subtexel ULP) to resolve point sampling between
-+    // texels.
++    // SPIR-V translator (1.5/4 of the 8-bit subtexel ULP, see GetPointSamplingRoundingOffset) to
++    // resolve point sampling between texels.
 +    float offset_values[3] = {};
-+    const float kRoundingOffset = 1.5f / 1024.0f;
++    const float kRoundingOffset =
++        SpirvShaderTranslator::GetPointSamplingRoundingOffset(current_shader().ucode_data_hash());
 +    bool weights = instr.opcode == ucode::FetchOpcode::kGetTextureWeights;
 +    switch (instr.dimension) {
 +      case xenos::FetchOpDimension::k1D:
