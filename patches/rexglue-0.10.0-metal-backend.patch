@@ -469,6 +469,46 @@ index d54df86..74913c7 100644
    // One-shot convenience for callers that don't care about the split.
    X_STATUS Setup(runtime::FunctionDispatcher* function_dispatcher, KernelState* kernel_state,
                   ui::WindowedAppContext* app_context, bool with_presentation) {
+diff --git a/include/rex/ui/imgui_dialog.h b/include/rex/ui/imgui_dialog.h
+index a7ab6b3..f4425b8 100644
+--- a/include/rex/ui/imgui_dialog.h
++++ b/include/rex/ui/imgui_dialog.h
+@@ -39,6 +39,12 @@ class ImGuiDialog {
+ 
+   void Draw();
+ 
++  // Whether the dialog needs the window repainted continuously (to take input or to animate).
++  // While no dialog does, the presenter paints only when the guest output or the window changes,
++  // which also draws the dialogs; a dialog that only shows something now and then (a notification
++  // with nothing to show) returns false while idle.
++  virtual bool NeedsContinuousPaint() const { return true; }
++
+  protected:
+   ImGuiDialog(ImGuiDrawer* imgui_drawer);
+ 
+diff --git a/include/rex/ui/overlay/achievement_toast.h b/include/rex/ui/overlay/achievement_toast.h
+index 7642601..b93550d 100644
+--- a/include/rex/ui/overlay/achievement_toast.h
++++ b/include/rex/ui/overlay/achievement_toast.h
+@@ -35,6 +35,9 @@ class AchievementToastDialog : public AchievementNotificationDialog {
+   // Thread-safe: safe to call from any thread, including guest threads.
+   void Push(const rex::system::AchievementEvent& event) override;
+ 
++  // Only while a toast is queued or on screen (fading needs every frame).
++  bool NeedsContinuousPaint() const override;
++
+  protected:
+   void OnDraw(ImGuiIO& io) override;
+ 
+@@ -47,7 +50,7 @@ class AchievementToastDialog : public AchievementNotificationDialog {
+     std::optional<std::chrono::steady_clock::time_point> visible_since;
+   };
+ 
+-  std::mutex mutex_;
++  mutable std::mutex mutex_;
+   std::deque<PendingToast> queue_;
+   AchievementIconCache icon_cache_;
+ };
 diff --git a/include/rex/ui/presenter.h b/include/rex/ui/presenter.h
 index afb4a30..f163ac5 100644
 --- a/include/rex/ui/presenter.h
@@ -14908,6 +14948,55 @@ index 4e7ad78..dc26143 100644
      }
    }
  }
+diff --git a/src/ui/imgui_drawer.cpp b/src/ui/imgui_drawer.cpp
+index f270f3c..1e4d411 100644
+--- a/src/ui/imgui_drawer.cpp
++++ b/src/ui/imgui_drawer.cpp
+@@ -9,6 +9,7 @@
+  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
+  */
+ 
++#include <algorithm>
+ #include <cfloat>
+ #include <cstring>
+ #include <filesystem>
+@@ -436,12 +437,14 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
+   // it now if needed.
+   DetachIfLastDialogRemoved();
+ 
+-  if (!dialogs_.empty()) {
+-    // Repaint (and handle input) continuously if still active. In detached mode
+-    // there is no presenter; the app drives repaint via its own present loop.
+-    if (presenter_) {
+-      presenter_->RequestUIPaintFromUIThread();
+-    }
++  // Repaint (and handle input) continuously while a dialog needs it. In detached
++  // mode there is no presenter; the app drives repaint via its own present loop.
++  // Idle dialogs are still drawn on every paint the guest output or the window
++  // causes.
++  if (presenter_ && std::any_of(dialogs_.begin(), dialogs_.end(), [](const ImGuiDialog* dialog) {
++        return dialog->NeedsContinuousPaint();
++      })) {
++    presenter_->RequestUIPaintFromUIThread();
+   }
+ }
+ 
+diff --git a/src/ui/overlay/achievement_toast.cpp b/src/ui/overlay/achievement_toast.cpp
+index 53b8c0b..33ae38c 100644
+--- a/src/ui/overlay/achievement_toast.cpp
++++ b/src/ui/overlay/achievement_toast.cpp
+@@ -29,6 +29,11 @@ void AchievementToastDialog::Push(const rex::system::AchievementEvent& event) {
+   queue_.push_back({event, std::chrono::steady_clock::now()});
+ }
+ 
++bool AchievementToastDialog::NeedsContinuousPaint() const {
++  std::lock_guard<std::mutex> lock(mutex_);
++  return !queue_.empty();
++}
++
+ void AchievementToastDialog::OnDraw(ImGuiIO& io) {
+   auto now = std::chrono::steady_clock::now();
+ 
 diff --git a/src/ui/presenter.cpp b/src/ui/presenter.cpp
 index 7360ed9..0c8a935 100644
 --- a/src/ui/presenter.cpp
