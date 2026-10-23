@@ -19,6 +19,7 @@
 #include <rex/runtime.h>
 #include <rex/system/flags.h>
 
+#include "achievement_toast.h"
 #include "menu/menu_patches.h"
 #include "menu/pc_options.h"
 #include "prompts/button_prompts.h"
@@ -142,6 +143,17 @@ class AzuraApp : public rex::ReXApp {
     };
     title_font_ = load("Barlow-SemiBold.ttf");
     body_font_ = load("Barlow-Medium.ttf");
+  }
+
+  // The notice for unlocked achievements, in place of the SDK's toast.
+  std::unique_ptr<rex::ui::AchievementNotificationDialog> CreateAchievementNotificationDialog()
+      override {
+    if (!imgui_drawer() || !immediate_drawer() || !runtime()) {
+      return nullptr;
+    }
+    return std::make_unique<azura::AchievementToast>(imgui_drawer(), immediate_drawer(), runtime(),
+                                                     REXCVAR_GET(user_language), title_font_,
+                                                     body_font_);
   }
 
   // Stop the prompt thread before the runtime and its memory go away, and remove the shader
