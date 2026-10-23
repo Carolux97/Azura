@@ -365,3 +365,24 @@ or better on a 1080p display.
   GPU time median: 1x 12.1 / 13.3 ms and 12.0 ms, 2x 40.9 / 48.7 ms and 39.9 ms, 3x 78.5 / 89.9 ms
   and 78.3 ms (a 27-second run). The GPU limits every scale; 2x draws 4 times the pixels for 3.4
   times the time.
+
+## 14. Upscaling: AMD CAS and Apple MetalFX
+
+The Upscaling choice of the game's Video menu (`present_effect`) offered bilinear, CAS and FSR, but
+the SDK only accepts CAS and FSR with the FidelityFX SDK, which the macOS build lacks: on Metal it
+was always bilinear. Now each platform offers what it supports, and the menu row is a list of our
+own whose values are those `present_effect` accepts in that build (`rex::cvar::GetFlagInfo`): on
+macOS bilinear, AMD CAS and Apple MetalFX; on Linux what its build has.
+
+- **CAS** runs the SDK's prebuilt FidelityFX CAS shaders (the Vulkan presenter's), converted to
+  MSL at start-up, with the chain the FidelityFX paint flow uses: sharpening when the guest output
+  already has the window's size, otherwise resampling by up to 2x along each axis, the rest
+  bilinear through an intermediate texture.
+- **MetalFX** is `MTLFXSpatialScaler` from the guest output to the window size in one pass, into
+  an intermediate texture copied to the drawable. It only upscales: a draw resolution scale above
+  the window size stays bilinear.
+- **Cost on an M4 (10 GPU cores)**: MetalFX from 1280x720 to 3024x1964 took 1.34 ms of GPU time
+  (measured alone); the CAS resample from 1280x720 to 2560x1440 took ~1.9 ms per present (Metal
+  System Trace, with the game keeping the GPU ~90% busy, so likely high). The presenter paints at
+  the display's rate (~177 presents per second on a 165 Hz display), whether or not the game sent
+  a new frame, which these effects make noticeable.

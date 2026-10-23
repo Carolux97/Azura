@@ -404,11 +404,12 @@ How:
   Movement Control 18 (calibration), Race Camera 20 (anti-aliasing), Brake
   21 (motion blur), Accelerator 22 (full screen); and two generic Xbox profile settings with three
   values that Gears does not read (**inferred**): Controller Sensitivity 13 (anisotropic filtering:
-  off, 4x, 16x) and Voice Via Speakers 6 (image scaling: bilinear, AMD CAS, AMD FSR). Their
-  definitions (`ProfileMappings[2]`, `[3]` and `[11]` to `[15]`) get our value names. The calibration row's definition has two values, both named "Open",
+  off, 4x, 16x). Their definitions (`ProfileMappings[2]` and `[11]` to `[15]`) get our value
+  names. The calibration row's definition has two values, both named "Open",
   since an array cannot shrink. The slider uses ID 9105, which the profile does not have.
 - **Lists of our own** (**verified**): a raw-value list row (`bUsesRawValue=true`) with an ID the
-  profile does not have (9106, frame rate limit) needs no definition, so it can have any number of
+  profile does not have (9106 frame rate limit, 9107 image scaling, whose values are the upscaling
+  effects of each platform's build) needs no definition, so it can have any number of
   values with any names. `PopulateOptionsList` empties its local `OptionValues`
   (`TArray<string>`), fills it with `GetProfileSettingValue_SpecialCase(psid, OptionValues)` (which
   only knows the multiplayer characters 44/45 and weapons 50/130 and leaves it empty otherwise),
