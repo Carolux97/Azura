@@ -18,10 +18,14 @@ import { getLocale, getPreference, initI18n, onLocaleChange, setPreference, syst
 import { SUPPORTED_LOCALES } from "./locale.js";
 import {
   RESOLUTION_SCALES,
+  choosableGpus,
+  gpuChoiceVisible,
+  gpuLabel,
   renderSize,
   resolutionValue,
   resolveAutoScale,
   scaleOfResolution,
+  selectedGpu,
   setDetectedSystem,
 } from "./graphics.js";
 import {
@@ -35,10 +39,12 @@ import {
   installUpdate,
   isNativeApp,
   launchGame,
+  listGpus,
   loadSettings,
   onGameExit,
   onGameOutput,
   onGameRestart,
+  onGpuMissing,
   onUpdateProgress,
   changeSavesFolder,
   createSaveBackup,
@@ -139,6 +145,10 @@ const state = {
   // (the package manager runs) or "waitingForApple" (Apple's install window is open).
   compiler: null,
   compilerAction: "",
+  // Graphics card chosen by the player (its UUID), or null for the game's own choice.
+  gpu: null,
+  // The graphics cards the runtime lists (see src-tauri/src/gpus.rs), once asked for.
+  gpus: { devices: [], automatic: null },
 };
 
 /** Builds the settings object platform.saveSettings stores (see src-tauri/src/settings.rs). */
@@ -152,6 +162,7 @@ const currentSettings = () => ({
   gameLanguageChosen: state.gameLanguageChosen,
   achievementsView: state.achievementsView,
   seenReleaseNotes: state.seenReleaseNotes,
+  gpu: state.gpu,
   savesFolder: state.savesFolder,
 });
 
@@ -510,6 +521,7 @@ const runRuntimeInstall = async () => {
     toast(t("toast.runtimeInstalled"));
     // The runtime reads the achievements, so they can show now.
     refreshAchievements();
+    refreshGpus();
     return true;
   } catch (error) {
     const [key, vars] = buildErrorMessage(error);
@@ -885,6 +897,7 @@ const applyStoredGraphics = (settings) => {
   const stored = settings.graphics?.renderResolution;
   state.renderResolution = scaleOfResolution(stored) ? stored : "auto";
   state.fullscreen = Boolean(settings.fullscreen);
+  state.gpu = settings.gpu ?? null;
 };
 
 /** Text of a resolution scale: "2560 × 1440 (2×)", or "1280 × 720 · original" for 1. */
@@ -902,6 +915,39 @@ const renderGraphics = () => {
   for (const scale of RESOLUTION_SCALES) select.add(new Option(resolutionLabel(scale), resolutionValue(scale)));
   select.value = state.renderResolution;
   document.getElementById("display-mode").value = state.fullscreen ? "fullscreen" : "windowed";
+  renderGpuChoice();
+};
+
+/** The graphics card choice, shown only when the computer has two or more cards. */
+const renderGpuChoice = () => {
+  const field = document.getElementById("gpu-field");
+  field.hidden = !gpuChoiceVisible(state.gpus);
+  if (field.hidden) return;
+  const kindLabels = { discrete: t("graphics.gpuDiscrete"), integrated: t("graphics.gpuIntegrated") };
+  const gpus = choosableGpus(state.gpus);
+  const automatic = gpus.find((gpu) => gpu.uuid === state.gpus.automatic);
+  const select = document.getElementById("gpu-choice");
+  select.replaceChildren();
+  select.add(
+    new Option(
+      t("graphics.gpuAuto", { name: automatic ? gpuLabel(automatic, kindLabels) : "…" }),
+      "auto",
+    ),
+  );
+  for (const gpu of gpus) select.add(new Option(gpuLabel(gpu, kindLabels), gpu.uuid));
+  select.value = selectedGpu(state.gpu, state.gpus);
+};
+
+/** Asks the runtime for the graphics cards (it must be installed), then shows the choice. */
+const refreshGpus = async () => {
+  if (!state.runtime?.installed) return;
+  try {
+    state.gpus = await listGpus();
+  } catch (error) {
+    console.error("Listing the graphics cards failed:", error);
+    state.gpus = { devices: [], automatic: null };
+  }
+  renderGpuChoice();
 };
 
 /** Wires the graphics controls; every change is saved. */
@@ -917,6 +963,13 @@ const setupGraphics = () => {
     state.fullscreen = displayMode.value === "fullscreen";
     persist();
   });
+
+  const gpu = document.getElementById("gpu-choice");
+  gpu.addEventListener("change", () => {
+    state.gpu = gpu.value === "auto" ? null : gpu.value;
+    persist();
+  });
+  onGpuMissing(() => toast(t("toast.gpuMissing")));
 };
 
 /** Adds one <option> per supported language to a <select>, labelled with its own name. */
@@ -1353,3 +1406,5 @@ if (!state.achievements) refreshAchievements();
 await refreshAndRenderSaves();
 setupUpdates();
 setupReleaseNotes();
+// Running the runtime to list the cards takes a moment: the rest of the window is ready first.
+refreshGpus();

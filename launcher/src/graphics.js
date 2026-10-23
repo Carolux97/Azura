@@ -61,3 +61,26 @@ export const renderSize = (scale) => ({
   width: BASE_RENDER_SIZE.width * scale,
   height: BASE_RENDER_SIZE.height * scale,
 });
+
+/**
+ * Graphics cards the player can choose from (see src-tauri/src/gpus.rs: { devices: [{ name, uuid,
+ * type, vendorId }], automatic }), only those the runtime can be pointed at (with a UUID).
+ */
+export const choosableGpus = (list) => (list?.devices ?? []).filter((gpu) => gpu.uuid);
+
+/** The choice is offered only with two or more cards: with one there is nothing to choose. */
+export const gpuChoiceVisible = (list) => choosableGpus(list).length >= 2;
+
+/**
+ * Text of a card: its name, with "dedicated" or "integrated" when the computer has one of each, so
+ * two cards of the same make can be told apart. `kindLabels` gives the translated words.
+ */
+export const gpuLabel = (gpu, kindLabels) => {
+  const kind = kindLabels[gpu.type];
+  return kind ? `${gpu.name} (${kind})` : gpu.name;
+};
+
+/** The stored choice if that card is present, otherwise "auto" (the game chooses). */
+export const selectedGpu = (stored, list) =>
+  stored && choosableGpus(list).some((gpu) => gpu.uuid === stored) ? stored : "auto";
+

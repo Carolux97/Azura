@@ -127,7 +127,11 @@
     "fullscreen": "Teljes képernyő",
     "renderResolution": "Renderelési felbontás",
     "original": "eredeti",
-    "resolutionAuto": "Automatikus ({size})"
+    "resolutionAuto": "Automatikus ({size})",
+    "gpu": "Videókártya",
+    "gpuAuto": "Automatikus ({name})",
+    "gpuDiscrete": "dedikált",
+    "gpuIntegrated": "integrált"
   },
   "achievements": {
     "title": "Teljesítmények",
@@ -188,7 +192,8 @@
     "runtimeInstalled": "A játék futtatókörnyezete telepítve.",
     "saveFailed": "A beállításokat nem sikerült menteni: {detail}",
     "compilerInstalled": "A fordító kész: {version}",
-    "compilerInstallFailed": "Nem sikerült telepíteni a fordítót: {detail}"
+    "compilerInstallFailed": "Nem sikerült telepíteni a fordítót: {detail}",
+    "gpuMissing": "A kiválasztott videókártya már nincs ebben a számítógépben: a játék az automatikusat használja."
   },
   "log": {
     "title": "Játéknapló",
