@@ -58,6 +58,23 @@ struct Option {
   float slider_min = 0, slider_max = 0, slider_step = 0;
 };
 
+// The upscaling effects present_effect accepts in this build of the SDK, in menu order: the Metal
+// presenter's on macOS (CAS, MetalFX), the FidelityFX ones with the FidelityFX SDK, bilinear
+// always. Others it may accept (the experimental temporal FSR) are not offered.
+std::vector<const char*> UpscalingChoices() {
+  static const char* const kOffered[] = {"bilinear", "cas", "fsr", "metalfx"};
+  std::vector<const char*> choices;
+  const rex::cvar::FlagEntry* flag = rex::cvar::GetFlagInfo("present_effect");
+  for (const char* effect : kOffered) {
+    if (flag && std::find(flag->constraints.allowed_values.begin(), flag->constraints.allowed_values.end(),
+                          effect) != flag->constraints.allowed_values.end()) {
+      choices.push_back(effect);
+    }
+  }
+  if (choices.empty()) choices.push_back("bilinear");
+  return choices;
+}
+
 const std::vector<Option>& Options() {
   static const std::vector<Option> options = {
       // List rows use profile settings the game never uses (here the racing game preferences of the
@@ -77,7 +94,8 @@ const std::vector<Option>& Options() {
       // Generic Xbox profile settings with three values that Gears never reads: Controller
       // Sensitivity (it has its own, 368, 59 and 60) and Voice Via Speakers.
       {kVideoCategory, 5, Label::kAnisotropic, "anisotropic_override", Kind::kChoice, 13, 2, {"0", "3", "5"}},
-      {kVideoCategory, 6, Label::kUpscaling, "present_effect", Kind::kChoice, 6, 3, {"bilinear", "cas", "fsr"}},
+      // A list of our own too: its values depend on the platform (UpscalingChoices).
+      {kVideoCategory, 6, Label::kUpscaling, "present_effect", Kind::kChoice, 9107, -1, UpscalingChoices()},
       // A slider needs no definition, and its ID is one the profile does not have: the menu's reads
       // and writes of it fail and change nothing.
       {kKeyboardMouseCategory, 0, Label::kMouseSensitivity, "mnk_sensitivity", Kind::kSlider, 9105, -1, {}, 0.1f, 3.0f,
@@ -259,6 +277,8 @@ const Texts& TextsFor(const std::string& language) {
 
 std::mutex g_mutex;
 std::filesystem::path g_config_path;
+// Language of the game's texts (of the menu patched last), for the value names of our own lists.
+std::string g_menu_language = "int";
 // Value shown for each option once read: settings that apply at the next start keep their old
 // cvar value until then, so the menu shows what was chosen rather than what is in effect.
 std::map<int, float> g_values;
@@ -508,6 +528,22 @@ bool PcOptionValueNames(int psid, std::vector<std::u16string>& names) {
       const auto found = unlimited.find(REXCVAR_GET(user_language));
       names = {u"30", u"60", u"90", u"120", found != unlimited.end() ? found->second : u"Unlimited"};
     }
+    if (option.label == Label::kUpscaling) {
+      std::string language;
+      {
+        std::lock_guard lock(g_mutex);
+        language = g_menu_language;
+      }
+      const Texts& texts = TextsFor(language);
+      for (const char* effect : option.choices) {
+        const std::string effect_name = effect;
+        const char* name = effect_name == "cas"       ? texts.cas
+                           : effect_name == "fsr"     ? texts.fsr
+                           : effect_name == "metalfx" ? "Apple MetalFX"
+                                                      : texts.bilinear;
+        names.push_back(CoalescedString::FromUtf8(name).text);
+      }
+    }
     return true;
   }
   return false;
@@ -634,6 +670,10 @@ void PatchMessageBoxTexts(CoalescedSection& section, const std::string& language
 }
 
 void PatchOptionsMenu(CoalescedSection& section, const std::string& language) {
+  {
+    std::lock_guard lock(g_mutex);
+    g_menu_language = language;
+  }
   const Texts& texts = TextsFor(language);
 
   // Button texts from the game's Audio category, in this file's language: Back and Defaults.
@@ -691,7 +731,6 @@ void PatchValueNames(CoalescedSection& section, const std::string& language) {
         std::vector<std::string> names;
         if (option.label == Label::kAntialiasing) names = {texts.off, texts.fxaa, texts.fxaa_extreme};
         if (option.label == Label::kAnisotropic) names = {texts.off, "4×", "16×"};
-        if (option.label == Label::kUpscaling) names = {texts.bilinear, texts.cas, texts.fsr};
         for (size_t i = 0; i < names.size(); ++i) {
           values += (i ? "," : "") + std::string("(Id=") + std::to_string(i) + ",Name=\"" + names[i] + "\")";
         }
