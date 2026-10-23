@@ -112,6 +112,18 @@ export const getReleaseNotes = async () =>
     : { version: "0.1.0", items: ["Builds the game for this computer from your own copy of Gears of War 3."] };
 
 /**
+ * Lists the graphics cards the game can run on: { devices, automatic } (see src-tauri/src/gpus.rs).
+ * Empty on macOS and in a browser.
+ */
+export const listGpus = async () =>
+  isNativeApp ? tauri.core.invoke("list_gpus") : { devices: [], automatic: null };
+
+/** Calls `listener` when the chosen graphics card is gone and the game starts with the automatic one. */
+export const onGpuMissing = (listener) => {
+  if (isNativeApp) return tauri.event.listen("gpu-missing", () => listener());
+};
+
+/**
  * State of the runtime (see src-tauri/src/install.rs): { installed, buildFound, updateAvailable,
  * path, source, updateKind }. `source` is "build" (a project build, copied), "kit" (built here) or
  * "none"; `updateKind`, for the kit, "link" (seconds) or "build" (minutes). A browser has none

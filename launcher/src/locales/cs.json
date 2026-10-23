@@ -127,7 +127,11 @@
     "fullscreen": "Celá obrazovka",
     "renderResolution": "Rozlišení vykreslování",
     "original": "původní",
-    "resolutionAuto": "Automaticky ({size})"
+    "resolutionAuto": "Automaticky ({size})",
+    "gpu": "Grafická karta",
+    "gpuAuto": "Automaticky ({name})",
+    "gpuDiscrete": "dedikovaná",
+    "gpuIntegrated": "integrovaná"
   },
   "achievements": {
     "title": "Úspěchy",
@@ -188,7 +192,8 @@
     "runtimeInstalled": "Běhové prostředí hry nainstalováno.",
     "saveFailed": "Nastavení se nepodařilo uložit: {detail}",
     "compilerInstalled": "Kompilátor připraven: {version}",
-    "compilerInstallFailed": "Kompilátor se nepodařilo nainstalovat: {detail}"
+    "compilerInstallFailed": "Kompilátor se nepodařilo nainstalovat: {detail}",
+    "gpuMissing": "Zvolená grafická karta už v tomto počítači není: hra použije automatickou."
   },
   "log": {
     "title": "Záznam hry",

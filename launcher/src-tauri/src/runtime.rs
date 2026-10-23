@@ -31,6 +31,8 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
+use crate::gpus::LaunchChoice;
+
 /// Name of the runtime executable inside the runtime folder.
 pub const RUNTIME_EXECUTABLE: &str = "azura";
 
@@ -101,6 +103,16 @@ pub struct LaunchFolders<'a> {
     pub saves: &'a Path,
     /// The shader cache (`cache_root`).
     pub cache: &'a Path,
+}
+
+/// Command-line arguments that point the runtime at the saves and cache folders, and at the chosen
+/// graphics card (see `gpus.rs`).
+pub fn launch_arguments(folders: &LaunchFolders, gpu: &LaunchChoice) -> Vec<String> {
+    let mut args = folder_arguments(folders);
+    if let Some(uuid) = &gpu.device_uuid {
+        args.push(format!("--vulkan_device_uuid={uuid}"));
+    }
+    args
 }
 
 /// Command-line arguments that point the runtime at the saves and cache folders.
@@ -192,12 +204,14 @@ impl RunningGame {
     }
 }
 
-/// Starts the runtime with `args` from `runtime_dir`, relaying its output.
+/// Starts the runtime with `args` from `runtime_dir`, relaying its output. `prime_offload` runs it
+/// on the NVIDIA card of a Linux laptop with hybrid graphics (see `gpus.rs`).
 fn spawn_game<E: GameEvents>(
     events: &E,
     executable: &Path,
     args: &[String],
     runtime_dir: &Path,
+    prime_offload: bool,
 ) -> std::io::Result<RunningGame> {
     let mut command = Command::new(executable);
     command
@@ -207,20 +221,9 @@ fn spawn_game<E: GameEvents>(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    // On Linux laptops with an NVIDIA GPU next to an integrated one, run the game on the NVIDIA
-    // one (PRIME render offload). Only when its Vulkan driver is installed, so other GPUs are left
-    // alone.
-    #[cfg(target_os = "linux")]
-    {
-        const NVIDIA_ICD: &str = "/usr/share/vulkan/icd.d/nvidia_icd.json";
-        if Path::new(NVIDIA_ICD).is_file() {
-            command
-                .env("__NV_PRIME_RENDER_OFFLOAD", "1")
-                .env("__GLX_VENDOR_LIBRARY_NAME", "nvidia")
-                .env("__VK_LAYER_NV_optimus", "NVIDIA_only")
-                .env("VK_DRIVER_FILES", NVIDIA_ICD);
-        }
-    }
+    // On Linux laptops with an NVIDIA GPU next to an integrated one, PRIME render offload runs the
+    // game on the NVIDIA one (and hides the others from it).
+    crate::gpus::set_prime_offload(&mut command, prime_offload);
     let mut child = command.spawn()?;
     let (done, relays_done) = mpsc::channel();
     let mut relays = 0;
@@ -251,6 +254,7 @@ fn watch_game<E: GameEvents>(
     executable: &Path,
     args: &[String],
     runtime_dir: &Path,
+    prime_offload: bool,
 ) -> ExitInfo {
     loop {
         let exit = game.wait();
@@ -258,7 +262,7 @@ fn watch_game<E: GameEvents>(
             return exit;
         }
         events.restart();
-        match spawn_game(events, executable, args, runtime_dir) {
+        match spawn_game(events, executable, args, runtime_dir, prime_offload) {
             Ok(next) => game = next,
             Err(error) => {
                 let line = format!("Cannot restart the game: {error}");
@@ -275,12 +279,14 @@ impl GameProcess {
         self.running.load(Ordering::SeqCst)
     }
 
-    /// Starts the runtime from its folder, so it finds `azura.toml` and writes its logs there.
-    /// Returns once the process has started; output, restarts and exit arrive later as events.
+    /// Starts the runtime from its folder, so it finds `azura.toml` and writes its logs there, on
+    /// the graphics card of `gpu`. Returns once the process has started; output, restarts and exit
+    /// arrive later as events.
     pub fn launch<E: GameEvents>(
         &self,
         events: E,
         folders: &LaunchFolders,
+        gpu: &LaunchChoice,
     ) -> Result<(), LaunchError> {
         let runtime_dir = folders.runtime;
         let executable = executable_path(runtime_dir);
@@ -292,9 +298,10 @@ impl GameProcess {
             return Err(LaunchError::AlreadyRunning);
         }
 
-        let args = folder_arguments(folders);
+        let args = launch_arguments(folders, gpu);
+        let prime_offload = gpu.prime_offload;
         let runtime_dir = runtime_dir.to_path_buf();
-        let game = match spawn_game(&events, &executable, &args, &runtime_dir) {
+        let game = match spawn_game(&events, &executable, &args, &runtime_dir, prime_offload) {
             Ok(game) => game,
             Err(error) => {
                 self.running.store(false, Ordering::SeqCst);
@@ -305,7 +312,7 @@ impl GameProcess {
         // The slot stays claimed while the game restarts, so Play cannot start a second game.
         let running = Arc::clone(&self.running);
         thread::spawn(move || {
-            let exit = watch_game(&events, game, &executable, &args, &runtime_dir);
+            let exit = watch_game(&events, game, &executable, &args, &runtime_dir, prime_offload);
             running.store(false, Ordering::SeqCst);
             events.exit(exit);
         });
@@ -317,6 +324,36 @@ impl GameProcess {
 mod tests {
     use super::*;
     use crate::test_support::TempFolder;
+
+    /// The game's own choice of graphics card, without PRIME render offload.
+    fn automatic_gpu() -> LaunchChoice {
+        LaunchChoice { device_uuid: None, prime_offload: false, chosen_missing: false }
+    }
+
+    #[test]
+    fn passes_the_chosen_graphics_card() {
+        let runtime = TempFolder::new("runtime-gpu-args");
+        let folders = LaunchFolders {
+            runtime: &runtime,
+            game: None,
+            saves: Path::new("/saves"),
+            cache: Path::new("/cache"),
+        };
+        let chosen = LaunchChoice {
+            device_uuid: Some("0123456789abcdef0123456789abcdef".into()),
+            prime_offload: false,
+            chosen_missing: false,
+        };
+        assert_eq!(
+            launch_arguments(&folders, &chosen),
+            [
+                "--user_data_root=/saves",
+                "--cache_root=/cache",
+                "--vulkan_device_uuid=0123456789abcdef0123456789abcdef"
+            ]
+        );
+        assert_eq!(launch_arguments(&folders, &automatic_gpu()), folder_arguments(&folders));
+    }
 
     #[test]
     fn passes_the_saves_and_cache_folders() {
@@ -399,7 +436,7 @@ mod tests {
             LaunchFolders { runtime: &runtime, game: None, saves: &runtime, cache: &runtime };
         let process = GameProcess::default();
         let recorder = Recorder::default();
-        process.launch(recorder.clone(), &folders).unwrap();
+        process.launch(recorder.clone(), &folders, &automatic_gpu()).unwrap();
 
         let events = recorder.until_exit();
         let position = |event: &str| events.iter().position(|e| e == event);
@@ -425,7 +462,7 @@ mod tests {
             LaunchFolders { runtime: &runtime, game: None, saves: &runtime, cache: &runtime };
         let process = GameProcess::default();
         let recorder = Recorder(Default::default(), Duration::from_millis(2));
-        process.launch(recorder.clone(), &folders).unwrap();
+        process.launch(recorder.clone(), &folders, &automatic_gpu()).unwrap();
 
         let events = recorder.until_exit();
         assert_eq!(events.len(), 51, "every line and then the exit: {events:?}");
@@ -442,7 +479,7 @@ mod tests {
             LaunchFolders { runtime: &runtime, game: None, saves: &runtime, cache: &runtime };
         let process = GameProcess::default();
         let recorder = Recorder::default();
-        process.launch(recorder.clone(), &folders).unwrap();
+        process.launch(recorder.clone(), &folders, &automatic_gpu()).unwrap();
 
         let events = recorder.until_exit();
         assert!(!events.contains(&"restart".to_string()), "{events:?}");

@@ -127,7 +127,11 @@
     "fullscreen": "Fullscreen",
     "renderResolution": "Render resolution",
     "original": "original",
-    "resolutionAuto": "Automatic ({size})"
+    "resolutionAuto": "Automatic ({size})",
+    "gpu": "Graphics card",
+    "gpuAuto": "Automatic ({name})",
+    "gpuDiscrete": "dedicated",
+    "gpuIntegrated": "integrated"
   },
   "achievements": {
     "title": "Achievements",
@@ -188,7 +192,8 @@
     "runtimeInstalled": "Game runtime installed.",
     "saveFailed": "Settings could not be saved: {detail}",
     "compilerInstalled": "Compiler ready: {version}",
-    "compilerInstallFailed": "The compiler could not be installed: {detail}"
+    "compilerInstallFailed": "The compiler could not be installed: {detail}",
+    "gpuMissing": "The chosen graphics card is not in this computer any more: the game uses the automatic one."
   },
   "log": {
     "title": "Game log",

@@ -127,7 +127,11 @@
     "fullscreen": "全螢幕",
     "renderResolution": "繪製解析度",
     "original": "原始",
-    "resolutionAuto": "自動（{size}）"
+    "resolutionAuto": "自動（{size}）",
+    "gpu": "顯示卡",
+    "gpuAuto": "自動（{name}）",
+    "gpuDiscrete": "獨立",
+    "gpuIntegrated": "內建"
   },
   "achievements": {
     "title": "成就",
@@ -188,7 +192,8 @@
     "runtimeInstalled": "已安裝遊戲執行環境。",
     "saveFailed": "無法儲存設定：{detail}",
     "compilerInstalled": "編譯器已就緒：{version}",
-    "compilerInstallFailed": "無法安裝編譯器：{detail}"
+    "compilerInstallFailed": "無法安裝編譯器：{detail}",
+    "gpuMissing": "所選的顯示卡已不在這台電腦上，遊戲改用自動選擇的顯示卡。"
   },
   "log": {
     "title": "遊戲記錄",

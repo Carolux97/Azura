@@ -127,7 +127,11 @@
     "fullscreen": "フルスクリーン",
     "renderResolution": "レンダリング解像度",
     "original": "オリジナル",
-    "resolutionAuto": "自動（{size}）"
+    "resolutionAuto": "自動（{size}）",
+    "gpu": "グラフィックカード",
+    "gpuAuto": "自動（{name}）",
+    "gpuDiscrete": "専用",
+    "gpuIntegrated": "内蔵"
   },
   "achievements": {
     "title": "実績",
@@ -188,7 +192,8 @@
     "runtimeInstalled": "ゲームランタイムをインストールしました。",
     "saveFailed": "設定を保存できませんでした: {detail}",
     "compilerInstalled": "コンパイラの準備完了: {version}",
-    "compilerInstallFailed": "コンパイラをインストールできませんでした: {detail}"
+    "compilerInstallFailed": "コンパイラをインストールできませんでした: {detail}",
+    "gpuMissing": "選択したグラフィックカードがこのコンピューターにありません。自動で選ばれたカードを使います。"
   },
   "log": {
     "title": "ゲームログ",
