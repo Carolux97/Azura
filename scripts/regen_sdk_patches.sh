@@ -22,6 +22,9 @@ export LC_ALL=C
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SDK="${ROOT}/sdk/rexglue-0.10.0-src"
+SDK_SRC="${SDK}"
+# shellcheck source=sdk_patches.sh
+source "${ROOT}/scripts/sdk_patches.sh"
 METAL_PATCH="${ROOT}/patches/rexglue-0.10.0-metal-backend.patch"
 XSC_PATCH="${ROOT}/patches/rexglue-0.10.0-xenos-shader-compiler.patch"
 XSC_DIR="src/graphics/pipeline/shader/xsc"
@@ -136,3 +139,6 @@ echo "==> metal backend patch: $(grep -c '^diff --git' "${METAL_PATCH}") files"
 echo "==> xenos shader compiler patch: $(grep -c '^diff --git' "${XSC_PATCH}") files"
 echo "==> ppc interpreter patch: $(grep -c '^diff --git' "${INTERP_PATCH}") files"
 echo "==> codegen stamp patch: $(grep -c '^diff --git' "${STAMP_PATCH}") files"
+# The tree is the whole stack of patches (they were just made from it), which build.sh then need
+# not check one by one.
+sdk_patches_hash > "${SDK_PATCHES_STAMP}"
