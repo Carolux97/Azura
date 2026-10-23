@@ -7284,10 +7284,10 @@ index 0000000..e91f6c2
 +}  // namespace rex::graphics::xsc
 diff --git a/src/graphics/pipeline/shader/xsc/xsc_translator_ps.cpp b/src/graphics/pipeline/shader/xsc/xsc_translator_ps.cpp
 new file mode 100644
-index 0000000..d044e25
+index 0000000..b72fd2f
 --- /dev/null
 +++ b/src/graphics/pipeline/shader/xsc/xsc_translator_ps.cpp
-@@ -0,0 +1,447 @@
+@@ -0,0 +1,494 @@
 +/**
 + * @file        graphics/pipeline/shader/xsc/xsc_translator_ps.cpp
 + * @brief       Xenos shader compiler: pixel shader prologue and epilogue, gamma conversions
@@ -7338,7 +7338,10 @@ index 0000000..d044e25
 +
 +  bool alpha_to_coverage_possible = shader.writes_color_target(0) && !IsEarlyFragmentTests();
 +  fragment.early_fragment_tests = IsEarlyFragmentTests();
-+  fragment.frag_coord = param_gen_needed || alpha_to_coverage_possible;
++  // Moving the evaluation to the guest pixel center needs the host pixel position.
++  bool guest_pixel_center = modification.pixel.guest_pixel_center &&
++                            (draw_resolution_scale_x_ > 1 || draw_resolution_scale_y_ > 1);
++  fragment.frag_coord = param_gen_needed || alpha_to_coverage_possible || guest_pixel_center;
 +  fragment.front_facing = param_gen_needed && !modification.pixel.param_gen_point;
 +  fragment.color_targets = shader.writes_color_targets();
 +  fragment.depth = shader.writes_depth();
@@ -7364,6 +7367,27 @@ index 0000000..d044e25
 +    front_facing_ = b.Emit(Op::kLoadFrontFacing, kBool, {});
 +  }
 +
++  // Host pixels per guest pixel along each axis, and with guest_pixel_center, the offset from the
++  // center of this host pixel to the center of its guest pixel.
++  uint32_t guest_pixel_size_x = draw_resolution_scale_x_ << modification.pixel.sample_space_x_log2;
++  uint32_t guest_pixel_size_y = draw_resolution_scale_y_ << modification.pixel.sample_space_y_log2;
++  ValueId guest_pixel_center_offset_x = kNoValue, guest_pixel_center_offset_y = kNoValue;
++  if (guest_pixel_center) {
++    auto get_offset = [&](uint32_t component, uint32_t guest_pixel_size) {
++      // (floor(position / size) + 0.5) * size - position.
++      ValueId position = b.Extract(frag_coord_, component);
++      ValueId size = b.ConstFloat(float(guest_pixel_size));
++      ValueId guest_pixel = b.Unary(
++          Op::kFloor, b.Binary(Op::kFMul, position, b.ConstFloat(1.0f / float(guest_pixel_size))));
++      return b.Binary(
++          Op::kFSub,
++          b.Binary(Op::kFMul, b.Binary(Op::kFAdd, guest_pixel, b.ConstFloat(0.5f)), size),
++          position);
++    };
++    guest_pixel_center_offset_x = get_offset(0, guest_pixel_size_x);
++    guest_pixel_center_offset_y = get_offset(1, guest_pixel_size_y);
++  }
++
 +  // Zero the registers (games may read registers they only initialize conditionally), and copy
 +  // the interpolators.
 +  for (uint32_t i = 0; i < register_count(); ++i) {
@@ -7375,6 +7399,23 @@ index 0000000..d044e25
 +      uint32_t location = rex::bit_count(interpolator_mask & ((UINT32_C(1) << i) - 1));
 +      value = b.Emit(Op::kLoadInterpolator, kFloat4, {},
 +                     {location, (fragment.interpolators_centroid >> i) & 1});
++      if (guest_pixel_center) {
++        // Along the screen-space derivatives to the guest pixel center: exact for the attributes
++        // of the screen-aligned rectangles data is computed with, which vary linearly.
++        ValueId offset_x = b.Construct(kFloat4, {guest_pixel_center_offset_x,
++                                                 guest_pixel_center_offset_x,
++                                                 guest_pixel_center_offset_x,
++                                                 guest_pixel_center_offset_x});
++        ValueId offset_y = b.Construct(kFloat4, {guest_pixel_center_offset_y,
++                                                 guest_pixel_center_offset_y,
++                                                 guest_pixel_center_offset_y,
++                                                 guest_pixel_center_offset_y});
++        value = b.Binary(
++            Op::kFAdd, value,
++            b.Binary(Op::kFAdd,
++                     b.Binary(Op::kFMul, b.Unary(Op::kDpdxCoarse, value), offset_x),
++                     b.Binary(Op::kFMul, b.Unary(Op::kDpdyCoarse, value), offset_y)));
++      }
 +    } else {
 +      value = b.ConstFloat(0.0f, 4);
 +    }
@@ -7385,11 +7426,15 @@ index 0000000..d044e25
 +  if (param_gen_needed) {
 +    ValueId const_sign_bit = b.ConstUint(UINT32_C(1) << 31);
 +    // X: pixel X .0 in the magnitude, back-facing in the sign bit.
++    // With guest_pixel_center, the guest pixel itself, otherwise the host position in guest
++    // pixels.
 +    ValueId param_gen_x = b.Unary(Op::kFloor, b.Extract(frag_coord_, 0));
-+    uint32_t param_gen_scale_x = draw_resolution_scale_x_ << modification.pixel.sample_space_x_log2;
-+    if (param_gen_scale_x > 1) {
++    if (guest_pixel_size_x > 1) {
 +      param_gen_x =
-+          b.Binary(Op::kFMul, param_gen_x, b.ConstFloat(1.0f / float(param_gen_scale_x)));
++          b.Binary(Op::kFMul, param_gen_x, b.ConstFloat(1.0f / float(guest_pixel_size_x)));
++      if (guest_pixel_center) {
++        param_gen_x = b.Unary(Op::kFloor, param_gen_x);
++      }
 +    }
 +    param_gen_x = b.Unary(Op::kFAbs, param_gen_x);
 +    if (!modification.pixel.param_gen_point) {
@@ -7406,10 +7451,12 @@ index 0000000..d044e25
 +    }
 +    // Y: pixel Y .0 in the magnitude, point in the sign bit.
 +    ValueId param_gen_y = b.Unary(Op::kFloor, b.Extract(frag_coord_, 1));
-+    uint32_t param_gen_scale_y = draw_resolution_scale_y_ << modification.pixel.sample_space_y_log2;
-+    if (param_gen_scale_y > 1) {
++    if (guest_pixel_size_y > 1) {
 +      param_gen_y =
-+          b.Binary(Op::kFMul, param_gen_y, b.ConstFloat(1.0f / float(param_gen_scale_y)));
++          b.Binary(Op::kFMul, param_gen_y, b.ConstFloat(1.0f / float(guest_pixel_size_y)));
++      if (guest_pixel_center) {
++        param_gen_y = b.Unary(Op::kFloor, param_gen_y);
++      }
 +    }
 +    param_gen_y = b.Unary(Op::kFAbs, param_gen_y);
 +    if (modification.pixel.param_gen_point) {

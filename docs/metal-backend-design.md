@@ -148,8 +148,8 @@ at 30 FPS, so 33.3 ms is the floor.
   flashes in some effects happen with both backends: open issues, not Metal regressions.
 - In the room with light shafts the command processor waits ~32 ms per frame for the GPU, with
   ~60 render target transfers per frame: the next target for render pass reduction.
-- Not yet in the Metal backend: tessellation (domain shaders), resolution scaling, host
-  occlusion queries (added later, section 12) and the Dear ImGui overlays.
+- Not yet in the Metal backend: tessellation (domain shaders), resolution scaling (added later,
+  section 13), host occlusion queries (added later, section 12) and the Dear ImGui overlays.
 - FXAA (the Antialiasing option of the game's Video menu) is a Metal shader written for Apple
   GPUs (half precision colors, quality as a function constant) after the gamma ramp pass with
   luma: ~0.18 ms more GPU time per frame at 1280x720 (0.32 vs 0.14 ms for the swap pass).
@@ -328,3 +328,40 @@ may wait for them before sending more.
   (`SpirvShaderTranslator::GetPointSamplingRoundingOffset`); the coordinates themselves are
   right (pixel centers at .5, no half-pixel offset), and public documentation does not say how
   the Xenos rounds there.
+
+## 13. Resolution scaling
+
+Gears 3 always draws at 1280x720: with the guest video mode at 1080p (`resolution = "1080p"`) the
+front buffer, the scene and its effects keep their 720p sizes (measured by logging every resolve
+and swap), as the Xbox 360's scaler did the rest. So more detail only comes from
+`draw_resolution_scale`, which before this the Metal backend ignored (it ran at 1x and said so in
+its log), and the scale is a whole number: 2x is 2560x1440, which is also the way to a true 1080p
+or better on a 1080p display.
+
+- **Render targets, transfers, resolves.** Host render targets are the scale times larger, the
+  EDRAM buffer has the scale squared times the samples, and the transfer rectangles, resolve
+  clears and render target dumps are in host pixels. The common resolve copy shaders have scaled
+  variants that write to a scaled resolve buffer instead of the guest memory, a byte of guest
+  memory being scale_x * scale_y bytes there, and textures made from those ranges load from it
+  with the scaled load shaders, the scale times larger. The front buffer is presented over the
+  scaled region of its texture.
+- **The scaled resolve buffer** is 512 MB times the scale area (4.5 GB at 3x3), a Metal buffer over
+  reserved, not committed, virtual memory: measured outside the game, wrapping 4.5 GB costs no
+  memory footprint and the GPU writing over 64 MB of it adds about that much. Only the render to
+  texture targets of the game use memory.
+- **Data targets.** Some render targets are data, not images: the game rebuilds its color grading
+  lookup table every frame into a 16-pixel-wide target from a 256x16 texture. At 3x every table
+  entry was 3x3 host pixels sampled a third of a texel off the center, and with bilinear filtering
+  and wrapping the first row mixed with the last: measured in the table, green 0.37 to 0.41 at 3x
+  instead of 0.00 to 0.07 at 1x in the row of the darkest greens, so shadows turned green. And a
+  table 3 times larger, even with exact values, is filtered in steps. So draws whose viewport is
+  at most 32 guest pixels wide or tall are evaluated at the guest pixel centers (the
+  `guest_pixel_center` shader modification: the interpolators move there along their screen-space
+  derivatives, the pixel position is the guest one, in XSC and in the SPIR-V translator), and
+  resolves at most 32 pixels wide or tall are reduced to the guest resolution in the guest memory
+  (`resolve_reduce`, the center host pixel of each guest pixel), where their textures load
+  unscaled. The table is then 16x16 as on the console, and the green is gone.
+- **Cost on an M4 (10 GPU cores)**, same walk through the first rooms, frame time median / p90 and
+  GPU time median: 1x 12.1 / 13.3 ms and 12.0 ms, 2x 40.9 / 48.7 ms and 39.9 ms, 3x 78.5 / 89.9 ms
+  and 78.3 ms (a 27-second run). The GPU limits every scale; 2x draws 4 times the pixels for 3.4
+  times the time.

@@ -111,8 +111,12 @@ fi
 # Relative link, so the checkout can move without breaking it.
 ln -sfn "$(basename "${MANIFEST}")" "${RUNTIME_DIR}/azura_manifest.toml"
 
+# shellcheck source=sdk_patches.sh
+source "${ROOT}/scripts/sdk_patches.sh"
+
 # Applies a patch to a git checkout unless it is already applied. Stops when it applies neither
-# way, which means the checkout has other changes in the same lines.
+# way, which means the checkout has other changes in the same lines, such as the patches of
+# another version of the project.
 apply_patch() {
   local dir="$1" patch="$2"
   if git -C "${dir}" apply --reverse --check "${patch}" 2>/dev/null; then
@@ -120,25 +124,27 @@ apply_patch() {
   fi
   if ! git -C "${dir}" apply --check "${patch}" 2>/dev/null; then
     echo "Cannot apply $(basename "${patch}") to ${dir}: the tree has conflicting changes." >&2
+    echo "If it has the patches of an earlier version of the project, restore the SDK source" >&2
+    echo "(git checkout and git clean in it and in thirdparty/utfcpp, which also removes any" >&2
+    echo "changes of your own there) and build again." >&2
     exit 1
   fi
   echo "==> Applying $(basename "${patch}")"
   git -C "${dir}" apply "${patch}"
 }
 
-apply_patch "${SDK_SRC}" "${ROOT}/patches/rexglue-0.10.0.patch"
-apply_patch "${SDK_SRC}" "${ROOT}/patches/rexglue-0.10.0-exit-code.patch"
-apply_patch "${SDK_SRC}" "${ROOT}/patches/rexglue-0.10.0-thread-cpu.patch"
-apply_patch "${SDK_SRC}" "${ROOT}/patches/rexglue-0.10.0-gpu-profiling.patch"
-apply_patch "${SDK_SRC}" "${ROOT}/patches/rexglue-0.10.0-present-pipeline.patch"
-apply_patch "${SDK_SRC}" "${ROOT}/patches/rexglue-0.10.0-edram-sample-space.patch"
-apply_patch "${SDK_SRC}" "${ROOT}/patches/rexglue-0.10.0-input-race.patch"
-apply_patch "${SDK_SRC}" "${ROOT}/patches/rexglue-0.10.0-kernel-random.patch"
-apply_patch "${SDK_SRC}" "${ROOT}/patches/rexglue-0.10.0-metal-backend.patch"
-apply_patch "${SDK_SRC}" "${ROOT}/patches/rexglue-0.10.0-xenos-shader-compiler.patch"
-apply_patch "${SDK_SRC}" "${ROOT}/patches/rexglue-0.10.0-ppc-interpreter.patch"
-apply_patch "${SDK_SRC}" "${ROOT}/patches/rexglue-0.10.0-codegen-stamp.patch"
-apply_patch "${SDK_SRC}/thirdparty/utfcpp" "${ROOT}/patches/rexglue-0.10.0-utfcpp.patch"
+# The patches are checked and applied only when they changed since the tree was last patched
+# (see sdk_patches.sh).
+patches_hash="$(sdk_patches_hash)"
+if [[ -f "${SDK_PATCHES_STAMP}" && "$(cat "${SDK_PATCHES_STAMP}")" == "${patches_hash}" ]]; then
+  echo "==> SDK patches already applied"
+else
+  rm -f "${SDK_PATCHES_STAMP}"
+  for entry in "${SDK_PATCHES[@]}"; do
+    apply_patch "${entry%%|*}" "${entry#*|}"
+  done
+  echo "${patches_hash}" > "${SDK_PATCHES_STAMP}"
+fi
 
 # On macOS, ensure the patched MoltenVK dylib is built and installed in the SDK before
 # configuring/building.

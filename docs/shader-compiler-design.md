@@ -310,9 +310,9 @@ intro, campaign, room with light shafts) and Metal System Traces.
     texture offsets and weights of textures resolved at the scaled resolution, which the SPIR-V
     translator takes into account. With the scale simulated in the bench, XSC before the fix
     differed in 2,472 of 3,825 comparisons (mostly one step of 8 bits); after it, in none. It only
-    matters on Vulkan: the Metal backend does not support resolution scaling yet and runs at 1x
-    whatever `draw_resolution_scale` says (its log says so at start), so phase 1 on Metal was not
-    affected.
+    matters on Vulkan: the Metal backend did not support resolution scaling then and ran at 1x
+    whatever `draw_resolution_scale` said, so phase 1 on Metal was not affected (it does now, see
+    section 13 of metal-backend-design.md).
   - 7e3 render targets. The Xbox 360 converts the color written to a `k_2_10_10_10_FLOAT` render
     target to 7e3 (RGB in [0, 31.875], NaN as 0, alpha fixed-point); the host render target is
     float16 and keeps negative and larger values. XSC clamps the color when the render target is
