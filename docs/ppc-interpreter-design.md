@@ -88,6 +88,11 @@ recompiled code today, what an interpreter has to match, how it plugs in, and ho
   for `lvx128`, whose rA the decoder does not mark as rA|0) and, for `vupkhsb128`/`vupklsb128`,
   whether operand 2 is 0x60, which the code generator's dispatch turns into the halfword forms.
   1,337 functions for 215 forms; building the bench fails if the file is stale.
+  Since every immediate value is generated, the builders take from an immediate only the bits the
+  hardware uses (the element index of `vspltb`/`vsplth`/`vspltw`, the 4-bit mask of `vrlimi128`)
+  and `vpkd3d128` writes no element past the vector at shift 3 of its 64-bit packs, as on the
+  Xbox 360. Values the game itself never uses would otherwise make x86 compilers reject the file
+  (out-of-range intrinsic immediates) or write past a register.
 - **Branches to code no function covers.** The code generator used to stop on them (validation
   error "UnresolvedCall") or emit `REX_FATAL`. Now `b`, `bl` and `bc` to such a target call it
   through the dispatcher (`REX_CALL_INDIRECT_FUNC`), which interprets it, and they are reported as
