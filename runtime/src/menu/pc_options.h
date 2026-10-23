@@ -11,7 +11,8 @@
 //   - the rows are defined in the game's localization files, which the engine imports in full
 //     (PatchOptionsMenu);
 //   - list rows are tied to profile settings the game never uses (the engine's racing game
-//     preferences), whose definitions get our value names (PatchValueNames);
+//     preferences), whose definitions get our value names (PatchValueNames), or are lists of our
+//     own (frame rate limit, upscaling), whose value names come from PcOptionValueNames;
 //   - the script hooks (script_hooks.cpp) put each row's current value in the list as the menu
 //     builds it, hand back what the player chose when the menu saves, follow the selected row to
 //     open the calibration screen, and patch two spots of the menu's bytecode.
