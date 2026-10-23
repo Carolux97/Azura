@@ -290,9 +290,16 @@ backend and the Vulkan one now seek to the start before reading.
 Unreal Engine 3 draws a box around each object and light flare between the begin and the end of
 an occlusion query (`EVENT_WRITE_ZPD`), tested against a half-resolution copy of the scene depth,
 and hides what the GPU counts no samples for. With the fake results of the common command
-processor (always visible) light flares showed through walls; the SDK's Vulkan and D3D12 real
-queries turn themselves off for Gears 3, whose end sample counts are 0x20 bytes before the
-begin's.
+processor (always visible) light flares showed through walls; the SDK's D3D12 real queries turn
+themselves off for Gears 3, whose end sample counts are 0x20 bytes before the begin's.
+
+The Vulkan backend counts the same way: the marker tells the begin from the end, each guest draw
+between them is counted by a host occlusion query begun and ended around it inside its render
+pass (so the backend's own draws are not counted), and the result is written when the submission
+completes. Host queries come in blocks of 256 reset at the start of each submission, since resets
+must be outside render passes. While the command processor waits for commands with results
+pending, it submits the open work and writes the results as the GPU completes them, as the guest
+may wait for them before sending more.
 
 - **Counting.** `MetalCommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD` tells the begin from
   the end by the 0xFFFFFEED marker the guest's driver writes at the end. Between them, each render
