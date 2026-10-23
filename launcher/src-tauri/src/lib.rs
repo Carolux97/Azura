@@ -3,6 +3,7 @@
 //! The interface lives in `launcher/src` as plain HTML, CSS and JavaScript. This crate opens the
 //! window that shows it and exposes the commands the interface calls through `invoke`.
 
+mod achievements;
 mod game_folder;
 mod install;
 #[cfg(test)]
@@ -16,6 +17,7 @@ mod versions;
 
 use std::path::Path;
 
+use achievements::AchievementsState;
 use game_folder::FolderCheck;
 use install::RuntimeStatus;
 use runtime::{GameProcess, LaunchError, LaunchFolders};
@@ -62,6 +64,60 @@ fn runtime_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
 /// Folder for the runtime's shader cache, under the app data folder.
 fn cache_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     Ok(app.path().app_data_dir().map_err(|e| e.to_string())?.join("cache"))
+}
+
+/// Folder that keeps the achievements read from each game build (see `achievements.rs`).
+fn achievements_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    Ok(app.path().app_data_dir().map_err(|e| e.to_string())?.join("achievements"))
+}
+
+/// The player's achievements for the Achievements section, for the game in `game_folder`, with
+/// their texts in `game_language` (an engine code such as "ESN"), else in the launcher's language
+/// (`ui_locale`), else in English. The interface passes the folder and the language it shows,
+/// because a change it has just made may not be saved yet. The first call for a game build has the
+/// runtime read the achievements from the game (about a second); later calls read what it kept.
+///
+/// `async`: it hashes the game executable to know its build, and may run the runtime.
+#[tauri::command]
+async fn get_achievements(
+    app: tauri::AppHandle,
+    game_folder: Option<String>,
+    game_language: Option<String>,
+    ui_locale: String,
+) -> Result<AchievementsState, String> {
+    let Some(folder) = game_folder else {
+        return Ok(AchievementsState::NoGame);
+    };
+    let FolderCheck::Ok { folder, version_id, .. } = game_folder::check_folder(Path::new(&folder), &Registry::bundled())
+    else {
+        return Ok(AchievementsState::NoGame);
+    };
+    let runtime = runtime_dir(&app)?;
+    let export_dir = achievements_dir(&app)?.join(&version_id);
+    let export = match achievements::read_export(&export_dir) {
+        Some(export) => export,
+        // No runtime yet, or one older than the build: an older one may not know
+        // --export_achievements and would start the game instead. The section asks for it to be
+        // installed, as Play would do first.
+        None if !runtime::executable_path(&runtime).is_file()
+            || install::status(&runtime, install::find_build().as_deref()).update_available =>
+        {
+            return Ok(AchievementsState::NoRuntime)
+        }
+        None => match achievements::export(&runtime, Path::new(&folder), &export_dir) {
+            Ok(export) => export,
+            Err(detail) => return Ok(AchievementsState::Unavailable { detail }),
+        },
+    };
+    let saves = settings_paths(&app)?.saves_folder()?;
+    let unlocks = achievements::read_unlocks(&achievements::unlocks_path(&saves, &export.title_id));
+    let languages: Vec<&str> = game_language
+        .as_deref()
+        .and_then(achievements::text_language)
+        .into_iter()
+        .chain(std::iter::once(ui_locale.as_str()))
+        .collect();
+    Ok(achievements::build_state(&export, &export_dir, &unlocks, &languages))
 }
 
 /// Reports whether the runtime is installed and whether a newer build can be installed.
@@ -233,7 +289,8 @@ pub fn run() {
             reset_saves,
             create_save_backup,
             restore_save_backup,
-            open_saves_folder
+            open_saves_folder,
+            get_achievements
         ])
         .setup(|app| {
             // Debug builds log to the terminal that started them; release builds stay quiet.

@@ -41,6 +41,7 @@ import {
   onUpdateProgress,
   changeSavesFolder,
   createSaveBackup,
+  getAchievements,
   getSaveStatus,
   openSavesFolder,
   pickGameFolder,
@@ -51,6 +52,8 @@ import {
   saveSettings,
 } from "./platform.js";
 import { defaultGameLanguage, gameLanguageName } from "./gameLanguages.js";
+import { achievementView } from "./achievements.js";
+import { LOCK_ICON, completedBanner, renderAchievementsPage } from "./achievementsPage.js";
 
 const SPORE_COUNT = 26;
 /** Launcher version shown in a browser; the app reads its real version (see detectSystem). */
@@ -100,6 +103,12 @@ const state = {
   renderResolution: "auto",
   // State of the saved games (see saves.rs), or null until it is read.
   saveStatus: null,
+  // What the Achievements section shows (see platform.getAchievements), { status: "loading" }
+  // while it is first read, or null before that. The view and the filter the player chose; the view
+  // is saved with the settings.
+  achievements: null,
+  achievementsView: "list",
+  achievementsFilter: "all",
 };
 
 /** Builds the settings object platform.saveSettings stores (see src-tauri/src/settings.rs). */
@@ -111,6 +120,7 @@ const currentSettings = () => ({
   uiLanguage: getPreference(),
   gameLanguage: state.gameLanguage,
   gameLanguageChosen: state.gameLanguageChosen,
+  achievementsView: state.achievementsView,
   savesFolder: state.savesFolder,
 });
 
@@ -166,6 +176,9 @@ const showView = (name) => {
   document.querySelectorAll(".view").forEach((view) => view.classList.toggle("is-active", view.dataset.view === name));
   if (name === "saves") {
     refreshAndRenderSaves();
+  }
+  if (name === "achievements") {
+    refreshAchievements();
   }
 };
 
@@ -347,6 +360,8 @@ const setupLaunch = () => {
     else if (code == null) setLogState("log.exitSignal", "error");
     else setLogState("log.exitError", "error", { code });
     renderPlay();
+    // The game may have unlocked achievements.
+    refreshAchievements();
   });
 
   document.getElementById("game-log-hide").addEventListener("click", () => {
@@ -366,6 +381,8 @@ const runRuntimeInstall = async () => {
   try {
     state.runtime = await installRuntime();
     toast(t("toast.runtimeInstalled"));
+    // The runtime reads the achievements, so they can show now.
+    refreshAchievements();
     return true;
   } catch (error) {
     setLogState("log.installFailed", "error", { detail: String(error) });
@@ -450,6 +467,7 @@ const applyGameCheck = (check) => {
   renderInstall();
   renderGameLanguages();
   renderPlay();
+  refreshAchievements();
 };
 
 /**
@@ -581,6 +599,7 @@ const setupLanguages = () => {
   uiSelect.addEventListener("change", async () => {
     await setPreference(uiSelect.value);
     persist();
+    refreshAchievements();
   });
 
   const gameSelect = document.getElementById("game-language");
@@ -588,6 +607,7 @@ const setupLanguages = () => {
     state.gameLanguage = gameSelect.value;
     state.gameLanguageChosen = true;
     persist();
+    refreshAchievements();
   });
 };
 
@@ -772,6 +792,100 @@ const setupSaves = () => {
   });
 };
 
+/** True while the Achievements section is the one on screen. */
+const achievementsShown = () => document.querySelector('.view[data-view="achievements"]')?.classList.contains("is-active");
+
+/**
+ * Writes the Achievements section, the lock mark of its navigation entry (until the achievements
+ * can be read) and the view selector, which shows only with the achievements.
+ */
+const renderAchievements = () => {
+  const data = state.achievements;
+  const ok = renderAchievementsPage(
+    document.getElementById("achievements-body"),
+    data,
+    state.achievementsView,
+    state.achievementsFilter,
+    {
+      t,
+      locale: getLocale(),
+      onFilter: (filter) => {
+        state.achievementsFilter = filter;
+        renderAchievements();
+      },
+      onGoToInstall: () => showView("install"),
+    },
+  );
+  const banner = completedBanner(data, { t, locale: getLocale() });
+  document.getElementById("achievements-banner").replaceChildren(...(banner ? [banner] : []));
+  document.querySelector(".view-achievements").classList.toggle("is-earned", Boolean(banner));
+
+  const views = document.getElementById("achievements-views");
+  views.hidden = !ok;
+  views.querySelectorAll("button").forEach((button) => {
+    const on = button.dataset.mode === state.achievementsView;
+    button.classList.toggle("is-on", on);
+    button.setAttribute("aria-pressed", String(on));
+  });
+  const eyebrow = ok ? `achievements.view${state.achievementsView[0].toUpperCase()}${state.achievementsView.slice(1)}` : "achievements.locked";
+  document.getElementById("achievements-eyebrow").textContent = t(eyebrow);
+
+  const nav = document.getElementById("nav-achievements");
+  nav.classList.toggle("is-locked", !ok);
+  nav.querySelector(".lock")?.remove();
+  if (!ok) nav.insertAdjacentHTML("beforeend", LOCK_ICON);
+};
+
+/** Achievements request in flight, and whether another was asked for meanwhile. */
+let achievementsRequest = null;
+let achievementsAgain = false;
+
+/**
+ * Reads the achievements again (the unlocks change while the game runs, and the game folder or
+ * language may have changed) and redraws the section. A call while a read is in flight reads once
+ * more after it, so the last change always shows. The first read of a game build has the runtime
+ * read them from the game, so a loading card shows until then.
+ */
+const refreshAchievements = () => {
+  if (achievementsRequest) {
+    achievementsAgain = true;
+    return achievementsRequest;
+  }
+  achievementsRequest = (async () => {
+    do {
+      achievementsAgain = false;
+      if (state.achievements?.status !== "ok") {
+        state.achievements = { status: "loading" };
+        renderAchievements();
+      }
+      try {
+        state.achievements = await getAchievements({
+          gameFolder: isInstalled() ? state.savedGameFolder : null,
+          gameLanguage: state.gameLanguage,
+          uiLocale: getLocale(),
+        });
+      } catch (error) {
+        console.error("Reading the achievements failed:", error);
+        state.achievements = { status: "unavailable", detail: String(error) };
+      }
+      renderAchievements();
+    } while (achievementsAgain);
+    achievementsRequest = null;
+  })();
+  return achievementsRequest;
+};
+
+/** Wires the view selector; the chosen view is saved with the settings. */
+const setupAchievements = () => {
+  document.querySelectorAll("#achievements-views button").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.achievementsView = button.dataset.mode;
+      renderAchievements();
+      persist();
+    });
+  });
+};
+
 const renderAll = () => {
   renderPlay();
   renderInstall();
@@ -780,6 +894,7 @@ const renderAll = () => {
   renderLanguageOptions();
   renderUpdate();
   renderSaves();
+  renderAchievements();
 };
 
 /**
@@ -797,6 +912,7 @@ const setupReloadOnFocus = () => {
       if (document.querySelector('.view[data-view="saves"]')?.classList.contains("is-active")) {
         await refreshAndRenderSaves();
       }
+      if (achievementsShown()) await refreshAchievements();
       if (saveTimer) return;
       const settings = await loadSettings();
       if (!settings) return;
@@ -828,6 +944,7 @@ setupInstall();
 setupGraphics();
 setupLanguages();
 setupSaves();
+setupAchievements();
 setupReloadOnFocus();
 
 /**
@@ -853,9 +970,12 @@ applyStoredGraphics(settings);
 state.userName = (settings.userName ?? "").slice(0, 15);
 state.gameLanguage = settings.gameLanguage ?? null;
 state.gameLanguageChosen = Boolean(settings.gameLanguageChosen);
+state.achievementsView = achievementView(settings.achievementsView);
 onLocaleChange(renderAll);
 await initI18n(settings.uiLanguage);
 document.getElementById("ui-language").value = getPreference();
 await restoreGameFolder(settings.gameFolder);
+// Without a valid folder restoreGameFolder reads nothing; the section still needs its locked page.
+if (!state.achievements) refreshAchievements();
 await refreshAndRenderSaves();
 setupUpdates();
