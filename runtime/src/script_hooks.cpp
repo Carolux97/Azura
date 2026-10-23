@@ -225,6 +225,9 @@ enum WatchedName {
   kClientGameOver,           // GearPC: shows the game over screen
   kClientSetCinematicMode,   // PlayerController: a cinematic starts or ends
   kMatineeCancelled,         // a Matinee sequence is skipped
+  kGetCallbackForOptionPsid,  // UIScene_Options: the live change callback of a row
+  kTVTypeWasChanged,         // UIScene_Options callback of TV type, borrowed by a row of ours
+  kGammaWasChanged,          // UIScene_Options callback of gamma, borrowed by a row of ours
   kWatchedNameCount,
 };
 constexpr const char* kWatchedNames[kWatchedNameCount] = {
@@ -236,7 +239,8 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "BuildCampaignURL",      "ServerTravel",           "ProcessServerTravel",
     "PawnDied",              "ShouldDeathCauseFailure", "GetDeathGameOverReason",
     "GameOverPlayer",        "ClientGameOver",         "ClientSetCinematicMode",
-    "MatineeCancelled"};
+    "MatineeCancelled",      "GetCallbackForOptionPSID", "Callback_TVTypeWasChanged",
+    "Callback_GammaWasChanged"};
 
 // FName index of each watched name, -1 until found (0 is a valid index: None).
 std::atomic<int32_t> g_names[kWatchedNameCount];
@@ -310,6 +314,11 @@ constexpr uint32_t kPopulateRow = 0;                // PopulateOptionsList local
 constexpr uint32_t kPopulateSliderValue = 172;      // PopulateOptionsList local Slider_Value
 constexpr uint32_t kPopulateListIndex = 176;        // PopulateOptionsList local OptionList_Index
 constexpr uint32_t kGetOptionValueAtIndex = 0;      // GetOptionValueAt parameter Index
+constexpr uint32_t kOptionsCategories = 1016;       // UIScene_Options.OptionCategories (TArray)
+constexpr uint32_t kCategorySize = 64;              // sizeof(OptionCategoryInfo)
+constexpr uint32_t kCategoryOptions = 40;           // OptionCategoryInfo.CategoryOptions (TArray)
+constexpr uint32_t kCallbackForPsid = 0;            // GetCallbackForOptionPSID parameter OptionPSID
+constexpr uint32_t kCallbackNewValue = 0;           // Callback_*WasChanged parameter NewValue (float)
 
 void StoreU32(uint8_t* base, uint32_t address, uint32_t value) {
   *reinterpret_cast<uint32_t*>(base + address) = __builtin_bswap32(value);
@@ -907,6 +916,97 @@ bool PatchTravelURL(uint8_t* base, uint32_t fstring_addr) {
   return write_url(new_url);
 }
 
+// --- Rows that depend on other rows ---
+//
+// Some rows of ours are only shown with certain values of others (the sharpness row only with an
+// image scaling effect that sharpens). The list is built from OptionCategories[CurrentMode].
+// CategoryOptions, filled with every row of ours from the localization file; those rows come last,
+// so the number of rows of that array (its TArray count) is lowered to hide them and raised again,
+// over the same elements, to show them. Only while the allocation still holds them.
+void SetShownRows(uint8_t* base, uint32_t scene, int category) {
+  const uint32_t categories = LoadU32(base, scene + kOptionsCategories);
+  if (!categories || category < 0 || static_cast<uint32_t>(category) >= LoadU32(base, scene + kOptionsCategories + 4)) {
+    return;
+  }
+  const uint32_t options = categories + static_cast<uint32_t>(category) * kCategorySize + kCategoryOptions;
+  const uint32_t shown = static_cast<uint32_t>(azura::menu::PcOptionsShownRows(category));
+  if (shown == 0 || LoadU32(base, options + 4) == shown) return;
+  if (shown > LoadU32(base, options + 8)) {
+    REXLOG_WARN("[Azura options] Category {} holds fewer rows than it should show ({})", category, shown);
+    return;
+  }
+  StoreU32(base, options + 4, shown);
+  REXLOG_DEBUG("[Azura options] Category {} shows {} rows", category, shown);
+}
+
+// Live changes. A row with bHasOnChangeCallback gets the callback GetCallbackForOptionPSID returns
+// for its profile setting, and Flash runs it every time the row's value changes. Rows of ours
+// borrow two callbacks of game rows that the Video list no longer has (see
+// PcOptionLiveCallbackPsid): the profile setting ID is swapped as GetCallbackForOptionPSID starts.
+void BorrowLiveCallback(uint8_t* base, uint32_t frame) {
+  const uint32_t psid_address = LoadU32(base, frame + kFrameLocals) + kCallbackForPsid;
+  const int borrowed = azura::menu::PcOptionLiveCallbackPsid(static_cast<int32_t>(LoadU32(base, psid_address)));
+  if (borrowed >= 0) StoreU32(base, psid_address, static_cast<uint32_t>(borrowed));
+}
+
+// Guest bytecode `PopulateOptionsList(); return;`, built once.
+uint32_t g_rebuild_list_code = 0;
+
+// Builds the current category's list again from the borrowed callback about to run (its frame in
+// ctx.r4), keeping the selection on row `row`: PopulateOptionsList ends with
+// `OptionsList.selectedIndex = 0.0`, whose float constant is `row` for the time of the call.
+void RebuildList(PPCContext& ctx, uint8_t* base, uint32_t function, int row) {
+  const uint32_t populate = FindClassFunction(base, LoadU32(base, function + kObjectOuter), "PopulateOptionsList");
+  if (!populate) {
+    REXLOG_WARN("[Azura options] PopulateOptionsList not found; the list is not rebuilt");
+    return;
+  }
+  if (!g_rebuild_list_code) {
+    constexpr uint8_t kTokenFinalFunction = 0x1C;
+    constexpr uint8_t kTokenEndFunctionParms = 0x16;
+    const uint8_t code[] = {kTokenFinalFunction, 0, 0, 0, 0, 0, 0, 0, 0, kTokenEndFunctionParms,
+                            kTokenReturn, kTokenNothing, kTokenEndOfScript};
+    const uint32_t address = rex::system::kernel_state()->memory()->SystemHeapAlloc(sizeof(code));
+    if (!address) return;
+    std::memcpy(base + address, code, sizeof(code));
+    StoreU32(base, address + 5, populate);
+    g_rebuild_list_code = address;
+  }
+  // The selection constant, found by the string before it: "selectedIndex", then a float token.
+  const uint32_t populate_code = LoadU32(base, populate + kStructScript);
+  const uint32_t populate_size = LoadU32(base, populate + kStructScript + 4);
+  const int64_t text = FindStringConst(base, populate_code, populate_size, "selectedIndex");
+  constexpr uint8_t kTokenFloatConst = 0x1E;
+  const uint32_t selection = text < 0 ? 0 : populate_code + static_cast<uint32_t>(text) + sizeof("selectedIndex");
+  const bool keep_selection = selection && selection + 5 <= populate_code + populate_size &&
+                              base[selection] == kTokenFloatConst && LoadU32(base, selection + 1) == 0;
+  if (keep_selection) StoreU32(base, selection + 1, FloatBits(static_cast<float>(row)));
+  const uint32_t frame = ctx.r4.u32;
+  const uint32_t own_code = LoadU32(base, frame + kFrameCode);
+  StoreU32(base, frame + kFrameCode, g_rebuild_list_code);
+  __imp__sub_822DF9E0(ctx, base);
+  StoreU32(base, frame + kFrameCode, own_code);
+  if (keep_selection) StoreU32(base, selection + 1, 0);
+  g_selected_row.store(keep_selection ? row : 0);
+  REXLOG_INFO("[Azura options] List rebuilt with {} rows, selection on row {}",
+              azura::menu::PcOptionsShownRows(CurrentMode(base, ctx.r3.u32)), keep_selection ? row : 0);
+}
+
+// Runs our code in place of a borrowed callback (see BorrowLiveCallback) when it comes from a row
+// of ours. Returns false when the game's own callback must run.
+bool HandleLiveChange(PPCContext& ctx, uint8_t* base, uint32_t function, int borrowed_psid) {
+  if (ObjectName(base, LoadU32(base, function + kObjectOuter)) != "UIScene_Options") return false;
+  const int category = CurrentMode(base, ctx.r3.u32);
+  const uint32_t bits = LoadU32(base, LoadU32(base, ctx.r4.u32 + kFrameLocals) + kCallbackNewValue);
+  float value;
+  std::memcpy(&value, &bits, 4);
+  int row = 0;
+  bool rows_changed = false;
+  if (!azura::menu::PcOptionLiveChange(category, borrowed_psid, value, row, rows_changed)) return false;
+  if (rows_changed) RebuildList(ctx, base, function, row);
+  return true;
+}
+
 }  // namespace
 
 extern "C" void sub_822DF4D0(PPCContext& __restrict ctx, uint8_t* base) {
@@ -988,6 +1088,8 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     g_returning_from_calibration.store(true);
   }
   if (Is(base, function, kReturnToMain) && g_returning_from_calibration.exchange(false)) return;
+  // A list being built: rows that depend on other rows' values are shown or hidden first.
+  if (Is(base, function, kPopulateOptionsList)) SetShownRows(base, ctx.r3.u32, CurrentMode(base, ctx.r3.u32));
   // A list being built, or the menu back on its categories: Flash starts every list on its first row.
   if (Is(base, function, kPopulateOptionsList) || Is(base, function, kReturnToMain)) {
     g_calibration_open.store(false);
@@ -1015,6 +1117,12 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     return;
   }
   if (Is(base, function, kFilterButtonInput) && HandleOptionsButton(ctx, base, function)) return;
+  if (Is(base, function, kGetCallbackForOptionPsid) &&
+      ObjectName(base, LoadU32(base, function + kObjectOuter)) == "UIScene_Options") {
+    BorrowLiveCallback(base, ctx.r4.u32);
+  }
+  if (Is(base, function, kTVTypeWasChanged) && HandleLiveChange(ctx, base, function, 53)) return;
+  if (Is(base, function, kGammaWasChanged) && HandleLiveChange(ctx, base, function, 49)) return;
   if (Is(base, function, kSpecialCaseValues) && FillOwnValueNames(ctx, base, function)) return;
   // The answer of the restart message box (see OpenRestartDialog): Accept restarts; nothing is
   // reset either way, so the Defaults code does not run.

@@ -365,6 +365,10 @@ or better on a 1080p display.
   GPU time median: 1x 12.1 / 13.3 ms and 12.0 ms, 2x 40.9 / 48.7 ms and 39.9 ms, 3x 78.5 / 89.9 ms
   and 78.3 ms (a 27-second run). The GPU limits every scale; 2x draws 4 times the pixels for 3.4
   times the time.
+- **Choosing it.** The Render resolution row of the game's Video menu (`render_resolution`:
+  Automatic, 1280x720, 2560x1440, 3840x2160), also shown by the launcher, sets the scale and the
+  texture cache limits when the game starts (`ApplyRenderResolution`, card 66). Automatic is 2x on
+  Pro, Max and Ultra chips with at least 16 GB of memory and 1x otherwise, the launcher's rule.
 
 ## 14. Upscaling: AMD CAS and Apple MetalFX
 
@@ -378,6 +382,12 @@ macOS bilinear, AMD CAS and Apple MetalFX; on Linux what its build has.
   MSL at start-up, with the chain the FidelityFX paint flow uses: sharpening when the guest output
   already has the window's size, otherwise resampling by up to 2x along each axis, the rest
   bilinear through an intermediate texture.
+- **Sharpness.** The Video menu's Sharpness slider (`upscaling_sharpness`, 0 to 1, card 66) sets
+  `present_cas_additional_sharpness` (and, with the FidelityFX SDK, lowers
+  `present_fsr_sharpness_reduction` from its default 0.2 to 0) and applies as the slider moves:
+  the row's live change callback (docs/reverse-engineering.md, "Live changes") has
+  `Presenter::RefreshGuestOutputSharpnessFromUIThread` take them again, and the next paint uses
+  them. MetalFX and bilinear have no sharpening, so the row only shows with CAS (or FSR).
 - **MetalFX** is `MTLFXSpatialScaler` from the guest output to the window size in one pass, into
   an intermediate texture copied to the drawable. It only upscales: a draw resolution scale above
   the window size stays bilinear.
