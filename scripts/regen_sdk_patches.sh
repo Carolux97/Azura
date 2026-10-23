@@ -44,6 +44,7 @@ INTERP_PATHS=(
   src/codegen/builders/builder_context.h
   src/codegen/builders/context.cpp
   src/codegen/builders/control_flow.cpp
+  src/codegen/builders/vector.cpp
   src/codegen/codegen_writer.cpp
   src/codegen/phase_validate.cpp
   src/codegen/instruction_dispatch.cpp
