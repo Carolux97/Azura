@@ -46,10 +46,18 @@ index da8e432..cb292a9 100644
    uint32_t primary_buffer_ptr_ = 0;
    uint32_t primary_buffer_size_ = 0;
 diff --git a/include/rex/graphics/flags.h b/include/rex/graphics/flags.h
-index 2cf24c4..272c7e1 100644
+index 2cf24c4..ee35f38 100644
 --- a/include/rex/graphics/flags.h
 +++ b/include/rex/graphics/flags.h
-@@ -72,6 +72,8 @@ REXCVAR_DECLARE(bool, use_fuzzy_alpha_epsilon);
+@@ -15,6 +15,7 @@
+ 
+ // GPU Core
+ REXCVAR_DECLARE(bool, vsync);
++REXCVAR_DECLARE(int32_t, guest_vblank_rate);
+ REXCVAR_DECLARE(bool, clear_memory_page_state);
+ REXCVAR_DECLARE(bool, half_pixel_offset);
+ REXCVAR_DECLARE(bool, async_shader_compilation);
+@@ -72,6 +73,8 @@ REXCVAR_DECLARE(bool, use_fuzzy_alpha_epsilon);
  
  // GPU Shader Translation
  REXCVAR_DECLARE(std::string, dump_shaders);
@@ -826,10 +834,21 @@ index e2983a4..ccc11f7 100644
                      "Use approximate compare for alpha test values to prevent "
                      "flickering on NVIDIA graphics cards");
 diff --git a/src/graphics/graphics_system.cpp b/src/graphics/graphics_system.cpp
-index 8f2fcb0..66df781 100644
+index 8f2fcb0..50e7c45 100644
 --- a/src/graphics/graphics_system.cpp
 +++ b/src/graphics/graphics_system.cpp
-@@ -76,6 +76,41 @@ GraphicsSystem::GraphicsSystem() : vsync_worker_running_(false) {}
+@@ -35,6 +35,10 @@ REXCVAR_DEFINE_STRING(swap_post_effect, "none", "GPU", "Swap post effect: none,
+     .allowed({"none", "fxaa", "fxaa_extreme"})
+     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+ 
++REXCVAR_DEFINE_INT32(guest_vblank_rate, 0, "GPU",
++                     "Vertical blanks per second the guest sees with vsync on; 0 uses the refresh "
++                     "rate of the guest video mode. A game that waits for a number of vertical "
++                     "blanks per frame runs that many times slower than this rate");
+ REXCVAR_DEFINE_BOOL(store_shaders, true, "GPU",
+                     "Store shaders persistently and load them when loading games to avoid "
+                     "runtime spikes and freezes when playing the game not for the first time.");
+@@ -76,6 +80,41 @@ GraphicsSystem::GraphicsSystem() : vsync_worker_running_(false) {}
  
  GraphicsSystem::~GraphicsSystem() = default;
  
@@ -871,6 +890,24 @@ index 8f2fcb0..66df781 100644
  X_STATUS GraphicsSystem::SetupPresentation(ui::WindowedAppContext* app_context) {
    if (presenter_) {
      return X_STATUS_SUCCESS;
+@@ -154,12 +193,15 @@ X_STATUS GraphicsSystem::SetupGuestGpu(runtime::FunctionDispatcher* function_dis
+         kernel::xboxkrnl::VdQueryVideoMode(&video_mode);
+         double refresh_rate_hz = std::max(1.0, double(float(video_mode.refresh_rate)));
+         uint64_t guest_tick_frequency = chrono::Clock::guest_tick_frequency();
+-        uint64_t vsync_interval_ticks =
+-            std::max(uint64_t(1), uint64_t(double(guest_tick_frequency) / refresh_rate_hz));
+         uint64_t no_vsync_interval_ticks = std::max(uint64_t(1), guest_tick_frequency / 1000);
+         uint64_t last_frame_time = chrono::Clock::QueryGuestTickCount();
+         while (vsync_worker_running_) {
+           uint64_t current_time = chrono::Clock::QueryGuestTickCount();
++          // Read every time, so a change of guest_vblank_rate applies at once.
++          int32_t vblank_rate = REXCVAR_GET(guest_vblank_rate);
++          double vblank_rate_hz = vblank_rate > 0 ? double(vblank_rate) : refresh_rate_hz;
++          uint64_t vsync_interval_ticks =
++              std::max(uint64_t(1), uint64_t(double(guest_tick_frequency) / vblank_rate_hz));
+           uint64_t interval_ticks =
+               REXCVAR_GET(vsync) ? vsync_interval_ticks : no_vsync_interval_ticks;
+           while (current_time - last_frame_time >= interval_ticks) {
 diff --git a/src/graphics/metal/metal_command_processor.h b/src/graphics/metal/metal_command_processor.h
 new file mode 100644
 index 0000000..b432d7c

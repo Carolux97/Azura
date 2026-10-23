@@ -41,7 +41,7 @@ vulkan_async_skip_incomplete_frames = false
 ppc_interpreter_fallback = true
 
 # ---------- Display ----------
-fullscreen = false
+fullscreen = true
 # Present the game in step with the display refresh (FIFO). The immediate and mailbox modes let
 # the presenter repaint the same frame hundreds of times per second, taking GPU time from the game.
 vulkan_allow_present_mode_immediate = false

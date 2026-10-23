@@ -392,7 +392,7 @@ Implemented in `runtime/src/menu/pc_options.{h,cpp}` (data and texts) and `scrip
 
 | Position | Category | Change |
 | --- | --- | --- |
-| 1 | Video | A list: Calibrate brightness (opens the game's calibration screen), Full screen, Vsync, Anti-aliasing, Motion blur, Anisotropic filtering, Image scaling. Back and Defaults |
+| 1 | Video | A list: Calibrate brightness (opens the game's calibration screen), Full screen, Frame rate limit (a list of our own), Anti-aliasing, Motion blur, Anisotropic filtering, Image scaling. Back and Defaults |
 | 5 | Keyboard and mouse | Replaces the storage location: Mouse sensitivity. Back and Defaults |
 
 How:
@@ -401,17 +401,30 @@ How:
   every `geargame.<lang>`, with every member, our texts in that language and the game's own texts
   (category titles, button names) kept from the file.
 - **List rows borrow profile settings the game never uses**, the engine's racing game preferences:
-  Movement Control 18 (calibration), Transmission 19 (vsync), Race Camera 20 (anti-aliasing), Brake
+  Movement Control 18 (calibration), Race Camera 20 (anti-aliasing), Brake
   21 (motion blur), Accelerator 22 (full screen); and two generic Xbox profile settings with three
   values that Gears does not read (**inferred**): Controller Sensitivity 13 (anisotropic filtering:
   off, 4x, 16x) and Voice Via Speakers 6 (image scaling: bilinear, AMD CAS, AMD FSR). Their
   definitions (`ProfileMappings[2]`, `[3]` and `[11]` to `[15]`) get our value names. The calibration row's definition has two values, both named "Open",
   since an array cannot shrink. The slider uses ID 9105, which the profile does not have.
+- **Lists of our own** (**verified**): a raw-value list row (`bUsesRawValue=true`) with an ID the
+  profile does not have (9106, frame rate limit) needs no definition, so it can have any number of
+  values with any names. `PopulateOptionsList` empties its local `OptionValues`
+  (`TArray<string>`), fills it with `GetProfileSettingValue_SpecialCase(psid, OptionValues)` (which
+  only knows the multiplayer characters 44/45 and weapons 50/130 and leaves it empty otherwise),
+  and hands each name to Flash with `OptionListProvider.SetElementString(J, SafeCaps(name))`. For
+  our IDs `script_hooks.cpp` runs bytecode of its own instead of the function's:
+  `OptionValues[I] = "name"` (`EX_Let`, `EX_DynArrayElement` with an `EX_IntConst` index and the
+  function's `EX_LocalOutVariable` 0x48 to `OptionValues`, `EX_UnicodeStringConst` big-endian
+  UTF-16) for each name, then `EX_Return EX_Nothing EX_EndOfScript`. The script interpreter grows
+  the array and allocates the strings with the game's allocator. The selected index and saving go
+  through the same hooks as the other rows (`OptionList_Index`, `GetOptionValueAt`); the profile
+  reads and writes of the unknown ID fail and change nothing.
 - **Showing values:** while `PopulateOptionsList` is on one of our rows, every call it makes
   (entered through `CallFunction`) rewrites its locals `Slider_Value` / `OptionList_Index` with the
   real value, so the call that hands them to Flash reads ours.
 - **Saving values:** when `GetOptionValueAt(Index)` returns for one of our rows, the value is
-  applied to its cvar (`fullscreen`, `vsync`, `swap_post_effect`, `motion_blur`,
+  applied to its cvar (`fullscreen`, `frame_rate_limit`, `swap_post_effect`, `motion_blur`,
   `anisotropic_override`, `present_effect`, `mnk_sensitivity`)
   and written to `azura.toml`, leaving the rest of the file as it is. The menu also writes the
   borrowed profile settings, which is harmless.
