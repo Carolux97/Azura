@@ -7,7 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { RESOLUTION_SCALES, autoResolutionScale, renderSize, textureMemoryFor } from "../src/graphics.js";
+import { RESOLUTION_SCALES, autoResolutionScale, renderSize, resolutionValue, scaleOfResolution } from "../src/graphics.js";
 
 test("render size multiplies the console's 1280x720", () => {
   assert.deepEqual(renderSize(1), { width: 1280, height: 720 });
@@ -32,8 +32,10 @@ test("every offered resolution is one the automatic choice can produce or larger
   assert.ok(RESOLUTION_SCALES.includes(1) && RESOLUTION_SCALES.includes(2));
 });
 
-test("texture memory grows with the resolution", () => {
-  assert.equal(textureMemoryFor(1), 384);
-  assert.equal(textureMemoryFor(2), 768);
-  assert.equal(textureMemoryFor(3), 768);
+test("resolutions are written as the game's Video menu names them", () => {
+  assert.deepEqual(RESOLUTION_SCALES.map(resolutionValue), ["1280x720", "2560x1440", "3840x2160"]);
+  assert.equal(scaleOfResolution("2560x1440"), 2);
+  assert.equal(scaleOfResolution("auto"), null);
+  assert.equal(scaleOfResolution("1920x1080"), null);
+  assert.equal(scaleOfResolution(undefined), null);
 });

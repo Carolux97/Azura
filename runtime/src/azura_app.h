@@ -18,6 +18,8 @@
 #include <rex/rex_app.h>
 #include <rex/runtime.h>
 #include <rex/system/flags.h>
+#include <rex/system/gpu_plugin.h>
+#include <rex/ui/presenter.h>
 
 #include "achievement_toast.h"
 #include "menu/menu_patches.h"
@@ -68,12 +70,35 @@ class AzuraApp : public rex::ReXApp {
     azura::menu::SetPcOptionsConfigPath(paths.config_path);
   }
 
+  // azura.toml is loaded and the GPU has not started: the render resolution of the Video menu
+  // sets the draw resolution scale and the texture memory, which the GPU reads once. Those
+  // settings belong to the GPU plugin, and a setting the runtime changes before its plugin is
+  // loaded is dropped, so the plugin is loaded here, as ReXApp would right after this hook (it
+  // keeps the one in `config.graphics`).
+  void OnPreSetup(rex::RuntimeConfig& config) override {
+    if (!config.graphics && !config.gpu_plugin.empty()) {
+      config.graphics = rex::system::LoadGpuPlugin(config.gpu_plugin);
+    }
+    azura::menu::ApplyRenderResolution();
+    azura::menu::ApplyUpscalingSharpness(false);
+  }
+
   // The runtime has mounted the game files and the game has not started: apply the menu changes
   // and route Quit Game to a normal window close (OnClosing shuts the title down).
   void OnPreLaunchModule() override {
     REXLOG_INFO("[Azura] Active gamertag / user_name: '{}'", REXCVAR_GET(user_name));
     // The frame rate limit of the Video menu (azura.toml) sets the guest's vertical blanks.
     azura::menu::ApplyFrameRateLimit();
+    // The Video menu's sharpness shows as soon as it changes: the presenter takes it again on the
+    // UI thread.
+    azura::menu::SetSharpnessChangedHandler([this] {
+      app_context().CallInUIThread([this] {
+        auto* graphics_system = runtime() ? runtime()->graphics_system() : nullptr;
+        if (!shutting_down_ && graphics_system && graphics_system->presenter()) {
+          graphics_system->presenter()->RefreshGuestOutputSharpnessFromUIThread();
+        }
+      });
+    });
     // The SDK writes one line per frame (frame time, FPS, draw calls...) to the CSV that
     // perf_log_csv names, once it is opened here; empty, the default, writes nothing.
     if (const std::string& csv = REXCVAR_GET(perf_log_csv); !csv.empty()) {
@@ -163,6 +188,7 @@ class AzuraApp : public rex::ReXApp {
   void OnShutdown() override {
     button_prompts_.reset();
     shutting_down_ = true;
+    azura::menu::SetSharpnessChangedHandler(nullptr);
     if (auto* graphics_system = runtime()->graphics_system()) {
       graphics_system->SetShaderCompilationStartedCallback(nullptr);
     }
