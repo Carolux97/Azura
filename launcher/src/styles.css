@@ -656,6 +656,251 @@ input[type="range"] { width: 100%; accent-color: var(--imulsion); }
 .backup-item-title { font-weight: 500; font-size: 13px; color: var(--text); }
 .backup-item-meta { font-size: 12px; color: var(--text-dim); }
 
+/* ---------- Achievements view ---------- */
+
+/* Wider than the other views: the badges grid and the view by acts need the room. */
+.view-achievements { max-width: 980px; }
+.ach-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+
+/* The selector of the three ways to see the achievements. */
+.segmented { display: flex; gap: 6px; margin-top: 6px; }
+.segmented[hidden] { display: none; }
+.segmented button,
+.chip {
+  padding: 6px 14px;
+  background: transparent;
+  border: 1px solid var(--steel-hi);
+  font-family: var(--font-ui);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.segmented button:hover,
+.chip:hover { color: var(--text); }
+.segmented button.is-on,
+.chip.is-on { border-color: var(--imulsion); color: var(--imulsion); background: rgba(255, 184, 28, 0.1); }
+
+.nav-item .lock { width: 14px; height: 14px; flex: none; color: var(--text-faint); }
+.nav-item.is-locked:not(.is-active) { color: var(--text-dim); }
+
+.ach-filters { display: flex; flex-wrap: wrap; gap: 8px; margin: 2px 0 14px; }
+.ach-empty { margin: 4px 0; }
+
+/* Medals: the game's artwork in a ring, gold once unlocked; dimmed while locked. */
+.medal {
+  --medal-size: 56px;
+  flex: none;
+  width: var(--medal-size);
+  height: var(--medal-size);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 50%;
+  background: #1b1d21;
+  border: 2.5px solid var(--steel-hi);
+}
+.medal img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+.medal svg { width: 100%; height: 100%; }
+.medal .medal-fill { fill: var(--steel-hi); }
+.medal .medal-line { stroke: var(--steel-hi); }
+.medal .medal-question { font-family: var(--font-display); font-size: 30px; }
+.medal.is-unlocked { border-color: var(--imulsion); box-shadow: 0 0 10px rgba(255, 184, 28, 0.4); }
+.medal.is-unlocked .medal-fill { fill: var(--imulsion); }
+.medal.is-unlocked .medal-line { stroke: var(--imulsion); }
+.medal.is-locked img { filter: grayscale(1) brightness(0.55); }
+
+/* The list (the list view and the sections by act). */
+.ach-list { list-style: none; margin: 0; padding: 0; }
+.ach { display: flex; align-items: center; gap: 16px; padding: 13px 4px; border-bottom: 1px solid rgba(255, 255, 255, 0.06); }
+.ach:last-child { border-bottom: 0; }
+.ach-text { flex: 1; min-width: 0; }
+.ach-name { font-family: var(--font-ui); font-weight: 700; font-size: 19px; letter-spacing: 0.06em; text-transform: uppercase; }
+.ach-desc { margin-top: 1px; font-size: 15px; color: var(--text-dim); }
+.ach.is-locked .ach-name,
+.ach.is-hidden .ach-name { color: var(--text-dim); }
+.ach.is-locked .ach-desc,
+.ach.is-hidden .ach-desc { color: var(--text-faint); }
+.ach.is-hidden .ach-name { font-style: italic; letter-spacing: 0.14em; }
+.ach-g { min-width: 52px; text-align: right; font-family: var(--font-display); font-size: 30px; color: var(--imulsion); }
+.ach-g small { margin-left: 2px; font-size: 16px; color: var(--text-dim); }
+.ach.is-locked .ach-g,
+.ach.is-hidden .ach-g { color: var(--text-faint); }
+.ach-when { display: grid; min-width: 104px; text-align: right; font-family: var(--font-ui); font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-faint); }
+.ach-when b { font-weight: 600; color: var(--text-dim); }
+.ach-list.is-compact .ach { gap: 10px; padding: 10px 0; }
+.ach-list.is-compact .ach-name { font-size: 15px; }
+.ach-list.is-compact .ach-desc { font-size: 13px; }
+.ach-list.is-compact .ach-g { min-width: 40px; font-size: 22px; }
+
+/* The grid of badges. */
+.ach-grid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 12px; }
+.tile {
+  display: grid;
+  justify-items: center;
+  padding: 16px 10px 12px;
+  text-align: center;
+  background: var(--panel);
+  border: 1px solid var(--steel-line);
+  clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%);
+  transition: border-color 0.15s, transform 0.15s;
+}
+.tile:hover { border-color: var(--imulsion); transform: translateY(-2px); }
+.tile-name { min-height: 34px; margin-top: 8px; font-family: var(--font-ui); font-weight: 700; font-size: 14px; letter-spacing: 0.06em; text-transform: uppercase; }
+.tile-g { font-family: var(--font-display); font-size: 20px; color: var(--imulsion); }
+.tile.is-locked .tile-name,
+.tile.is-hidden .tile-name { color: var(--text-dim); }
+.tile.is-locked .tile-g,
+.tile.is-hidden .tile-g { color: var(--text-faint); }
+
+.tile:focus-visible { border-color: var(--imulsion); outline: none; }
+
+/* The card of a badge, over the grid while it is hovered or focused (placed by achievementsPage.js). */
+.ach-tooltip {
+  --arrow-x: 50%;
+  position: fixed;
+  z-index: 40;
+  width: 270px;
+  padding: 12px 14px 11px;
+  background: rgba(14, 15, 17, 0.97);
+  border: 1px solid var(--imulsion);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.6), 0 0 18px rgba(255, 184, 28, 0.12);
+  pointer-events: none;
+  animation: ach-tooltip-in 0.12s ease-out;
+}
+.ach-tooltip[hidden] { display: none; }
+.ach-tooltip.is-locked,
+.ach-tooltip.is-hidden { border-color: var(--steel-hi); }
+/* The arrow, a small rotated square on the edge that faces the badge. */
+.ach-tooltip::after {
+  content: "";
+  position: absolute;
+  left: var(--arrow-x);
+  bottom: -6px;
+  width: 10px;
+  height: 10px;
+  background: inherit;
+  border: inherit;
+  border-top: 0;
+  border-left: 0;
+  transform: translateX(-50%) rotate(45deg);
+}
+.ach-tooltip.is-below::after { top: -6px; bottom: auto; transform: translateX(-50%) rotate(225deg); }
+.ach-tooltip-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.ach-tooltip-name { font-family: var(--font-ui); font-weight: 700; font-size: 16px; letter-spacing: 0.06em; text-transform: uppercase; }
+.ach-tooltip-g { flex: none; font-family: var(--font-display); font-size: 22px; color: var(--imulsion); }
+.ach-tooltip-g small { margin-left: 2px; font-size: 13px; color: var(--text-dim); }
+.ach-tooltip.is-locked .ach-tooltip-g,
+.ach-tooltip.is-hidden .ach-tooltip-g { color: var(--text-faint); }
+.ach-tooltip.is-hidden .ach-tooltip-name { font-style: italic; color: var(--text-dim); }
+.ach-tooltip-desc { margin: 4px 0 8px; font-size: 14px; line-height: 1.35; color: var(--text-dim); }
+.ach-tooltip-status { display: flex; gap: 6px; font-family: var(--font-ui); font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-faint); }
+.ach-tooltip-status b { font-weight: 600; color: var(--text-dim); }
+.ach-tooltip.is-unlocked .ach-tooltip-status { color: var(--imulsion); }
+@keyframes ach-tooltip-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* The Embry Star card: the badge, the gamerscore earned and its bar. */
+.embry-card { display: flex; align-items: center; gap: 26px; }
+.embry-card.is-side { display: grid; justify-items: center; text-align: center; gap: 6px; }
+.embry-badge { position: relative; flex: none; width: 118px; }
+.embry-card.is-stats .embry-badge { width: 150px; }
+.embry-card.is-side .embry-badge { width: 130px; }
+.embry-badge svg { display: block; width: 100%; }
+.embry-badge.is-dim svg { filter: grayscale(1) brightness(0.62); }
+.embry-info { flex: 1; min-width: 0; width: 100%; }
+.embry-g { font-family: var(--font-display); font-size: 44px; line-height: 1; letter-spacing: 0.04em; }
+.embry-g b { font-weight: 600; color: var(--imulsion-hot); }
+.embry-g small { font-size: 22px; color: var(--text-dim); }
+.embry-bar {
+  position: relative;
+  height: 10px;
+  margin: 10px 0 8px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--steel-line);
+  clip-path: polygon(0 0, 100% 0, calc(100% - 6px) 100%, 0 100%);
+}
+.embry-bar span { display: block; height: 100%; background: linear-gradient(90deg, var(--imulsion-deep), var(--imulsion) 70%, var(--imulsion-hot)); box-shadow: 0 0 12px var(--imulsion-glow); }
+.embry-bar.is-thin { height: 8px; margin: 10px 0 4px; }
+.embry-count { font-family: var(--font-ui); font-size: 14px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-dim); }
+.embry-hint { margin-top: 6px; font-size: 14px; color: var(--text-faint); }
+.embry-stats { display: flex; gap: 18px; }
+.embry-stat { min-width: 76px; text-align: center; }
+.embry-stat b { display: block; font-family: var(--font-display); font-size: 38px; line-height: 1; color: var(--text); }
+.embry-stat span { font-family: var(--font-ui); font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-dim); }
+
+/* Every achievement unlocked: a banner, a halo with slow rays behind the badge, a gold border on
+   the card and a shine running along the full bar. */
+.embry-banner {
+  margin: -6px 0 16px;
+  padding: 10px 16px;
+  border: 1px solid var(--imulsion);
+  background: linear-gradient(90deg, rgba(255, 184, 28, 0.18), rgba(255, 184, 28, 0.04));
+  font-family: var(--font-ui);
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--imulsion-hot);
+}
+.embry-banner small { margin-left: 14px; font-weight: 600; letter-spacing: 0.12em; color: var(--text-dim); }
+.embry-card.is-earned { border-color: var(--imulsion); box-shadow: 0 0 0 1px rgba(255, 184, 28, 0.25) inset, 0 0 36px rgba(255, 184, 28, 0.14); }
+.embry-card.is-earned .embry-badge svg { filter: drop-shadow(0 0 14px rgba(235, 238, 245, 0.55)) drop-shadow(0 0 28px rgba(255, 184, 28, 0.35)); }
+.embry-card.is-earned .embry-badge::before {
+  content: "";
+  position: absolute;
+  inset: -26%;
+  z-index: -1;
+  border-radius: 50%;
+  background: repeating-conic-gradient(from 0deg, rgba(255, 224, 138, 0.28) 0 6deg, transparent 6deg 18deg);
+  -webkit-mask: radial-gradient(circle, #000 30%, transparent 68%);
+  mask: radial-gradient(circle, #000 30%, transparent 68%);
+  animation: embry-rays 28s linear infinite;
+}
+.embry-card.is-earned .embry-core { fill: #ffe08a; }
+.embry-card.is-earned .embry-g b { text-shadow: 0 0 18px var(--imulsion-glow); }
+.embry-card.is-earned .embry-bar span {
+  background: linear-gradient(90deg, var(--imulsion-deep), var(--imulsion), var(--imulsion-hot), var(--imulsion)) 0 0 / 200% 100%;
+  animation: embry-shine 3.2s linear infinite;
+}
+@keyframes embry-rays { to { transform: rotate(360deg); } }
+@keyframes embry-shine { to { background-position: -200% 0; } }
+
+/* The view by acts: the sections, with the Embry Star card and what comes next beside them. */
+.ach-columns { display: grid; grid-template-columns: 1fr 280px; gap: 22px; align-items: start; }
+.ach-side { position: sticky; top: 0; }
+.ach-section-head { display: flex; justify-content: space-between; align-items: flex-start; }
+.ach-section-head .help { margin: 0; }
+.ach-section-count { font-family: var(--font-display); font-size: 30px; color: var(--imulsion); }
+/* Below the default window width the sections get too narrow beside the card: the card and what
+   comes next go above them instead. */
+@media (max-width: 1140px) {
+  .ach-columns { grid-template-columns: 1fr; }
+  .ach-side { position: static; order: -1; display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .ach-side > .panel { margin-bottom: 0; }
+}
+
+/* The page without the game: dimmed medals behind a card with a lock. */
+.ach-stage { position: relative; }
+.ach-ghost { opacity: 0.5; filter: saturate(0.4); }
+.ach-gate {
+  position: absolute;
+  top: 44%;
+  left: 50%;
+  width: min(440px, 86%);
+  margin: 0;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  background: rgba(14, 15, 17, 0.94);
+  border-color: var(--steel-hi);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
+}
+.ach-gate .lock { display: block; width: 34px; height: 34px; margin: 0 auto 8px; color: var(--imulsion); }
+.ach-gate .panel-title { font-size: 20px; }
+.ach-detail { margin: -6px 0 14px; font-size: 12px; color: var(--text-faint); word-break: break-word; }
+.skeleton { height: 12px; margin: 6px 0; border-radius: 2px; background: rgba(255, 255, 255, 0.08); }
+.skeleton.is-small { height: 9px; opacity: 0.7; }
+.skeleton.is-g { flex: none; width: 46px; height: 22px; }
+
 /* ---------- Reduced motion ---------- */
 
 @media (prefers-reduced-motion: reduce) {
@@ -674,4 +919,7 @@ input[type="range"] { width: 100%; accent-color: var(--imulsion); }
   .rail-foot { display: none; }
   .content { padding: 28px 16px; }
   .play-row, .field-grid { grid-template-columns: 1fr; }
+  .ach-head, .embry-card { flex-wrap: wrap; }
+  .ach-columns { grid-template-columns: 1fr; }
+  .ach-when { display: none; }
 }

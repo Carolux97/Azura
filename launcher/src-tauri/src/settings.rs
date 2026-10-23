@@ -8,7 +8,7 @@
 //!   setting (cvar) names. The in-game settings menu (F4) writes to it too, so the launcher only
 //!   ever rewrites its own keys and keeps everything else, comments included.
 //! - `launcher.toml`: what only the launcher uses (interface language, chosen preset, which game
-//!   language was picked, and the saves folder, which the runtime receives on the command line;
+//!   language was picked, how the Achievements section shows them, and the saves folder, which the runtime receives on the command line;
 //!   see `saves.rs`). The game language also reaches the runtime as `user_language`.
 //!
 //! Graphics values are passed through as found: a key missing from `azura.toml` is sent as
@@ -88,6 +88,13 @@ fn default_true() -> bool {
     true
 }
 
+/// How the Achievements section shows them when the player has not chosen: as a list.
+const DEFAULT_ACHIEVEMENTS_VIEW: &str = "list";
+
+fn default_achievements_view() -> String {
+    DEFAULT_ACHIEVEMENTS_VIEW.into()
+}
+
 /// `render_resolution` for what an older launcher stored with the draw resolution `scale`: "auto"
 /// when its render resolution followed the Mac, else the size of that scale (`None` for a scale
 /// the menu lacks).
@@ -122,6 +129,10 @@ pub struct Settings {
     pub game_language: Option<String>,
     /// Whether the user picked `game_language` (an automatic choice is recomputed per folder).
     pub game_language_chosen: bool,
+    /// How the Achievements section shows them: "list", "badges" or "acts" (see
+    /// `launcher/src/achievements.js`).
+    #[serde(default = "default_achievements_view")]
+    pub achievements_view: String,
     /// Folder that holds the saves. Read-only here: `save` keeps the stored one, and only moving
     /// the saves (`SettingsPaths::set_saves_folder`) changes it, so the interface may leave it out.
     #[serde(default)]
@@ -140,6 +151,7 @@ struct LauncherFile {
     ui_language: String,
     game_language: Option<String>,
     game_language_chosen: bool,
+    achievements_view: String,
     saves_folder: Option<String>,
 }
 
@@ -150,6 +162,7 @@ impl Default for LauncherFile {
             ui_language: "auto".into(),
             game_language: None,
             game_language_chosen: false,
+            achievements_view: default_achievements_view(),
             saves_folder: None,
         }
     }
@@ -261,6 +274,7 @@ impl SettingsPaths {
             ui_language: launcher.ui_language,
             game_language: launcher.game_language,
             game_language_chosen: launcher.game_language_chosen,
+            achievements_view: launcher.achievements_view,
             saves_folder,
         })
     }
@@ -330,6 +344,7 @@ impl SettingsPaths {
             ui_language: settings.ui_language.clone(),
             game_language: settings.game_language.clone(),
             game_language_chosen: settings.game_language_chosen,
+            achievements_view: settings.achievements_view.clone(),
             saves_folder: self.load_launcher_file()?.saves_folder,
         };
         self.save_launcher_file(&launcher)
@@ -357,6 +372,7 @@ mod tests {
             ui_language: "es".into(),
             game_language: Some("ESN".into()),
             game_language_chosen: true,
+            achievements_view: "badges".into(),
             saves_folder: crate::saves::default_folder().to_string_lossy().into_owned(),
         }
     }
@@ -370,6 +386,7 @@ mod tests {
         assert!(settings.fullscreen);
         assert_eq!(settings.graphics, GraphicsValues::default());
         assert_eq!(settings.ui_language, "auto");
+        assert_eq!(settings.achievements_view, "list");
     }
 
     #[test]
@@ -394,6 +411,7 @@ mod tests {
             "gameLanguageChosen":false}"#;
         let settings: Settings = serde_json::from_str(json).unwrap();
         assert_eq!(settings.game_folder.as_deref(), Some("/Games/Gears of War 3"));
+        assert_eq!(settings.achievements_view, "list");
     }
 
     #[test]

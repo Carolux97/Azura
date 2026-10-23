@@ -211,3 +211,33 @@ export const openSavesFolder = async () => {
   if (isNativeApp) return tauri.core.invoke("open_saves_folder");
 };
 
+
+/**
+ * The player's achievements for the Achievements section (see src-tauri/src/achievements.rs), for
+ * the game in `gameFolder`, with their texts in `gameLanguage` (an engine code), else in
+ * `uiLocale`, else in English. Resolves to
+ *   { status: "ok", achievements, unlockedCount, earnedGamerscore, totalGamerscore, completedAt }
+ * or { status: "noGame" }, { status: "noRuntime" }, { status: "unavailable", detail }.
+ * The browser simulation sends 50 placeholder achievements with a few unlocked and one hidden.
+ */
+export const getAchievements = async ({ gameFolder, gameLanguage, uiLocale }) => {
+  if (isNativeApp) return tauri.core.invoke("get_achievements", { gameFolder, gameLanguage, uiLocale });
+  if (!gameFolder) return { status: "noGame" };
+  const unlockedAt = Date.parse("2026-10-21T21:16:05Z");
+  const achievements = Array.from({ length: 50 }, (_, index) => {
+    const id = index + 1;
+    const unlocked = id <= 3;
+    const hidden = id === 19;
+    return {
+      id,
+      name: hidden ? null : `Achievement ${id}`,
+      description: hidden ? null : unlocked ? "Simulated achievement, unlocked." : "Simulated achievement, still locked.",
+      gamerscore: hidden ? null : 20,
+      hidden,
+      unlocked,
+      unlockedAt: unlocked ? unlockedAt + id * 3_600_000 : null,
+      icon: null,
+    };
+  });
+  return { status: "ok", achievements, unlockedCount: 3, earnedGamerscore: 60, totalGamerscore: 1000, completedAt: null };
+};
