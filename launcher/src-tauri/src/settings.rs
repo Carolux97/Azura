@@ -228,7 +228,7 @@ impl SettingsPaths {
             fullscreen: runtime
                 .get(KEY_FULLSCREEN)
                 .and_then(Item::as_bool)
-                .unwrap_or(false),
+                .unwrap_or(true),
             graphics: GraphicsValues {
                 resolution_scale: get_integer(&runtime, KEY_SCALE_X),
                 texture_memory: get_integer(&runtime, KEY_TEXTURE_SOFT),
@@ -327,7 +327,7 @@ mod tests {
         let settings = SettingsPaths::new(&dir).load().unwrap();
         assert_eq!(settings.game_folder, None);
         assert_eq!(settings.user_name, None);
-        assert!(!settings.fullscreen);
+        assert!(settings.fullscreen);
         assert_eq!(settings.graphics, GraphicsValues::default());
         assert!(settings.resolution_auto);
         assert_eq!(settings.ui_language, "auto");

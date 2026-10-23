@@ -87,7 +87,7 @@ const state = {
   system: null,
   launcherVersion: BROWSER_LAUNCHER_VERSION,
   userName: "",
-  fullscreen: false,
+  fullscreen: true,
   // Render resolution: "Automatic" (follows this Mac) or the scale the user chose.
   resolutionAuto: true,
   resolutionScale: 1,
