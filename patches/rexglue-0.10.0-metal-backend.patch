@@ -700,7 +700,7 @@ index a744375..92724c2 100644
    if (!count_remaining) {
      REXGPU_ERROR("{}: Packet too small, can't read VGT_DRAW_INITIATOR", opcode_name);
 diff --git a/src/graphics/flags.cpp b/src/graphics/flags.cpp
-index e2983a4..ad10b87 100644
+index e2983a4..ccc11f7 100644
 --- a/src/graphics/flags.cpp
 +++ b/src/graphics/flags.cpp
 @@ -25,6 +25,25 @@ REXCVAR_DEFINE_BOOL(gamma_render_target_as_unorm16, true, "GPU",
