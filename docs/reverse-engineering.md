@@ -392,7 +392,7 @@ Implemented in `runtime/src/menu/pc_options.{h,cpp}` (data and texts) and `scrip
 
 | Position | Category | Change |
 | --- | --- | --- |
-| 1 | Video | A list: Calibrate brightness (opens the game's calibration screen), Full screen, Frame rate limit (a list of our own), Anti-aliasing, Motion blur, Anisotropic filtering, Image scaling. Back and Defaults |
+| 1 | Video | A list: Calibrate brightness (opens the game's calibration screen), Full screen, Frame rate limit (a list of our own), Anti-aliasing, Motion blur, Anisotropic filtering, Render resolution (a list of our own), Image scaling, Sharpness (a slider, only with an image scaling effect that sharpens). Back and Defaults |
 | 5 | Keyboard and mouse | Replaces the storage location: Mouse sensitivity. Back and Defaults |
 
 How:
@@ -406,10 +406,11 @@ How:
   values that Gears does not read (**inferred**): Controller Sensitivity 13 (anisotropic filtering:
   off, 4x, 16x). Their definitions (`ProfileMappings[2]` and `[11]` to `[15]`) get our value
   names. The calibration row's definition has two values, both named "Open",
-  since an array cannot shrink. The slider uses ID 9105, which the profile does not have.
+  since an array cannot shrink. The sliders use IDs the profile does not have: 9105 (mouse sensitivity) and 9109 (sharpness).
 - **Lists of our own** (**verified**): a raw-value list row (`bUsesRawValue=true`) with an ID the
   profile does not have (9106 frame rate limit, 9107 image scaling, whose values are the upscaling
-  effects of each platform's build) needs no definition, so it can have any number of
+  effects of each platform's build, 9108 render resolution, whose first value is "Automatic" in
+  the player's language) needs no definition, so it can have any number of
   values with any names. `PopulateOptionsList` empties its local `OptionValues`
   (`TArray<string>`), fills it with `GetProfileSettingValue_SpecialCase(psid, OptionValues)` (which
   only knows the multiplayer characters 44/45 and weapons 50/130 and leaves it empty otherwise),
@@ -441,6 +442,25 @@ How:
   categories while Flash goes back to the Video list; that one call is skipped.
 - **Motion blur** is applied at start-up by setting `[SystemSettings] MotionBlur` in
   `Xbox360-GearEngine.ini`.
+- **Live changes** (**verified** on screen): a row's value only lives in Flash until the category
+  is left, unless the row has `bHasOnChangeCallback`, in which case Flash runs the delegate
+  `GetCallbackForOptionPSID(psid)` gave it every time the value changes, with the new value (the
+  slider value or the list index). That function is a switch over the game's IDs (49 gamma,
+  53 TV type, 41 to 43 the volumes). Image scaling and Sharpness set the flag and, as
+  `GetCallbackForOptionPSID` starts, their IDs are swapped for 53 and 49, whose callbacks
+  (`Callback_TVTypeWasChanged`, `Callback_GammaWasChanged` of `UIScene_Options`) no row of the
+  Video list uses any more. When those run from one of our rows, our code runs instead: Sharpness
+  applies at once, Image scaling saves its value and shows or hides the Sharpness row.
+- **Rows shown or hidden with the menu open** (**verified** on screen): rows of ours that depend on
+  another row's value come last in the localization file, so they are hidden by lowering the count
+  of `OptionCategories[1].CategoryOptions` (the `TArray` at +40 of the category) and shown again
+  by raising it over the same elements, while its allocation holds them. Before every
+  `PopulateOptionsList` the count is set; after a change the list is rebuilt from the borrowed
+  callback by running bytecode of ours in its frame, `PopulateOptionsList(); return;` (final
+  function token `1C` with the function's address, `16`, `04 0B`, `53`), so the engine calls it
+  the normal way. `PopulateOptionsList` ends with `OptionsList.selectedIndex = 0.0`: for that
+  call its float constant (after the `"selectedIndex"` string) is the changed row's index, so the
+  selection stays there.
 
 ## Profile settings
 

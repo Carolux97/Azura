@@ -42,10 +42,17 @@ const KEY_USER_NAME: &str = "user_name";
 const KEY_USER_LANGUAGE: &str = "user_language";
 const KEY_GPU_PLUGIN: &str = "gpu_plugin";
 const KEY_FULLSCREEN: &str = "fullscreen";
+/// Render resolution of the game's Video menu ("auto", "1280x720", "2560x1440" or "3840x2160").
+/// Defined by the runtime, which sets the draw resolution scale and texture memory from it.
+const KEY_RENDER_RESOLUTION: &str = "render_resolution";
+// What older launchers wrote in its place; the runtime now sets them itself at start-up.
 const KEY_SCALE_X: &str = "draw_resolution_scale_x";
-const KEY_SCALE_Y: &str = "draw_resolution_scale_y";
-const KEY_TEXTURE_SOFT: &str = "texture_cache_memory_limit_soft";
-const KEY_TEXTURE_HARD: &str = "texture_cache_memory_limit_hard";
+const LEGACY_KEYS: [&str; 4] = [
+    KEY_SCALE_X,
+    "draw_resolution_scale_y",
+    "texture_cache_memory_limit_soft",
+    "texture_cache_memory_limit_hard",
+];
 
 /// Console language ID (the SDK's `XLanguage`) for an engine language code. Czech and Hungarian
 /// have none on the console, so they are not passed to the runtime.
@@ -73,12 +80,27 @@ const GPU_PLUGIN: &str = "xenos";
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphicsValues {
-    pub resolution_scale: Option<i64>,
-    pub texture_memory: Option<i64>,
+    /// `render_resolution`, the same setting as the game's Video menu.
+    pub render_resolution: Option<String>,
 }
 
 fn default_true() -> bool {
     true
+}
+
+/// `render_resolution` for what an older launcher stored with the draw resolution `scale`: "auto"
+/// when its render resolution followed the Mac, else the size of that scale (`None` for a scale
+/// the menu lacks).
+fn legacy_render_resolution(resolution_auto: bool, scale: i64) -> Option<String> {
+    if resolution_auto {
+        return Some("auto".into());
+    }
+    match scale {
+        1 => Some("1280x720".into()),
+        2 => Some("2560x1440".into()),
+        3 => Some("3840x2160".into()),
+        _ => None,
+    }
 }
 
 /// Everything the interface reads and writes, exchanged with it as JSON.
@@ -92,10 +114,8 @@ pub struct Settings {
     /// Display mode (`fullscreen` in `azura.toml`).
     pub fullscreen: bool,
     /// Graphics values found in `azura.toml`.
+    #[serde(default)]
     pub graphics: GraphicsValues,
-    /// The render resolution follows this Mac ("Automatic") instead of the scale the user chose.
-    #[serde(default = "default_true")]
-    pub resolution_auto: bool,
     /// Interface language: "auto" (follow the system) or a launcher locale code.
     pub ui_language: String,
     /// Engine language code of the game ("INT", "ESN", ...), when one is selected.
@@ -113,6 +133,9 @@ pub struct Settings {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 struct LauncherFile {
+    /// Written by older launchers (the render resolution followed the Mac); read only to carry
+    /// that choice over to `render_resolution`.
+    #[serde(default = "default_true", skip_serializing)]
     resolution_auto: bool,
     ui_language: String,
     game_language: Option<String>,
@@ -230,15 +253,31 @@ impl SettingsPaths {
                 .and_then(Item::as_bool)
                 .unwrap_or(true),
             graphics: GraphicsValues {
-                resolution_scale: get_integer(&runtime, KEY_SCALE_X),
-                texture_memory: get_integer(&runtime, KEY_TEXTURE_SOFT),
+                render_resolution: get_string(&runtime, KEY_RENDER_RESOLUTION).or_else(|| {
+                    get_integer(&runtime, KEY_SCALE_X)
+                        .and_then(|scale| legacy_render_resolution(launcher.resolution_auto, scale))
+                }),
             },
-            resolution_auto: launcher.resolution_auto,
             ui_language: launcher.ui_language,
             game_language: launcher.game_language,
             game_language_chosen: launcher.game_language_chosen,
             saves_folder,
         })
+    }
+
+    /// Writes `render_resolution` to `azura.toml` when only an older launcher's scale is there, so
+    /// the game starts at the resolution chosen before the Video menu had it. Called before every
+    /// launch; a file that already has the key, or none to carry over, is left untouched.
+    pub fn migrate_render_resolution(&self) -> Result<(), String> {
+        let runtime_text = read_optional(&self.runtime_config).map_err(|e| e.to_string())?;
+        let runtime: DocumentMut = runtime_text
+            .parse()
+            .map_err(|e| format!("{} is not valid TOML: {e}", self.runtime_config.display()))?;
+        if runtime.contains_key(KEY_RENDER_RESOLUTION) || !runtime.contains_key(KEY_SCALE_X) {
+            return Ok(());
+        }
+        let settings = self.load()?;
+        self.save(&settings)
     }
 
     /// Saves the settings. `azura.toml` is re-read first and only the launcher's keys change, so
@@ -271,11 +310,14 @@ impl SettingsPaths {
             KEY_USER_LANGUAGE,
             settings.game_language.as_deref().and_then(console_language).map(value),
         );
-        set_or_remove(&mut runtime, KEY_SCALE_X, graphics.resolution_scale.map(value));
-        set_or_remove(&mut runtime, KEY_SCALE_Y, graphics.resolution_scale.map(value));
-        set_or_remove(&mut runtime, KEY_TEXTURE_SOFT, graphics.texture_memory.map(value));
-        // The hard limit is kept at twice the soft one, as in the SDK defaults (384 / 768 MB).
-        set_or_remove(&mut runtime, KEY_TEXTURE_HARD, graphics.texture_memory.map(|mb| value(mb * 2)));
+        set_or_remove(
+            &mut runtime,
+            KEY_RENDER_RESOLUTION,
+            graphics.render_resolution.as_deref().map(value),
+        );
+        for key in LEGACY_KEYS {
+            runtime.remove(key);
+        }
         let runtime_out = if is_new {
             format!("{RUNTIME_CONFIG_HEADER}\n{runtime}")
         } else {
@@ -284,7 +326,7 @@ impl SettingsPaths {
         write_atomically(&self.runtime_config, &runtime_out).map_err(|e| e.to_string())?;
 
         let launcher = LauncherFile {
-            resolution_auto: settings.resolution_auto,
+            resolution_auto: true,
             ui_language: settings.ui_language.clone(),
             game_language: settings.game_language.clone(),
             game_language_chosen: settings.game_language_chosen,
@@ -310,10 +352,8 @@ mod tests {
             user_name: Some("Marcus".into()),
             fullscreen: true,
             graphics: GraphicsValues {
-                resolution_scale: Some(2),
-                texture_memory: Some(768),
+                render_resolution: Some("2560x1440".into()),
             },
-            resolution_auto: false,
             ui_language: "es".into(),
             game_language: Some("ESN".into()),
             game_language_chosen: true,
@@ -329,7 +369,6 @@ mod tests {
         assert_eq!(settings.user_name, None);
         assert!(settings.fullscreen);
         assert_eq!(settings.graphics, GraphicsValues::default());
-        assert!(settings.resolution_auto);
         assert_eq!(settings.ui_language, "auto");
     }
 
@@ -376,10 +415,7 @@ mod tests {
             "fullscreen = true",
             "game_data_root = \"/Games/Gears of War 3\"",
             "user_language = 5",
-            "draw_resolution_scale_x = 2",
-            "draw_resolution_scale_y = 2",
-            "texture_cache_memory_limit_soft = 768",
-            "texture_cache_memory_limit_hard = 1536",
+            "render_resolution = \"2560x1440\"",
         ] {
             assert!(text.contains(line), "missing `{line}` in:\n{text}");
         }
@@ -401,14 +437,60 @@ mod tests {
         let dir = temp_folder("merge");
         let config = dir.join(RUNTIME_CONFIG);
         fs::create_dir_all(config.parent().unwrap()).unwrap();
-        fs::write(&config, "# Set from the F4 menu.\nvsync = false\ntexture_cache_memory_limit_soft = 1\n").unwrap();
+        fs::write(&config, "# Set from the F4 menu.\nvsync = false\n").unwrap();
 
         SettingsPaths::new(&dir).save(&sample_settings()).unwrap();
         let text = fs::read_to_string(&config).unwrap();
         assert!(text.contains("# Set from the F4 menu."));
         assert!(text.contains("vsync = false"));
-        assert!(text.contains("texture_cache_memory_limit_soft = 768"));
-        assert!(!text.contains("texture_cache_memory_limit_soft = 1\n"));
+    }
+
+    #[test]
+    fn the_runtime_sets_the_scale_and_texture_memory_itself() {
+        let dir = temp_folder("legacy-keys");
+        let config = dir.join(RUNTIME_CONFIG);
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        fs::write(
+            &config,
+            "draw_resolution_scale_x = 2\ndraw_resolution_scale_y = 2\n\
+             texture_cache_memory_limit_soft = 768\ntexture_cache_memory_limit_hard = 1536\n",
+        )
+        .unwrap();
+
+        SettingsPaths::new(&dir).save(&sample_settings()).unwrap();
+        let text = fs::read_to_string(&config).unwrap();
+        for key in LEGACY_KEYS {
+            assert!(!text.contains(key), "`{key}` left in:\n{text}");
+        }
+    }
+
+    #[test]
+    fn an_older_launchers_resolution_carries_over() {
+        let dir = temp_folder("migrate");
+        let config = dir.join(RUNTIME_CONFIG);
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        let paths = SettingsPaths::new(&dir);
+
+        // A chosen scale becomes its size.
+        fs::write(&config, "draw_resolution_scale_x = 3\ndraw_resolution_scale_y = 3\n").unwrap();
+        fs::write(dir.join(LAUNCHER_CONFIG), "resolution_auto = false\n").unwrap();
+        paths.migrate_render_resolution().unwrap();
+        let text = fs::read_to_string(&config).unwrap();
+        assert!(text.contains("render_resolution = \"3840x2160\""), "in:\n{text}");
+        assert!(!text.contains("draw_resolution_scale_x"));
+
+        // Automatic (the scale it resolved to was written too) stays automatic.
+        fs::write(&config, "draw_resolution_scale_x = 1\n").unwrap();
+        fs::write(dir.join(LAUNCHER_CONFIG), "resolution_auto = true\n").unwrap();
+        paths.migrate_render_resolution().unwrap();
+        assert!(fs::read_to_string(&config).unwrap().contains("render_resolution = \"auto\""));
+
+        // A resolution chosen in the game is never replaced.
+        fs::write(&config, "render_resolution = \"1280x720\"\ndraw_resolution_scale_x = 2\n").unwrap();
+        paths.migrate_render_resolution().unwrap();
+        let text = fs::read_to_string(&config).unwrap();
+        assert!(text.contains("render_resolution = \"1280x720\""));
+        assert!(text.contains("draw_resolution_scale_x = 2"));
     }
 
     #[test]
@@ -451,9 +533,9 @@ mod tests {
         let dir = temp_folder("types");
         let config = dir.join(RUNTIME_CONFIG);
         fs::create_dir_all(config.parent().unwrap()).unwrap();
-        fs::write(&config, "draw_resolution_scale_x = \"high\"\nfullscreen = 1\n").unwrap();
+        fs::write(&config, "render_resolution = 2\nfullscreen = 1\n").unwrap();
         let settings = SettingsPaths::new(&dir).load().unwrap();
-        assert_eq!(settings.graphics.resolution_scale, None);
+        assert_eq!(settings.graphics.render_resolution, None);
         assert!(settings.fullscreen);
     }
 
