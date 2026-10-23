@@ -72,6 +72,8 @@ class AzuraApp : public rex::ReXApp {
   // and route Quit Game to a normal window close (OnClosing shuts the title down).
   void OnPreLaunchModule() override {
     REXLOG_INFO("[Azura] Active gamertag / user_name: '{}'", REXCVAR_GET(user_name));
+    // The frame rate limit of the Video menu (azura.toml) sets the guest's vertical blanks.
+    azura::menu::ApplyFrameRateLimit();
     // The SDK writes one line per frame (frame time, FPS, draw calls...) to the CSV that
     // perf_log_csv names, once it is opened here; empty, the default, writes nothing.
     if (const std::string& csv = REXCVAR_GET(perf_log_csv); !csv.empty()) {
