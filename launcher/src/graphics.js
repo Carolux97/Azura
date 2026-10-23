@@ -1,7 +1,7 @@
 /*
  * Graphics settings the launcher sets before the game starts, kept free of DOM access so they can be
- * unit tested with Node. Everything else (vsync, anti-aliasing, motion blur, filtering, image
- * scaling, full screen) is in the game's Options menu.
+ * unit tested with Node. Everything else (frame rate limit, anti-aliasing, motion blur, filtering,
+ * image scaling, full screen) is in the game's Options menu.
  *
  * Settings written to the runtime (cvars, read at start-up):
  *   resolutionScale  draw_resolution_scale_x / _y    (1 = the console's 1280x720)

@@ -12,9 +12,13 @@
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
+#include <rex/system/flags.h>
 
 #include "coalesced.h"
 
+REXCVAR_DEFINE_DOUBLE(frame_rate_limit, 30.0, "Azura/Graphics",
+                      "Most frames per second: 30 as on the Xbox 360, 60, 90 or 120; 150 or more "
+                      "removes the limit");
 REXCVAR_DEFINE_BOOL(motion_blur, true, "Azura/Graphics",
                     "Motion blur (the game's SystemSettings.MotionBlur); read when the game starts")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
@@ -29,7 +33,7 @@ enum class Kind { kAction, kToggle, kChoice, kSlider };
 enum class Label {
   kCalibrate,
   kFullscreen,
-  kVsync,
+  kFrameRateLimit,
   kAntialiasing,
   kMotionBlur,
   kMouseSensitivity,
@@ -63,7 +67,10 @@ const std::vector<Option>& Options() {
       // calibration row (Movement Control, two values) names both "Open".
       {kVideoCategory, kCalibrateRow, Label::kCalibrate, nullptr, Kind::kAction, 18, 11, {}},
       {kVideoCategory, 1, Label::kFullscreen, "fullscreen", Kind::kToggle, 22, 15, {}},
-      {kVideoCategory, 2, Label::kVsync, "vsync", Kind::kToggle, 19, 12, {}},
+      // A list of our own (no definition, ID 9106, which the profile does not have): its value
+      // names come from PcOptionValueNames when the menu asks for them (script_hooks.cpp).
+      {kVideoCategory, 2, Label::kFrameRateLimit, "frame_rate_limit", Kind::kChoice, 9106, -1,
+       {"30", "60", "90", "120", "150"}},
       {kVideoCategory, 3, Label::kAntialiasing, "swap_post_effect", Kind::kChoice, 20, 13,
        {"none", "fxaa", "fxaa_extreme"}},
       {kVideoCategory, 4, Label::kMotionBlur, "motion_blur", Kind::kToggle, 21, 14, {}},
@@ -99,7 +106,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
        {{"KEYBOARD AND MOUSE", "Adjust the keyboard and mouse settings."},
         {{"CALIBRATE BRIGHTNESS", "Open the brightness calibration screen."},
          {"FULL SCREEN", "Play in full screen or in a window."},
-         {"VSYNC", "Synchronise the image with the display to avoid tearing."},
+         {"FRAME RATE LIMIT", "Most frames per second the game draws. 30 is the Xbox 360's."},
          {"ANTI-ALIASING", "Smooth jagged edges. Takes effect the next time the game starts."},
          {"MOTION BLUR", "Blur the image during fast movement. Takes effect the next time the game starts."},
          {"MOUSE SENSITIVITY", "Adjust how fast the camera turns with the mouse."},
@@ -110,7 +117,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
        {{"TECLADO Y RATÓN", "Ajuste las opciones del teclado y el ratón."},
         {{"CALIBRAR BRILLO", "Abra la pantalla de calibración del brillo."},
          {"PANTALLA COMPLETA", "Juegue a pantalla completa o en una ventana."},
-         {"SINCRONIZACIÓN VERTICAL", "Sincronice la imagen con la pantalla para evitar cortes."},
+         {"LÍMITE DE FOTOGRAMAS", "Máximo de fotogramas por segundo. 30 es el de Xbox 360."},
          {"ANTIALIASING", "Suavice los bordes dentados. Se aplica la próxima vez que inicie el juego."},
          {"DESENFOQUE DE MOVIMIENTO",
           "Desenfoque la imagen en los movimientos rápidos. Se aplica la próxima vez que inicie el juego."},
@@ -122,7 +129,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
        {{"TASTATUR UND MAUS", "Passen Sie die Einstellungen für Tastatur und Maus an."},
         {{"HELLIGKEIT KALIBRIEREN", "Öffnet den Bildschirm zur Kalibrierung der Helligkeit."},
          {"VOLLBILD", "Im Vollbild oder in einem Fenster spielen."},
-         {"VERTIKALE SYNCHRONISATION", "Synchronisiert das Bild mit dem Bildschirm, um Tearing zu vermeiden."},
+         {"BILDRATENBEGRENZUNG", "Höchstzahl der Bilder pro Sekunde. 30 entspricht der Xbox 360."},
          {"KANTENGLÄTTUNG", "Glättet gezackte Kanten. Wird beim nächsten Spielstart wirksam."},
          {"BEWEGUNGSUNSCHÄRFE", "Verwischt das Bild bei schnellen Bewegungen. Wird beim nächsten Spielstart wirksam."},
          {"MAUSEMPFINDLICHKEIT", "Legt fest, wie schnell sich die Kamera mit der Maus dreht."},
@@ -133,7 +140,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
        {{"TASTIERA E MOUSE", "Regola le impostazioni di tastiera e mouse."},
         {{"CALIBRA LUMINOSITÀ", "Apri la schermata di calibrazione della luminosità."},
          {"SCHERMO INTERO", "Gioca a schermo intero o in una finestra."},
-         {"SINCRONIZZAZIONE VERTICALE", "Sincronizza l'immagine con lo schermo per evitare lo screen tearing."},
+         {"LIMITE FOTOGRAMMI", "Numero massimo di fotogrammi al secondo. 30 è quello di Xbox 360."},
          {"ANTI-ALIASING", "Smussa i bordi frastagliati. Ha effetto al prossimo avvio del gioco."},
          {"SFOCATURA DI MOVIMENTO", "Sfoca l'immagine durante i movimenti rapidi. Ha effetto al prossimo avvio del gioco."},
          {"SENSIBILITÀ DEL MOUSE", "Regola la velocità con cui la visuale ruota con il mouse."},
@@ -144,7 +151,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
        {{"キーボードとマウス", "キーボードとマウスの設定を調整します。"},
         {{"明るさの調整", "明るさの調整画面を開きます。"},
          {"フルスクリーン", "フルスクリーンまたはウィンドウでプレイします。"},
-         {"垂直同期", "画面のティアリングを防ぐため、映像をディスプレイと同期させます。"},
+         {"フレームレート上限", "1秒あたりの最大フレーム数。Xbox 360は30です。"},
          {"アンチエイリアス", "ギザギザした輪郭を滑らかにします。次回ゲーム起動時に適用されます。"},
          {"モーションブラー", "素早い動きの際に映像をぼかします。次回ゲーム起動時に適用されます。"},
          {"マウス感度", "マウスでカメラを回転させる速さを調整します。"},
@@ -155,7 +162,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
        {{"CLAVIER ET SOURIS", "Réglez les options du clavier et de la souris."},
         {{"CALIBRER LA LUMINOSITÉ", "Ouvrez l'écran de calibrage de la luminosité."},
          {"PLEIN ÉCRAN", "Jouez en plein écran ou dans une fenêtre."},
-         {"SYNCHRO VERTICALE", "Synchronisez l'image avec l'écran pour éviter les déchirures."},
+         {"LIMITE D'IMAGES PAR SECONDE", "Nombre maximal d'images par seconde. 30 correspond à la Xbox 360."},
          {"ANTICRÉNELAGE", "Lissez les bords crénelés. Prend effet au prochain lancement du jeu."},
          {"FLOU DE MOUVEMENT", "Floutez l'image lors des mouvements rapides. Prend effet au prochain lancement du jeu."},
          {"SENSIBILITÉ DE LA SOURIS", "Réglez la vitesse de rotation de la caméra avec la souris."},
@@ -166,7 +173,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
        {{"TECLADO E MOUSE", "Ajuste as opções do teclado e do mouse."},
         {{"CALIBRAR BRILHO", "Abra a tela de calibração do brilho."},
          {"TELA CHEIA", "Jogue em tela cheia ou em uma janela."},
-         {"SINCRONIZAÇÃO VERTICAL", "Sincronize a imagem com a tela para evitar cortes."},
+         {"LIMITE DE QUADROS", "Máximo de quadros por segundo. 30 é o do Xbox 360."},
          {"ANTISSERRILHAMENTO", "Suaviza bordas serrilhadas. Aplica-se na próxima vez que o jogo for iniciado."},
          {"DESFOQUE DE MOVIMENTO",
           "Desfoca a imagem em movimentos rápidos. Aplica-se na próxima vez que o jogo for iniciado."},
@@ -178,7 +185,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
        {{"KLAWIATURA I MYSZ", "Dostosuj ustawienia klawiatury i myszy."},
         {{"KALIBRACJA JASNOŚCI", "Otwórz ekran kalibracji jasności."},
          {"PEŁNY EKRAN", "Graj na pełnym ekranie lub w oknie."},
-         {"SYNCHRONIZACJA PIONOWA", "Synchronizuje obraz z ekranem, aby uniknąć rozrywania."},
+         {"LIMIT KLATEK", "Maksymalna liczba klatek na sekundę. 30 to wartość z Xbox 360."},
          {"WYGŁADZANIE KRAWĘDZI", "Wygładza postrzępione krawędzie. Zadziała po ponownym uruchomieniu gry."},
          {"ROZMYCIE RUCHU", "Rozmywa obraz podczas szybkiego ruchu. Zadziała po ponownym uruchomieniu gry."},
          {"CZUŁOŚĆ MYSZY", "Dostosuj szybkość obrotu kamery myszą."},
@@ -189,7 +196,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
        {{"КЛАВИАТУРА И МЫШЬ", "Настройте параметры клавиатуры и мыши."},
         {{"КАЛИБРОВКА ЯРКОСТИ", "Откройте экран калибровки яркости."},
          {"ПОЛНОЭКРАННЫЙ РЕЖИМ", "Играйте в полноэкранном режиме или в окне."},
-         {"ВЕРТИКАЛЬНАЯ СИНХРОНИЗАЦИЯ", "Синхронизирует изображение с экраном, чтобы избежать разрывов."},
+         {"ОГРАНИЧЕНИЕ ЧАСТОТЫ КАДРОВ", "Максимальное число кадров в секунду. 30, как на Xbox 360."},
          {"СГЛАЖИВАНИЕ", "Сглаживает неровные края. Вступит в силу при следующем запуске игры."},
          {"РАЗМЫТИЕ В ДВИЖЕНИИ", "Размывает изображение при быстром движении. Вступит в силу при следующем запуске игры."},
          {"ЧУВСТВИТЕЛЬНОСТЬ МЫШИ", "Настройте скорость поворота камеры мышью."},
@@ -200,7 +207,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
        {{"KLÁVESNICE A MYŠ", "Upravte nastavení klávesnice a myši."},
         {{"KALIBRACE JASU", "Otevřete obrazovku kalibrace jasu."},
          {"CELÁ OBRAZOVKA", "Hrajte na celé obrazovce nebo v okně."},
-         {"VERTIKÁLNÍ SYNCHRONIZACE", "Synchronizuje obraz s displejem, aby se zabránilo trhání."},
+         {"OMEZENÍ SNÍMKŮ", "Nejvyšší počet snímků za sekundu. 30 odpovídá Xbox 360."},
          {"VYHLAZOVÁNÍ HRAN", "Vyhlazuje zubaté hrany. Projeví se při příštím spuštění hry."},
          {"ROZMAZÁNÍ POHYBU", "Rozmazává obraz při rychlém pohybu. Projeví se při příštím spuštění hry."},
          {"CITLIVOST MYŠI", "Upravte rychlost otáčení kamery myší."},
@@ -211,7 +218,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
        {{"BILLENTYŰZET ÉS EGÉR", "A billentyűzet és az egér beállításai."},
         {{"FÉNYERŐ KALIBRÁLÁSA", "Megnyitja a fényerő kalibrálási képernyőjét."},
          {"TELJES KÉPERNYŐ", "Játék teljes képernyőn vagy ablakban."},
-         {"FÜGGŐLEGES SZINKRON", "Szinkronizálja a képet a kijelzővel a képtörés elkerülése érdekében."},
+         {"KÉPKOCKASZÁM-KORLÁT", "Másodpercenkénti képkockák legnagyobb száma. A 30 az Xbox 360 értéke."},
          {"ÉLSIMÍTÁS", "Kisimítja a recés éleket. A játék következő indításakor lép életbe."},
          {"MOZGÁSI ELMOSÓDÁS", "Elmossa a képet gyors mozgáskor. A játék következő indításakor lép életbe."},
          {"EGÉRÉRZÉKENYSÉG", "Az egérrel történő kameraforgatás sebessége."},
@@ -222,7 +229,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
        {{"鍵盤與滑鼠", "調整鍵盤與滑鼠設定。"},
         {{"校正亮度", "開啟亮度校正畫面。"},
          {"全螢幕", "以全螢幕或視窗模式進行遊戲。"},
-         {"垂直同步", "讓畫面與顯示器同步，以避免畫面撕裂。"},
+         {"畫面更新率上限", "每秒最多的畫面數。30 與 Xbox 360 相同。"},
          {"反鋸齒", "讓鋸齒狀的邊緣更平滑。下次啟動遊戲時生效。"},
          {"動態模糊", "在快速移動時模糊畫面。下次啟動遊戲時生效。"},
          {"滑鼠靈敏度", "調整用滑鼠轉動鏡頭的速度。"},
@@ -233,7 +240,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
        {{"키보드 및 마우스", "키보드 및 마우스 설정을 조정합니다."},
         {{"밝기 보정", "밝기 보정 화면을 엽니다."},
          {"전체 화면", "전체 화면 또는 창 모드로 플레이합니다."},
-         {"수직 동기화", "화면 찢어짐을 막기 위해 화면과 동기화합니다."},
+         {"프레임 속도 제한", "초당 최대 프레임 수. 30은 Xbox 360과 같습니다."},
          {"안티에일리어싱", "계단 현상을 부드럽게 합니다. 다음에 게임을 시작할 때 적용됩니다."},
          {"모션 블러", "빠르게 움직일 때 화면을 흐리게 합니다. 다음에 게임을 시작할 때 적용됩니다."},
          {"마우스 감도", "마우스로 카메라를 돌리는 속도를 조정합니다."},
@@ -327,7 +334,9 @@ std::string FormatValue(const Option& option, float value, bool toml) {
       return value >= 0.5f ? "true" : "false";
     case Kind::kChoice: {
       const size_t index = std::min(static_cast<size_t>(value < 0 ? 0 : value + 0.5f), option.choices.size() - 1);
-      return toml ? std::string("\"") + option.choices[index] + "\"" : option.choices[index];
+      const std::string& choice = option.choices[index];
+      const bool number = !choice.empty() && choice.find_first_not_of("0123456789.") == std::string::npos;
+      return toml && !number ? std::string("\"") + choice + "\"" : choice;
     }
     case Kind::kSlider:
       return FormatFloat(value);
@@ -473,10 +482,36 @@ std::string RowText(const Option& option, const Texts& texts) {
   } else {
     row << "Type=OST_OptionList,Slider_Minimum=0.00,Slider_Maximum=0.00,Slider_Increment=0.00)";
   }
+  // A list without a definition of its own takes its value names from the script's special case
+  // (bUsesRawValue), which script_hooks.cpp answers with PcOptionValueNames.
+  if (option.kind == Kind::kChoice && option.mapping < 0) {
+    std::string text = row.str();
+    const std::string from = "bUsesRawValue=false";
+    text.replace(text.find(from), from.size(), "bUsesRawValue=true");
+    return text;
+  }
   return row.str();
 }
 
 }  // namespace
+
+bool PcOptionValueNames(int psid, std::vector<std::u16string>& names) {
+  for (const Option& option : Options()) {
+    if (option.psid != psid || option.kind != Kind::kChoice || option.mapping >= 0) continue;
+    names.clear();
+    if (option.label == Label::kFrameRateLimit) {
+      // Xbox 360 language IDs (user_language).
+      static const std::map<uint32_t, const char16_t*> unlimited = {
+          {1, u"Unlimited"},  {2, u"無制限"},     {3, u"Unbegrenzt"},    {4, u"Illimité"},
+          {5, u"Sin límite"}, {6, u"Illimitato"}, {7, u"무제한"},        {8, u"無限制"},
+          {9, u"Ilimitado"},  {11, u"Bez limitu"}, {12, u"Без ограничения"}};
+      const auto found = unlimited.find(REXCVAR_GET(user_language));
+      names = {u"30", u"60", u"90", u"120", found != unlimited.end() ? found->second : u"Unlimited"};
+    }
+    return true;
+  }
+  return false;
+}
 
 void SetPcOptionsConfigPath(std::filesystem::path config_path) {
   std::lock_guard lock(g_mutex);
@@ -524,6 +559,7 @@ void PcOptionStoreValue(int option, float value) {
   }
   rex::cvar::SetFlagByName(entry.cvar, FormatValue(entry, value, false));
   REXLOG_INFO("[Azura options] {} = {}", entry.cvar, FormatValue(entry, value, false));
+  if (entry.label == Label::kFrameRateLimit) ApplyFrameRateLimit();
   if (!config_path.empty()) UpsertTomlKey(config_path, entry.cvar, FormatValue(entry, value, true));
 }
 
@@ -552,6 +588,7 @@ void PcOptionsResetDefaults(int category) {
     }
     if (!config_path.empty()) UpsertTomlKey(config_path, option.cvar, FormatValue(option, value, true));
     REXLOG_INFO("[Azura options] {} reset to {}", option.cvar, FormatValue(option, value, false));
+    if (option.label == Label::kFrameRateLimit) ApplyFrameRateLimit();
   }
 }
 
@@ -669,6 +706,30 @@ void PatchValueNames(CoalescedSection& section, const std::string& language) {
 
 void PatchSystemSettings(CoalescedSection& section) {
   SetKey(section, "MotionBlur", REXCVAR_GET(motion_blur) ? "True" : "False");
+}
+
+void PatchEngineSettings(CoalescedSection& section) {
+  // The engine sleeps when a frame would go past MaxSmoothedFrameRate (62 in the game's ini). The
+  // limit comes from the vertical blanks instead (ApplyFrameRateLimit), so the ceiling is raised
+  // above any limit; at 30 the game still waits for its two vertical blanks per frame.
+  SetKey(section, "MaxSmoothedFrameRate", "1000");
+}
+
+void ApplyFrameRateLimit() {
+  const double limit = REXCVAR_GET(frame_rate_limit);
+  if (limit >= kFrameRateUnlimited) {
+    // Vertical blanks every millisecond: the game never waits for them.
+    rex::cvar::SetFlagByName("vsync", "false");
+    REXLOG_INFO("[Azura options] Frame rate not limited");
+    return;
+  }
+  // The game presents a frame every two vertical blanks (30 FPS at the Xbox 360's 60 Hz), so the
+  // guest sees twice as many vertical blanks per second as the frames it may draw.
+  const int frames = static_cast<int>(std::lround(std::max(30.0, limit)));
+  rex::cvar::SetFlagByName("vsync", "true");
+  rex::cvar::SetFlagByName("guest_vblank_rate", std::to_string(frames * 2));
+  REXLOG_INFO("[Azura options] Frame rate limited to {} ({} vertical blanks per second)", frames,
+              frames * 2);
 }
 
 }  // namespace azura::menu
