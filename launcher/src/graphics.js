@@ -1,15 +1,17 @@
 /*
- * Graphics settings the launcher sets before the game starts, kept free of DOM access so they can be
+ * Graphics settings the launcher shows before the game starts, kept free of DOM access so they can be
  * unit tested with Node. Everything else (frame rate limit, anti-aliasing, motion blur, filtering,
  * image scaling, full screen) is in the game's Options menu.
  *
- * Settings written to the runtime (cvars, read at start-up):
- *   resolutionScale  draw_resolution_scale_x / _y    (1 = the console's 1280x720)
- *   textureMemory    texture_cache_memory_limit_soft (MB; the hard limit is twice this value),
- *                    derived from the resolution: a larger render needs more texture memory.
+ * Setting written to the runtime (a cvar, read at start-up):
+ *   renderResolution  render_resolution: "auto" or a render size ("2560x1440"). It is the same
+ *                     setting as the Render resolution row of the game's Video menu; the runtime
+ *                     turns it into the draw resolution scale and the texture memory, and resolves
+ *                     "auto" with the same rule as autoResolutionScale below
+ *                     (runtime/src/menu/pc_options.cpp).
  *
- * The automatic resolution and the memory sizes are a first proposal, to be tuned by measuring
- * frame rates on real Apple Silicon hardware.
+ * The automatic resolution is a first proposal, to be tuned by measuring frame rates on real Apple
+ * Silicon hardware.
  */
 
 /** Base render size of the game on the console; resolutionScale multiplies it. */
@@ -31,8 +33,17 @@ export const autoResolutionScale = (system) => {
   return /\b(Pro|Max|Ultra)\b/.test(system.chip ?? "") ? 2 : 1;
 };
 
-/** Texture memory (MB) for a resolution scale. */
-export const textureMemoryFor = (scale) => (scale >= 2 ? 768 : 384);
+/** render_resolution value of a resolution scale: "2560x1440" for 2. */
+export const resolutionValue = (scale) => {
+  const { width, height } = renderSize(scale);
+  return `${width}x${height}`;
+};
+
+/**
+ * Scale of a render_resolution value: 2 for "2560x1440", null for "auto" and for anything the
+ * game's menu does not offer.
+ */
+export const scaleOfResolution = (value) => RESOLUTION_SCALES.find((scale) => resolutionValue(scale) === value) ?? null;
 
 /** Machine the launcher runs on, once detected; null until then (and in a browser). */
 let detectedSystem = null;
