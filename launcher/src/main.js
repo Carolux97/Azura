@@ -16,7 +16,14 @@
 
 import { getLocale, getPreference, initI18n, onLocaleChange, setPreference, systemLocale, t } from "./i18n.js";
 import { SUPPORTED_LOCALES } from "./locale.js";
-import { RESOLUTION_SCALES, renderSize, resolveAutoScale, setDetectedSystem, textureMemoryFor } from "./graphics.js";
+import {
+  RESOLUTION_SCALES,
+  renderSize,
+  resolutionValue,
+  resolveAutoScale,
+  scaleOfResolution,
+  setDetectedSystem,
+} from "./graphics.js";
 import {
   checkForUpdate,
   checkGameFolder,
@@ -88,23 +95,19 @@ const state = {
   launcherVersion: BROWSER_LAUNCHER_VERSION,
   userName: "",
   fullscreen: true,
-  // Render resolution: "Automatic" (follows this Mac) or the scale the user chose.
-  resolutionAuto: true,
-  resolutionScale: 1,
+  // Render resolution (render_resolution, also in the game's Video menu): "auto" (follows this Mac)
+  // or the render size the user chose ("2560x1440").
+  renderResolution: "auto",
   // State of the saved games (see saves.rs), or null until it is read.
   saveStatus: null,
 };
-
-/** Resolution scale the game will use: the automatic one for this Mac, or the chosen one. */
-const effectiveScale = () => (state.resolutionAuto ? resolveAutoScale() : state.resolutionScale);
 
 /** Builds the settings object platform.saveSettings stores (see src-tauri/src/settings.rs). */
 const currentSettings = () => ({
   gameFolder: state.savedGameFolder,
   userName: state.userName || null,
   fullscreen: state.fullscreen,
-  graphics: { resolutionScale: effectiveScale(), textureMemory: textureMemoryFor(effectiveScale()) },
-  resolutionAuto: state.resolutionAuto,
+  graphics: { renderResolution: state.renderResolution },
   uiLanguage: getPreference(),
   gameLanguage: state.gameLanguage,
   gameLanguageChosen: state.gameLanguageChosen,
@@ -521,9 +524,9 @@ const restoreGameFolder = async (folder) => {
 
 /** Takes the graphics settings as stored. */
 const applyStoredGraphics = (settings) => {
-  state.resolutionAuto = settings.resolutionAuto !== false;
-  const stored = Number(settings.graphics?.resolutionScale);
-  state.resolutionScale = Number.isInteger(stored) && stored > 0 ? stored : resolveAutoScale();
+  // A value the game's menu does not offer (set by hand) reads as Automatic, as in the runtime.
+  const stored = settings.graphics?.renderResolution;
+  state.renderResolution = scaleOfResolution(stored) ? stored : "auto";
   state.fullscreen = Boolean(settings.fullscreen);
 };
 
@@ -539,12 +542,8 @@ const renderGraphics = () => {
   const select = document.getElementById("resolution-scale");
   select.replaceChildren();
   select.add(new Option(t("graphics.resolutionAuto", { size: resolutionLabel(resolveAutoScale()) }), "auto"));
-  // A scale set by hand in azura.toml may not be one the launcher offers; it is listed as it is.
-  const scales = RESOLUTION_SCALES.includes(state.resolutionScale)
-    ? RESOLUTION_SCALES
-    : [...RESOLUTION_SCALES, state.resolutionScale];
-  for (const scale of scales) select.add(new Option(resolutionLabel(scale), String(scale)));
-  select.value = state.resolutionAuto ? "auto" : String(state.resolutionScale);
+  for (const scale of RESOLUTION_SCALES) select.add(new Option(resolutionLabel(scale), resolutionValue(scale)));
+  select.value = state.renderResolution;
   document.getElementById("display-mode").value = state.fullscreen ? "fullscreen" : "windowed";
 };
 
@@ -552,8 +551,7 @@ const renderGraphics = () => {
 const setupGraphics = () => {
   const resolution = document.getElementById("resolution-scale");
   resolution.addEventListener("change", () => {
-    state.resolutionAuto = resolution.value === "auto";
-    if (!state.resolutionAuto) state.resolutionScale = Number(resolution.value);
+    state.renderResolution = resolution.value;
     persist();
   });
 

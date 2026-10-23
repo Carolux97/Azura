@@ -14,6 +14,10 @@
 #include <rex/logging.h>
 #include <rex/system/flags.h>
 
+#if defined(__APPLE__)
+#include <sys/sysctl.h>
+#endif
+
 #include "coalesced.h"
 
 REXCVAR_DEFINE_DOUBLE(frame_rate_limit, 30.0, "Azura/Graphics",
@@ -22,6 +26,17 @@ REXCVAR_DEFINE_DOUBLE(frame_rate_limit, 30.0, "Azura/Graphics",
 REXCVAR_DEFINE_BOOL(motion_blur, true, "Azura/Graphics",
                     "Motion blur (the game's SystemSettings.MotionBlur); read when the game starts")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_STRING(render_resolution, "auto", "Azura/Graphics",
+                      "Resolution the game is drawn at: auto (chosen for this computer), 1280x720 (the "
+                      "Xbox 360's), 2560x1440 or 3840x2160. Sets draw_resolution_scale_x/y and the "
+                      "texture cache limits when the game starts")
+    .allowed({"auto", "1280x720", "2560x1440", "3840x2160"})
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_DOUBLE(upscaling_sharpness, 0.0, "Azura/Graphics",
+                      "Extra sharpening of the image scaling effects that sharpen (AMD CAS, and AMD FSR 1 "
+                      "with the FidelityFX SDK), from 0 (the effect's own) to 1 (the most). Sets "
+                      "present_cas_additional_sharpness and present_fsr_sharpness_reduction")
+    .range(0.0, 1.0);
 
 namespace azura::menu {
 
@@ -39,6 +54,8 @@ enum class Label {
   kMouseSensitivity,
   kAnisotropic,
   kUpscaling,
+  kRenderResolution,
+  kSharpness,
   kCount
 };
 
@@ -94,8 +111,14 @@ const std::vector<Option>& Options() {
       // Generic Xbox profile settings with three values that Gears never reads: Controller
       // Sensitivity (it has its own, 368, 59 and 60) and Voice Via Speakers.
       {kVideoCategory, 5, Label::kAnisotropic, "anisotropic_override", Kind::kChoice, 13, 2, {"0", "3", "5"}},
-      // A list of our own too: its values depend on the platform (UpscalingChoices).
-      {kVideoCategory, 6, Label::kUpscaling, "present_effect", Kind::kChoice, 9107, -1, UpscalingChoices()},
+      // Lists of our own too: the resolution's value names include "Automatic" in the player's
+      // language, and the upscaling values depend on the platform (UpscalingChoices).
+      {kVideoCategory, 6, Label::kRenderResolution, "render_resolution", Kind::kChoice, 9108, -1,
+       {"auto", "1280x720", "2560x1440", "3840x2160"}},
+      {kVideoCategory, 7, Label::kUpscaling, "present_effect", Kind::kChoice, 9107, -1, UpscalingChoices()},
+      // Applies while the game runs, so the player sees the sharpening change (ApplyUpscalingSharpness).
+      {kVideoCategory, 8, Label::kSharpness, "upscaling_sharpness", Kind::kSlider, 9109, -1, {}, 0.0f, 1.0f,
+       0.1f},
       // A slider needs no definition, and its ID is one the profile does not have: the menu's reads
       // and writes of it fail and change nothing.
       {kKeyboardMouseCategory, 0, Label::kMouseSensitivity, "mnk_sensitivity", Kind::kSlider, 9105, -1, {}, 0.1f, 3.0f,
@@ -115,6 +138,7 @@ struct Texts {
   const char* bilinear;
   const char* cas;
   const char* fsr;
+  const char* automatic;  // the render resolution chosen for this computer
 };
 
 // Keyed by the extension of the localization files. Labels are upper case like the game's own.
@@ -129,8 +153,12 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"MOTION BLUR", "Blur the image during fast movement. Takes effect the next time the game starts."},
          {"MOUSE SENSITIVITY", "Adjust how fast the camera turns with the mouse."},
          {"ANISOTROPIC FILTERING", "Keep textures sharp when seen at an angle."},
-         {"IMAGE SCALING", "How the image is scaled to the window. Takes effect the next time the game starts."}},
-        "Off", "On", "FXAA", "FXAA extreme", "Open", "Bilinear (original)", "AMD CAS (sharpening)", "AMD FSR 1"}},
+         {"IMAGE SCALING", "How the image is scaled to the window. Takes effect the next time the game starts."},
+         {"RENDER RESOLUTION",
+          "Resolution the game is drawn at, before image scaling. Automatic chooses one for this computer. Takes effect the next time the game starts."},
+         {"SHARPNESS",
+          "How much extra sharpening the image scaling adds. 0 keeps its own."}},
+        "Off", "On", "FXAA", "FXAA extreme", "Open", "Bilinear (original)", "AMD CAS (sharpening)", "AMD FSR 1", "Automatic"}},
       {"esn",
        {{"TECLADO Y RATÓN", "Ajuste las opciones del teclado y el ratón."},
         {{"CALIBRAR BRILLO", "Abra la pantalla de calibración del brillo."},
@@ -141,8 +169,12 @@ const std::map<std::string, Texts>& LocalizedTexts() {
           "Desenfoque la imagen en los movimientos rápidos. Se aplica la próxima vez que inicie el juego."},
          {"SENSIBILIDAD DEL RATÓN", "Ajuste la velocidad a la que gira la cámara con el ratón."},
          {"FILTRADO ANISOTRÓPICO", "Mantenga nítidas las texturas vistas en ángulo."},
-         {"ESCALADO DE IMAGEN", "Cómo se escala la imagen a la ventana. Se aplica la próxima vez que inicie el juego."}},
-        "Desactivado", "Activado", "FXAA", "FXAA extremo", "Abrir", "Bilineal (original)", "AMD CAS (nitidez)", "AMD FSR 1"}},
+         {"ESCALADO DE IMAGEN", "Cómo se escala la imagen a la ventana. Se aplica la próxima vez que inicie el juego."},
+         {"RESOLUCIÓN DE RENDERIZADO",
+          "Resolución a la que se dibuja el juego, antes del escalado de imagen. Automática elige una para este equipo. Se aplica la próxima vez que inicie el juego."},
+         {"NITIDEZ",
+          "Cuánto enfoque añade el escalado de imagen. 0 deja el suyo propio."}},
+        "Desactivado", "Activado", "FXAA", "FXAA extremo", "Abrir", "Bilineal (original)", "AMD CAS (nitidez)", "AMD FSR 1", "Automática"}},
       {"deu",
        {{"TASTATUR UND MAUS", "Passen Sie die Einstellungen für Tastatur und Maus an."},
         {{"HELLIGKEIT KALIBRIEREN", "Öffnet den Bildschirm zur Kalibrierung der Helligkeit."},
@@ -152,8 +184,12 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"BEWEGUNGSUNSCHÄRFE", "Verwischt das Bild bei schnellen Bewegungen. Wird beim nächsten Spielstart wirksam."},
          {"MAUSEMPFINDLICHKEIT", "Legt fest, wie schnell sich die Kamera mit der Maus dreht."},
          {"ANISOTROPE FILTERUNG", "Hält schräg betrachtete Texturen scharf."},
-         {"BILDSKALIERUNG", "Wie das Bild auf das Fenster skaliert wird. Wird beim nächsten Spielstart wirksam."}},
-        "Aus", "Ein", "FXAA", "FXAA extrem", "Öffnen", "Bilinear (Original)", "AMD CAS (Schärfung)", "AMD FSR 1"}},
+         {"BILDSKALIERUNG", "Wie das Bild auf das Fenster skaliert wird. Wird beim nächsten Spielstart wirksam."},
+         {"RENDERAUFLÖSUNG",
+          "Auflösung, in der das Spiel vor der Bildskalierung gezeichnet wird. Automatisch wählt eine für diesen Computer. Wird beim nächsten Spielstart wirksam."},
+         {"SCHÄRFE",
+          "Wie viel zusätzliche Schärfe die Bildskalierung hinzufügt. 0 behält ihre eigene."}},
+        "Aus", "Ein", "FXAA", "FXAA extrem", "Öffnen", "Bilinear (Original)", "AMD CAS (Schärfung)", "AMD FSR 1", "Automatisch"}},
       {"ita",
        {{"TASTIERA E MOUSE", "Regola le impostazioni di tastiera e mouse."},
         {{"CALIBRA LUMINOSITÀ", "Apri la schermata di calibrazione della luminosità."},
@@ -163,8 +199,12 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"SFOCATURA DI MOVIMENTO", "Sfoca l'immagine durante i movimenti rapidi. Ha effetto al prossimo avvio del gioco."},
          {"SENSIBILITÀ DEL MOUSE", "Regola la velocità con cui la visuale ruota con il mouse."},
          {"FILTRO ANISOTROPICO", "Mantiene nitide le texture viste di sbieco."},
-         {"RIDIMENSIONAMENTO IMMAGINE", "Come l'immagine viene scalata nella finestra. Ha effetto al prossimo avvio del gioco."}},
-        "Disattivato", "Attivato", "FXAA", "FXAA estremo", "Apri", "Bilineare (originale)", "AMD CAS (nitidezza)", "AMD FSR 1"}},
+         {"RIDIMENSIONAMENTO IMMAGINE", "Come l'immagine viene scalata nella finestra. Ha effetto al prossimo avvio del gioco."},
+         {"RISOLUZIONE DI RENDERING",
+          "Risoluzione a cui viene disegnato il gioco, prima del ridimensionamento. Automatica ne sceglie una per questo computer. Ha effetto al prossimo avvio del gioco."},
+         {"NITIDEZZA",
+          "Quanta nitidezza aggiuntiva applica il ridimensionamento dell'immagine. 0 mantiene la sua."}},
+        "Disattivato", "Attivato", "FXAA", "FXAA estremo", "Apri", "Bilineare (originale)", "AMD CAS (nitidezza)", "AMD FSR 1", "Automatica"}},
       {"jpn",
        {{"キーボードとマウス", "キーボードとマウスの設定を調整します。"},
         {{"明るさの調整", "明るさの調整画面を開きます。"},
@@ -174,8 +214,12 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"モーションブラー", "素早い動きの際に映像をぼかします。次回ゲーム起動時に適用されます。"},
          {"マウス感度", "マウスでカメラを回転させる速さを調整します。"},
          {"異方性フィルタリング", "斜めから見たテクスチャを鮮明に保ちます。"},
-         {"画像スケーリング", "映像をウィンドウに合わせて拡大する方法です。次回ゲーム起動時に適用されます。"}},
-        "オフ", "オン", "FXAA", "FXAA (最大)", "開く", "バイリニア（オリジナル）", "AMD CAS（シャープ化）", "AMD FSR 1"}},
+         {"画像スケーリング", "映像をウィンドウに合わせて拡大する方法です。次回ゲーム起動時に適用されます。"},
+         {"レンダリング解像度",
+          "画像スケーリングの前にゲームを描画する解像度です。自動ではこのコンピューターに合わせて選びます。次回ゲーム起動時に適用されます。"},
+         {"シャープネス",
+          "画像スケーリングに加えるシャープ化の強さです。0 は標準のままです。"}},
+        "オフ", "オン", "FXAA", "FXAA (最大)", "開く", "バイリニア（オリジナル）", "AMD CAS（シャープ化）", "AMD FSR 1", "自動"}},
       {"fra",
        {{"CLAVIER ET SOURIS", "Réglez les options du clavier et de la souris."},
         {{"CALIBRER LA LUMINOSITÉ", "Ouvrez l'écran de calibrage de la luminosité."},
@@ -185,8 +229,12 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"FLOU DE MOUVEMENT", "Floutez l'image lors des mouvements rapides. Prend effet au prochain lancement du jeu."},
          {"SENSIBILITÉ DE LA SOURIS", "Réglez la vitesse de rotation de la caméra avec la souris."},
          {"FILTRAGE ANISOTROPE", "Gardez les textures nettes vues en biais."},
-         {"MISE À L'ÉCHELLE", "Mise à l'échelle de l'image dans la fenêtre. Prend effet au prochain lancement du jeu."}},
-        "Désactivé", "Activé", "FXAA", "FXAA extrême", "Ouvrir", "Bilinéaire (d'origine)", "AMD CAS (netteté)", "AMD FSR 1"}},
+         {"MISE À L'ÉCHELLE", "Mise à l'échelle de l'image dans la fenêtre. Prend effet au prochain lancement du jeu."},
+         {"RÉSOLUTION DE RENDU",
+          "Résolution à laquelle le jeu est dessiné, avant la mise à l'échelle. Automatique en choisit une pour cet ordinateur. Prend effet au prochain lancement du jeu."},
+         {"NETTETÉ",
+          "Netteté supplémentaire ajoutée par la mise à l'échelle de l'image. 0 conserve la sienne."}},
+        "Désactivé", "Activé", "FXAA", "FXAA extrême", "Ouvrir", "Bilinéaire (d'origine)", "AMD CAS (netteté)", "AMD FSR 1", "Automatique"}},
       {"ptb",
        {{"TECLADO E MOUSE", "Ajuste as opções do teclado e do mouse."},
         {{"CALIBRAR BRILHO", "Abra a tela de calibração do brilho."},
@@ -197,8 +245,12 @@ const std::map<std::string, Texts>& LocalizedTexts() {
           "Desfoca a imagem em movimentos rápidos. Aplica-se na próxima vez que o jogo for iniciado."},
          {"SENSIBILIDADE DO MOUSE", "Ajuste a velocidade com que a câmera gira com o mouse."},
          {"FILTRAGEM ANISOTRÓPICA", "Mantém nítidas as texturas vistas em ângulo."},
-         {"ESCALA DA IMAGEM", "Como a imagem é dimensionada para a janela. Aplica-se na próxima vez que o jogo for iniciado."}},
-        "Desativado", "Ativado", "FXAA", "FXAA extremo", "Abrir", "Bilinear (original)", "AMD CAS (nitidez)", "AMD FSR 1"}},
+         {"ESCALA DA IMAGEM", "Como a imagem é dimensionada para a janela. Aplica-se na próxima vez que o jogo for iniciado."},
+         {"RESOLUÇÃO DE RENDERIZAÇÃO",
+          "Resolução em que o jogo é desenhado, antes da escala da imagem. Automática escolhe uma para este computador. Aplica-se na próxima vez que o jogo for iniciado."},
+         {"NITIDEZ",
+          "Quanta nitidez extra a escala da imagem adiciona. 0 mantém a dela."}},
+        "Desativado", "Ativado", "FXAA", "FXAA extremo", "Abrir", "Bilinear (original)", "AMD CAS (nitidez)", "AMD FSR 1", "Automática"}},
       {"pol",
        {{"KLAWIATURA I MYSZ", "Dostosuj ustawienia klawiatury i myszy."},
         {{"KALIBRACJA JASNOŚCI", "Otwórz ekran kalibracji jasności."},
@@ -208,8 +260,12 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"ROZMYCIE RUCHU", "Rozmywa obraz podczas szybkiego ruchu. Zadziała po ponownym uruchomieniu gry."},
          {"CZUŁOŚĆ MYSZY", "Dostosuj szybkość obrotu kamery myszą."},
          {"FILTROWANIE ANIZOTROPOWE", "Zachowuje ostrość tekstur oglądanych pod kątem."},
-         {"SKALOWANIE OBRAZU", "Sposób skalowania obrazu do okna. Zadziała po ponownym uruchomieniu gry."}},
-        "Wyłączone", "Włączone", "FXAA", "FXAA ekstremalne", "Otwórz", "Dwuliniowe (oryginalne)", "AMD CAS (wyostrzanie)", "AMD FSR 1"}},
+         {"SKALOWANIE OBRAZU", "Sposób skalowania obrazu do okna. Zadziała po ponownym uruchomieniu gry."},
+         {"ROZDZIELCZOŚĆ RENDEROWANIA",
+          "Rozdzielczość, w jakiej rysowana jest gra, przed skalowaniem obrazu. Automatyczna dobiera ją do tego komputera. Zadziała po ponownym uruchomieniu gry."},
+         {"OSTROŚĆ",
+          "Ile dodatkowej ostrości dodaje skalowanie obrazu. 0 zachowuje domyślną."}},
+        "Wyłączone", "Włączone", "FXAA", "FXAA ekstremalne", "Otwórz", "Dwuliniowe (oryginalne)", "AMD CAS (wyostrzanie)", "AMD FSR 1", "Automatyczna"}},
       {"rus",
        {{"КЛАВИАТУРА И МЫШЬ", "Настройте параметры клавиатуры и мыши."},
         {{"КАЛИБРОВКА ЯРКОСТИ", "Откройте экран калибровки яркости."},
@@ -219,8 +275,12 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"РАЗМЫТИЕ В ДВИЖЕНИИ", "Размывает изображение при быстром движении. Вступит в силу при следующем запуске игры."},
          {"ЧУВСТВИТЕЛЬНОСТЬ МЫШИ", "Настройте скорость поворота камеры мышью."},
          {"АНИЗОТРОПНАЯ ФИЛЬТРАЦИЯ", "Сохраняет чёткость текстур, видимых под углом."},
-         {"МАСШТАБИРОВАНИЕ ИЗОБРАЖЕНИЯ", "Способ масштабирования изображения под окно. Вступит в силу при следующем запуске игры."}},
-        "Выкл.", "Вкл.", "FXAA", "FXAA (макс.)", "Открыть", "Билинейное (оригинал)", "AMD CAS (резкость)", "AMD FSR 1"}},
+         {"МАСШТАБИРОВАНИЕ ИЗОБРАЖЕНИЯ", "Способ масштабирования изображения под окно. Вступит в силу при следующем запуске игры."},
+         {"РАЗРЕШЕНИЕ РЕНДЕРИНГА",
+          "Разрешение, в котором отрисовывается игра, до масштабирования изображения. «Автоматически» подбирает его для этого компьютера. Вступит в силу при следующем запуске игры."},
+         {"РЕЗКОСТЬ",
+          "Сколько дополнительной резкости добавляет масштабирование изображения. 0 — без изменений."}},
+        "Выкл.", "Вкл.", "FXAA", "FXAA (макс.)", "Открыть", "Билинейное (оригинал)", "AMD CAS (резкость)", "AMD FSR 1", "Автоматически"}},
       {"cze",
        {{"KLÁVESNICE A MYŠ", "Upravte nastavení klávesnice a myši."},
         {{"KALIBRACE JASU", "Otevřete obrazovku kalibrace jasu."},
@@ -230,8 +290,12 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"ROZMAZÁNÍ POHYBU", "Rozmazává obraz při rychlém pohybu. Projeví se při příštím spuštění hry."},
          {"CITLIVOST MYŠI", "Upravte rychlost otáčení kamery myší."},
          {"ANIZOTROPNÍ FILTROVÁNÍ", "Udržuje ostré textury viděné pod úhlem."},
-         {"ŠKÁLOVÁNÍ OBRAZU", "Způsob škálování obrazu do okna. Projeví se při příštím spuštění hry."}},
-        "Vypnuto", "Zapnuto", "FXAA", "FXAA extrémní", "Otevřít", "Bilineární (původní)", "AMD CAS (zostření)", "AMD FSR 1"}},
+         {"ŠKÁLOVÁNÍ OBRAZU", "Způsob škálování obrazu do okna. Projeví se při příštím spuštění hry."},
+         {"ROZLIŠENÍ VYKRESLOVÁNÍ",
+          "Rozlišení, ve kterém se hra vykresluje, před škálováním obrazu. Automaticky zvolí rozlišení pro tento počítač. Projeví se při příštím spuštění hry."},
+         {"OSTROST",
+          "Kolik dalšího zostření přidá škálování obrazu. 0 ponechá výchozí."}},
+        "Vypnuto", "Zapnuto", "FXAA", "FXAA extrémní", "Otevřít", "Bilineární (původní)", "AMD CAS (zostření)", "AMD FSR 1", "Automaticky"}},
       {"hun",
        {{"BILLENTYŰZET ÉS EGÉR", "A billentyűzet és az egér beállításai."},
         {{"FÉNYERŐ KALIBRÁLÁSA", "Megnyitja a fényerő kalibrálási képernyőjét."},
@@ -241,8 +305,12 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"MOZGÁSI ELMOSÓDÁS", "Elmossa a képet gyors mozgáskor. A játék következő indításakor lép életbe."},
          {"EGÉRÉRZÉKENYSÉG", "Az egérrel történő kameraforgatás sebessége."},
          {"ANIZOTRÓP SZŰRÉS", "Élesen tartja a ferdén látott textúrákat."},
-         {"KÉPSKÁLÁZÁS", "A kép ablakhoz méretezésének módja. A játék következő indításakor lép életbe."}},
-        "Ki", "Be", "FXAA", "FXAA (extrém)", "Megnyitás", "Bilineáris (eredeti)", "AMD CAS (élesítés)", "AMD FSR 1"}},
+         {"KÉPSKÁLÁZÁS", "A kép ablakhoz méretezésének módja. A játék következő indításakor lép életbe."},
+         {"RENDERELÉSI FELBONTÁS",
+          "A játék rajzolási felbontása a képskálázás előtt. Az Automatikus ehhez a számítógéphez választ. A játék következő indításakor lép életbe."},
+         {"ÉLESSÉG",
+          "Mennyi további élesítést ad a képskálázás. A 0 a sajátját hagyja meg."}},
+        "Ki", "Be", "FXAA", "FXAA (extrém)", "Megnyitás", "Bilineáris (eredeti)", "AMD CAS (élesítés)", "AMD FSR 1", "Automatikus"}},
       {"chn",
        {{"鍵盤與滑鼠", "調整鍵盤與滑鼠設定。"},
         {{"校正亮度", "開啟亮度校正畫面。"},
@@ -252,8 +320,12 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"動態模糊", "在快速移動時模糊畫面。下次啟動遊戲時生效。"},
          {"滑鼠靈敏度", "調整用滑鼠轉動鏡頭的速度。"},
          {"非等向性過濾", "讓斜角觀看的材質保持清晰。"},
-         {"影像縮放", "影像縮放至視窗的方式。下次啟動遊戲時生效。"}},
-        "關閉", "開啟", "FXAA", "FXAA 極致", "開啟", "雙線性（原始）", "AMD CAS（銳利化）", "AMD FSR 1"}},
+         {"影像縮放", "影像縮放至視窗的方式。下次啟動遊戲時生效。"},
+         {"渲染解析度",
+          "遊戲在影像縮放前的繪製解析度。自動會為這台電腦選擇。下次啟動遊戲時生效。"},
+         {"銳利度",
+          "影像縮放額外增加的銳利度。0 為保持原樣。"}},
+        "關閉", "開啟", "FXAA", "FXAA 極致", "開啟", "雙線性（原始）", "AMD CAS（銳利化）", "AMD FSR 1", "自動"}},
       {"kor",
        {{"키보드 및 마우스", "키보드 및 마우스 설정을 조정합니다."},
         {{"밝기 보정", "밝기 보정 화면을 엽니다."},
@@ -263,8 +335,12 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"모션 블러", "빠르게 움직일 때 화면을 흐리게 합니다. 다음에 게임을 시작할 때 적용됩니다."},
          {"마우스 감도", "마우스로 카메라를 돌리는 속도를 조정합니다."},
          {"비등방성 필터링", "비스듬히 보이는 텍스처를 선명하게 유지합니다."},
-         {"이미지 스케일링", "화면을 창 크기에 맞게 조정하는 방식입니다. 다음에 게임을 시작할 때 적용됩니다."}},
-        "끔", "켬", "FXAA", "FXAA 최대", "열기", "바이리니어 (원본)", "AMD CAS (선명화)", "AMD FSR 1"}},
+         {"이미지 스케일링", "화면을 창 크기에 맞게 조정하는 방식입니다. 다음에 게임을 시작할 때 적용됩니다."},
+         {"렌더링 해상도",
+          "이미지 스케일링 전에 게임을 그리는 해상도입니다. 자동은 이 컴퓨터에 맞게 선택합니다. 다음에 게임을 시작할 때 적용됩니다."},
+         {"선명도",
+          "이미지 스케일링에 더할 선명도입니다. 0은 기본값을 유지합니다."}},
+        "끔", "켬", "FXAA", "FXAA 최대", "열기", "바이리니어 (원본)", "AMD CAS (선명화)", "AMD FSR 1", "자동"}},
   };
   return texts;
 }
@@ -288,6 +364,8 @@ std::map<int, float> g_started;
 // Values of the start-up options the player was last asked about, so that answering "Later" is
 // not asked again until something changes.
 std::string g_prompted_for;
+// Shows a new upscaling_sharpness while the game runs (SetSharpnessChangedHandler).
+std::function<void()> g_sharpness_changed;
 
 bool Valid(int option) {
   return option >= 0 && option < static_cast<int>(Options().size());
@@ -296,7 +374,18 @@ bool Valid(int option) {
 // Options that the runtime only reads when the game starts.
 bool NeedsRestart(const Option& option) {
   return option.label == Label::kAntialiasing || option.label == Label::kUpscaling ||
-         option.label == Label::kMotionBlur;
+         option.label == Label::kMotionBlur || option.label == Label::kRenderResolution;
+}
+
+// Rows whose changes the script hears of while the menu is open (bHasOnChangeCallback): Flash runs
+// the callback that UIScene_Options.GetCallbackForOptionPSID gives for the row's profile setting.
+// Ours borrow the callbacks of two game rows the Video list no longer has, the calibration
+// screen's gamma (49) and TV type (53), and the script hooks run our code instead of theirs. Returns
+// the borrowed profile setting ID, or -1 for a row without one.
+int LiveCallbackPsid(const Option& option) {
+  if (option.label == Label::kUpscaling) return 53;
+  if (option.label == Label::kSharpness) return 49;
+  return -1;
 }
 
 float ReadCvar(const Option& option) {
@@ -493,7 +582,8 @@ std::string RowText(const Option& option, const Texts& texts) {
   const auto& [label, tooltip] = texts.labels[static_cast<int>(option.label)];
   std::ostringstream row;
   row << "(ProfileSettingId=" << option.psid << ",SettingDescription=\"" << label << "\",SettingTooltip=\"" << tooltip
-      << "\",bUsesRawValue=false,bIsGlobalValue=false,bHasOnChangeCallback=false,"
+      << "\",bUsesRawValue=false,bIsGlobalValue=false,bHasOnChangeCallback="
+      << (LiveCallbackPsid(option) >= 0 ? "true" : "false") << ","
       << "bRequiresMatureLanguageSupport=false,";
   if (option.kind == Kind::kSlider) {
     row << "Type=OST_Slider,Slider_Minimum=" << FormatFloat(option.slider_min)
@@ -528,6 +618,15 @@ bool PcOptionValueNames(int psid, std::vector<std::u16string>& names) {
       const auto found = unlimited.find(REXCVAR_GET(user_language));
       names = {u"30", u"60", u"90", u"120", found != unlimited.end() ? found->second : u"Unlimited"};
     }
+    if (option.label == Label::kRenderResolution) {
+      std::string language;
+      {
+        std::lock_guard lock(g_mutex);
+        language = g_menu_language;
+      }
+      names = {CoalescedString::FromUtf8(TextsFor(language).automatic).text, u"1280 × 720", u"2560 × 1440",
+               u"3840 × 2160"};
+    }
     if (option.label == Label::kUpscaling) {
       std::string language;
       {
@@ -554,11 +653,59 @@ void SetPcOptionsConfigPath(std::filesystem::path config_path) {
   g_config_path = std::move(config_path);
 }
 
+namespace {
+
+// Whether the image scaling effect chosen in the menu (shown, maybe not in effect until a restart)
+// sharpens, so the sharpness row applies to it.
+bool ChosenUpscalingSharpens() {
+  for (size_t i = 0; i < Options().size(); ++i) {
+    const Option& option = Options()[i];
+    if (option.label != Label::kUpscaling) continue;
+    const std::string effect = FormatValue(option, PcOptionDisplayValue(static_cast<int>(i)), false);
+    return effect == "cas" || effect == "fsr";
+  }
+  return false;
+}
+
+// Whether `option` is a row the menu shows now: the sharpness row only with an effect that sharpens.
+bool Shown(const Option& option) {
+  return option.label != Label::kSharpness || ChosenUpscalingSharpens();
+}
+
+}  // namespace
+
 int FindPcOption(int category, int row) {
   for (size_t i = 0; i < Options().size(); ++i) {
-    if (Options()[i].category == category && Options()[i].row == row) return static_cast<int>(i);
+    const Option& option = Options()[i];
+    if (option.category == category && option.row == row) return Shown(option) ? static_cast<int>(i) : -1;
   }
   return -1;
+}
+
+int PcOptionsShownRows(int category) {
+  int rows = 0;
+  while (FindPcOption(category, rows) >= 0) ++rows;
+  return rows;
+}
+
+int PcOptionLiveCallbackPsid(int psid) {
+  for (const Option& option : Options()) {
+    if (option.psid == psid) return LiveCallbackPsid(option);
+  }
+  return -1;
+}
+
+bool PcOptionLiveChange(int category, int borrowed_psid, float value, int& row, bool& rows_changed) {
+  for (size_t i = 0; i < Options().size(); ++i) {
+    const Option& option = Options()[i];
+    if (option.category != category || LiveCallbackPsid(option) != borrowed_psid || !Shown(option)) continue;
+    const int rows_before = PcOptionsShownRows(category);
+    PcOptionStoreValue(static_cast<int>(i), value);
+    row = option.row;
+    rows_changed = PcOptionsShownRows(category) != rows_before;
+    return true;
+  }
+  return false;
 }
 
 bool PcOptionIsSlider(int option) {
@@ -596,6 +743,7 @@ void PcOptionStoreValue(int option, float value) {
   rex::cvar::SetFlagByName(entry.cvar, FormatValue(entry, value, false));
   REXLOG_INFO("[Azura options] {} = {}", entry.cvar, FormatValue(entry, value, false));
   if (entry.label == Label::kFrameRateLimit) ApplyFrameRateLimit();
+  if (entry.label == Label::kSharpness) ApplyUpscalingSharpness(true);
   if (!config_path.empty()) UpsertTomlKey(config_path, entry.cvar, FormatValue(entry, value, true));
 }
 
@@ -625,6 +773,7 @@ void PcOptionsResetDefaults(int category) {
     if (!config_path.empty()) UpsertTomlKey(config_path, option.cvar, FormatValue(option, value, true));
     REXLOG_INFO("[Azura options] {} reset to {}", option.cvar, FormatValue(option, value, false));
     if (option.label == Label::kFrameRateLimit) ApplyFrameRateLimit();
+    if (option.label == Label::kSharpness) ApplyUpscalingSharpness(true);
   }
 }
 
@@ -769,6 +918,80 @@ void ApplyFrameRateLimit() {
   rex::cvar::SetFlagByName("guest_vblank_rate", std::to_string(frames * 2));
   REXLOG_INFO("[Azura options] Frame rate limited to {} ({} vertical blanks per second)", frames,
               frames * 2);
+}
+
+namespace {
+
+// Resolution scale "auto" stands for, as the launcher's Automatic (launcher/src/graphics.js): 2 on
+// Apple Pro, Max and Ultra chips with at least 16 GB of memory (more GPU cores and memory
+// bandwidth), else 1, the console's own resolution.
+int AutoResolutionScale() {
+#if defined(__APPLE__) && defined(__aarch64__)
+  char chip[128] = {};
+  size_t chip_size = sizeof(chip) - 1;
+  uint64_t memory = 0;
+  size_t memory_size = sizeof(memory);
+  if (sysctlbyname("machdep.cpu.brand_string", chip, &chip_size, nullptr, 0) != 0 ||
+      sysctlbyname("hw.memsize", &memory, &memory_size, nullptr, 0) != 0) {
+    return 1;
+  }
+  if (memory < 16ull * 1024 * 1024 * 1024) return 1;
+  std::istringstream words{std::string(chip)};
+  for (std::string word; words >> word;) {
+    if (word == "Pro" || word == "Max" || word == "Ultra") return 2;
+  }
+#endif
+  return 1;
+}
+
+}  // namespace
+
+void ApplyRenderResolution() {
+  const std::string chosen = REXCVAR_GET(render_resolution);
+  const int scale = chosen == "1280x720"    ? 1
+                    : chosen == "2560x1440" ? 2
+                    : chosen == "3840x2160" ? 3
+                                            : AutoResolutionScale();
+  // A larger render needs more texture memory; the hard limit is twice the soft one, as in the
+  // SDK's defaults (384 and 768 MB).
+  const int texture_memory = scale >= 2 ? 768 : 384;
+  const std::pair<const char*, int> settings[] = {
+      {"draw_resolution_scale_x", scale},
+      {"draw_resolution_scale_y", scale},
+      {"texture_cache_memory_limit_soft", texture_memory},
+      {"texture_cache_memory_limit_hard", texture_memory * 2},
+  };
+  for (const auto& [name, value] : settings) {
+    // Rejected when the setting is not registered yet (its GPU plugin is not loaded).
+    if (!rex::cvar::SetFlagByName(name, std::to_string(value))) {
+      REXLOG_WARN("[Azura options] Cannot set {} = {} for the render resolution", name, value);
+    }
+  }
+  REXLOG_INFO("[Azura options] Render resolution {}: {}x{} (scale {}, texture memory {} MB)", chosen,
+              1280 * scale, 720 * scale, scale, texture_memory);
+  // These values are the ones the game starts with, not changes waiting for a restart.
+  rex::cvar::ClearPendingRestartFlags();
+}
+
+void SetSharpnessChangedHandler(std::function<void()> handler) {
+  std::lock_guard lock(g_mutex);
+  g_sharpness_changed = std::move(handler);
+}
+
+void ApplyUpscalingSharpness(bool show_now) {
+  const double sharpness = std::clamp(REXCVAR_GET(upscaling_sharpness), 0.0, 1.0);
+  // CAS adds its sharpening on top of its own (0 to 1). FSR's RCAS takes a reduction in stops whose
+  // default is 0.2: 0 here keeps that default and 1 removes the reduction, its sharpest.
+  rex::cvar::SetFlagByName("present_cas_additional_sharpness", FormatFloat(float(sharpness)));
+  if (rex::cvar::GetFlagInfo("present_fsr_sharpness_reduction")) {
+    rex::cvar::SetFlagByName("present_fsr_sharpness_reduction", FormatFloat(float(0.2 * (1.0 - sharpness))));
+  }
+  std::function<void()> handler;
+  {
+    std::lock_guard lock(g_mutex);
+    handler = g_sharpness_changed;
+  }
+  if (show_now && handler) handler();
 }
 
 }  // namespace azura::menu
