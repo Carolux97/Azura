@@ -252,6 +252,8 @@ int PatchMenus(Coalesced& coalesced) {
         PatchValueNames(section, language);
       } else if (engine_config && section_name == "SystemSettings") {
         PatchSystemSettings(section);
+      } else if (engine_config && section_name == "Engine.Engine") {
+        PatchEngineSettings(section);
       } else if (ui_texts && section_name == "MessageBoxStrings") {
         PatchMessageBoxTexts(section, language);
       } else if (ui_texts && section_name == "MainMenu") {

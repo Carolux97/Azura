@@ -41,9 +41,11 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <mutex>
 #include <string>
 #include <unordered_set>
+#include <vector>
 
 #include "script_hooks.h"
 
@@ -209,6 +211,7 @@ enum WatchedName {
   kCloseVideoOptionsScene,   // UIScene_Options: the calibration screen closes
   kMenuOptionSelected,       // UIScene_Options.Callback_MenuOptionSelected: a category is chosen
   kReturnToMain,             // UIScene_Options.Callback_ReturnToMain: back to the categories
+  kSpecialCaseValues,        // UIScene_Options: value names of a raw-value list row
   kResetAcceptAlias,         // button alias of the Defaults message box's Accept button
   kGenericAcceptAlias,       // button alias of the game's plain Accept button
   kBuildCampaignURL,         // GearMenuGame: builds travel URL for campaign
@@ -228,6 +231,7 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "HandleMenuSelection",   "PopulateOptionsList",    "GetOptionValueAt",
     "OnConfirm_ResetDefaults", "FilterButtonInput",    "Callback_VideoOptions",
     "CloseVideoOptionsScene", "Callback_MenuOptionSelected", "Callback_ReturnToMain",
+    "GetProfileSettingValue_SpecialCase",
     "ResetAccept",           "GenericAccept",
     "BuildCampaignURL",      "ServerTravel",           "ProcessServerTravel",
     "PawnDied",              "ShouldDeathCauseFailure", "GetDeathGameOverReason",
@@ -468,6 +472,106 @@ void RunInstead(PPCContext& ctx, uint8_t* base, uint32_t function, uint32_t loca
   StoreU32(base, frame + kFrameNode, node);
   StoreU32(base, frame + kFrameCode, code);
   StoreU32(base, frame + kFrameLocals, own_locals);
+}
+
+// --- List rows of our own ---
+//
+// A raw-value list row (bUsesRawValue) gets its value names from
+// UIScene_Options.GetProfileSettingValue_SpecialCase(OptionPSID, out OptionValues), which only
+// knows the multiplayer characters and weapons and leaves the array empty for any other ID. For the
+// IDs of our own lists (menu/pc_options.h), the script runs bytecode of ours instead of its own,
+// `OptionValues[I] = "name"` for each name followed by a return, so the script interpreter grows
+// the array and allocates the strings with the game's allocator, which frees them later.
+constexpr uint8_t kTokenLet = 0x0F;
+constexpr uint8_t kTokenDynArrayElement = 0x10;
+constexpr uint8_t kTokenIntConst = 0x1D;
+constexpr uint8_t kTokenUnicodeStringConst = 0x34;
+constexpr uint8_t kTokenReturn = 0x04;
+constexpr uint8_t kTokenNothing = 0x0B;
+constexpr uint8_t kTokenEndOfScript = 0x53;
+constexpr uint32_t kSpecialCasePsid = 0;  // GetProfileSettingValue_SpecialCase parameter OptionPSID
+
+std::mutex g_value_names_mutex;
+std::map<std::u16string, uint32_t> g_value_names_code;  // guest bytecode for each list of names
+
+// The property `name` among the children of `function`, or 0.
+uint32_t FindFunctionProperty(const uint8_t* base, uint32_t function, const std::string& name) {
+  for (uint32_t prop = LoadU32(base, function + kStructChildren); prop; prop = LoadU32(base, prop + kFieldNext)) {
+    if (ObjectName(base, prop) == name) return prop;
+  }
+  return 0;
+}
+
+// The token the function's own bytecode uses to read `property` (the byte before its first
+// reference, an 8-byte big-endian object pointer), or 0 when it never refers to it.
+uint8_t PropertyToken(const uint8_t* base, uint32_t function, uint32_t property) {
+  const uint32_t code = LoadU32(base, function + kStructScript);
+  const uint32_t size = LoadU32(base, function + kStructScript + 4);
+  for (uint32_t i = 1; i + 8 <= size; ++i) {
+    if (LoadU32(base, code + i) == 0 && LoadU32(base, code + i + 4) == property) return base[code + i - 1];
+  }
+  return 0;
+}
+
+// Guest bytecode that fills OptionValues with `names`, built once per list of names.
+uint32_t ValueNamesCode(uint8_t* base, uint32_t function, const std::vector<std::u16string>& names) {
+  std::u16string key;
+  for (const auto& name : names) key += name + u'\0';
+  std::lock_guard lock(g_value_names_mutex);
+  if (const auto found = g_value_names_code.find(key); found != g_value_names_code.end()) return found->second;
+  const uint32_t values = FindFunctionProperty(base, function, "OptionValues");
+  const uint8_t values_token = values ? PropertyToken(base, function, values) : 0;
+  if (!values_token) {
+    REXLOG_WARN("[Azura options] GetProfileSettingValue_SpecialCase is not as expected; no value names");
+    return 0;
+  }
+  std::vector<uint8_t> code;
+  auto u32 = [&code](uint32_t v) {
+    for (int shift = 24; shift >= 0; shift -= 8) code.push_back(static_cast<uint8_t>(v >> shift));
+  };
+  for (size_t i = 0; i < names.size(); ++i) {
+    code.push_back(kTokenLet);
+    code.push_back(kTokenDynArrayElement);
+    code.push_back(kTokenIntConst);
+    u32(static_cast<uint32_t>(i));
+    code.push_back(values_token);
+    u32(0);
+    u32(values);
+    // UTF-16, big-endian like the rest of the console's bytecode, zero-terminated.
+    code.push_back(kTokenUnicodeStringConst);
+    for (char16_t c : names[i]) {
+      code.push_back(static_cast<uint8_t>(c >> 8));
+      code.push_back(static_cast<uint8_t>(c));
+    }
+    code.push_back(0);
+    code.push_back(0);
+  }
+  code.push_back(kTokenReturn);
+  code.push_back(kTokenNothing);
+  code.push_back(kTokenEndOfScript);
+  const uint32_t address = rex::system::kernel_state()->memory()->SystemHeapAlloc(static_cast<uint32_t>(code.size()));
+  if (!address) return 0;
+  std::memcpy(base + address, code.data(), code.size());
+  g_value_names_code.emplace(key, address);
+  REXLOG_INFO("[Azura options] Value names bytecode for {} names ({} bytes, OptionValues token 0x{:02X})",
+              names.size(), code.size(), values_token);
+  return address;
+}
+
+// Runs our bytecode in place of GetProfileSettingValue_SpecialCase when the row is one of our own
+// lists. Returns false when the script's own code must run.
+bool FillOwnValueNames(PPCContext& ctx, uint8_t* base, uint32_t function) {
+  const uint32_t frame = ctx.r4.u32;
+  const int32_t psid = static_cast<int32_t>(LoadU32(base, LoadU32(base, frame + kFrameLocals) + kSpecialCasePsid));
+  std::vector<std::u16string> names;
+  if (!azura::menu::PcOptionValueNames(psid, names) || names.empty()) return false;
+  const uint32_t code = ValueNamesCode(base, function, names);
+  if (!code) return false;
+  const uint32_t own_code = LoadU32(base, frame + kFrameCode);
+  StoreU32(base, frame + kFrameCode, code);
+  __imp__sub_822DF9E0(ctx, base);
+  StoreU32(base, frame + kFrameCode, own_code);
+  return true;
 }
 
 // --- Restart message box ---
@@ -911,6 +1015,7 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     return;
   }
   if (Is(base, function, kFilterButtonInput) && HandleOptionsButton(ctx, base, function)) return;
+  if (Is(base, function, kSpecialCaseValues) && FillOwnValueNames(ctx, base, function)) return;
   // The answer of the restart message box (see OpenRestartDialog): Accept restarts; nothing is
   // reset either way, so the Defaults code does not run.
   if (Is(base, function, kResetDefaults) && g_restart_dialog.exchange(false)) {

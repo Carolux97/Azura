@@ -3,7 +3,7 @@
 // The Options menu (UIScene_Options) is a list of categories whose rows each edit a profile
 // setting. Azura changes it so that:
 //   - Video, which only opened the brightness calibration screen, becomes a list: a "Calibrate
-//     brightness" row that opens that screen with Accept, then full screen, vsync, anti-aliasing
+//     brightness" row that opens that screen with Accept, then full screen, frame rate limit, anti-aliasing
 //     and motion blur;
 //   - "Storage location", which has no use on a PC, becomes "Keyboard and mouse", with the mouse
 //     sensitivity (and the place for key bindings later).
@@ -22,6 +22,7 @@
 
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace azura::menu {
 
@@ -32,6 +33,13 @@ constexpr int kVideoCategory = 1;
 constexpr int kKeyboardMouseCategory = 5;  // the game's storage location position
 // Row of the Video category that opens the brightness calibration screen.
 constexpr int kCalibrateRow = 0;
+
+// The value of frame_rate_limit that removes the limit (the last entry of its list).
+constexpr float kFrameRateUnlimited = 150.0f;
+
+// The value names of a list row of our own (one without a profile setting definition) whose
+// profile setting ID is `psid`, in the player's language. False when `psid` is not one of them.
+bool PcOptionValueNames(int psid, std::vector<std::u16string>& names);
 
 // Where chosen values are saved (azura.toml).
 void SetPcOptionsConfigPath(std::filesystem::path config_path);
@@ -83,5 +91,10 @@ void PatchValueNames(CoalescedSection& section, const std::string& language);
 // Applies the settings the engine reads at start-up to the [SystemSettings] section of the
 // engine configuration (Xbox360-GearEngine.ini).
 void PatchSystemSettings(CoalescedSection& section);
+// [Engine.Engine] of Xbox360-GearEngine.ini: the frame rate smoothing ceiling.
+void PatchEngineSettings(CoalescedSection& section);
+// Applies frame_rate_limit to the guest's vertical blanks (vsync, guest_vblank_rate). Called at
+// start-up and when the Video menu changes it.
+void ApplyFrameRateLimit();
 
 }  // namespace azura::menu
