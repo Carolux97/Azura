@@ -469,6 +469,107 @@ index d54df86..74913c7 100644
    // One-shot convenience for callers that don't care about the split.
    X_STATUS Setup(runtime::FunctionDispatcher* function_dispatcher, KernelState* kernel_state,
                   ui::WindowedAppContext* app_context, bool with_presentation) {
+diff --git a/include/rex/ui/presenter.h b/include/rex/ui/presenter.h
+index afb4a30..f163ac5 100644
+--- a/include/rex/ui/presenter.h
++++ b/include/rex/ui/presenter.h
+@@ -47,6 +47,12 @@
+ #include <wrl/client.h>
+ #endif  // XE_PLATFORM
+ 
++// AMD FidelityFX Contrast Adaptive Sharpening as a guest output effect: with the FidelityFX SDK, and
++// in the Metal presenter on macOS, which runs the SDK's prebuilt CAS shaders converted to MSL.
++#if defined(REX_HAS_FIDELITYFX_SDK) || defined(__APPLE__)
++#define REX_HAS_GUEST_OUTPUT_CAS 1
++#endif
++
+ namespace rex {
+ namespace ui {
+ 
+@@ -212,8 +218,14 @@ class Presenter {
+    public:
+     enum class Effect {
+       kBilinear,
+-#if defined(REX_HAS_FIDELITYFX_SDK)
++#if defined(REX_HAS_GUEST_OUTPUT_CAS)
+       kCas,
++#endif
++#if defined(__APPLE__)
++      // Apple MetalFX spatial upscaling, in the Metal presenter.
++      kMetalFx,
++#endif
++#if defined(REX_HAS_FIDELITYFX_SDK)
+       // AMD FidelityFX Super Resolution upsampling, Contrast Adaptive
+       // Sharpening otherwise.
+       kFsr,
+@@ -238,13 +250,18 @@ class Presenter {
+       kPerformance,
+       kUltraPerformance,
+     };
++#endif  // defined(REX_HAS_FIDELITYFX_SDK)
+ 
++#if defined(REX_HAS_GUEST_OUTPUT_CAS)
+     // This value is used as a lerp factor.
+     static constexpr float kCasAdditionalSharpnessMin = 0.0f;
+     static constexpr float kCasAdditionalSharpnessMax = 1.0f;
+     static constexpr float kCasAdditionalSharpnessDefault = 0.0f;
+     static_assert(kCasAdditionalSharpnessDefault >= kCasAdditionalSharpnessMin &&
+                   kCasAdditionalSharpnessDefault <= kCasAdditionalSharpnessMax);
++#endif
++
++#if defined(REX_HAS_FIDELITYFX_SDK)
+ 
+     // EASU (as well as CAS) is designed for scaling by factors of up to 2x2.
+     // Some sensible limit for unusual cases, when the game for some reason
+@@ -273,13 +290,16 @@ class Presenter {
+     Effect GetEffect() const { return effect_; }
+     void SetEffect(Effect new_effect) { effect_ = new_effect; }
+ 
+-#if defined(REX_HAS_FIDELITYFX_SDK)
++#if defined(REX_HAS_GUEST_OUTPUT_CAS)
+     float GetCasAdditionalSharpness() const { return cas_additional_sharpness_; }
+     void SetCasAdditionalSharpness(float new_cas_additional_sharpness) {
+       cas_additional_sharpness_ =
+           std::min(kCasAdditionalSharpnessMax,
+                    std::max(kCasAdditionalSharpnessMin, new_cas_additional_sharpness));
+     }
++#endif
++
++#if defined(REX_HAS_FIDELITYFX_SDK)
+ 
+     uint32_t GetFsrMaxUpsamplingPasses() const { return fsr_max_upsampling_passes_; }
+     void SetFsrMaxUpsamplingPasses(uint32_t new_fsr_max_upsampling_passes) {
+@@ -314,8 +334,10 @@ class Presenter {
+     // original front buffer as possible.
+     bool allow_overscan_cutoff_ = false;
+     Effect effect_ = Effect::kBilinear;
+-#if defined(REX_HAS_FIDELITYFX_SDK)
++#if defined(REX_HAS_GUEST_OUTPUT_CAS)
+     float cas_additional_sharpness_ = kCasAdditionalSharpnessDefault;
++#endif
++#if defined(REX_HAS_FIDELITYFX_SDK)
+     uint32_t fsr_max_upsampling_passes_ = kFsrMaxUpscalingPassesMax;
+     float fsr_sharpness_reduction_ = kFsrSharpnessReductionDefault;
+     FsrQualityMode fsr_quality_mode_ = FsrQualityMode::kAuto;
+@@ -548,7 +570,7 @@ class Presenter {
+     }
+   };
+ 
+-#if defined(REX_HAS_FIDELITYFX_SDK)
++#if defined(REX_HAS_GUEST_OUTPUT_CAS)
+   static constexpr float CalculateCasPostSetupSharpness(float sharpness) {
+     // CasSetup const1.x.
+     return -1.0f / (8.0f - 3.0f * sharpness);
+@@ -583,6 +605,9 @@ class Presenter {
+     }
+   };
+ 
++#endif  // defined(REX_HAS_GUEST_OUTPUT_CAS)
++
++#if defined(REX_HAS_FIDELITYFX_SDK)
+   struct FsrEasuConstants {
+     // No output offset because the EASU pass is always done to an intermediate
+     // framebuffer.
 diff --git a/include/rex/ui/vulkan/device.h b/include/rex/ui/vulkan/device.h
 index 947817f..23e4d04 100644
 --- a/include/rex/ui/vulkan/device.h
@@ -597,7 +698,7 @@ index d3f26eb..5d2ba98 100644
      false,  // kCommandBufferStalls
      false,  // kVerticesProcessed
 diff --git a/src/graphics/CMakeLists.txt b/src/graphics/CMakeLists.txt
-index 0d8f8af..2ab2ac1 100644
+index 0d8f8af..935e88b 100644
 --- a/src/graphics/CMakeLists.txt
 +++ b/src/graphics/CMakeLists.txt
 @@ -41,6 +41,18 @@ set(REXGPU_XENOS_SPIRV_SOURCES
@@ -662,7 +763,7 @@ index 0d8f8af..2ab2ac1 100644
  endif()
  
  if(REXGLUE_USE_D3D12)
-@@ -151,6 +190,90 @@ if(REXGLUE_USE_VULKAN)
+@@ -151,6 +190,91 @@ if(REXGLUE_USE_VULKAN)
      )
  endif()
  
@@ -708,6 +809,7 @@ index 0d8f8af..2ab2ac1 100644
 +        spirv-cross-glsl
 +        spirv-cross-core
 +        "-framework Metal"
++        "-framework MetalFX"
 +        "-framework QuartzCore"
 +        "-framework Foundation"
 +    )
@@ -5405,10 +5507,10 @@ index 0000000..790a6f8
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_presenter.h b/src/graphics/metal/metal_presenter.h
 new file mode 100644
-index 0000000..940bce8
+index 0000000..ca1415d
 --- /dev/null
 +++ b/src/graphics/metal/metal_presenter.h
-@@ -0,0 +1,75 @@
+@@ -0,0 +1,98 @@
 +/**
 + * @file        graphics/metal/metal_presenter.h
 + * @brief       Presents the guest output to a CAMetalLayer with Metal
@@ -5426,6 +5528,7 @@ index 0000000..940bce8
 +#include <rex/ui/presenter.h>
 +
 +#import <Metal/Metal.h>
++#import <MetalFX/MetalFX.h>
 +#import <QuartzCore/CAMetalLayer.h>
 +
 +namespace rex::graphics::metal {
@@ -5471,11 +5574,33 @@ index 0000000..940bce8
 +                 id<MTLCommandQueue> queue)
 +      : Presenter(host_gpu_loss_callback), device_(device), queue_(queue) {}
 +  bool InitializeSurfaceIndependent();
++  // The AMD CAS pipelines (the SDK's prebuilt shaders converted to MSL), nil if unavailable.
++  bool InitializeCas(id<MTLLibrary> paint_library);
++  // A render pass drawing a guest output effect over the viewport of a target.
++  void EncodeEffect(id<MTLRenderCommandEncoder> encoder, id<MTLRenderPipelineState> pipeline,
++                    id<MTLTexture> source, int32_t x, int32_t y, uint32_t width, uint32_t height,
++                    const void* constants, size_t constants_size);
++  // A texture an effect renders into for the next one, kept while its size stays the same.
++  id<MTLTexture> GetIntermediateTexture(id<MTLTexture> __strong& texture, uint32_t width,
++                                        uint32_t height, MTLTextureUsage usage, NSString* label);
 +
 +  id<MTLDevice> device_;
 +  id<MTLCommandQueue> queue_;
 +  id<MTLRenderPipelineState> paint_pipeline_ = nil;
 +  id<MTLSamplerState> paint_sampler_ = nil;
++
++  // present_effect = "cas": sharpening at the same size, or resampling (up to 2x along each axis,
++  // the rest is bilinear) to the drawable or to an intermediate texture.
++  id<MTLRenderPipelineState> cas_sharpen_pipeline_ = nil;
++  id<MTLRenderPipelineState> cas_resample_pipeline_ = nil;
++  id<MTLRenderPipelineState> cas_resample_intermediate_pipeline_ = nil;
++  id<MTLTexture> cas_intermediate_texture_ = nil;
++
++  // present_effect = "metalfx": MetalFX spatial upscaling to an intermediate texture of the output
++  // size, then copied to the drawable. Recreated when the sizes change.
++  id<MTLFXSpatialScaler> metalfx_scaler_ = nil;
++  id<MTLTexture> metalfx_output_texture_ = nil;
++  bool metalfx_supported_ = false;
 +  std::array<id<MTLTexture>, kGuestOutputMailboxSize> guest_output_textures_ = {};
 +
 +  CAMetalLayer* layer_ = nil;
@@ -5486,10 +5611,10 @@ index 0000000..940bce8
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_presenter.mm b/src/graphics/metal/metal_presenter.mm
 new file mode 100644
-index 0000000..a508249
+index 0000000..32d3696
 --- /dev/null
 +++ b/src/graphics/metal/metal_presenter.mm
-@@ -0,0 +1,251 @@
+@@ -0,0 +1,469 @@
 +/**
 + * @file        graphics/metal/metal_presenter.mm
 + * @brief       Presents the guest output to a CAMetalLayer with Metal
@@ -5501,16 +5626,34 @@ index 0000000..a508249
 +#include "metal_presenter.h"
 +
 +#include "metal_immediate_drawer.h"
++#include "metal_spirv.h"
 +
 +#include <algorithm>
++#include <cstring>
 +#include <mutex>
++#include <vector>
 +
++#include <rex/assert.h>
 +#include <rex/logging.h>
 +#include <rex/ui/surface_mac.h>
 +
 +namespace rex::graphics::metal {
 +
++// AMD FidelityFX CAS as the SDK prebuilds it for the Vulkan presenter (MIT licensed, see the
++// SDK's shader sources), converted to MSL at initialization.
++namespace shaders {
++#include "../../ui/shaders/vulkan_spirv/guest_output_ffx_cas_resample_ps.h"
++#include "../../ui/shaders/vulkan_spirv/guest_output_ffx_cas_sharpen_ps.h"
++}  // namespace shaders
++
 +namespace {
++
++// In the push constants of the prebuilt guest output shaders, the effect constants come after the
++// Vulkan presenter's GuestOutputPaintRectangleConstants for its vertex shader (offset and size, 4
++// floats), which the Metal presenter's own vertex function does not need.
++constexpr size_t kEffectConstantsOffset = sizeof(float) * 4;
++// The largest effect constants (CasResampleConstants).
++constexpr size_t kEffectConstantsMaxSize = 32;
 +
 +// Draws the guest output into the letterboxed rectangle with bilinear filtering.
 +NSString* const kPaintShaderSource = @R"MSL(
@@ -5573,7 +5716,108 @@ index 0000000..a508249
 +  sampler_descriptor.sAddressMode = MTLSamplerAddressModeClampToEdge;
 +  sampler_descriptor.tAddressMode = MTLSamplerAddressModeClampToEdge;
 +  paint_sampler_ = [device_ newSamplerStateWithDescriptor:sampler_descriptor];
++  if (!InitializeCas(library)) {
++    REXLOG_WARN("MetalPresenter: CAS is not available, it is drawn as bilinear");
++  }
++  metalfx_supported_ = [MTLFXSpatialScalerDescriptor supportsDevice:device_];
++  if (!metalfx_supported_) {
++    REXLOG_WARN("MetalPresenter: MetalFX spatial upscaling is not supported by this GPU, it is "
++                "drawn as bilinear");
++  }
 +  return InitializeCommonSurfaceIndependent();
++}
++
++bool MetalPresenter::InitializeCas(id<MTLLibrary> paint_library) {
++  // The prebuilt shaders take the guest output texture (set 0 binding 0, read with texel fetches)
++  // and their constants as push constants, and work out the output pixel from the fragment
++  // position and the output offset.
++  const std::vector<MslBinding> bindings = {
++      {0, 0, MslBinding::Kind::kTexture, 0},
++      {0, 1, MslBinding::Kind::kSampler, 0},
++      {MslBinding::kPushConstantSet, 0, MslBinding::Kind::kBuffer, 0},
++  };
++  auto create_pipeline = [&](const uint32_t* code, size_t code_size, const char* name,
++                             MTLPixelFormat format) -> id<MTLRenderPipelineState> {
++    MslShader shader;
++    if (!SpirvToMsl(code, code_size / sizeof(uint32_t), MslStage::kFragment, bindings, shader,
++                    false, name)) {
++      return nil;
++    }
++    id<MTLFunction> fragment = CompileMslFunction(device_, shader, name);
++    if (!fragment) {
++      return nil;
++    }
++    MTLRenderPipelineDescriptor* descriptor = [MTLRenderPipelineDescriptor new];
++    descriptor.label = @(name);
++    descriptor.vertexFunction = [paint_library newFunctionWithName:@"paint_vertex"];
++    descriptor.fragmentFunction = fragment;
++    descriptor.colorAttachments[0].pixelFormat = format;
++    NSError* error = nil;
++    id<MTLRenderPipelineState> pipeline = [device_ newRenderPipelineStateWithDescriptor:descriptor
++                                                                                  error:&error];
++    if (!pipeline) {
++      REXLOG_ERROR("MetalPresenter: failed to create the {} pipeline: {}", name,
++                   error ? error.localizedDescription.UTF8String : "unknown error");
++    }
++    return pipeline;
++  };
++  cas_sharpen_pipeline_ =
++      create_pipeline(shaders::guest_output_ffx_cas_sharpen_ps,
++                      sizeof(shaders::guest_output_ffx_cas_sharpen_ps), "cas_sharpen",
++                      MTLPixelFormatBGRA8Unorm);
++  cas_resample_pipeline_ =
++      create_pipeline(shaders::guest_output_ffx_cas_resample_ps,
++                      sizeof(shaders::guest_output_ffx_cas_resample_ps), "cas_resample",
++                      MTLPixelFormatBGRA8Unorm);
++  cas_resample_intermediate_pipeline_ =
++      create_pipeline(shaders::guest_output_ffx_cas_resample_ps,
++                      sizeof(shaders::guest_output_ffx_cas_resample_ps),
++                      "cas_resample_intermediate", kGuestOutputFormat);
++  if (!cas_sharpen_pipeline_ || !cas_resample_pipeline_ || !cas_resample_intermediate_pipeline_) {
++    cas_sharpen_pipeline_ = nil;
++    cas_resample_pipeline_ = nil;
++    cas_resample_intermediate_pipeline_ = nil;
++    return false;
++  }
++  return true;
++}
++
++void MetalPresenter::EncodeEffect(id<MTLRenderCommandEncoder> encoder,
++                                  id<MTLRenderPipelineState> pipeline, id<MTLTexture> source,
++                                  int32_t x, int32_t y, uint32_t width, uint32_t height,
++                                  const void* constants, size_t constants_size) {
++  MTLViewport viewport = {double(x), double(y), double(width), double(height), 0.0, 1.0};
++  [encoder setViewport:viewport];
++  [encoder setRenderPipelineState:pipeline];
++  [encoder setFragmentTexture:source atIndex:0];
++  [encoder setFragmentSamplerState:paint_sampler_ atIndex:0];
++  if (constants) {
++    assert_true(constants_size <= kEffectConstantsMaxSize);
++    uint8_t push_constants[kEffectConstantsOffset + kEffectConstantsMaxSize] = {};
++    std::memcpy(push_constants + kEffectConstantsOffset, constants,
++                std::min(constants_size, kEffectConstantsMaxSize));
++    [encoder setFragmentBytes:push_constants
++                       length:kEffectConstantsOffset + constants_size
++                      atIndex:0];
++  }
++  [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
++}
++
++id<MTLTexture> MetalPresenter::GetIntermediateTexture(id<MTLTexture> __strong& texture,
++                                                      uint32_t width, uint32_t height,
++                                                      MTLTextureUsage usage, NSString* label) {
++  if (!texture || texture.width != width || texture.height != height) {
++    MTLTextureDescriptor* descriptor =
++        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:kGuestOutputFormat
++                                                           width:width
++                                                          height:height
++                                                       mipmapped:NO];
++    descriptor.usage = usage;
++    descriptor.storageMode = MTLStorageModePrivate;
++    texture = [device_ newTextureWithDescriptor:descriptor];
++    texture.label = label;
++  }
++  return texture;
 +}
 +
 +ui::Surface::TypeFlags MetalPresenter::GetSupportedSurfaceTypes() const {
@@ -5696,10 +5940,10 @@ index 0000000..a508249
 +
 +    id<MTLTexture> guest_output = nil;
 +    GuestOutputPaintFlow flow = {};
++    GuestOutputPaintConfig paint_config;
 +    {
 +      uint32_t mailbox_index;
 +      GuestOutputProperties properties;
-+      GuestOutputPaintConfig paint_config;
 +      std::unique_lock<std::mutex> lock(
 +          ConsumeGuestOutput(mailbox_index, &properties, &paint_config));
 +      if (mailbox_index != UINT32_MAX) {
@@ -5710,6 +5954,113 @@ index 0000000..a508249
 +
 +    id<MTLCommandBuffer> command_buffer = [queue_ commandBuffer];
 +    command_buffer.label = @"Present";
++
++    // The effects before the last one, which draws to the drawable, over the output rectangle of
++    // the paint flow. The paint flow itself only has bilinear stretching here: the upscaling
++    // effects are the Metal presenter's own.
++    id<MTLTexture> final_source = guest_output;
++    id<MTLRenderPipelineState> final_pipeline = paint_pipeline_;
++    CasSharpenConstants cas_sharpen_constants;
++    CasResampleConstants cas_resample_constants;
++    const void* final_constants = nullptr;
++    size_t final_constants_size = 0;
++    int32_t output_x = 0, output_y = 0;
++    uint32_t output_width = 0, output_height = 0;
++    if (guest_output && flow.effect_count) {
++      output_x = flow.output_x;
++      output_y = flow.output_y;
++      output_width = flow.effect_output_sizes[flow.effect_count - 1].first;
++      output_height = flow.effect_output_sizes[flow.effect_count - 1].second;
++      uint32_t input_width = uint32_t(guest_output.width);
++      uint32_t input_height = uint32_t(guest_output.height);
++      GuestOutputPaintConfig::Effect effect = paint_config.GetEffect();
++      if (effect == GuestOutputPaintConfig::Effect::kMetalFx && metalfx_supported_ &&
++          (output_width > input_width || output_height > input_height)) {
++        // MetalFX only upscales; downscaling (a draw resolution scale above the display) stays
++        // bilinear.
++        if (!metalfx_scaler_ || metalfx_scaler_.inputWidth != input_width ||
++            metalfx_scaler_.inputHeight != input_height ||
++            metalfx_scaler_.outputWidth != output_width ||
++            metalfx_scaler_.outputHeight != output_height) {
++          MTLFXSpatialScalerDescriptor* descriptor = [MTLFXSpatialScalerDescriptor new];
++          descriptor.inputWidth = input_width;
++          descriptor.inputHeight = input_height;
++          descriptor.outputWidth = output_width;
++          descriptor.outputHeight = output_height;
++          descriptor.colorTextureFormat = kGuestOutputFormat;
++          descriptor.outputTextureFormat = kGuestOutputFormat;
++          // The guest output is gamma-encoded, after the gamma ramp.
++          descriptor.colorProcessingMode = MTLFXSpatialScalerColorProcessingModePerceptual;
++          metalfx_scaler_ = [descriptor newSpatialScalerWithDevice:device_];
++          metalfx_output_texture_ = nil;
++          if (metalfx_scaler_) {
++            GetIntermediateTexture(metalfx_output_texture_, output_width, output_height,
++                                   metalfx_scaler_.outputTextureUsage | MTLTextureUsageShaderRead,
++                                   @"MetalFX output");
++          } else {
++            REXLOG_ERROR("MetalPresenter: failed to create the MetalFX spatial scaler for "
++                         "{}x{} to {}x{}",
++                         input_width, input_height, output_width, output_height);
++          }
++        }
++        if (metalfx_scaler_ && metalfx_output_texture_) {
++          metalfx_scaler_.colorTexture = guest_output;
++          metalfx_scaler_.inputContentWidth = input_width;
++          metalfx_scaler_.inputContentHeight = input_height;
++          metalfx_scaler_.outputTexture = metalfx_output_texture_;
++          [metalfx_scaler_ encodeToCommandBuffer:command_buffer];
++          // Copied 1:1 to the drawable by the bilinear pass.
++          final_source = metalfx_output_texture_;
++        }
++      } else if (effect == GuestOutputPaintConfig::Effect::kCas && cas_sharpen_pipeline_) {
++        float sharpness =
++            CalculateCasPostSetupSharpness(paint_config.GetCasAdditionalSharpness());
++        if (output_width == input_width && output_height == input_height) {
++          cas_sharpen_constants.output_offset[0] = output_x;
++          cas_sharpen_constants.output_offset[1] = output_y;
++          cas_sharpen_constants.sharpness_post_setup = sharpness;
++          final_pipeline = cas_sharpen_pipeline_;
++          final_constants = &cas_sharpen_constants;
++          final_constants_size = sizeof(cas_sharpen_constants);
++        } else {
++          // CAS is designed for up to 2x along each axis, as in the FidelityFX paint flow.
++          uint32_t resample_width = std::min(input_width * 2, output_width);
++          uint32_t resample_height = std::min(input_height * 2, output_height);
++          cas_resample_constants.input_output_size_ratio[0] =
++              float(input_width) / float(resample_width);
++          cas_resample_constants.input_output_size_ratio[1] =
++              float(input_height) / float(resample_height);
++          cas_resample_constants.sharpness_post_setup = sharpness;
++          if (resample_width == output_width && resample_height == output_height) {
++            cas_resample_constants.output_offset[0] = output_x;
++            cas_resample_constants.output_offset[1] = output_y;
++            final_pipeline = cas_resample_pipeline_;
++            final_constants = &cas_resample_constants;
++            final_constants_size = sizeof(cas_resample_constants);
++          } else {
++            // Resampled to an intermediate texture, stretched the rest of the way bilinearly.
++            cas_resample_constants.output_offset[0] = 0;
++            cas_resample_constants.output_offset[1] = 0;
++            id<MTLTexture> intermediate = GetIntermediateTexture(
++                cas_intermediate_texture_, resample_width, resample_height,
++                MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead, @"CAS output");
++            MTLRenderPassDescriptor* intermediate_pass =
++                [MTLRenderPassDescriptor renderPassDescriptor];
++            intermediate_pass.colorAttachments[0].texture = intermediate;
++            intermediate_pass.colorAttachments[0].loadAction = MTLLoadActionDontCare;
++            intermediate_pass.colorAttachments[0].storeAction = MTLStoreActionStore;
++            id<MTLRenderCommandEncoder> intermediate_encoder =
++                [command_buffer renderCommandEncoderWithDescriptor:intermediate_pass];
++            EncodeEffect(intermediate_encoder, cas_resample_intermediate_pipeline_, guest_output,
++                         0, 0, resample_width, resample_height, &cas_resample_constants,
++                         sizeof(cas_resample_constants));
++            [intermediate_encoder endEncoding];
++            final_source = intermediate;
++          }
++        }
++      }
++    }
++
 +    MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
 +    pass.colorAttachments[0].texture = drawable.texture;
 +    pass.colorAttachments[0].loadAction = MTLLoadActionClear;
@@ -5717,16 +6068,8 @@ index 0000000..a508249
 +    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
 +    id<MTLRenderCommandEncoder> encoder = [command_buffer renderCommandEncoderWithDescriptor:pass];
 +    if (guest_output && flow.effect_count) {
-+      // Only the bilinear effect exists on Metal: the last effect draws to the drawable.
-+      const std::pair<uint32_t, uint32_t>& output_size =
-+          flow.effect_output_sizes[flow.effect_count - 1];
-+      MTLViewport viewport = {double(flow.output_x), double(flow.output_y),
-+                              double(output_size.first), double(output_size.second), 0.0, 1.0};
-+      [encoder setViewport:viewport];
-+      [encoder setRenderPipelineState:paint_pipeline_];
-+      [encoder setFragmentTexture:guest_output atIndex:0];
-+      [encoder setFragmentSamplerState:paint_sampler_ atIndex:0];
-+      [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
++      EncodeEffect(encoder, final_pipeline, final_source, output_x, output_y, output_width,
++                   output_height, final_constants, final_constants_size);
 +    }
 +    // The UI drawers (ImGui overlays) over the guest output, in the same pass.
 +    if (execute_ui_drawers) {
@@ -14565,6 +14908,62 @@ index 4e7ad78..dc26143 100644
      }
    }
  }
+diff --git a/src/ui/presenter.cpp b/src/ui/presenter.cpp
+index 7360ed9..0c8a935 100644
+--- a/src/ui/presenter.cpp
++++ b/src/ui/presenter.cpp
+@@ -71,6 +71,20 @@ REXCVAR_DEFINE_STRING(
+     "Temporal FSR quality mode: auto, nativeaa, quality, balanced, performance, ultra_performance")
+     .allowed({"auto", "nativeaa", "quality", "balanced", "performance", "ultra_performance"})
+     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++#elif defined(__APPLE__)
++// The Metal presenter's own effects: AMD CAS from the SDK's prebuilt shaders, and Apple MetalFX
++// spatial upscaling. Other presenters on macOS draw them as bilinear.
++REXCVAR_DEFINE_STRING(present_effect, "bilinear", "UI/Presenter",
++                      "Guest output effect: bilinear, cas, metalfx (the Metal backend)")
++    .allowed({"bilinear", "cas", "metalfx"})
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++
++REXCVAR_DEFINE_DOUBLE(present_cas_additional_sharpness,
++                      rex::ui::Presenter::GuestOutputPaintConfig::kCasAdditionalSharpnessDefault,
++                      "UI/Presenter", "Additional CAS sharpness in [0, 1]")
++    .range(rex::ui::Presenter::GuestOutputPaintConfig::kCasAdditionalSharpnessMin,
++           rex::ui::Presenter::GuestOutputPaintConfig::kCasAdditionalSharpnessMax)
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+ #else
+ REXCVAR_DEFINE_STRING(present_effect, "bilinear", "UI/Presenter", "Guest output effect: bilinear")
+     .allowed({"bilinear"})
+@@ -92,10 +106,17 @@ GuestOutputPaintConfig::Effect ParsePresentEffect(const std::string& effect_name
+   std::string lowered = effect_name;
+   std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                  [](unsigned char c) { return char(std::tolower(c)); });
+-#if defined(REX_HAS_FIDELITYFX_SDK)
++#if defined(REX_HAS_GUEST_OUTPUT_CAS)
+   if (lowered == "cas") {
+     return GuestOutputPaintConfig::Effect::kCas;
+   }
++#endif
++#if defined(__APPLE__)
++  if (lowered == "metalfx") {
++    return GuestOutputPaintConfig::Effect::kMetalFx;
++  }
++#endif
++#if defined(REX_HAS_FIDELITYFX_SDK)
+   if (lowered == "fsr") {
+     return GuestOutputPaintConfig::Effect::kFsr;
+   }
+@@ -261,8 +282,10 @@ GuestOutputPaintConfig BuildGuestOutputPaintConfigFromCVar() {
+ #endif
+   config.SetAllowOverscanCutoff(REXCVAR_GET(present_allow_overscan_cutoff));
+   config.SetEffect(parsed_effect);
+-#if defined(REX_HAS_FIDELITYFX_SDK)
++#if defined(REX_HAS_GUEST_OUTPUT_CAS)
+   config.SetCasAdditionalSharpness(float(REXCVAR_GET(present_cas_additional_sharpness)));
++#endif
++#if defined(REX_HAS_FIDELITYFX_SDK)
+   config.SetFsrMaxUpsamplingPasses(
+       uint32_t(std::max(int32_t(1), REXCVAR_GET(present_fsr_max_upsampling_passes))));
+   config.SetFsrSharpnessReduction(float(REXCVAR_GET(present_fsr_sharpness_reduction)));
 diff --git a/src/ui/vulkan/vulkan_device.cpp b/src/ui/vulkan/vulkan_device.cpp
 index 8197bb4..7838036 100644
 --- a/src/ui/vulkan/vulkan_device.cpp
