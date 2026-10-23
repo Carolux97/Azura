@@ -12,7 +12,7 @@
 //     (PatchOptionsMenu);
 //   - list rows are tied to profile settings the game never uses (the engine's racing game
 //     preferences), whose definitions get our value names (PatchValueNames), or are lists of our
-//     own (frame rate limit, upscaling), whose value names come from PcOptionValueNames;
+//     own (frame rate limit, render resolution, upscaling), whose value names come from PcOptionValueNames;
 //   - the script hooks (script_hooks.cpp) put each row's current value in the list as the menu
 //     builds it, hand back what the player chose when the menu saves, follow the selected row to
 //     open the calibration screen, and patch two spots of the menu's bytecode.
@@ -22,6 +22,7 @@
 #pragma once
 
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -46,8 +47,22 @@ bool PcOptionValueNames(int psid, std::vector<std::u16string>& names);
 void SetPcOptionsConfigPath(std::filesystem::path config_path);
 
 // Identifier of the PC option at row `row` of category `category`, or -1 when the row is one of the
-// game's own.
+// game's own or is not shown now (the sharpness row without an image scaling effect that sharpens).
 int FindPcOption(int category, int row);
+
+// Number of rows category `category` shows now (some depend on other rows' values).
+int PcOptionsShownRows(int category);
+
+// For a row of ours whose changes the script must hear of while the menu is open, the profile
+// setting ID of the game row whose change callback it borrows (UIScene_Options.
+// GetCallbackForOptionPSID); -1 for any other `psid`.
+int PcOptionLiveCallbackPsid(int psid);
+
+// The borrowed callback of `borrowed_psid` ran with `value` in category `category`: applies and
+// saves it for the row of ours that borrows it, and returns true (false when no shown row of ours
+// borrows it, so the game's own callback must run). `row` is that row; `rows_changed` tells whether
+// the rows the category shows changed, so the list must be built again.
+bool PcOptionLiveChange(int category, int borrowed_psid, float value, int& row, bool& rows_changed);
 
 // Whether PC option `option` is a slider (else a list).
 bool PcOptionIsSlider(int option);
@@ -64,7 +79,7 @@ void PcOptionStoreValue(int option, float value);
 // Puts the options of `category` back to their default values (the category's Defaults button).
 void PcOptionsResetDefaults(int category);
 
-// Some options (anti-aliasing, image scaling, motion blur) only take effect when the game starts.
+// Some options (anti-aliasing, render resolution, image scaling, motion blur) only take effect when the game starts.
 // Called when the player leaves `category` of the Options menu, once its values are saved: returns
 // true when a new value of one of those options is not in effect yet and the player has not been
 // asked about these values before, so the game can offer to restart.
@@ -94,6 +109,18 @@ void PatchValueNames(CoalescedSection& section, const std::string& language);
 void PatchSystemSettings(CoalescedSection& section);
 // [Engine.Engine] of Xbox360-GearEngine.ini: the frame rate smoothing ceiling.
 void PatchEngineSettings(CoalescedSection& section);
+// Applies render_resolution (the Video menu's render resolution, "auto" for this computer) to the
+// draw resolution scale and the texture cache limits. Called at start-up, once the GPU plugin that
+// defines them is loaded and before the GPU starts: they cannot change while the game runs.
+void ApplyRenderResolution();
+// Applies upscaling_sharpness (the Video menu's sharpness) to the sharpening settings of the image
+// scaling effects. Called at start-up with `show_now` false, before the presenter reads them, and
+// when the menu changes it with `show_now` true, which also runs the handler of
+// SetSharpnessChangedHandler so the next frame shows it.
+void ApplyUpscalingSharpness(bool show_now);
+// What ApplyUpscalingSharpness runs to show a change while the game runs (from any thread);
+// nullptr to stop.
+void SetSharpnessChangedHandler(std::function<void()> handler);
 // Applies frame_rate_limit to the guest's vertical blanks (vsync, guest_vblank_rate). Called at
 // start-up and when the Video menu changes it.
 void ApplyFrameRateLimit();

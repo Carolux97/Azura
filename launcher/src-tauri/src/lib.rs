@@ -90,6 +90,8 @@ async fn launch_game(
     let runtime = runtime_dir(&app).map_err(LaunchError::StartFailed)?;
     let cache = cache_dir(&app).map_err(LaunchError::StartFailed)?;
     let paths = settings_paths(&app).map_err(LaunchError::StartFailed)?;
+    // The runtime reads the render resolution from render_resolution only.
+    paths.migrate_render_resolution().map_err(LaunchError::StartFailed)?;
     let game = paths.load().map_err(LaunchError::StartFailed)?.game_folder.map(std::path::PathBuf::from);
     let saves = paths.saves_folder().map_err(LaunchError::SavesUnavailable)?;
     saves::prepare(&saves, &cache).map_err(|e| LaunchError::SavesUnavailable(format!("{e:?}")))?;

@@ -43,6 +43,10 @@ class AchievementToast : public rex::ui::AchievementNotificationDialog {
   // Thread-safe: called from the guest thread that unlocks the achievement.
   void Push(const rex::system::AchievementEvent& event) override;
 
+  // Only while a notice is on screen or queued (fading and sliding need every frame, and the gap
+  // between two notices has to end); otherwise the window is repainted only for game frames.
+  bool NeedsContinuousPaint() const override;
+
  protected:
   void OnDraw(ImGuiIO& io) override;
 
@@ -71,7 +75,7 @@ class AchievementToast : public rex::ui::AchievementNotificationDialog {
   ImFont* body_font_;
   rex::ui::AchievementIconCache icon_cache_;
 
-  std::mutex mutex_;
+  mutable std::mutex mutex_;
   std::deque<rex::system::AchievementEvent> queue_;
   // UI thread only: the notice on screen, and when the next one may start.
   std::optional<Display> current_;
