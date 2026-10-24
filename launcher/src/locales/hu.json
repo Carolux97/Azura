@@ -21,8 +21,8 @@
     "runtimeVersion": "Runtime ReXGlue {version}"
   },
   "play": {
-    "eyebrow": "Natív macOS-port · Gears of War 3",
-    "lede": "A saját játékpéldányod, Apple Siliconra újrafordítva.",
+    "eyebrow": "Natív {platform}-port · Gears of War 3",
+    "lede": "A saját játékpéldányod, {target} rendszerre újrafordítva.",
     "launch": "Játék",
     "launching": "Indítás",
     "mode": "Kampány",
@@ -56,9 +56,9 @@
     "runtimeNotBuilt": "Nincs telepítve",
     "runtimeUpdateKit": "Frissítés érhető el"
   },
-  "news": {
-    "title": "Hírek",
-    "skeleton": "A projekt első váza: runtime, manifest és launcher."
+  "releaseNotes": {
+    "title": "A(z) {version} verzió újdonságai",
+    "dismiss": "Értem"
   },
   "install": {
     "title": "Telepítés",

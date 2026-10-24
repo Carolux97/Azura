@@ -9,6 +9,7 @@ mod disc_image;
 mod game_folder;
 mod gamepad;
 mod install;
+mod release_notes;
 #[cfg(test)]
 mod test_support;
 mod runtime;
@@ -396,6 +397,13 @@ async fn get_system_info() -> SystemInfo {
     system::system_info()
 }
 
+/// What this launcher version brings, for the "What's new" panel (see `release_notes.rs`).
+/// `None` when the changelog has no section for it.
+#[tauri::command]
+async fn get_release_notes(app: tauri::AppHandle) -> Option<release_notes::ReleaseNotes> {
+    release_notes::current(&app.package_info().version.to_string())
+}
+
 /// Checks whether a newer launcher version is published (see `updater.rs`).
 #[tauri::command]
 async fn check_for_update(app: tauri::AppHandle) -> Result<Option<UpdateInfo>, String> {
@@ -422,6 +430,7 @@ pub fn run() {
             load_settings,
             save_settings,
             get_system_info,
+            get_release_notes,
             get_runtime_status,
             install_runtime,
             launch_game,
