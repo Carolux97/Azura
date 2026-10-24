@@ -2,7 +2,7 @@
   "name": "azura-launcher",
   "version": "0.2.1",
   "private": true,
-  "license": "BSD-3-Clause",
+  "license": "PolyForm-Strict-1.0.0",
   "type": "module",
   "scripts": {
     "build": "../scripts/build-launcher.sh",

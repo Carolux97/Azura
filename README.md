@@ -71,7 +71,11 @@ Microsoft, Epic Games or The Coalition.
 
 ## License
 
-Gears3-Azura's own code is released under the [BSD 3-Clause License](LICENSE). The third-party
-code it builds on, and the licenses that apply to it, are listed in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The license covers this project's code only:
-Gears of War, its code and its data belong to their owners and are not part of this repository.
+Gears3-Azura's own code is source-available under the [PolyForm Strict License 1.0.0](LICENSE):
+you may read it and use it for noncommercial purposes, but not change it or share it, in source or
+built form, without the copyright holders' permission. Copyright 2026 Carolina Molina Elvira and
+Juan Llorca Martínez. Our changes to the ReXGlue SDK and MoltenVK (`patches/`) stay under those
+projects' own licenses. The third-party code the project builds on, and the licenses that apply to
+it, are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The license covers this
+project's code only: Gears of War, its code and its data belong to their owners and are not part
+of this repository.
