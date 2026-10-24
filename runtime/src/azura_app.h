@@ -24,6 +24,7 @@
 
 #include "achievement_export.h"
 #include "achievement_toast.h"
+#include "input/player_assignment.h"
 #include "menu/menu_patches.h"
 #include "menu/pc_options.h"
 #include "prompts/button_prompts.h"
@@ -105,6 +106,8 @@ class AzuraApp : public rex::ReXApp {
   // and route Quit Game to a normal window close (OnClosing shuts the title down).
   void OnPreLaunchModule() override {
     REXLOG_INFO("[Azura] Active gamertag / user_name: '{}'", REXCVAR_GET(user_name));
+    // Before the game polls a controller: which controller plays which player (player_assignment.h).
+    azura::input::InstallPlayerAssignment(runtime());
     // The frame rate limit of the Video menu (azura.toml) sets the guest's vertical blanks.
     azura::menu::ApplyFrameRateLimit();
     // The Video menu's sharpness shows as soon as it changes: the presenter takes it again on the
