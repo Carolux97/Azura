@@ -46,6 +46,21 @@ older launcher (`draw_resolution_scale_x`, with `resolution_auto` in `launcher.t
 scaling, mouse sensitivity, bindings) is changed in the game's Options menu.
 Both sides read and write the same `azura.toml`.
 
+## Compiler
+
+The runtime is built on the player's machine from their own `default.xex`
+(`docs/player-runtime-build.md`), so the launcher needs a C++ compiler there; the Installation
+view shows its state and installs one when it is missing (`src-tauri/src/toolchain.rs`). A
+compiler counts only when it compiles and links a small C++23 program. On macOS it is Apple's,
+from the Command Line Tools or Xcode; `xcrun` is run only once `xcode-select -p` names a folder,
+since on a Mac without them it would open Apple's install dialog by itself. Installing runs
+`xcode-select --install`, which opens that dialog for the player, and the launcher checks again
+every few seconds until the tools are there or the dialog is closed. On Linux it is the newest
+`clang++` (clang 18 or newer) on the PATH; installing runs the distribution's package manager
+(apt, dnf, pacman or zypper, found from `/etc/os-release`) through `pkexec`. Image-based systems
+(ostree ones such as Bazzite, and SteamOS) get the manual instructions instead. The manual command
+is always shown too.
+
 ## Achievements
 
 The Achievements section lists the game's achievements with their artwork, the gamerscore earned and

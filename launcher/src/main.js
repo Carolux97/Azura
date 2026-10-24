@@ -42,6 +42,8 @@ import {
   changeSavesFolder,
   createSaveBackup,
   getAchievements,
+  getCompilerStatus,
+  installCompiler,
   getSaveStatus,
   openSavesFolder,
   pickGameFolder,
@@ -109,6 +111,11 @@ const state = {
   achievements: null,
   achievementsView: "list",
   achievementsFilter: "all",
+  // The C++ compiler the runtime is built with (see platform.getCompilerStatus), or null while it is
+  // first checked; and what the launcher is doing about it: "" (nothing), "checking", "installing"
+  // (the package manager runs) or "waitingForApple" (Apple's install window is open).
+  compiler: null,
+  compilerAction: "",
 };
 
 /** Builds the settings object platform.saveSettings stores (see src-tauri/src/settings.rs). */
@@ -223,6 +230,11 @@ const renderPlay = () => {
   if (isInstalled()) detail = "status.xexFound";
   else if (state.gameCheck) detail = `install.${state.gameCheck.status}`;
   status.querySelector(".status-detail").textContent = t(detail, state.gameCheck ?? {});
+
+  const compilerLine = document.getElementById("status-compiler");
+  compilerLine.dataset.state = state.compiler?.status === "ready" ? "ok" : "warn";
+  compilerLine.querySelector(".status-detail").textContent =
+    state.compiler?.status === "ready" ? state.compiler.version : t(state.compiler ? "status.compilerMissing" : "status.compilerChecking");
 
   const runtime = document.getElementById("status-runtime");
   const [, tone] = runtimeState();
@@ -392,6 +404,89 @@ const runRuntimeInstall = async () => {
     renderInstall();
     renderPlay();
   }
+};
+
+/** How often the status is checked while Apple's install window is open, and for how long. */
+const APPLE_TOOLS_POLL_MS = 5000;
+const APPLE_TOOLS_POLL_LIMIT_MS = 60 * 60 * 1000;
+
+/** Writes the compiler's state into its Installation panel: what was found, and how to install it. */
+const renderCompiler = () => {
+  const status = state.compiler;
+  const line = document.getElementById("compiler-check");
+  const install = document.getElementById("install-compiler");
+  const manual = document.getElementById("compiler-manual");
+  const action = state.compilerAction;
+  const ready = status?.status === "ready";
+  line.dataset.state = ready ? "ok" : status ? "error" : "";
+  if (action === "waitingForApple") line.textContent = t("install.compilerWaitingApple");
+  else if (action === "installing") line.textContent = t("install.compilerInstalling");
+  else if (!status || action === "checking") line.textContent = t("install.compilerChecking");
+  else if (ready) line.textContent = t("install.compilerReady", { version: status.version });
+  else if (status.found) line.textContent = t("install.compilerUnusable", { found: status.found, problem: status.problem ?? "" });
+  else line.textContent = t("install.compilerMissing");
+
+  const kind = status?.install?.kind;
+  install.hidden = ready || !status || kind === "manual";
+  install.disabled = action !== "";
+  install.textContent = t(kind === "appleCommandLineTools" ? "install.compilerInstallApple" : "install.compilerInstallPackage");
+  document.getElementById("recheck-compiler").disabled = action !== "";
+  manual.hidden = ready || !status?.manual;
+  document.getElementById("compiler-manual-command").textContent = status?.manual ?? "";
+};
+
+/** Checks the compiler again and redraws what shows it. */
+const refreshCompiler = async () => {
+  try {
+    state.compiler = await getCompilerStatus();
+  } catch (error) {
+    console.error("Checking the compiler failed:", error);
+  }
+  renderCompiler();
+  renderPlay();
+};
+
+/**
+ * Wires the compiler panel. Installing on macOS opens Apple's window and returns at once, so the
+ * status is checked every few seconds until the tools are there or Apple's installer is closed
+ * without installing them; on Linux the package manager runs to the end first.
+ */
+const setupCompiler = () => {
+  document.getElementById("recheck-compiler").addEventListener("click", async () => {
+    state.compilerAction = "checking";
+    renderCompiler();
+    await refreshCompiler();
+    state.compilerAction = "";
+    renderCompiler();
+  });
+
+  document.getElementById("install-compiler").addEventListener("click", async () => {
+    const apple = state.compiler?.install?.kind === "appleCommandLineTools";
+    state.compilerAction = apple ? "waitingForApple" : "installing";
+    renderCompiler();
+    try {
+      await installCompiler();
+      if (apple) {
+        // Until the tools are there, or Apple's installer has closed without installing them.
+        const start = Date.now();
+        while (Date.now() - start < APPLE_TOOLS_POLL_LIMIT_MS) {
+          await new Promise((resolve) => setTimeout(resolve, APPLE_TOOLS_POLL_MS));
+          state.compiler = await getCompilerStatus();
+          if (state.compiler.status === "ready" || !state.compiler.installerRunning) break;
+        }
+      } else {
+        state.compiler = await getCompilerStatus();
+      }
+      if (state.compiler?.status === "ready") toast(t("toast.compilerInstalled", { version: state.compiler.version }));
+    } catch (error) {
+      toast(t("toast.compilerInstallFailed", { detail: String(error) }));
+      await refreshCompiler();
+    } finally {
+      state.compilerAction = "";
+      renderCompiler();
+      renderPlay();
+    }
+  });
 };
 
 /** Writes the folder path and the result of its check into the Installation view. */
@@ -895,6 +990,7 @@ const renderAll = () => {
   renderUpdate();
   renderSaves();
   renderAchievements();
+  renderCompiler();
 };
 
 /**
@@ -945,6 +1041,7 @@ setupGraphics();
 setupLanguages();
 setupSaves();
 setupAchievements();
+setupCompiler();
 setupReloadOnFocus();
 
 /**
@@ -964,6 +1061,8 @@ const detectSystem = async () => {
 // The machine is detected before the settings load, because "Automatic" resolves from it.
 await detectSystem();
 await refreshRuntime();
+// In the background: it compiles a small program, and nothing below waits for it.
+refreshCompiler();
 const settings = await loadSavedSettings();
 state.savesFolder = settings.savesFolder ?? "";
 applyStoredGraphics(settings);

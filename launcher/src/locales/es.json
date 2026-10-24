@@ -41,7 +41,10 @@
     "gpuValue": "{machine} · Vulkan sobre Metal",
     "runtimeMissing": "No hay ninguna compilación",
     "runtimeNotInstalled": "Se instalará al pulsar Jugar",
-    "runtimeUpdate": "Actualización lista, se instalará al pulsar Jugar"
+    "runtimeUpdate": "Actualización lista, se instalará al pulsar Jugar",
+    "compiler": "Compilador",
+    "compilerChecking": "Comprobando…",
+    "compilerMissing": "Sin instalar"
   },
   "news": {
     "title": "Novedades",
@@ -83,7 +86,19 @@
     "savesHelp": "Carpeta de tus puntos de control de campaña y tu perfil. Al cambiarla, tus partidas se mueven allí.",
     "savesConflict": "{folder} ya contiene partidas guardadas. ¿Quieres reemplazarlas por tus partidas actuales?",
     "savesReplace": "Reemplazar",
-    "savesCancel": "Cancelar"
+    "savesCancel": "Cancelar",
+    "compilerTitle": "Compilador",
+    "compilerHelp": "El juego funciona como código nativo compilado en este ordenador a partir de tu propia copia, así que el launcher necesita un compilador de C++. Si falta, lo instala.",
+    "compilerChecking": "Comprobando el compilador…",
+    "compilerReady": "Listo: {version}",
+    "compilerUnusable": "{found} no sirve: {problem}",
+    "compilerMissing": "No se ha encontrado ningún compilador.",
+    "compilerInstallApple": "Instalar las Command Line Tools de Apple",
+    "compilerInstallPackage": "Instalar clang",
+    "compilerInstalling": "Instalando el compilador…",
+    "compilerWaitingApple": "Sigue la ventana de Apple para instalar las Command Line Tools. El launcher continúa solo cuando estén instaladas.",
+    "compilerCheckAgain": "Comprobar de nuevo",
+    "compilerManual": "O ejecuta esto en un terminal:"
   },
   "graphics": {
     "title": "Gráficos",
@@ -151,7 +166,9 @@
     "savesNested": "Elige una carpeta que no esté dentro de la actual (ni al revés).",
     "savesFailed": "No se pudieron mover las partidas: {detail}",
     "runtimeInstalled": "Runtime del juego instalado.",
-    "saveFailed": "No se pudieron guardar los ajustes: {detail}"
+    "saveFailed": "No se pudieron guardar los ajustes: {detail}",
+    "compilerInstalled": "Compilador listo: {version}",
+    "compilerInstallFailed": "No se ha podido instalar el compilador: {detail}"
   },
   "log": {
     "title": "Registro del juego",
