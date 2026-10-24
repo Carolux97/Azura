@@ -31,7 +31,12 @@
     "running": "Jogando",
     "runtimeWillInstall": "Instala o runtime primeiro",
     "building": "INSTALANDO",
-    "buildingSub": "O jogo está sendo construído para este computador"
+    "buildingSub": "O jogo está sendo construído para este computador",
+    "installRuntime": "INSTALAR",
+    "installRuntimeSub": "Constrói o jogo para este computador · alguns minutos",
+    "update": "ATUALIZAR",
+    "updateLinkSub": "Poucos segundos",
+    "updateBuildSub": "Cerca de dois minutos"
   },
   "status": {
     "gameFiles": "Arquivos do jogo",
@@ -47,7 +52,9 @@
     "compiler": "Compilador",
     "compilerChecking": "Verificando…",
     "compilerMissing": "Não instalado",
-    "runtimeBuilding": "Construindo…"
+    "runtimeBuilding": "Construindo…",
+    "runtimeNotBuilt": "Não instalado",
+    "runtimeUpdateKit": "Atualização disponível"
   },
   "news": {
     "title": "Novidades",

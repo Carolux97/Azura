@@ -31,7 +31,12 @@
     "running": "Playing",
     "runtimeWillInstall": "Installs the runtime first",
     "building": "INSTALLING",
-    "buildingSub": "The game is being built for this computer"
+    "buildingSub": "The game is being built for this computer",
+    "installRuntime": "INSTALL",
+    "installRuntimeSub": "Builds the game for this computer · a few minutes",
+    "update": "UPDATE",
+    "updateLinkSub": "A few seconds",
+    "updateBuildSub": "About two minutes"
   },
   "status": {
     "gameFiles": "Game files",
@@ -47,7 +52,9 @@
     "compiler": "Compiler",
     "compilerChecking": "Checking…",
     "compilerMissing": "Not installed",
-    "runtimeBuilding": "Building…"
+    "runtimeBuilding": "Building…",
+    "runtimeNotBuilt": "Not installed",
+    "runtimeUpdateKit": "Update available"
   },
   "news": {
     "title": "News",

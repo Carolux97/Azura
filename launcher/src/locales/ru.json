@@ -31,7 +31,12 @@
     "running": "В игре",
     "runtimeWillInstall": "Сначала установит среду выполнения",
     "building": "УСТАНОВКА",
-    "buildingSub": "Игра собирается для этого компьютера"
+    "buildingSub": "Игра собирается для этого компьютера",
+    "installRuntime": "УСТАНОВИТЬ",
+    "installRuntimeSub": "Собирает игру для этого компьютера · несколько минут",
+    "update": "ОБНОВИТЬ",
+    "updateLinkSub": "Несколько секунд",
+    "updateBuildSub": "Около двух минут"
   },
   "status": {
     "gameFiles": "Файлы игры",
@@ -47,7 +52,9 @@
     "compiler": "Компилятор",
     "compilerChecking": "Проверка…",
     "compilerMissing": "Не установлен",
-    "runtimeBuilding": "Собирается…"
+    "runtimeBuilding": "Собирается…",
+    "runtimeNotBuilt": "Не установлен",
+    "runtimeUpdateKit": "Доступно обновление"
   },
   "news": {
     "title": "Новости",
