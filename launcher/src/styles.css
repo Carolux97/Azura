@@ -554,9 +554,9 @@ code, kbd {
 }
 @keyframes status-progress { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
 
-.news-item { display: grid; grid-template-columns: 110px 1fr; gap: 12px; }
-.news-item time { color: var(--imulsion); font-family: var(--font-ui); font-weight: 600; letter-spacing: 0.06em; }
-.news-item p { margin: 0; color: var(--text-dim); }
+.release-notes-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.release-notes-list { margin: 10px 0 0; padding-left: 18px; color: var(--text-dim); display: grid; gap: 6px; }
+.release-notes-list li::marker { color: var(--imulsion); }
 
 /* ---------- Form controls ---------- */
 

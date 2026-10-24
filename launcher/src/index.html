@@ -79,9 +79,10 @@
       <!-- PLAY -->
       <section class="view is-active" data-view="play" aria-labelledby="play-title">
         <header class="hero">
-          <p class="eyebrow" data-i18n="play.eyebrow"></p>
+          <!-- Both name the system the launcher runs on; renderPlay() fills them. -->
+          <p class="eyebrow" id="play-eyebrow"></p>
           <h1 id="play-title" class="wordmark">AZURA</h1>
-          <p class="lede" data-i18n="play.lede"></p>
+          <p class="lede" id="play-lede"></p>
         </header>
 
         <div class="play-row">
@@ -143,12 +144,14 @@
           <pre class="log-body" id="game-log-body"></pre>
         </div>
 
-        <div class="panel news">
-          <h2 class="panel-title" data-i18n="news.title"></h2>
-          <article class="news-item">
-            <time datetime="2026-10-16"></time>
-            <p data-i18n="news.skeleton"></p>
-          </article>
+        <!-- What this launcher version brings, once after it is installed or updated (from
+             launcher/CHANGELOG.md); renderReleaseNotes() fills it. -->
+        <div class="panel release-notes" id="release-notes" hidden>
+          <div class="release-notes-head">
+            <h2 class="panel-title" id="release-notes-title"></h2>
+            <button class="btn btn-small" id="release-notes-dismiss" data-pad-back data-i18n="releaseNotes.dismiss"></button>
+          </div>
+          <ul class="release-notes-list" id="release-notes-list"></ul>
         </div>
       </section>
 

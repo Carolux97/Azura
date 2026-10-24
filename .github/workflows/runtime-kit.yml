@@ -3,8 +3,10 @@
 # kit holds no game data, so it builds here; scripts/kit/check_kit.py checks it before it is kept.
 #
 # It runs when something that defines the kit changes (the SDK patches, the build scripts, the
-# runtime's CMake, this workflow), for release tags, and by hand. A macOS run costs about ten times
-# its minutes on a private repository, so it does not run for every change of the runtime's code.
+# runtime's CMake, this workflow), for release tags, by hand, and from the Release workflow, which
+# bundles the kits of its own commit in the launchers it publishes. A macOS run costs about ten
+# times its minutes on a private repository, so it does not run for every change of the runtime's
+# code.
 
 name: Runtime kit
 
@@ -25,13 +27,16 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+  workflow_call:
 
 # The workflow only reads the repository; the kits are kept as artifacts of the run.
 permissions:
   contents: read
 
+# Called from another workflow, github.workflow is the caller's name, so its runs and this
+# workflow's own never cancel each other.
 concurrency:
-  group: runtime-kit-${{ github.ref }}
+  group: runtime-kit-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -44,8 +49,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # On the project's own Mac (a self-hosted runner, see CONTRIBUTING.md): GitHub's macOS
+          # runners count ten times their minutes on a private repository.
           - platform: mac-arm64
-            runner: macos-latest
+            runner: [self-hosted, macOS, ARM64]
           # In Ubuntu 22.04 with clang 20, as the SDK builds its own Linux releases: the kit's
           # libraries then need no newer glibc than 2.35.
           - platform: linux-amd64
