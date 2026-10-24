@@ -183,6 +183,9 @@ async fn get_runtime_status(app: tauri::AppHandle) -> Result<RuntimeStatus, Stri
                 (Ok(kit), Ok((_, version))) => {
                     let work = work_dir(&app, &version)?;
                     let state = builder::read_state(&work);
+                    // Installed means built here from the kit for this game: a runtime folder
+                    // that holds an executable from elsewhere (a copied project build) is not.
+                    status.installed &= state.as_ref().is_some_and(|state| state.xex_sha256 == version.xex_sha256);
                     let kept = state.as_ref().is_some_and(|state| builder::objects_kept(&work, state));
                     let compiler = toolchain::compiler_version().unwrap_or_default();
                     builder::update_kind(state.as_ref(), &kit.keys, &version.xex_sha256, &compiler, status.installed, kept)

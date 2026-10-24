@@ -31,7 +31,12 @@
     "running": "플레이 중",
     "runtimeWillInstall": "먼저 런타임을 설치합니다",
     "building": "설치 중",
-    "buildingSub": "이 컴퓨터용으로 게임을 빌드하는 중입니다"
+    "buildingSub": "이 컴퓨터용으로 게임을 빌드하는 중입니다",
+    "installRuntime": "설치",
+    "installRuntimeSub": "이 컴퓨터용으로 게임 빌드 · 몇 분",
+    "update": "업데이트",
+    "updateLinkSub": "몇 초",
+    "updateBuildSub": "약 2분"
   },
   "status": {
     "gameFiles": "게임 파일",
@@ -47,7 +52,9 @@
     "compiler": "컴파일러",
     "compilerChecking": "확인 중…",
     "compilerMissing": "설치되지 않음",
-    "runtimeBuilding": "빌드 중…"
+    "runtimeBuilding": "빌드 중…",
+    "runtimeNotBuilt": "설치되지 않음",
+    "runtimeUpdateKit": "업데이트 있음"
   },
   "news": {
     "title": "새 소식",

@@ -31,7 +31,12 @@
     "running": "遊玩中",
     "runtimeWillInstall": "會先安裝執行環境",
     "building": "安裝中",
-    "buildingSub": "正在為這台電腦建置遊戲"
+    "buildingSub": "正在為這台電腦建置遊戲",
+    "installRuntime": "安裝",
+    "installRuntimeSub": "為這台電腦建置遊戲 · 幾分鐘",
+    "update": "更新",
+    "updateLinkSub": "幾秒",
+    "updateBuildSub": "約兩分鐘"
   },
   "status": {
     "gameFiles": "遊戲檔案",
@@ -47,7 +52,9 @@
     "compiler": "編譯器",
     "compilerChecking": "檢查中…",
     "compilerMissing": "未安裝",
-    "runtimeBuilding": "建置中…"
+    "runtimeBuilding": "建置中…",
+    "runtimeNotBuilt": "未安裝",
+    "runtimeUpdateKit": "有可用的更新"
   },
   "news": {
     "title": "最新消息",

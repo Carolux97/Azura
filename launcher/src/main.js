@@ -262,6 +262,8 @@ const renderPlay = () => {
   if (!state.runtime.buildFound && !state.runtime.installed) runtimeDetail = t("status.runtimeMissing");
   else if (!state.runtime.installed) runtimeDetail = t("status.runtimeNotInstalled");
   else if (state.runtime.updateAvailable) runtimeDetail = t("status.runtimeUpdate");
+  if (state.runtime.source === "kit" && !state.runtime.installed) runtimeDetail = t("status.runtimeNotBuilt");
+  else if (state.runtime.source === "kit" && state.runtime.updateAvailable) runtimeDetail = t("status.runtimeUpdateKit");
   if (building) runtimeDetail = t("status.runtimeBuilding");
   runtime.querySelector(".status-detail").textContent = runtimeDetail;
 
@@ -276,9 +278,17 @@ const renderPlay = () => {
   button.disabled = state.game !== "idle" || state.installingRuntime;
   let label = "play.install";
   let sub = "play.installSub";
+  const fromKit = state.runtime.source === "kit";
   if (isInstalled() && building) {
     label = "play.building";
     sub = "play.buildingSub";
+  } else if (isInstalled() && fromKit && state.game === "idle" && !state.runtime.installed) {
+    // From the kit the button installs first, and says so; it turns to Play once installed.
+    label = "play.installRuntime";
+    sub = "play.installRuntimeSub";
+  } else if (isInstalled() && fromKit && state.game === "idle" && state.runtime.updateAvailable) {
+    label = "play.update";
+    sub = state.runtime.updateKind === "link" ? "play.updateLinkSub" : "play.updateBuildSub";
   } else if (isInstalled()) {
     label = { idle: "play.launch", starting: "play.launching", running: "play.running" }[state.game];
     sub = state.game === "idle" && runtimeNeedsInstall() ? "play.runtimeWillInstall" : "play.mode";
