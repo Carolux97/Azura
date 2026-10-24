@@ -30,7 +30,7 @@
     "installSub": "設定遊戲檔案",
     "running": "遊玩中",
     "runtimeWillInstall": "會先安裝執行環境",
-    "building": "建置中",
+    "building": "安裝中",
     "buildingSub": "正在為這台電腦建置遊戲"
   },
   "status": {

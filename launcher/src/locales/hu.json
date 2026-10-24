@@ -30,7 +30,7 @@
     "installSub": "Játékfájlok beállítása",
     "running": "Játékban",
     "runtimeWillInstall": "Előbb telepíti a futtatókörnyezetet",
-    "building": "ÉPÍTÉS",
+    "building": "TELEPÍTÉS",
     "buildingSub": "A játék épül ehhez a számítógéphez"
   },
   "status": {
