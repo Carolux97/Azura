@@ -21,8 +21,8 @@
     "runtimeVersion": "Runtime ReXGlue {version}"
   },
   "play": {
-    "eyebrow": "macOS ネイティブ移植版 · Gears of War 3",
-    "lede": "お持ちのゲームを Apple Silicon 向けに再コンパイル。",
+    "eyebrow": "{platform} ネイティブ移植版 · Gears of War 3",
+    "lede": "お持ちのゲームを {target} 向けに再コンパイル。",
     "launch": "プレイ",
     "launching": "起動中",
     "mode": "キャンペーン",
@@ -56,9 +56,9 @@
     "runtimeNotBuilt": "未インストール",
     "runtimeUpdateKit": "更新があります"
   },
-  "news": {
-    "title": "お知らせ",
-    "skeleton": "プロジェクトの最初の骨組み：ランタイム、マニフェスト、ランチャー。"
+  "releaseNotes": {
+    "title": "バージョン {version} の新機能",
+    "dismiss": "OK"
   },
   "install": {
     "title": "インストール",

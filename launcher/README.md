@@ -166,31 +166,74 @@ python3 -m http.server 5180 --directory src
 ## Updates and releases
 
 Installed launchers update themselves with Tauri's updater. On start-up the launcher reads
-`latest.json` from the fixed GitHub release `launcher-updates` of this repository; when it lists a
+`latest.json` from the fixed release `launcher-updates` of the releases repository; when it lists a
 newer version, the sidebar offers it, and installing downloads the archive, checks its signature
-against `plugins.updater.pubkey` in `src-tauri/tauri.conf.json` and restarts into it. While the
-repository is private that file cannot be downloaded, so the check fails quietly and nothing is
-offered.
+against `plugins.updater.pubkey` in `src-tauri/tauri.conf.json` and restarts into it. Each launcher
+carries the player kit of its platform, so a new launcher is also how fixes to the game reach
+players: once it has updated, it rebuilds or relinks the runtime from the new kit.
 
-Releases are signed with a key that never enters the repository. Create it once (it asks for a
-password; keep both the file and the password in your password manager: losing either means
-installed launchers can never be updated again):
+Releases are published to a public repository that only holds releases (`RELEASES_REPO` in
+`scripts/release-common.sh`, and the updater endpoint in `tauri.conf.json`), because this
+repository is private and installed launchers download without credentials. It is kept as hard
+to come across as possible: no description, README or topics, and releases titled with the
+version alone.
 
-```bash
-npx tauri signer generate -w ~/.tauri/azura-launcher.key
-```
+### How a release happens
 
-and put the contents of `~/.tauri/azura-launcher.key.pub` in `plugins.updater.pubkey`. Until then
-the release script fails (the build checks that key); debug builds and the app itself are fine.
+Bump the version in `src-tauri/tauri.conf.json`, `package.json` and `src-tauri/Cargo.toml`, and
+add its section to `CHANGELOG.md` (what the version brings, as players see it), in a pull request.
+The section is the update's notes, and the launcher shows it once in Play after it is installed or
+updated (`src-tauri/src/release_notes.rs`; the player's dismissal is `seen_release_notes` in
+`launcher.toml`). A release without it fails, and so does the Rust test that reads the current
+version's notes. When it is merged, the Release workflow (`.github/workflows/release.yml`) sees a
+version that is not released yet and:
 
-To release: bump the version in `src-tauri/tauri.conf.json`, `package.json` and
-`src-tauri/Cargo.toml`, then run
+1. builds the player kits of that commit (the Runtime kit workflow);
+2. builds the launcher on macOS (the `.dmg`, and the `.app.tar.gz` the updater downloads) and on
+   Linux (the AppImage, which is both), each with its kit inside (`scripts/release-launcher.sh`);
+3. publishes both in one release, `launcher-v<version>`, and uploads the `latest.json` that lists
+   both platforms to `launcher-updates` (`scripts/publish-launcher.sh`).
+
+Other pushes to main do not start it. To check the whole pipeline without publishing, run
+the workflow by hand (Actions, Release, Run workflow) with "Publish" off; with it on, it publishes a
+version that is not released yet, which is also how to run a failed release again.
+
+The workflow fails with a clear message when the three versions disagree, or when a version asked
+to be published by hand is already released.
+
+### Keys and secrets
+
+Releases are signed with a key that never enters the repository. It was created once with
+`npx tauri signer generate -w ~/.tauri/azura-launcher.key` (it asks for a password); its public half
+is `plugins.updater.pubkey`. Keep both the file and the password in your password manager: losing
+either means installed launchers can never be updated again.
+
+The workflow needs three repository secrets:
+
+- `TAURI_SIGNING_PRIVATE_KEY`: the contents of `~/.tauri/azura-launcher.key`;
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: its password;
+- `RELEASES_TOKEN`: a fine-grained personal access token with access to the releases repository
+  only and Contents set to read and write, which is what creating releases needs.
+
+### macOS without an Apple Developer ID
+
+The app is signed ad hoc (`bundle.macOS.signingIdentity` is `-`), not with an Apple Developer ID,
+and it is not notarized, so macOS blocks the first launch of a downloaded copy. The player opens it
+once from System Settings, Privacy & Security, "Open Anyway" (Control-click, Open no longer works
+since macOS 15). With a Developer ID, the same build signs and notarizes when Tauri finds Apple's
+credentials in the environment (`APPLE_CERTIFICATE`, `APPLE_ID` and the rest), with no other change.
+
+### Releasing by hand
+
+The same scripts run on a Mac or a Linux machine with the platform's kit
+(`scripts/build-kit.sh`):
 
 ```bash
 TAURI_SIGNING_PRIVATE_KEY=~/.tauri/azura-launcher.key TAURI_SIGNING_PRIVATE_KEY_PASSWORD=... ../scripts/release-launcher.sh --publish
 ```
 
-Without `--publish` it only builds into `dist/<version>/`.
+Without `--publish` it only builds into `dist/<version>/`. A release by hand carries only the
+platform it was built on, so Linux launchers are not offered it; the workflow is the normal way.
 
 ## Current state
 

@@ -34,7 +34,7 @@
       "dmg"
     ],
     "category": "Game",
-    "shortDescription": "Launcher for the Gears3-Azura native macOS port",
+    "shortDescription": "Launcher for the Gears3-Azura native port",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -42,6 +42,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "macOS": {
+      "signingIdentity": "-"
+    },
     "resources": {
       "../../LICENSE": "licenses/LICENSE",
       "../../THIRD_PARTY_NOTICES.md": "licenses/THIRD_PARTY_NOTICES.md",
@@ -52,7 +55,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ0NDAwQTU2QzEyNzMzRkQKUldUOU15ZkJWZ3BBMUcvRlpVTTRsTG9kWklhajgzRWxPcEZ2VGdGamg0TjRYbEVoeGNYMmo2ZnkK",
       "endpoints": [
-        "https://github.com/Carolux97/Gears3-Azura/releases/download/launcher-updates/latest.json"
+        "https://github.com/Carolux97/files/releases/download/launcher-updates/latest.json"
       ]
     }
   }
