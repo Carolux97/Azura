@@ -11,10 +11,13 @@
  *   { status: "unsupportedVersion", folder, titleId, mediaId, languages }
  *                                                the game, in a build with no manifest yet
  *   { status: "wrongGame", folder, titleId }     an Xbox 360 executable of another game
- *   { status: "notADirectory", folder }          the path is missing or not a folder
+ *   { status: "notADirectory", folder }          the path is missing, or neither a folder nor a file
+ *   { status: "notADiscImage", folder }          a file that is not an Xbox 360 disc image
  *   { status: "missingXex", folder }             no default.xex in it or its subfolders
+ *   { status: "missingXexInImage", folder }      a disc image without default.xex
  *   { status: "invalidXex", folder }             default.xex is not an Xbox 360 executable
- * `folder` is where the executable was found, or the path that was checked when it was not.
+ * The game is a folder or a disc image (.iso). `folder` is where the executable was found (the
+ * disc image itself for one), or the path that was checked when it was not.
  * `languages` lists the engine language codes found in the folder (see gameLanguages.js).
  */
 
@@ -44,7 +47,27 @@ export const pickGameFolder = async () => {
   return tauri.core.invoke("pick_game_folder");
 };
 
-/** Checks a folder chosen in an earlier session. */
+/**
+ * Opens the system file picker for a disc image (.iso) of the game and checks it. Resolves to null
+ * when the user cancels.
+ */
+export const pickGameImage = async () => {
+  if (!isNativeApp) return simulatedCheck("~/Games/Gears of War 3.iso");
+  return tauri.core.invoke("pick_game_image");
+};
+
+/**
+ * Calls `onDrop(path)` with the path of a file or folder dropped on the window. Only in the app: a
+ * browser gives pages no paths.
+ */
+export const onPathDropped = (onDrop) => {
+  if (!isNativeApp) return;
+  tauri.webview.getCurrentWebview().onDragDropEvent((event) => {
+    if (event.payload.type === "drop" && event.payload.paths.length === 1) onDrop(event.payload.paths[0]);
+  });
+};
+
+/** Checks a folder or disc image chosen in an earlier session, or dropped on the window. */
 export const checkGameFolder = async (path) => {
   if (!isNativeApp) return simulatedCheck(path);
   return tauri.core.invoke("check_game_folder", { path });
