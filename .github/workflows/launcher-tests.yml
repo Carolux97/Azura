@@ -35,8 +35,10 @@ jobs:
           # macOS runners count ten times their minutes on a private repository.
           - name: macos
             runner: [self-hosted, macOS, ARM64]
+          # Linux on the project's own Linux runner, an Ubuntu 22.04 container on a home server
+          # (see CONTRIBUTING.md): the repository's included minutes are used up.
           - name: ubuntu
-            runner: ubuntu-latest
+            runner: [self-hosted, Linux, X64]
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
@@ -57,9 +59,9 @@ jobs:
         run: npm test
 
       # Tauri links against the system's web view and GTK on Linux; gilrs (controllers) against
-      # libudev.
+      # libudev. The project's own runner has them installed already and no sudo.
       - name: Install the Linux libraries Tauri needs
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && runner.environment == 'github-hosted'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
