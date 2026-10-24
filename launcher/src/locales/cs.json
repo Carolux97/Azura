@@ -30,7 +30,7 @@
     "installSub": "Nastavte herní soubory",
     "running": "Hraje se",
     "runtimeWillInstall": "Nejprve nainstaluje běhové prostředí",
-    "building": "SESTAVOVÁNÍ",
+    "building": "INSTALACE",
     "buildingSub": "Hra se sestavuje pro tento počítač"
   },
   "status": {

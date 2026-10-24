@@ -30,7 +30,7 @@
     "installSub": "ゲームファイルを設定",
     "running": "プレイ中",
     "runtimeWillInstall": "先にランタイムをインストールします",
-    "building": "ビルド中",
+    "building": "インストール中",
     "buildingSub": "このコンピュータ向けにゲームをビルドしています"
   },
   "status": {
