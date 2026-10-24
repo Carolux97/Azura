@@ -25,6 +25,7 @@
 #include "achievement_export.h"
 #include "achievement_toast.h"
 #include "input/player_assignment.h"
+#include "gpu_list.h"
 #include "menu/menu_patches.h"
 #include "menu/pc_options.h"
 #include "perf_marker.h"
@@ -80,13 +81,17 @@ class AzuraApp : public rex::ReXApp {
     azura::menu::SetPcOptionsConfigPath(paths.config_path);
   }
 
-  // Logging is ready and nothing else has started (no window, no GPU). Started by the launcher to
-  // export the achievements, the runtime does only that and exits, so the launcher can read them
-  // without starting the game. std::_Exit skips the static destructors of a runtime that never
-  // set up the rest.
+  // Logging is ready and nothing else has started (no window, no GPU). Started by the launcher for
+  // a one-off task, the runtime does only that and exits: exporting the achievements, so the
+  // launcher can read them without starting the game, or listing the graphics cards
+  // (--list_gpus). std::_Exit skips the static destructors of a runtime that never set up the
+  // rest.
   void OnPostInitLogging() override {
     if (azura::AchievementExportRequested()) {
       std::_Exit(azura::ExportAchievements(game_data_root()));
+    }
+    if (azura::GpuListRequested()) {
+      std::_Exit(azura::PrintGpuList());
     }
   }
 

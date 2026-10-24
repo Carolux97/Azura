@@ -127,7 +127,11 @@
     "fullscreen": "Vollbild",
     "renderResolution": "Renderauflösung",
     "original": "Original",
-    "resolutionAuto": "Automatisch ({size})"
+    "resolutionAuto": "Automatisch ({size})",
+    "gpu": "Grafikkarte",
+    "gpuAuto": "Automatisch ({name})",
+    "gpuDiscrete": "dediziert",
+    "gpuIntegrated": "integriert"
   },
   "achievements": {
     "title": "Erfolge",
@@ -188,7 +192,8 @@
     "runtimeInstalled": "Spiel-Runtime installiert.",
     "saveFailed": "Einstellungen konnten nicht gespeichert werden: {detail}",
     "compilerInstalled": "Compiler bereit: {version}",
-    "compilerInstallFailed": "Der Compiler konnte nicht installiert werden: {detail}"
+    "compilerInstallFailed": "Der Compiler konnte nicht installiert werden: {detail}",
+    "gpuMissing": "Die gewählte Grafikkarte ist nicht mehr in diesem Computer: Das Spiel nutzt die automatische."
   },
   "log": {
     "title": "Spielprotokoll",

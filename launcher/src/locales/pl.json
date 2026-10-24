@@ -127,7 +127,11 @@
     "fullscreen": "Pełny ekran",
     "renderResolution": "Rozdzielczość renderowania",
     "original": "oryginalna",
-    "resolutionAuto": "Automatyczna ({size})"
+    "resolutionAuto": "Automatyczna ({size})",
+    "gpu": "Karta graficzna",
+    "gpuAuto": "Automatyczna ({name})",
+    "gpuDiscrete": "dedykowana",
+    "gpuIntegrated": "zintegrowana"
   },
   "achievements": {
     "title": "Osiągnięcia",
@@ -188,7 +192,8 @@
     "runtimeInstalled": "Środowisko gry zainstalowane.",
     "saveFailed": "Nie udało się zapisać ustawień: {detail}",
     "compilerInstalled": "Kompilator gotowy: {version}",
-    "compilerInstallFailed": "Nie udało się zainstalować kompilatora: {detail}"
+    "compilerInstallFailed": "Nie udało się zainstalować kompilatora: {detail}",
+    "gpuMissing": "Wybranej karty graficznej nie ma już w tym komputerze: gra używa automatycznej."
   },
   "log": {
     "title": "Dziennik gry",

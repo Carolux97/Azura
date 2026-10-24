@@ -127,7 +127,11 @@
     "fullscreen": "Полный экран",
     "renderResolution": "Разрешение рендеринга",
     "original": "оригинал",
-    "resolutionAuto": "Автоматически ({size})"
+    "resolutionAuto": "Автоматически ({size})",
+    "gpu": "Видеокарта",
+    "gpuAuto": "Автоматически ({name})",
+    "gpuDiscrete": "дискретная",
+    "gpuIntegrated": "встроенная"
   },
   "achievements": {
     "title": "Достижения",
@@ -188,7 +192,8 @@
     "runtimeInstalled": "Среда выполнения игры установлена.",
     "saveFailed": "Не удалось сохранить настройки: {detail}",
     "compilerInstalled": "Компилятор готов: {version}",
-    "compilerInstallFailed": "Не удалось установить компилятор: {detail}"
+    "compilerInstallFailed": "Не удалось установить компилятор: {detail}",
+    "gpuMissing": "Выбранной видеокарты больше нет в этом компьютере: игра использует выбранную автоматически."
   },
   "log": {
     "title": "Журнал игры",

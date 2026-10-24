@@ -994,6 +994,46 @@ index aa55a4a..c8bb914 100644
  XE_UI_VULKAN_FUNCTION(vkInvalidateMappedMemoryRanges)
  XE_UI_VULKAN_FUNCTION(vkMapMemory)
  XE_UI_VULKAN_FUNCTION(vkResetCommandPool)
+diff --git a/include/rex/ui/vulkan/provider.h b/include/rex/ui/vulkan/provider.h
+index 3d603f5..0a68fcc 100644
+--- a/include/rex/ui/vulkan/provider.h
++++ b/include/rex/ui/vulkan/provider.h
+@@ -11,6 +11,8 @@
+  */
+ 
+ #include <memory>
++#include <string>
++#include <vector>
+ 
+ #include <rex/ui/graphics_provider.h>
+ #include <rex/ui/vulkan/device.h>
+@@ -23,7 +25,25 @@ namespace vulkan {
+ 
+ class VulkanProvider : public GraphicsProvider {
+  public:
+-  static std::unique_ptr<VulkanProvider> Create(bool with_gpu_emulation, bool with_presentation);
++  // use_chosen_device false ignores vulkan_device_uuid and vulkan_device, making the automatic
++  // choice.
++  static std::unique_ptr<VulkanProvider> Create(bool with_gpu_emulation, bool with_presentation,
++                                                bool use_chosen_device = true);
++
++  // A physical device as the launcher lists it to let the player choose (vulkan_device_uuid).
++  struct DeviceInfo {
++    std::string name;
++    // VkPhysicalDeviceIDProperties::deviceUUID as 32 lowercase hexadecimal digits, which stays the
++    // same for a card when the order of the devices changes; empty if the driver cannot tell it.
++    std::string uuid;
++    VkPhysicalDeviceType type;
++    uint32_t vendor_id;
++  };
++  // The physical devices of the system, in the order Vulkan enumerates them, and the UUID of the
++  // one Create chooses for GPU emulation without a chosen device, the automatic choice (empty if
++  // none is usable; without a window, so presentation support is not checked). False if Vulkan
++  // is not available.
++  static bool ListDevices(std::vector<DeviceInfo>& devices_out, std::string& automatic_uuid_out);
+ 
+   VulkanInstance* vulkan_instance() const { return vulkan_instance_.get(); }
+ 
 diff --git a/resources/templates/codegen/register_cpp.inja b/resources/templates/codegen/register_cpp.inja
 index 0be31c4..83be65c 100644
 --- a/resources/templates/codegen/register_cpp.inja
@@ -16396,3 +16436,139 @@ index 8197bb4..7838036 100644
  
    if (with_gpu_emulation) {
      XE_UI_VULKAN_FEATURE(robustBufferAccess)
+diff --git a/src/ui/vulkan/vulkan_provider.cpp b/src/ui/vulkan/vulkan_provider.cpp
+index 9eeb902..6337da5 100644
+--- a/src/ui/vulkan/vulkan_provider.cpp
++++ b/src/ui/vulkan/vulkan_provider.cpp
+@@ -25,6 +25,12 @@ REXCVAR_DEFINE_BOOL(vulkan_validation_enabled, false, "UI/Vulkan",
+ REXCVAR_DEFINE_INT32(vulkan_device, -1, "UI/Vulkan", "Vulkan device index (-1 for auto selection)")
+     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+ 
++REXCVAR_DEFINE_STRING(vulkan_device_uuid, "", "UI/Vulkan",
++                      "Vulkan device to use, by its UUID (32 hexadecimal digits, as listed by the "
++                      "launcher); empty or not found chooses automatically. Takes precedence over "
++                      "vulkan_device")
++    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
++
+ REXCVAR_DEFINE_BOOL(vulkan_prefer_geometry_shader, true, "UI/Vulkan",
+                     "Prefer physical devices supporting geometryShader when auto-selecting")
+     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+@@ -44,8 +50,69 @@ namespace rex {
+ namespace ui {
+ namespace vulkan {
+ 
++namespace {
++
++// VkPhysicalDeviceIDProperties::deviceUUID of a physical device as 32 lowercase hexadecimal
++// digits, or empty without vkGetPhysicalDeviceProperties2 (Vulkan 1.1 or
++// VK_KHR_get_physical_device_properties2).
++std::string GetPhysicalDeviceUuid(const VulkanInstance& instance,
++                                  VkPhysicalDevice physical_device) {
++  const VulkanInstance::Functions& ifn = instance.functions();
++  if (!ifn.vkGetPhysicalDeviceProperties2) {
++    return {};
++  }
++  VkPhysicalDeviceIDProperties id_properties = {};
++  id_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
++  VkPhysicalDeviceProperties2 properties = {};
++  properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
++  properties.pNext = &id_properties;
++  ifn.vkGetPhysicalDeviceProperties2(physical_device, &properties);
++  static const char kDigits[] = "0123456789abcdef";
++  std::string uuid;
++  uuid.reserve(VK_UUID_SIZE * 2);
++  for (uint8_t byte : id_properties.deviceUUID) {
++    uuid.push_back(kDigits[byte >> 4]);
++    uuid.push_back(kDigits[byte & 0xF]);
++  }
++  return uuid;
++}
++
++}  // namespace
++
++bool VulkanProvider::ListDevices(std::vector<DeviceInfo>& devices_out,
++                                 std::string& automatic_uuid_out) {
++  devices_out.clear();
++  automatic_uuid_out.clear();
++  // The automatic choice, as the game makes it without a chosen device.
++  std::unique_ptr<VulkanProvider> provider = Create(true, false, false);
++  std::unique_ptr<VulkanInstance> instance;
++  const VulkanInstance* vulkan_instance;
++  if (provider) {
++    vulkan_instance = provider->vulkan_instance();
++    automatic_uuid_out = GetPhysicalDeviceUuid(*vulkan_instance,
++                                               provider->vulkan_device()->physical_device());
++  } else {
++    instance = VulkanInstance::Create(false, false);
++    if (!instance) {
++      return false;
++    }
++    vulkan_instance = instance.get();
++  }
++  std::vector<VkPhysicalDevice> physical_devices;
++  vulkan_instance->EnumeratePhysicalDevices(physical_devices);
++  for (VkPhysicalDevice physical_device : physical_devices) {
++    VkPhysicalDeviceProperties properties;
++    vulkan_instance->functions().vkGetPhysicalDeviceProperties(physical_device, &properties);
++    devices_out.push_back({properties.deviceName,
++                           GetPhysicalDeviceUuid(*vulkan_instance, physical_device),
++                           properties.deviceType, properties.vendorID});
++  }
++  return true;
++}
++
+ std::unique_ptr<VulkanProvider> VulkanProvider::Create(const bool with_gpu_emulation,
+-                                                       const bool with_presentation) {
++                                                       const bool with_presentation,
++                                                       const bool use_chosen_device) {
+   std::unique_ptr<VulkanProvider> provider(new VulkanProvider());
+ 
+   provider->vulkan_instance_ =
+@@ -75,7 +142,36 @@ std::unique_ptr<VulkanProvider> VulkanProvider::Create(const bool with_gpu_emula
+     REXLOG_WARN("* {}: {}", physical_device_index, physical_device_properties.deviceName);
+   }
+ 
+-  if (REXCVAR_GET(vulkan_device) >= 0 &&
++  // The device the player chose, by its UUID, which does not depend on the enumeration order.
++  const std::string chosen_uuid = use_chosen_device ? REXCVAR_GET(vulkan_device_uuid) : "";
++  if (!chosen_uuid.empty()) {
++    bool found = false;
++    for (size_t i = 0; i < physical_devices.size(); ++i) {
++      if (GetPhysicalDeviceUuid(*provider->vulkan_instance_, physical_devices[i]) != chosen_uuid) {
++        continue;
++      }
++      found = true;
++      VkPhysicalDeviceProperties properties;
++      ifn.vkGetPhysicalDeviceProperties(physical_devices[i], &properties);
++      provider->vulkan_device_ =
++          VulkanDevice::CreateIfSupported(provider->vulkan_instance_.get(), physical_devices[i],
++                                          with_gpu_emulation, with_presentation);
++      if (provider->vulkan_device_) {
++        REXLOG_INFO("Vulkan: using the chosen device {}: {}", i, properties.deviceName);
++      } else {
++        REXLOG_WARN("Vulkan: the chosen device {} ({}) cannot run the game, choosing "
++                    "automatically",
++                    i, properties.deviceName);
++      }
++      break;
++    }
++    if (!found) {
++      REXLOG_WARN("Vulkan: the chosen device (UUID {}) is not present, choosing automatically",
++                  chosen_uuid);
++    }
++  }
++
++  if (!provider->vulkan_device_ && use_chosen_device && REXCVAR_GET(vulkan_device) >= 0 &&
+       uint32_t(REXCVAR_GET(vulkan_device)) < physical_devices.size()) {
+     provider->vulkan_device_ = VulkanDevice::CreateIfSupported(
+         provider->vulkan_instance_.get(), physical_devices[REXCVAR_GET(vulkan_device)],
+@@ -134,6 +230,9 @@ std::unique_ptr<VulkanProvider> VulkanProvider::Create(const bool with_gpu_emula
+       provider->vulkan_device_ = VulkanDevice::CreateIfSupported(
+           provider->vulkan_instance_.get(), physical_device, with_gpu_emulation, with_presentation);
+       if (provider->vulkan_device_) {
++        VkPhysicalDeviceProperties properties;
++        ifn.vkGetPhysicalDeviceProperties(physical_device, &properties);
++        REXLOG_INFO("Vulkan: using {} (chosen automatically)", properties.deviceName);
+         break;
+       }
+     }

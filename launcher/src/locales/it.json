@@ -127,7 +127,11 @@
     "fullscreen": "Schermo intero",
     "renderResolution": "Risoluzione di rendering",
     "original": "originale",
-    "resolutionAuto": "Automatica ({size})"
+    "resolutionAuto": "Automatica ({size})",
+    "gpu": "Scheda grafica",
+    "gpuAuto": "Automatica ({name})",
+    "gpuDiscrete": "dedicata",
+    "gpuIntegrated": "integrata"
   },
   "achievements": {
     "title": "Obiettivi",
@@ -188,7 +192,8 @@
     "runtimeInstalled": "Runtime del gioco installato.",
     "saveFailed": "Impossibile salvare le impostazioni: {detail}",
     "compilerInstalled": "Compilatore pronto: {version}",
-    "compilerInstallFailed": "Impossibile installare il compilatore: {detail}"
+    "compilerInstallFailed": "Impossibile installare il compilatore: {detail}",
+    "gpuMissing": "La scheda grafica scelta non è più in questo computer: il gioco usa quella automatica."
   },
   "log": {
     "title": "Registro del gioco",
