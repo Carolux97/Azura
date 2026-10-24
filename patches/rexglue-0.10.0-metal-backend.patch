@@ -670,6 +670,25 @@ index 7b938b9..89a63d8 100644
    std::unique_ptr<rex::thread::Event> creation_completion_event_;
    bool creation_completion_set_event_ = false;
    size_t creation_threads_shutdown_from_ = SIZE_MAX;
+diff --git a/include/rex/input/device_assignment.h b/include/rex/input/device_assignment.h
+index a318f2c..6751e8d 100644
+--- a/include/rex/input/device_assignment.h
++++ b/include/rex/input/device_assignment.h
+@@ -26,6 +26,14 @@ class DeviceAssignment {
+ 
+   /// An empty result means the guest sees X_ERROR_DEVICE_NOT_CONNECTED.
+   virtual void DevicesForUser(uint32_t user_index, std::vector<DeviceId>& out) const = 0;
++
++  /// The device a guest user last pressed something on, among its devices, each time the guest
++  /// polls that user (kInvalid until one is pressed). A policy that hands devices to users as they
++  /// are used (an unclaimed pad becomes a player's when it presses something) reads it here.
++  virtual void OnActive(uint32_t user_index, DeviceId id) {
++    (void)user_index;
++    (void)id;
++  }
+ };
+ 
+ /// Device ordinal N feeds guest user N. Synthetic devices feed user 0.
 diff --git a/include/rex/perf/counter.h b/include/rex/perf/counter.h
 index 83f0dff..8def116 100644
 --- a/include/rex/perf/counter.h
@@ -15703,6 +15722,33 @@ index 4e7ad78..dc26143 100644
      }
    }
  }
+diff --git a/src/input/input_system.cpp b/src/input/input_system.cpp
+index c9f7ed6..bf37992 100644
+--- a/src/input/input_system.cpp
++++ b/src/input/input_system.cpp
+@@ -255,6 +255,7 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
+   if (user_index < kMaxGuestUsers) {
+     active_kind_[user_index].store(static_cast<uint8_t>(KindOf(active_devices_.Active(user_index))),
+                                    std::memory_order_relaxed);
++    assignment_->OnActive(user_index, active_devices_.Active(user_index));
+   }
+ 
+   if (!any) {
+@@ -298,6 +299,14 @@ X_RESULT InputSystem::SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration
+   std::vector<DeviceId> ids;
+   assignment_->DevicesForUser(user_index, ids);
+ 
++  // With several pads on one user, the one in the player's hands buzzes alone: the others are
++  // lying on the table. Until one is pressed (or while the keyboard is in use), all of them do.
++  const DeviceId active = active_devices_.Active(user_index);
++  const DeviceInfo* active_info = DeviceInfoFor(active);
++  if (active_info && !active_info->synthetic && std::find(ids.begin(), ids.end(), active) != ids.end()) {
++    ids.assign(1, active);
++  }
++
+   // Every pad on this user belongs to the same player, so all of them buzz.
+   // Only pads decide the result: synthetic devices accept any vibration and
+   // would otherwise report success for a pad that never rumbled.
 diff --git a/src/system/runtime.cpp b/src/system/runtime.cpp
 index c10694c..2225156 100644
 --- a/src/system/runtime.cpp
