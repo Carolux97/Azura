@@ -58,7 +58,8 @@
   },
   "releaseNotes": {
     "title": "Novinky ve verzi {version}",
-    "dismiss": "Rozumím"
+    "dismiss": "Rozumím",
+    "show": "Novinky"
   },
   "install": {
     "title": "Instalace",
