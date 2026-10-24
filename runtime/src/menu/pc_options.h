@@ -118,6 +118,9 @@ void ApplyRenderResolution();
 // when the menu changes it with `show_now` true, which also runs the handler of
 // SetSharpnessChangedHandler so the next frame shows it.
 void ApplyUpscalingSharpness(bool show_now);
+// Whether the running presenter draws a present_effect value ("cas", "metalfx"...), so the
+// upscaling row lists only those (from any thread); nullptr lists every value the build accepts.
+void SetUpscalingSupport(std::function<bool(const std::string&)> supported);
 // What ApplyUpscalingSharpness runs to show a change while the game runs (from any thread);
 // nullptr to stop.
 void SetSharpnessChangedHandler(std::function<void()> handler);
