@@ -29,7 +29,9 @@
     "install": "Telepítés",
     "installSub": "Játékfájlok beállítása",
     "running": "Játékban",
-    "runtimeWillInstall": "Előbb telepíti a futtatókörnyezetet"
+    "runtimeWillInstall": "Előbb telepíti a futtatókörnyezetet",
+    "building": "ÉPÍTÉS",
+    "buildingSub": "A játék épül ehhez a számítógéphez"
   },
   "status": {
     "gameFiles": "Játékfájlok",
@@ -44,7 +46,8 @@
     "runtimeUpdate": "Frissítés kész, a Játék gomb megnyomásakor települ",
     "compiler": "Fordító",
     "compilerChecking": "Ellenőrzés…",
-    "compilerMissing": "Nincs telepítve"
+    "compilerMissing": "Nincs telepítve",
+    "runtimeBuilding": "Épül…"
   },
   "news": {
     "title": "Hírek",
