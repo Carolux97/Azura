@@ -179,13 +179,22 @@ async fn get_runtime_status(app: tauri::AppHandle) -> Result<RuntimeStatus, Stri
             let mut status = install::status(&dir, None);
             status.source = "kit";
             status.build_found = true;
-            let built = builder::read_kit(&kit).ok().zip(game_build(&app).ok()).is_some_and(|(kit, (_, version))| {
-                work_dir(&app, &version)
-                    .ok()
-                    .and_then(|work| builder::read_state(&work))
-                    .is_some_and(|state| state.xex_sha256 == version.xex_sha256 && state.keys.as_ref() == Some(&kit.keys))
-            });
-            status.update_available = !status.installed || !built;
+            let kind = match (builder::read_kit(&kit), game_build(&app)) {
+                (Ok(kit), Ok((_, version))) => {
+                    let work = work_dir(&app, &version)?;
+                    let state = builder::read_state(&work);
+                    let kept = state.as_ref().is_some_and(|state| builder::objects_kept(&work, state));
+                    let compiler = toolchain::compiler_version().unwrap_or_default();
+                    builder::update_kind(state.as_ref(), &kit.keys, &version.xex_sha256, &compiler, status.installed, kept)
+                }
+                _ => builder::UpdateKind::Build,
+            };
+            status.update_available = kind != builder::UpdateKind::None;
+            status.update_kind = match kind {
+                builder::UpdateKind::None => None,
+                builder::UpdateKind::Link => Some("link"),
+                builder::UpdateKind::Build => Some("build"),
+            };
             Ok(status)
         }
     }

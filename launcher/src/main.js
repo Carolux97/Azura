@@ -206,8 +206,12 @@ const runtimeNeedsInstall = () => state.runtime.buildFound && (!state.runtime.in
 
 /** Translation key describing the runtime, and its status tone ("ok", "warn" or "error"). */
 const runtimeState = () => {
-  const { installed, buildFound, updateAvailable } = state.runtime;
+  const { installed, buildFound, updateAvailable, source, updateKind } = state.runtime;
   if (installed && !updateAvailable) return ["install.runtimeInstalled", "ok"];
+  // Built here from the kit: say what an update takes, seconds or minutes.
+  if (source === "kit" && !installed) return ["install.runtimeNotBuilt", "warn"];
+  if (source === "kit" && updateKind === "link") return ["install.runtimeUpdateLink", "warn"];
+  if (source === "kit") return ["install.runtimeUpdateBuild", "warn"];
   if (installed) return ["install.runtimeUpdate", "warn"];
   if (buildFound) return ["install.runtimeNotInstalled", "warn"];
   return ["install.runtimeNoBuild", "error"];

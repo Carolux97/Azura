@@ -260,6 +260,12 @@ fn minimum_major() -> u32 {
     }
 }
 
+/// The version of the compiler there is, without checking that it works (cheap, for the update
+/// check: a different version means the runtime is built again).
+pub fn compiler_version() -> Option<String> {
+    find_compiler().map(|compiler| compiler.version)
+}
+
 /// The compiler the runtime is built with, when there is a working one.
 pub fn compiler() -> Option<Compiler> {
     let compiler = find_compiler()?;
