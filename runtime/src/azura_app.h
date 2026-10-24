@@ -14,6 +14,7 @@
 #include <imgui.h>
 
 #include <rex/cvar.h>
+#include <rex/image_info.h>
 #include <rex/perf/counter.h>
 #include <rex/rex_app.h>
 #include <rex/runtime.h>
@@ -36,6 +37,12 @@ REXCVAR_DECLARE(std::string, perf_log_csv);
 #if defined(__APPLE__)
 #include "platform_mac.h"
 #endif
+
+// The recompiled game image, defined in the code `rexglue codegen` writes from the player's
+// default.xex (azura_init.cpp). Declared here rather than taken from the generated headers, so
+// this code compiles without any generated code: it is linked with it later, on the machine that
+// generates it.
+extern const rex::PPCImageInfo PPCImageConfig;
 
 class AzuraApp : public rex::ReXApp {
  public:
