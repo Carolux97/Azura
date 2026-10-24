@@ -793,6 +793,35 @@ index aa55a4a..c8bb914 100644
  XE_UI_VULKAN_FUNCTION(vkInvalidateMappedMemoryRanges)
  XE_UI_VULKAN_FUNCTION(vkMapMemory)
  XE_UI_VULKAN_FUNCTION(vkResetCommandPool)
+diff --git a/resources/templates/codegen/register_cpp.inja b/resources/templates/codegen/register_cpp.inja
+index 0be31c4..83be65c 100644
+--- a/resources/templates/codegen/register_cpp.inja
++++ b/resources/templates/codegen/register_cpp.inja
+@@ -5,6 +5,13 @@
+ #include "{{ project }}_init.h"
+ #include <rex/system/function_dispatcher.h>
+ 
++// The calls are split into functions of a few thousand each, which compile in a second or two;
++// a single function with all of them would take the compiler minutes.
++{% for chunk in register_chunks %}
++static void RegisterFunctions_{{ loop.index }}(rex::runtime::IModuleRegistrar* registrar) {
++{% for fn in chunk %}  registrar->SetFunction({{ fn.address }}, {{ fn.name }});
++{% endfor %}}
++{% endfor %}
+ {% if is_dll %}
+ #ifdef _WIN32
+ #define REX_MODULE_EXPORT __declspec(dllexport)
+@@ -17,8 +24,8 @@ void ReXModule_Register(rex::runtime::IModuleRegistrar* registrar) {
+ {% else %}
+ void {{ project }}_RegisterFunctions(rex::runtime::IModuleRegistrar* registrar) {
+ {% endif %}
+-{% for fn in functions %}{% if not fn.below_code_base or fn.is_import %}  registrar->SetFunction({{ fn.address }}, {{ fn.name }});
+-{% endif %}{% endfor %}}
++{% for chunk in register_chunks %}  RegisterFunctions_{{ loop.index }}(registrar);
++{% endfor %}}
+ 
+ {% if is_dll %}
+ // The runtime uses this baked layout for the dispatch table. It must match the
 diff --git a/src/core/memory_posix.cpp b/src/core/memory_posix.cpp
 index b52bf39..13f51dc 100644
 --- a/src/core/memory_posix.cpp
