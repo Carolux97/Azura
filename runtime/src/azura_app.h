@@ -27,6 +27,7 @@
 #include "input/player_assignment.h"
 #include "menu/menu_patches.h"
 #include "menu/pc_options.h"
+#include "perf_marker.h"
 #include "prompts/button_prompts.h"
 #include "relaunch.h"
 #include "script_hooks.h"
@@ -125,6 +126,9 @@ class AzuraApp : public rex::ReXApp {
     if (const std::string& csv = REXCVAR_GET(perf_log_csv); !csv.empty()) {
       rex::perf::SetCsvLogPath(csv);
       REXLOG_INFO("[Azura] Writing per-frame performance counters to {}", csv);
+      // While recording, F8 marks the frame in the CSV, so a hitch the player noticed can be found
+      // afterwards (controllers mark with Back, see perf_marker.h).
+      perf_marker_ = std::make_unique<azura::PerfMarker>();
     }
 #if defined(__APPLE__)
     // Again now that the window exists, so it gets the icon too (see platform_mac.mm).
@@ -208,6 +212,7 @@ class AzuraApp : public rex::ReXApp {
   // compilation notice before the ImGui drawer does.
   void OnShutdown() override {
     button_prompts_.reset();
+    perf_marker_.reset();
     shutting_down_ = true;
     azura::menu::SetSharpnessChangedHandler(nullptr);
     if (auto* graphics_system = runtime()->graphics_system()) {
@@ -257,4 +262,6 @@ class AzuraApp : public rex::ReXApp {
   // Deletes itself when it closes, clearing this pointer. Accessed on the UI thread only.
   azura::ShaderCompileOverlay* shader_compile_overlay_ = nullptr;
   bool shutting_down_ = false;
+  // Marks frames in the perf_log_csv CSV; only while it records.
+  std::unique_ptr<azura::PerfMarker> perf_marker_;
 };
