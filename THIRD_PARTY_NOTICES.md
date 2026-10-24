@@ -1,7 +1,8 @@
 # Third-party notices
 
-Gears3-Azura's own code is under the BSD 3-Clause License (see [LICENSE](LICENSE)). It builds on
-and includes work by others, listed here with their licenses.
+Gears3-Azura's own code is under the PolyForm Strict License 1.0.0 (see [LICENSE](LICENSE)). It
+builds on and includes work by others, listed here with their licenses, which keep applying to
+that work.
 
 ## Included in this repository
 

@@ -115,6 +115,14 @@ platform labels.
 - No card or ticket references in code or comments; they go in commit messages and pull requests.
 - Comments describe what the code does now and why, not the history of a fix.
 
+## License of contributions
+
+The project's own code is under the PolyForm Strict License 1.0.0 (see [LICENSE](LICENSE)), which
+does not let others change or share it. By sending a contribution you agree that it is licensed
+under the same terms, and that Carolina Molina Elvira and Juan Llorca Martínez, who hold the
+project's copyright, may use, change and share it as part of the project under any license.
+Changes to the ReXGlue SDK and MoltenVK (`patches/`) stay under those projects' licenses.
+
 ## Before opening a pull request
 
 - Launcher tests pass: `cargo test` in `launcher/src-tauri` and `npm test` in `launcher`.
