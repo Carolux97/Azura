@@ -55,6 +55,68 @@ for i in range(0, len(game), 1800):
     print(f"  {i // 1800:3d}  {statistics.median(gpu):5.1f} / {gpu[int(len(gpu) * 0.9)]:5.1f}"
           f"  {statistics.median(int(r['host_draws']) for r in window):6.0f}"
           f"  {statistics.median(int(r['host_render_passes']) for r in window):4.0f}")
+# Hitches: gameplay frames above twice the median frame time, and the frames the player marked
+# (F8, or the controller's Back button) with the slowest frame of the two seconds before each
+# mark. A frame as long as its neighbours is not a hitch but a lower steady rate (the game holds
+# some scenes at 30 FPS), and is left out. Each one gets the
+# cause that took most of it: the work its draws did on the command processor thread (shader
+# translation, texture loading, getting a pipeline), waiting for the GPU, or GPU time above the
+# frame time. Recordings older than these columns have no hitch section.
+if "draw_pipeline_us" not in rows[0]:
+    sys.exit()
+index = {id(r): i for i, r in enumerate(rows)}
+median_us = statistics.median(float(r["frame_time_us"]) for r in game)
+def steady(i):
+    """Whether frame i is as long as the frames around it (within 15%)."""
+    frame_us = float(rows[i]["frame_time_us"])
+    around = rows[max(0, i - 3):i] + rows[i + 1:i + 4]
+    return len(around) == 6 and all(abs(float(r["frame_time_us"]) - frame_us) < 0.15 * frame_us
+                                    for r in around)
+hitches = {id(r): r for r in game
+           if float(r["frame_time_us"]) > 2 * median_us and not steady(index[id(r)])}
+marks = [i for i, r in enumerate(rows) if int(r.get("markers") or 0) > 0]
+for i in marks:
+    before = rows[max(0, i - int(2e6 / median_us)):i + 1]
+    slowest = max(before, key=lambda r: float(r["frame_time_us"]))
+    hitches[id(slowest)] = slowest
+causes = {
+    "shader translation": "draw_shader_translation_us",
+    "texture loading": "draw_texture_load_us",
+    "pipeline": "draw_pipeline_us",
+    "GPU wait": "host_gpu_wait_us",
+}
+threads = {}
+threads_csv = sys.argv[1][:-len(".csv")] + ".threads.csv"
+try:
+    for t in csv.DictReader(open(threads_csv)):
+        # The last line can be cut short, as in the frame CSV.
+        if None in t.values():
+            continue
+        threads.setdefault(int(t["frame"]), []).append((int(t["cpu_us"]), t["name"]))
+except (FileNotFoundError, KeyError, TypeError, ValueError):
+    pass
+print(f"Hitches (frames above {2 * median_us / 1000:.1f} ms, and {len(marks)} marked by the player):")
+totals = {}
+for r in sorted(hitches.values(), key=lambda r: index[id(r)]):
+    frame_us = float(r["frame_time_us"])
+    parts = {name: float(r[column]) for name, column in causes.items()}
+    gpu_us = float(r["host_gpu_time_us"])
+    if gpu_us > median_us * 1.5:
+        parts["GPU time"] = gpu_us - median_us
+    cause, cause_us = max(parts.items(), key=lambda item: item[1])
+    if frame_us < 1.5 * median_us:
+        cause = "no hitch"
+    elif cause_us < (frame_us - median_us) / 3:
+        cause = "other"
+    totals[cause] = totals.get(cause, 0) + 1
+    i = index[id(r)]
+    marked = " (marked)" if any(i <= m <= i + int(2e6 / median_us) for m in marks) else ""
+    detail = "  ".join(f"{name} {us / 1000:.1f}" for name, us in parts.items() if us >= 500)
+    print(f"  frame {i:6d}{marked}: {frame_us / 1000:6.1f} ms  -> {cause:18s} {detail}")
+    if cause == "other" and i in threads:
+        busiest = sorted(threads[i], reverse=True)[:3]
+        print("        busiest threads: " + ", ".join(f"{n or '?'} {us / 1000:.1f} ms" for us, n in busiest))
+print("  by cause: " + ", ".join(f"{cause} {count}" for cause, count in sorted(totals.items())))
 EOF
 }
 
@@ -67,6 +129,9 @@ case "${1:-}" in
     cp "${CONFIG}" "${BACKUP}"
     csv="${OUT_DIR}/${label}_$(date +%Y%m%d-%H%M%S).csv"
     shift 2
+    # Every session records with perf_marker_button: the controller's Back button (View, Create or
+    # Share) marks a hitch the player notices, as F8 does, instead of reaching the game.
+    set -- perf_marker_button=true "$@"
     # A TOML key may appear only once: drop the earlier values of the keys set here (the backup
     # keeps them).
     keys="perf_log_csv"
