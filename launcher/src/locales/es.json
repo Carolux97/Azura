@@ -259,6 +259,18 @@
     "resetToast": "Partidas restablecidas. Se creó una copia de seguridad.",
     "backupToast": "Copia de seguridad creada correctamente",
     "restoreToast": "Partida restaurada con éxito"
+  },
+  "gamepad": {
+    "select": "Seleccionar",
+    "back": "Atrás",
+    "section": "Sección",
+    "play": "Jugar",
+    "type": "Escribir",
+    "delete": "Borrar",
+    "space": "Espacio",
+    "done": "Aceptar",
+    "cancel": "Cancelar",
+    "page": "Página"
   }
 }
 

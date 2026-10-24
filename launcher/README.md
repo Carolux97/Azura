@@ -110,6 +110,27 @@ original game hid (its flags lack 0x8) is sent to the interface without its name
 gamerscore or artwork until it is unlocked. The section stays locked, with a button to the
 Installation view, until there is a valid game folder and an installed runtime to read it.
 
+## Controllers
+
+The launcher can be driven with a controller. `src-tauri/src/gamepad.rs` reads the controllers
+(the webview's own Gamepad API depends on how each platform's WebKit was built) and sends the
+interface one `gamepad-input` event per action, only while the launcher window has the focus. On
+macOS it uses Apple's GameController framework, the one that receives a DualSense's input over
+Bluetooth (reading the HID device gets only its connection); on Linux, gilrs.
+
+`src/gamepadNav.js` applies the actions: the D-pad and the left stick move the focus to the nearest
+control in that direction (`src/gamepad.js`, within the rail or within the section), South (A,
+Cross) presses, East (B, Circle) cancels a prompt or goes back to Play, the shoulder buttons switch
+sections, Start starts the game; left and right change selects and sliders. South on a text field
+(the gamertag) opens the on-screen keyboard (`src/virtualKeyboard.js`): West deletes, North types a
+space, Start is Done, East cancels. While a controller is in use, a hint bar shows its buttons with
+the glyphs of its family (Xbox and Steam Deck, PlayStation, Nintendo or generic), drawn in
+`src/gamepadGlyphs.js`; the mouse or the keyboard hides it again. Nothing reacts while the game
+runs. A cancel button that should answer East marks itself with `data-pad-back`.
+
+On Linux, building needs libudev (`libudev-dev`), and `cargo test prints_controller_events --
+--ignored --nocapture` prints what each controller sends.
+
 ## Layout
 
 | Path | What it holds |

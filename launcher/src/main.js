@@ -45,6 +45,7 @@ import {
   getCompilerStatus,
   installCompiler,
   onRuntimeBuildProgress,
+  onGamepadInput,
   showBuildLog,
   getSaveStatus,
   openSavesFolder,
@@ -58,6 +59,8 @@ import {
   saveSettings,
 } from "./platform.js";
 import { defaultGameLanguage, gameLanguageName } from "./gameLanguages.js";
+import { setupGamepad } from "./gamepadNav.js";
+import { TEXT_RULES } from "./textRules.js";
 import { achievementView } from "./achievements.js";
 import { createBuildTracker } from "./buildProgress.js";
 import { LOCK_ICON, completedBanner, renderAchievementsPage } from "./achievementsPage.js";
@@ -131,7 +134,7 @@ const state = {
 /** Builds the settings object platform.saveSettings stores (see src-tauri/src/settings.rs). */
 const currentSettings = () => ({
   gameFolder: state.savedGameFolder,
-  userName: state.userName || null,
+  userName: state.userName.trimEnd() || null,
   fullscreen: state.fullscreen,
   graphics: { renderResolution: state.renderResolution },
   uiLanguage: getPreference(),
@@ -790,10 +793,10 @@ const setupInstall = () => {
 
   const playerField = document.getElementById("player-name");
   if (playerField) {
+    // Only what a gamertag may hold stays (textRules.js), however it was typed or pasted.
     playerField.addEventListener("input", () => {
-      if (playerField.value.length > 15) {
-        playerField.value = playerField.value.slice(0, 15);
-      }
+      const clean = TEXT_RULES.gamertag.clean(playerField.value);
+      if (clean !== playerField.value) playerField.value = clean;
       state.userName = playerField.value;
       renderPlay();
       persist();
@@ -1190,7 +1193,7 @@ const setupReloadOnFocus = () => {
       const settings = await loadSettings();
       if (!settings) return;
       applyStoredGraphics(settings);
-      state.userName = (settings.userName ?? "").slice(0, 15);
+      state.userName = TEXT_RULES.gamertag.clean(settings.userName ?? "");
       renderGraphics();
       renderInstall();
       renderPlay();
@@ -1212,6 +1215,8 @@ const loadSavedSettings = async () => {
 
 createSpores();
 setupNavigation();
+// The controller belongs to the game while it runs.
+setupGamepad({ showView, blocked: () => state.game !== "idle", t, onLocaleChange, onInput: onGamepadInput });
 setupLaunch();
 setupInstall();
 setupGraphics();
@@ -1244,7 +1249,7 @@ refreshCompiler();
 const settings = await loadSavedSettings();
 state.savesFolder = settings.savesFolder ?? "";
 applyStoredGraphics(settings);
-state.userName = (settings.userName ?? "").slice(0, 15);
+state.userName = TEXT_RULES.gamertag.clean(settings.userName ?? "");
 state.gameLanguage = settings.gameLanguage ?? null;
 state.gameLanguageChosen = Boolean(settings.gameLanguageChosen);
 state.achievementsView = achievementView(settings.achievementsView);
