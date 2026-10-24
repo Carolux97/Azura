@@ -382,7 +382,7 @@ index dd90ef7..6169777 100644
    std::atomic_flag bindings_setup_entered_ = ATOMIC_FLAG_INIT;
    std::vector<TextureBinding> texture_bindings_;
 diff --git a/include/rex/graphics/pipeline/shader/spirv_translator.h b/include/rex/graphics/pipeline/shader/spirv_translator.h
-index 3a9b681..b37aaee 100644
+index 3a9b681..9809460 100644
 --- a/include/rex/graphics/pipeline/shader/spirv_translator.h
 +++ b/include/rex/graphics/pipeline/shader/spirv_translator.h
 @@ -94,6 +94,12 @@ class SpirvShaderTranslator : public ShaderTranslator {
@@ -398,7 +398,19 @@ index 3a9b681..b37aaee 100644
      } pixel;
      uint64_t value = 0;
  
-@@ -444,6 +450,11 @@ class SpirvShaderTranslator : public ShaderTranslator {
+@@ -405,6 +411,11 @@ class SpirvShaderTranslator : public ShaderTranslator {
+ 
+     bool demote_to_helper_invocation;
+     bool sample_rate_shading;
++
++    // Sample cube maps with an explicit LOD calculated from the gradients instead of with the
++    // gradients: NVIDIA's Vulkan drivers return garbage for one pixel of every 2x2 quad from cube
++    // map sampling with explicit gradients. Costs anisotropic filtering on cube maps.
++    bool cube_lod_from_gradients;
+   };
+ 
+   SpirvShaderTranslator(const Features& features, bool native_2x_msaa_with_attachments,
+@@ -444,6 +455,11 @@ class SpirvShaderTranslator : public ShaderTranslator {
        Modification::DepthStencilMode depth_stencil_mode =
            Modification::DepthStencilMode::kNoModifiers);
  
@@ -410,6 +422,18 @@ index 3a9b681..b37aaee 100644
    // Common functions useful not only for the translator, but also for EDRAM
    // emulation via conventional render targets.
  
+@@ -697,6 +713,11 @@ class SpirvShaderTranslator : public ShaderTranslator {
+   // set internally, optionally doing linear interpolation between the an
+   // existing value and the new one (the result location may be the same as for
+   // the first lerp endpoint, but not across signedness).
++  // The LOD for sampling a cube map in the direction `direction` with the cube space gradients
++  // `gradient_h` and `gradient_v`, a face being `face_size` texels wide.
++  spv::Id CubeLodFromGradients(spv::Id direction, spv::Id gradient_h, spv::Id gradient_v,
++                               spv::Id face_size);
++
+   void SampleTexture(spv::Builder::TextureParameters& texture_parameters,
+                      spv::ImageOperandsMask image_operands_mask, spv::Id image_unsigned,
+                      spv::Id image_signed, spv::Id sampler, spv::Id is_any_unsigned,
 diff --git a/include/rex/graphics/pipeline/shader/translator.h b/include/rex/graphics/pipeline/shader/translator.h
 index 340ced5..67eafaa 100644
 --- a/include/rex/graphics/pipeline/shader/translator.h
@@ -14247,10 +14271,30 @@ index bd0019c..ca62abd 100644
                }
              }
 diff --git a/src/graphics/pipeline/shader/spirv_translator.cpp b/src/graphics/pipeline/shader/spirv_translator.cpp
-index d2ea876..d216966 100644
+index d2ea876..30b8cd5 100644
 --- a/src/graphics/pipeline/shader/spirv_translator.cpp
 +++ b/src/graphics/pipeline/shader/spirv_translator.cpp
-@@ -2904,8 +2904,12 @@ void SpirvShaderTranslator::StartFragmentShaderBeforeMain() {
+@@ -42,7 +42,8 @@ SpirvShaderTranslator::Features::Features(bool all)
+       rounding_mode_rte_float32(all),
+       fragment_shader_sample_interlock(all),
+       demote_to_helper_invocation(all),
+-      sample_rate_shading(all) {}
++      sample_rate_shading(all),
++      cube_lod_from_gradients(false) {}
+ 
+ SpirvShaderTranslator::Features::Features(const ui::vulkan::VulkanDevice* const vulkan_device)
+     : max_storage_buffer_range(vulkan_device->properties().maxStorageBufferRange),
+@@ -59,7 +60,8 @@ SpirvShaderTranslator::Features::Features(const ui::vulkan::VulkanDevice* const
+       rounding_mode_rte_float32(vulkan_device->properties().shaderRoundingModeRTEFloat32),
+       fragment_shader_sample_interlock(vulkan_device->properties().fragmentShaderSampleInterlock),
+       demote_to_helper_invocation(vulkan_device->properties().shaderDemoteToHelperInvocation),
+-      sample_rate_shading(vulkan_device->properties().sampleRateShading) {
++      sample_rate_shading(vulkan_device->properties().sampleRateShading),
++      cube_lod_from_gradients(true) {
+   const uint32_t vulkan_api_version = vulkan_device->properties().apiVersion;
+   if (vulkan_api_version >= VK_MAKE_API_VERSION(0, 1, 2, 0)) {
+     spirv_version = spv::Spv_1_5;
+@@ -2904,8 +2906,12 @@ void SpirvShaderTranslator::StartFragmentShaderBeforeMain() {
        (draw_resolution_scale_x_ > 1 || draw_resolution_scale_y_ > 1 ||
         fragment_coordinates_modification.pixel.sample_space_x_log2 ||
         fragment_coordinates_modification.pixel.sample_space_y_log2);
@@ -14264,7 +14308,7 @@ index d2ea876..d216966 100644
      input_fragment_coordinates_ = builder_->createVariable(spv::NoPrecision, spv::StorageClassInput,
                                                             type_float4_, "gl_FragCoord");
      builder_->addDecoration(input_fragment_coordinates_, spv::DecorationBuiltIn,
-@@ -3171,6 +3175,43 @@ void SpirvShaderTranslator::StartFragmentShaderInMain() {
+@@ -3171,6 +3177,43 @@ void SpirvShaderTranslator::StartFragmentShaderInMain() {
  
    uint32_t param_gen_interpolator = GetPsParamGenInterpolator();
  
@@ -14308,7 +14352,7 @@ index d2ea876..d216966 100644
    // Zero general-purpose registers to prevent crashes when the game
    // references them after only initializing them conditionally, and copy
    // interpolants to GPRs.
-@@ -3179,14 +3220,32 @@ void SpirvShaderTranslator::StartFragmentShaderInMain() {
+@@ -3179,14 +3222,32 @@ void SpirvShaderTranslator::StartFragmentShaderInMain() {
      if (i == param_gen_interpolator) {
        continue;
      }
@@ -14347,7 +14391,7 @@ index d2ea876..d216966 100644
    }
  
    // Pixel parameters.
-@@ -3224,6 +3283,11 @@ void SpirvShaderTranslator::StartFragmentShaderInMain() {
+@@ -3224,6 +3285,11 @@ void SpirvShaderTranslator::StartFragmentShaderInMain() {
        param_gen_x = builder_->createNoContractionBinOp(
            spv::OpFMul, type_float_, param_gen_x,
            builder_->makeFloatConstant(1.0f / float(param_gen_scale_x)));
@@ -14359,7 +14403,7 @@ index d2ea876..d216966 100644
      }
      param_gen_x = builder_->createUnaryBuiltinCall(type_float_, ext_inst_glsl_std_450_,
                                                     GLSLstd450FAbs, param_gen_x);
-@@ -3262,6 +3326,10 @@ void SpirvShaderTranslator::StartFragmentShaderInMain() {
+@@ -3262,6 +3328,10 @@ void SpirvShaderTranslator::StartFragmentShaderInMain() {
        param_gen_y = builder_->createNoContractionBinOp(
            spv::OpFMul, type_float_, param_gen_y,
            builder_->makeFloatConstant(1.0f / float(param_gen_scale_y)));
@@ -14371,7 +14415,7 @@ index d2ea876..d216966 100644
      param_gen_y = builder_->createUnaryBuiltinCall(type_float_, ext_inst_glsl_std_450_,
                                                     GLSLstd450FAbs, param_gen_y);
 diff --git a/src/graphics/pipeline/shader/spirv_translator_fetch.cpp b/src/graphics/pipeline/shader/spirv_translator_fetch.cpp
-index 9ce3bb4..2075487 100644
+index 9ce3bb4..f590aca 100644
 --- a/src/graphics/pipeline/shader/spirv_translator_fetch.cpp
 +++ b/src/graphics/pipeline/shader/spirv_translator_fetch.cpp
 @@ -691,7 +691,8 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
@@ -14384,7 +14428,18 @@ index 9ce3bb4..2075487 100644
        switch (instr.dimension) {
          case xenos::FetchOpDimension::k1D:
            offset_values[0] = instr.attributes.offset_x + kRoundingOffset;
-@@ -1409,8 +1410,7 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
+@@ -813,6 +814,10 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
+           if (instr.attributes.unnormalized_coordinates) {
+             size_needed_components |= 0b0011;
+           }
++          // The face width, for the LOD calculated from the gradients.
++          if (use_computed_lod && features_.cube_lod_from_gradients) {
++            size_needed_components |= 0b0001;
++          }
+           // The size is not needed for face ID offset.
+           size_needed_components &= 0b0011;
+           break;
+@@ -1409,8 +1414,7 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
              builder_->createUnaryOp(spv::OpLogicalNot, type_bool_, is_all_signed);
  
          // Load the fetch constant word 4, needed unconditionally for LOD
@@ -14394,7 +14449,36 @@ index 9ce3bb4..2075487 100644
          id_vector_temp_.clear();
          id_vector_temp_.push_back(const_int_0_);
          id_vector_temp_.push_back(
-@@ -2030,10 +2030,22 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
+@@ -1837,16 +1841,24 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
+           sample_result_signed =
+               if_data_is_3d.createMergePhi(sample_result_signed_3d, sample_result_signed_stacked);
+         } else {
+-          if (use_computed_lod) {
+-            texture_parameters.gradX = gradients_h;
+-            texture_parameters.gradY = gradients_v;
+-          }
+           id_vector_temp_.clear();
+           for (uint32_t i = 0; i < 3; ++i) {
+             id_vector_temp_.push_back(coordinates[i]);
+           }
+           texture_parameters.coords =
+               builder_->createCompositeConstruct(type_float3_, id_vector_temp_);
++          if (use_computed_lod) {
++            if (instr.dimension == xenos::FetchOpDimension::kCube &&
++                features_.cube_lod_from_gradients) {
++              assert_true(size[0] != spv::NoResult);
++              texture_parameters.lod = CubeLodFromGradients(texture_parameters.coords, gradients_h,
++                                                            gradients_v, size[0]);
++              image_operands_mask = spv::ImageOperandsLodMask;
++            } else {
++              texture_parameters.gradX = gradients_h;
++              texture_parameters.gradY = gradients_v;
++            }
++          }
+           SampleTexture(texture_parameters, image_operands_mask, image_2d_array_or_cube_unsigned,
+                         image_2d_array_or_cube_signed, sampler, is_any_unsigned, is_any_signed,
+                         sample_result_unsigned, sample_result_signed);
+@@ -2030,10 +2042,22 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
          }
  
          // Apply the exponent bias from the bits 13:18 of the fetch constant
@@ -14419,7 +14503,95 @@ index 9ce3bb4..2075487 100644
                                    builder_->makeUintConstant(13), builder_->makeUintConstant(6)));
          {
            uint32_t result_remaining_components = used_result_nonzero_components;
-@@ -2246,4 +2258,23 @@ spv::Id SpirvShaderTranslator::QueryTextureLod(spv::Builder::TextureParameters&
+@@ -2177,6 +2201,87 @@ size_t SpirvShaderTranslator::FindOrAddSamplerBinding(uint32_t fetch_constant,
+   return new_sampler_binding_index;
+ }
+ 
++spv::Id SpirvShaderTranslator::CubeLodFromGradients(spv::Id direction, spv::Id gradient_h,
++                                                    spv::Id gradient_v, spv::Id face_size) {
++  // The face is chosen by the major axis ma, and the face coordinates are sc / ma and tc / ma
++  // with sc and tc the two other components, in [-1, 1] across the face. Their gradients come
++  // from the quotient rule, d(sc / ma) = (dsc * ma - sc * dma) / ma^2; the sign of ma does not
++  // matter for the lengths below.
++  auto component = [&](spv::Id vector, uint32_t index) {
++    return builder_->createCompositeExtract(vector, type_float_, index);
++  };
++  auto select = [&](spv::Id condition, spv::Id if_true, spv::Id if_false) {
++    return builder_->createTriOp(spv::OpSelect, type_float_, condition, if_true, if_false);
++  };
++  spv::Id direction_abs =
++      builder_->createUnaryBuiltinCall(type_float3_, ext_inst_glsl_std_450_, GLSLstd450FAbs,
++                                       direction);
++  spv::Id abs_x = component(direction_abs, 0);
++  spv::Id abs_y = component(direction_abs, 1);
++  spv::Id abs_z = component(direction_abs, 2);
++  spv::Id is_x_major = builder_->createBinOp(
++      spv::OpLogicalAnd, type_bool_,
++      builder_->createBinOp(spv::OpFOrdGreaterThanEqual, type_bool_, abs_x, abs_y),
++      builder_->createBinOp(spv::OpFOrdGreaterThanEqual, type_bool_, abs_x, abs_z));
++  spv::Id is_y_major = builder_->createBinOp(
++      spv::OpLogicalAnd, type_bool_, builder_->createUnaryOp(spv::OpLogicalNot, type_bool_,
++                                                            is_x_major),
++      builder_->createBinOp(spv::OpFOrdGreaterThanEqual, type_bool_, abs_y, abs_z));
++  spv::Id is_x_or_y_major =
++      builder_->createBinOp(spv::OpLogicalOr, type_bool_, is_x_major, is_y_major);
++  // Major axis, and the two other axes: (y, z) for X, (x, z) for Y, (x, y) for Z.
++  auto major = [&](spv::Id vector) {
++    return select(is_x_major, component(vector, 0),
++                  select(is_y_major, component(vector, 1), component(vector, 2)));
++  };
++  auto first_minor = [&](spv::Id vector) {
++    return select(is_x_major, component(vector, 1), component(vector, 0));
++  };
++  auto second_minor = [&](spv::Id vector) {
++    return select(is_x_or_y_major, component(vector, 2), component(vector, 1));
++  };
++  spv::Id ma = major(direction);
++  spv::Id sc = first_minor(direction);
++  spv::Id tc = second_minor(direction);
++  // A zero direction has no face; keep the division finite.
++  spv::Id ma_squared = builder_->createBinBuiltinCall(
++      type_float_, ext_inst_glsl_std_450_, GLSLstd450NMax,
++      builder_->createNoContractionBinOp(spv::OpFMul, type_float_, ma, ma),
++      builder_->makeFloatConstant(1.0e-30f));
++  // Squared length of the face coordinate gradient along one screen axis.
++  auto face_gradient_length_squared = [&](spv::Id gradient) {
++    spv::Id gradient_ma = major(gradient);
++    auto face_derivative = [&](spv::Id coordinate, spv::Id gradient_coordinate) {
++      spv::Id numerator = builder_->createNoContractionBinOp(
++          spv::OpFSub, type_float_,
++          builder_->createNoContractionBinOp(spv::OpFMul, type_float_, gradient_coordinate, ma),
++          builder_->createNoContractionBinOp(spv::OpFMul, type_float_, coordinate, gradient_ma));
++      return builder_->createNoContractionBinOp(spv::OpFDiv, type_float_, numerator, ma_squared);
++    };
++    spv::Id ds = face_derivative(sc, first_minor(gradient));
++    spv::Id dt = face_derivative(tc, second_minor(gradient));
++    return builder_->createNoContractionBinOp(
++        spv::OpFAdd, type_float_, builder_->createNoContractionBinOp(spv::OpFMul, type_float_, ds, ds),
++        builder_->createNoContractionBinOp(spv::OpFMul, type_float_, dt, dt));
++  };
++  spv::Id length_squared = builder_->createBinBuiltinCall(
++      type_float_, ext_inst_glsl_std_450_, GLSLstd450NMax,
++      face_gradient_length_squared(gradient_h), face_gradient_length_squared(gradient_v));
++  // The face coordinates span 2 across face_size texels: texels = 0.5 * face_size * length.
++  spv::Id half_size = builder_->createNoContractionBinOp(spv::OpFMul, type_float_, face_size,
++                                                         builder_->makeFloatConstant(0.5f));
++  spv::Id texel_length_squared = builder_->createNoContractionBinOp(
++      spv::OpFMul, type_float_, length_squared,
++      builder_->createNoContractionBinOp(spv::OpFMul, type_float_, half_size, half_size));
++  // log2(sqrt(x)) = 0.5 * log2(x); a zero gradient gives the most detailed level after clamping.
++  spv::Id log2_length_squared = builder_->createUnaryBuiltinCall(
++      type_float_, ext_inst_glsl_std_450_, GLSLstd450Log2,
++      builder_->createBinBuiltinCall(type_float_, ext_inst_glsl_std_450_, GLSLstd450NMax,
++                                     texel_length_squared, builder_->makeFloatConstant(1.0e-30f)));
++  return builder_->createNoContractionBinOp(spv::OpFMul, type_float_, log2_length_squared,
++                                            builder_->makeFloatConstant(0.5f));
++}
++
+ void SpirvShaderTranslator::SampleTexture(spv::Builder::TextureParameters& texture_parameters,
+                                           spv::ImageOperandsMask image_operands_mask,
+                                           spv::Id image_unsigned, spv::Id image_signed,
+@@ -2246,4 +2351,23 @@ spv::Id SpirvShaderTranslator::QueryTextureLod(spv::Builder::TextureParameters&
    return if_signed.createMergePhi(lod_signed, lod_unsigned);
  }
  
@@ -15981,6 +16153,81 @@ index 4e7ad78..dc26143 100644
      }
    }
  }
+diff --git a/src/graphics/vulkan/texture_cache.cpp b/src/graphics/vulkan/texture_cache.cpp
+index f3528ee..b500271 100644
+--- a/src/graphics/vulkan/texture_cache.cpp
++++ b/src/graphics/vulkan/texture_cache.cpp
+@@ -318,9 +318,13 @@ const VulkanTextureCache::HostFormatPair VulkanTextureCache::kBestHostFormats[64
+     {{kLoadShaderIndexUnknown}, {kLoadShaderIndexUnknown}, xenos::XE_GPU_TEXTURE_SWIZZLE_RGGG},
+     // k_DXN
+     // VK_FORMAT_BC5_UNORM_BLOCK is optional.
++    // Signed: titles sample normal maps as signed DXN (Gears of War 3 does). The guest decodes the
++    // block as unsigned bytes and reads each byte as two's complement, which is what an SNORM view
++    // of the decompressed bytes does; BC5_SNORM would interpolate the endpoints as signed instead.
+     {{kLoadShaderIndex128bpb, VK_FORMAT_BC5_UNORM_BLOCK, true},
+-     {kLoadShaderIndexUnknown},
+-     xenos::XE_GPU_TEXTURE_SWIZZLE_RGGG},
++     {kLoadShaderIndexDXNToRG8, VK_FORMAT_R8G8_SNORM},
++     xenos::XE_GPU_TEXTURE_SWIZZLE_RGGG,
++     true},
+     // k_8_8_8_8_AS_16_16_16_16
+     {{kLoadShaderIndex32bpb, VK_FORMAT_R8G8B8A8_UNORM},
+      {kLoadShaderIndex32bpb, VK_FORMAT_R8G8B8A8_SNORM},
+@@ -366,9 +370,11 @@ const VulkanTextureCache::HostFormatPair VulkanTextureCache::kBestHostFormats[64
+      xenos::XE_GPU_TEXTURE_SWIZZLE_RRRR},
+     // k_DXT5A
+     // VK_FORMAT_BC4_UNORM_BLOCK is optional.
++    // Signed: an SNORM view of the decompressed bytes, as for k_DXN.
+     {{kLoadShaderIndex64bpb, VK_FORMAT_BC4_UNORM_BLOCK, true},
+-     {kLoadShaderIndexUnknown},
+-     xenos::XE_GPU_TEXTURE_SWIZZLE_RRRR},
++     {kLoadShaderIndexDXT5AToR8, VK_FORMAT_R8_SNORM},
++     xenos::XE_GPU_TEXTURE_SWIZZLE_RRRR,
++     true},
+     // k_CTX1
+     {{kLoadShaderIndexCTX1, VK_FORMAT_R8G8_UNORM},
+      {kLoadShaderIndexUnknown},
+@@ -422,15 +428,15 @@ const VulkanTextureCache::HostFormatPair VulkanTextureCache::kHostFormatDXT4_5Un
+ 
+ const VulkanTextureCache::HostFormatPair VulkanTextureCache::kHostFormatDXNUnaligned = {
+     {kLoadShaderIndexDXNToRG8, VK_FORMAT_R8G8_UNORM, false, true},
+-    {kLoadShaderIndexUnknown},
++    {kLoadShaderIndexDXNToRG8, VK_FORMAT_R8G8_SNORM, false, true},
+     xenos::XE_GPU_TEXTURE_SWIZZLE_RGGG,
+-    false};
++    true};
+ 
+ const VulkanTextureCache::HostFormatPair VulkanTextureCache::kHostFormatDXT5AUnaligned = {
+     {kLoadShaderIndexDXT5AToR8, VK_FORMAT_R8_UNORM, false, true},
+-    {kLoadShaderIndexUnknown},
++    {kLoadShaderIndexDXT5AToR8, VK_FORMAT_R8_SNORM, false, true},
+     xenos::XE_GPU_TEXTURE_SWIZZLE_RRRR,
+-    false};
++    true};
+ 
+ VulkanTextureCache::~VulkanTextureCache() {
+   const ui::vulkan::VulkanDevice* const vulkan_device = command_processor_.GetVulkanDevice();
+@@ -2511,8 +2517,9 @@ bool VulkanTextureCache::Initialize() {
+     host_format_dxt5a.format_unsigned.block_compressed = false;
+   }
+   // Keep signed format support aligned with D3D12 for texture formats where
+-  // D3D12 doesn't expose signed sampling paths.
+-  constexpr std::array<xenos::TextureFormat, 19> kD3D12SignedUnsupportedFormats = {
++  // D3D12 doesn't expose signed sampling paths. k_DXN and k_DXT5A are not in the
++  // list: titles sample them as signed, through SNORM views of the decompressed data.
++  constexpr std::array<xenos::TextureFormat, 17> kD3D12SignedUnsupportedFormats = {
+       xenos::TextureFormat::k_1_5_5_5,
+       xenos::TextureFormat::k_5_6_5,
+       xenos::TextureFormat::k_6_5_5,
+@@ -2523,8 +2530,6 @@ bool VulkanTextureCache::Initialize() {
+       xenos::TextureFormat::k_DXT1,
+       xenos::TextureFormat::k_DXT2_3,
+       xenos::TextureFormat::k_DXT4_5,
+-      xenos::TextureFormat::k_DXN,
+-      xenos::TextureFormat::k_DXT5A,
+       xenos::TextureFormat::k_CTX1,
+       xenos::TextureFormat::k_DXT1_AS_16_16_16_16,
+       xenos::TextureFormat::k_DXT2_3_AS_16_16_16_16,
 diff --git a/src/input/input_system.cpp b/src/input/input_system.cpp
 index c9f7ed6..bf37992 100644
 --- a/src/input/input_system.cpp
