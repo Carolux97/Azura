@@ -5,6 +5,7 @@
 
 mod achievements;
 mod builder;
+mod disc_image;
 mod game_folder;
 mod install;
 #[cfg(test)]
@@ -39,6 +40,15 @@ use versions::Registry;
 #[tauri::command]
 async fn pick_game_folder(app: tauri::AppHandle) -> Option<FolderCheck> {
     let picked = app.dialog().file().blocking_pick_folder()?;
+    let path = picked.into_path().ok()?;
+    Some(game_folder::check_folder(&path, &Registry::bundled()))
+}
+
+/// Opens the native file picker for a disc image (`.iso`) of the game and checks it. Returns
+/// `None` when the user cancels. `async` for the same reason as `pick_game_folder`.
+#[tauri::command]
+async fn pick_game_image(app: tauri::AppHandle) -> Option<FolderCheck> {
+    let picked = app.dialog().file().add_filter("Xbox 360 disc image", &["iso"]).blocking_pick_file()?;
     let path = picked.into_path().ok()?;
     Some(game_folder::check_folder(&path, &Registry::bundled()))
 }
@@ -406,6 +416,7 @@ pub fn run() {
         .manage(GameProcess::default())
         .invoke_handler(tauri::generate_handler![
             pick_game_folder,
+            pick_game_image,
             check_game_folder,
             load_settings,
             save_settings,

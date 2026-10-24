@@ -1,8 +1,9 @@
-//! Finds and checks the folder that holds the user's copy of the game.
+//! Finds and checks the user's copy of the game: a folder, or a disc image (`.iso`).
 //!
 //! A valid folder contains `default.xex`, the Xbox 360 executable the runtime recompiles. Users
 //! often pick the folder one level above it (the one that holds the dump), so the immediate
-//! subfolders are searched too.
+//! subfolders are searched too. A disc image holds the same files in its own file system
+//! (`disc_image.rs`); they are read from it in place, and the runtime mounts the image itself.
 //!
 //! The executable is checked in three steps:
 //! 1. its XEX2 header is read, as laid out in the ReXGlue SDK (`rex/system/util/xex2_info.h`):
@@ -22,6 +23,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+use crate::disc_image::DiscImage;
 use crate::versions::Registry;
 
 /// Name of the game executable inside the game folder.
@@ -61,11 +63,12 @@ pub enum XexError {
     NoExecutionInfo,
 }
 
-/// Result of checking a folder, sent to the interface as JSON (`{"status": "ok", ...}`).
+/// Result of checking a folder or disc image, sent to the interface as JSON
+/// (`{"status": "ok", ...}`).
 ///
 /// Every variant carries `folder` so the interface can always show which path the result is about.
-/// `folder` is where `default.xex` was found (possibly a subfolder of the one picked), or the path
-/// that was checked when it was not found. IDs are uppercase hex, as the Xbox tools show them.
+/// `folder` is where `default.xex` was found (possibly a subfolder of the one picked, or the disc
+/// image itself), or the path that was checked when it was not found. IDs are uppercase hex, as the Xbox tools show them.
 /// `languages` lists the game's language codes found in the folder (for example `["INT", "FRA"]`).
 #[derive(Debug, Serialize, PartialEq, Eq)]
 #[serde(tag = "status", rename_all = "camelCase")]
@@ -91,8 +94,12 @@ pub enum FolderCheck {
     /// A valid Xbox 360 executable of another game.
     #[serde(rename_all = "camelCase")]
     WrongGame { folder: String, title_id: String },
-    /// The path does not exist or is not a folder.
+    /// The path does not exist, or is neither a folder nor a file.
     NotADirectory { folder: String },
+    /// A file that is not an Xbox 360 disc image, or a damaged one.
+    NotADiscImage { folder: String },
+    /// A disc image without `default.xex` at its root.
+    MissingXexInImage { folder: String },
     /// Neither the folder nor its immediate subfolders contain `default.xex`.
     MissingXex { folder: String },
     /// `default.xex` exists but is not a readable Xbox 360 executable.
@@ -146,11 +153,12 @@ fn read_xex_info(path: &Path) -> Option<XexInfo> {
 fn sha256_file(path: &Path) -> io::Result<String> {
     let mut hasher = Sha256::new();
     io::copy(&mut File::open(path)?, &mut hasher)?;
-    Ok(hasher
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect())
+    Ok(hex(&hasher.finalize()))
+}
+
+/// Bytes as lowercase hex.
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// Language codes of the `Coalesced_<LANG>.bin` bundles in the game folder, sorted. Empty when
@@ -159,10 +167,13 @@ fn find_languages(game_folder: &Path) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(game_folder.join(COOKED_DIR)) else {
         return Vec::new();
     };
-    let mut languages: Vec<String> = entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let name = entry.file_name().into_string().ok()?;
+    languages_of(entries.filter_map(Result::ok).filter_map(|entry| entry.file_name().into_string().ok()))
+}
+
+/// Language codes of the `Coalesced_<LANG>.bin` names among `names`, uppercase and sorted.
+fn languages_of(names: impl Iterator<Item = String>) -> Vec<String> {
+    let mut languages: Vec<String> = names
+        .filter_map(|name| {
             let code = name.strip_prefix("Coalesced_")?.strip_suffix(".bin")?;
             Some(code.to_ascii_uppercase())
         })
@@ -189,19 +200,78 @@ fn find_xex_folder(dir: &Path) -> Option<PathBuf> {
         .find(|path| path.join(XEX_FILE_NAME).is_file())
 }
 
-/// Checks a folder picked by the user (or remembered from a previous run) against the registry
-/// of known builds.
+/// Checks a folder or disc image picked by the user (or remembered from a previous run) against
+/// the registry of known builds.
 pub fn check_folder(dir: &Path, registry: &Registry) -> FolderCheck {
     let display = |path: &Path| path.to_string_lossy().into_owned();
+    if dir.is_file() {
+        return check_disc_image(dir, registry);
+    }
     if !dir.is_dir() {
         return FolderCheck::NotADirectory { folder: display(dir) };
     }
     let Some(game_folder) = find_xex_folder(dir) else {
         return FolderCheck::MissingXex { folder: display(dir) };
     };
-    let folder = display(&game_folder);
     let xex_path = game_folder.join(XEX_FILE_NAME);
-    let Some(info) = read_xex_info(&xex_path) else {
+    let languages = find_languages(&game_folder);
+    identify(display(&game_folder), read_xex_info(&xex_path), languages, || sha256_file(&xex_path), registry)
+}
+
+/// Checks a disc image: the same checks as a folder's, on the files read from the image.
+fn check_disc_image(path: &Path, registry: &Registry) -> FolderCheck {
+    let folder = path.to_string_lossy().into_owned();
+    let mut image = match DiscImage::open(path) {
+        Ok(Some(image)) => image,
+        Ok(None) | Err(_) => return FolderCheck::NotADiscImage { folder },
+    };
+    let xex = match image.find(XEX_FILE_NAME) {
+        Ok(Some(xex)) if !xex.is_directory => xex,
+        Ok(_) => return FolderCheck::MissingXexInImage { folder },
+        Err(_) => return FolderCheck::NotADiscImage { folder },
+    };
+    let info = image.open_file(&xex).ok().and_then(|reader| {
+        let mut bytes = Vec::new();
+        reader.take(MAX_HEADER_BYTES).read_to_end(&mut bytes).ok()?;
+        parse_xex_header(&bytes).ok()
+    });
+    let cooked = match image.find(COOKED_DIR) {
+        Ok(Some(cooked)) if cooked.is_directory => image.list(&cooked).unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    let languages = languages_of(cooked.into_iter().map(|entry| entry.name));
+    let hash = || -> io::Result<String> {
+        let mut hasher = Sha256::new();
+        io::copy(&mut image.open_file(&xex)?, &mut hasher)?;
+        Ok(hex(&hasher.finalize()))
+    };
+    identify(folder, info, languages, hash, registry)
+}
+
+/// Copies `default.xex` out of a disc image to `destination`, for the code generator, which reads
+/// the executable from a file.
+pub fn copy_xex_from_image(image: &Path, destination: &Path) -> io::Result<()> {
+    let mut image = DiscImage::open(image)?
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "not an Xbox 360 disc image"))?;
+    let xex = image
+        .find(XEX_FILE_NAME)?
+        .filter(|xex| !xex.is_directory)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "the disc image has no default.xex"))?;
+    io::copy(&mut image.open_file(&xex)?, &mut File::create(destination)?)?;
+    Ok(())
+}
+
+/// The checks after `default.xex` was found, the same for a folder and a disc image: its header
+/// (`info`), the title ID, then the hash (`hash`, read only for the game's own title ID, since it
+/// reads the whole executable) against the known builds.
+fn identify(
+    folder: String,
+    info: Option<XexInfo>,
+    languages: Vec<String>,
+    hash: impl FnOnce() -> io::Result<String>,
+    registry: &Registry,
+) -> FolderCheck {
+    let Some(info) = info else {
         return FolderCheck::InvalidXex { folder };
     };
 
@@ -211,8 +281,7 @@ pub fn check_folder(dir: &Path, registry: &Registry) -> FolderCheck {
     }
 
     let media_id = format!("{:08X}", info.media_id);
-    let languages = find_languages(&game_folder);
-    let Ok(hash) = sha256_file(&xex_path) else {
+    let Ok(hash) = hash() else {
         return FolderCheck::InvalidXex { folder };
     };
     match registry.find_by_hash(&hash) {
@@ -325,6 +394,55 @@ mod tests {
                 languages: vec!["INT".into(), "RUS".into()],
             }
         );
+    }
+
+    #[test]
+    fn recognises_a_known_build_in_a_disc_image() {
+        use crate::disc_image::test_image::{write, Node};
+        let dir = temp_folder("known-image");
+        let xex = sample_header(TEST_TITLE_ID, 0x0000_0001);
+        let image = dir.join("Gears of War 3.iso");
+        write(&image, 0, &[
+            Node::File("default.xex", xex.clone()),
+            Node::Directory(
+                "GearGame",
+                vec![Node::Directory(
+                    "CookedXbox360",
+                    vec![Node::File("Coalesced_RUS.bin", vec![1]), Node::File("Coalesced_INT.bin", vec![1])],
+                )],
+            ),
+        ]);
+        assert_eq!(
+            check_folder(&image, &registry_for(&xex)),
+            FolderCheck::Ok {
+                folder: image.to_string_lossy().into_owned(),
+                title_id: "4D5308AB".into(),
+                media_id: "00000001".into(),
+                version_id: "test".into(),
+                version_name: "Test".into(),
+                languages: vec!["INT".into(), "RUS".into()],
+            }
+        );
+        let copied = dir.join("default.xex");
+        copy_xex_from_image(&image, &copied).unwrap();
+        assert_eq!(std::fs::read(&copied).unwrap(), xex);
+    }
+
+    #[test]
+    fn reports_a_file_that_is_not_a_game_image() {
+        use crate::disc_image::test_image::{write, Node};
+        let dir = temp_folder("bad-image");
+        let other = dir.join("notes.txt");
+        std::fs::write(&other, b"not a disc").unwrap();
+        let folder = |path: &Path| path.to_string_lossy().into_owned();
+        assert_eq!(check_folder(&other, &registry_for(b"")), FolderCheck::NotADiscImage { folder: folder(&other) });
+        let without_xex = dir.join("other.iso");
+        write(&without_xex, 0, &[Node::File("readme.txt", b"hi".to_vec())]);
+        assert_eq!(
+            check_folder(&without_xex, &registry_for(b"")),
+            FolderCheck::MissingXexInImage { folder: folder(&without_xex) }
+        );
+        assert!(copy_xex_from_image(&without_xex, &dir.join("default.xex")).is_err());
     }
 
     #[test]
