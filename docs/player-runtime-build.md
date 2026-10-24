@@ -140,6 +140,31 @@ After the game folder is checked (`game_folder.rs` already identifies the build 
 The work folder keeps the objects (216 MB) for updates; the generated C++ (234 MB) is deleted after
 each build, since codegen writes it again when needed.
 
+### The game: a folder or a disc image
+
+The player picks either the folder of their dump or its disc image (`.iso`), or drops either on
+the Installation view. A disc image is used in place, never extracted:
+
+- **The check.** `disc_image.rs` reads the image's file system (XDVDFS: the volume descriptor at
+  sector 32 of the game partition, then directory tables that are binary trees of entries), at the
+  same partition offsets the SDK's `DiscImageDevice` tries, so it takes both an image of the game
+  partition alone and a full dump of the disc. `game_folder.rs` then runs the same checks as for
+  a folder on the files read from it: the XEX2 header, the title ID, the SHA-256 of `default.xex`
+  against `versions.toml`, and the languages. `versions.toml` needs nothing new, since the hash is
+  the executable's.
+- **The build.** Codegen reads only `game/default.xex`: for a disc image, `game/` in the work
+  folder holds that file copied out of the image (about 20 MB) instead of being a link to the
+  game folder.
+- **The runtime.** `game_data_root` (the launcher passes it as `--game_data_root`) may name the
+  image. An SDK patch makes `Runtime::SetupVfs` mount a file with the SDK's `DiscImageDevice`,
+  which maps the image and reads the game's files from it, and a folder with `HostPathDevice` as
+  before; `ReXApp::ConstructRuntime` accepts either. The achievement export takes the image too.
+
+Extracting the image to a folder was set aside: it costs the game's size again on disk (7.3 GB for
+this game) and minutes of copying, for a runtime that can read the image as the console read the
+disc. Reading a disc image breaks no protection: it is the game's own file system, and
+`default.xex` is processed exactly as from a folder.
+
 ### Progress
 
 While the runtime is built, a card under the button shows the step, a bar with the percentage of
@@ -250,3 +275,6 @@ Card 72 built phases 1 to 6 in one pull request
 6. **Updates by build and link keys,** with the per-object keys (section 7).
 7. **Linux** is still open: the measurements and checks of section 10, by Juan Llorca Martínez,
    before phases 4 and 5 are closed on Linux.
+
+Card 33 added the game as a disc image (section 5): `disc_image.rs`, the check and the build in
+the launcher, and the SDK patch that mounts the image in the runtime.
