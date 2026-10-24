@@ -55,9 +55,17 @@ commands to build it, which the launcher runs with the machine's compiler. Insta
 Installation view, or Play when nothing is installed, does it: codegen with the kit's code
 generator in `build/<game build>/` under the app data folder, the generated files compiled one per
 core, the link, and the new runtime folder swapped in by renames, keeping the player's
-`azura.toml` and logs. Each object is reused while its key matches (its source, the command and the
-generated headers the compiler reported it used), so an interrupted build resumes and a second one
-only runs codegen and the link. Progress arrives as `runtime-build-progress` events.
+`azura.toml` and logs. Each object is reused while its key matches (its source, the command, the
+compiler and the generated headers the compiler reported it used), so an interrupted build
+resumes. Progress arrives as `runtime-build-progress` events.
+
+Updates: `build/<game build>/state.json` records the kit's keys, the game executable's hash, the
+compiler and the objects the installed runtime was linked from. When a newer kit only changes what
+the link uses (our code, the SDK libraries, the staged files) and the objects are still there, the
+runtime is linked again from them in under a second; when the generated code depends on what
+changed (the code generator, the manifest, the headers, the commands), or the game or the compiler
+changed, it is built again, compiling only the files whose key changed. The Installation view says
+which an update takes, and Play installs it before starting the game.
 
 Where the runtime comes from, in order: `AZURA_RUNTIME_BUILD` (a build folder, copied),
 `AZURA_KIT` (a kit folder, built from), a project build when the launcher runs from a checkout

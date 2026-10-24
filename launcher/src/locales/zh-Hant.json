@@ -98,7 +98,10 @@
     "compilerInstalling": "正在安裝編譯器…",
     "compilerWaitingApple": "請依照 Apple 的視窗安裝 Command Line Tools。安裝完成後，啟動器會自動繼續。",
     "compilerCheckAgain": "重新檢查",
-    "compilerManual": "或在終端機中執行："
+    "compilerManual": "或在終端機中執行：",
+    "runtimeNotBuilt": "尚未建置：第一次從你的遊戲副本建置需要幾分鐘。",
+    "runtimeUpdateLink": "有可用的更新：幾秒內即可安裝。",
+    "runtimeUpdateBuild": "更新需要重新建置遊戲：約兩分鐘。"
   },
   "graphics": {
     "title": "圖形",

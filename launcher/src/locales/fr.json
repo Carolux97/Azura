@@ -98,7 +98,10 @@
     "compilerInstalling": "Installation du compilateur…",
     "compilerWaitingApple": "Suivez la fenêtre d'Apple pour installer les Command Line Tools. Le launcher continue tout seul une fois installées.",
     "compilerCheckAgain": "Vérifier à nouveau",
-    "compilerManual": "Ou exécutez ceci dans un terminal :"
+    "compilerManual": "Ou exécutez ceci dans un terminal :",
+    "runtimeNotBuilt": "Pas encore construit : la première construction à partir de votre copie du jeu prend quelques minutes.",
+    "runtimeUpdateLink": "Une mise à jour est prête : elle s'installe en quelques secondes.",
+    "runtimeUpdateBuild": "Une mise à jour demande de reconstruire le jeu : environ deux minutes."
   },
   "graphics": {
     "title": "Graphismes",

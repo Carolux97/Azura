@@ -98,7 +98,10 @@
     "compilerInstalling": "Instalace kompilátoru…",
     "compilerWaitingApple": "Postupujte podle okna Applu a nainstalujte Command Line Tools. Launcher po instalaci sám pokračuje.",
     "compilerCheckAgain": "Zkontrolovat znovu",
-    "compilerManual": "Nebo spusťte v terminálu:"
+    "compilerManual": "Nebo spusťte v terminálu:",
+    "runtimeNotBuilt": "Zatím nesestaveno: první sestavení z vaší kopie hry trvá několik minut.",
+    "runtimeUpdateLink": "Je připravena aktualizace: nainstaluje se za pár sekund.",
+    "runtimeUpdateBuild": "Aktualizace vyžaduje znovu sestavit hru: asi dvě minuty."
   },
   "graphics": {
     "title": "Grafika",

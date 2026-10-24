@@ -98,7 +98,10 @@
     "compilerInstalling": "コンパイラをインストールしています…",
     "compilerWaitingApple": "Apple のウインドウに従って Command Line Tools をインストールしてください。インストール後、ランチャーは自動で続行します。",
     "compilerCheckAgain": "再確認",
-    "compilerManual": "またはターミナルで次を実行:"
+    "compilerManual": "またはターミナルで次を実行:",
+    "runtimeNotBuilt": "まだビルドされていません: お持ちのゲームからの初回ビルドには数分かかります。",
+    "runtimeUpdateLink": "更新があります: 数秒でインストールされます。",
+    "runtimeUpdateBuild": "更新にはゲームの再ビルドが必要です: 約 2 分。"
   },
   "graphics": {
     "title": "グラフィック",
