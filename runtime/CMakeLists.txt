@@ -21,7 +21,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # (target rexglue) there, runs codegen with it and configures again, and azura_host and the tests
 # build without any game files.
 set(AZURA_REXGLUE_CMAKE ${CMAKE_CURRENT_SOURCE_DIR}/generated/rexglue.cmake)
-if(EXISTS ${AZURA_REXGLUE_CMAKE})
+option(AZURA_KIT_PROBE "Configure the probes the player kit records its build commands from (scripts/build-kit.sh)" OFF)
+if(AZURA_KIT_PROBE)
+    # The player kit is built against the patched SDK as installed, the form it ships in, and
+    # never with generated code, even where codegen has run.
+    find_package(rexglue 0.10.0 CONFIG REQUIRED)
+elseif(EXISTS ${AZURA_REXGLUE_CMAKE})
     include(${AZURA_REXGLUE_CMAKE})
 elseif(REXSDK_DIR)
     add_subdirectory(${REXSDK_DIR} rexglue-sdk)
@@ -114,10 +119,94 @@ if(REXSDK_DIR)
     add_test(NAME azura_prompts_tests COMMAND azura_prompts_tests)
 endif()
 
+# The SDK stages MoltenVK's ICD file from ${REXGLUE_ROOT}/cmake, a variable only the packaged SDK
+# defines. When the SDK is built from source, its source tree is that root.
+if(REXSDK_DIR AND NOT REXGLUE_ROOT)
+    set(REXGLUE_ROOT ${REXSDK_DIR})
+endif()
+
+# What a runtime executable needs besides the SDK's own set-up (rexglue_configure_target): AppKit
+# on macOS, our patched MoltenVK, and our files beside it. Shared by azura and the kit probe, so
+# the player kit stages exactly what this build does.
+function(azura_configure_runtime target)
+    if(APPLE)
+        target_link_libraries(${target} PRIVATE "-framework Cocoa")
+    endif()
+
+    # The SDK copies MoltenVK into vulkan/lib in the target's POST_BUILD step, which only runs
+    # when the target relinks. We patch MoltenVK (see scripts/build_moltenvk.sh and patches/), so
+    # re-copy it on every build whether we are using the source SDK (MoltenVK::MoltenVK) or the
+    # prebuilt SDK (rex::moltenvk).
+    if(TARGET MoltenVK::MoltenVK)
+        set(moltenvk MoltenVK::MoltenVK)
+    elseif(TARGET rex::moltenvk)
+        set(moltenvk rex::moltenvk)
+    endif()
+    if(moltenvk)
+        add_custom_target(${target}_stage_moltenvk ALL
+            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${target}>/vulkan/lib"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "$<TARGET_FILE:${moltenvk}>"
+                "$<TARGET_FILE_DIR:${target}>/vulkan/lib/libMoltenVK.dylib"
+            COMMENT "Staging MoltenVK next to the executable"
+            VERBATIM)
+        add_dependencies(${target}_stage_moltenvk ${target})
+    endif()
+
+    # The runtime loads its settings from azura.toml beside the executable. The documented
+    # defaults are installed next to it as azura.default.toml on every build; the user's
+    # azura.toml is never touched by the build.
+    add_custom_command(TARGET ${target} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CMAKE_CURRENT_SOURCE_DIR}/config/azura.default.toml
+                $<TARGET_FILE_DIR:${target}>/azura.default.toml
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CMAKE_CURRENT_SOURCE_DIR}/config/gamecontrollerdb.txt
+                $<TARGET_FILE_DIR:${target}>/gamecontrollerdb.txt
+        COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:${target}>/assets
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CMAKE_CURRENT_SOURCE_DIR}/assets/azura-icon.png
+                $<TARGET_FILE_DIR:${target}>/assets/azura-icon.png
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CMAKE_CURRENT_SOURCE_DIR}/assets/azura-icon.icns
+                $<TARGET_FILE_DIR:${target}>/assets/azura-icon.icns
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                ${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts
+                $<TARGET_FILE_DIR:${target}>/assets/fonts
+        COMMENT "Installing azura.default.toml, gamecontrollerdb.txt and assets beside the executable")
+    if(APPLE)
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND osascript -l JavaScript -e
+                    "ObjC.import('AppKit');
+                     var img = $.NSImage.alloc.initWithContentsOfFile('$<TARGET_FILE_DIR:${target}>/assets/azura-icon.png');
+                     if (img) $.NSWorkspace.sharedWorkspace.setIconForFileOptions(img, '$<TARGET_FILE:${target}>', 0);"
+            COMMENT "Setting macOS icon on the runtime executable"
+            VERBATIM)
+    endif()
+endfunction()
+
+# The probes of the player kit (scripts/build-kit.sh), which has to build the runtime on a machine
+# with the player's generated code and no CMake. They are never built: the kit records the
+# commands CMake would run for them. azura_kit_recomp is one source configured exactly as the
+# generated code is (rexglue_add_recomp_library), and azura_kit_probe an executable configured
+# exactly as azura is, linking azura_host and that source.
+if(AZURA_KIT_PROBE)
+    rexglue_add_recomp_library(azura_kit_recomp
+        SOURCES tools/kit/recomp_probe.cpp
+        INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/tools/kit)
+    add_executable(azura_kit_probe EXCLUDE_FROM_ALL)
+    target_link_libraries(azura_kit_probe PRIVATE azura_kit_recomp)
+    rexglue_configure_target(azura_kit_probe GPU_PLUGINS xenos HOST_OBJECTS azura_host)
+    azura_configure_runtime(azura_kit_probe)
+    if(TARGET azura_kit_probe_stage_moltenvk)
+        set_target_properties(azura_kit_probe_stage_moltenvk PROPERTIES EXCLUDE_FROM_ALL TRUE)
+    endif()
+endif()
+
 # Everything below links our code with the generated code, which needs codegen to have run.
-if(NOT EXISTS ${AZURA_REXGLUE_CMAKE})
-    message(STATUS "generated/rexglue.cmake not found: only the SDK, our code (azura_host) and the "
-                   "tests are configured")
+if(AZURA_KIT_PROBE OR NOT EXISTS ${AZURA_REXGLUE_CMAKE})
+    message(STATUS "No generated code (or a kit probe build): only the SDK, our code (azura_host) "
+                   "and the tests are configured")
     return()
 endif()
 
@@ -125,70 +214,12 @@ endif()
 # sources of its own.
 add_executable(azura)
 
-# The SDK stages MoltenVK's ICD file from ${REXGLUE_ROOT}/cmake, a variable only the packaged SDK
-# defines. When the SDK is built from source, its source tree is that root.
-if(REXSDK_DIR AND NOT REXGLUE_ROOT)
-    set(REXGLUE_ROOT ${REXSDK_DIR})
-endif()
-
 # GPU_PLUGINS xenos stages librexgpu-xenos.dylib next to the executable; on macOS the SDK also
 # stages the Vulkan loader and MoltenVK. HOST_OBJECTS links azura_host instead of compiling the
 # SDK's host sources into the executable again.
 rexglue_setup_target(azura GPU_PLUGINS xenos HOST_OBJECTS azura_host)
-if(APPLE)
-    target_link_libraries(azura PRIVATE "-framework Cocoa")
-endif()
-
-# The SDK copies MoltenVK into vulkan/lib in azura's POST_BUILD step, which only runs when azura
-# relinks. We patch MoltenVK (see scripts/build_moltenvk.sh and patches/), so re-copy it on every
-# build whether we are using the source SDK (MoltenVK::MoltenVK) or the prebuilt SDK (rex::moltenvk).
-if(TARGET MoltenVK::MoltenVK)
-    set(AZURA_MOLTENVK_TARGET MoltenVK::MoltenVK)
-elseif(TARGET rex::moltenvk)
-    set(AZURA_MOLTENVK_TARGET rex::moltenvk)
-endif()
-if(AZURA_MOLTENVK_TARGET)
-    add_custom_target(azura_stage_moltenvk ALL
-        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:azura>/vulkan/lib"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "$<TARGET_FILE:${AZURA_MOLTENVK_TARGET}>"
-            "$<TARGET_FILE_DIR:azura>/vulkan/lib/libMoltenVK.dylib"
-        COMMENT "Staging MoltenVK next to the executable"
-        VERBATIM)
-    add_dependencies(azura_stage_moltenvk azura)
-endif()
+azura_configure_runtime(azura)
 
 if(REXSDK_DIR AND EXISTS "${AZURA_COMPAT_INCLUDE}" AND TARGET azura_recomp)
     target_include_directories(azura_recomp PRIVATE "${AZURA_COMPAT_INCLUDE}")
-endif()
-
-# The runtime loads its settings from azura.toml beside the executable. The documented defaults
-# are installed next to it as azura.default.toml on every build; the user's azura.toml is never
-# touched by the build.
-add_custom_command(TARGET azura POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${CMAKE_CURRENT_SOURCE_DIR}/config/azura.default.toml
-            $<TARGET_FILE_DIR:azura>/azura.default.toml
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${CMAKE_CURRENT_SOURCE_DIR}/config/gamecontrollerdb.txt
-            $<TARGET_FILE_DIR:azura>/gamecontrollerdb.txt
-    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:azura>/assets
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${CMAKE_CURRENT_SOURCE_DIR}/assets/azura-icon.png
-            $<TARGET_FILE_DIR:azura>/assets/azura-icon.png
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${CMAKE_CURRENT_SOURCE_DIR}/assets/azura-icon.icns
-            $<TARGET_FILE_DIR:azura>/assets/azura-icon.icns
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-            ${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts
-            $<TARGET_FILE_DIR:azura>/assets/fonts
-    COMMENT "Installing azura.default.toml, gamecontrollerdb.txt and assets beside the executable")
-if(APPLE)
-    add_custom_command(TARGET azura POST_BUILD
-        COMMAND osascript -l JavaScript -e
-                "ObjC.import('AppKit');
-                 var img = $.NSImage.alloc.initWithContentsOfFile('$<TARGET_FILE_DIR:azura>/assets/azura-icon.png');
-                 if (img) $.NSWorkspace.sharedWorkspace.setIconForFileOptions(img, '$<TARGET_FILE:azura>', 0);"
-        COMMENT "Setting macOS icon on the runtime executable"
-        VERBATIM)
 endif()

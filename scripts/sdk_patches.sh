@@ -16,6 +16,10 @@ SDK_PATCHES=(
   "${SDK_SRC}|${ROOT}/patches/rexglue-0.10.0-ppc-interpreter.patch"
   "${SDK_SRC}|${ROOT}/patches/rexglue-0.10.0-codegen-stamp.patch"
   "${SDK_SRC}/thirdparty/utfcpp|${ROOT}/patches/rexglue-0.10.0-utfcpp.patch"
+  # The SDK builds MoltenVK from this tree on macOS, so its fixes go here too, or a build of the SDK
+  # (ours, or the player kit's) ships the MoltenVK without them.
+  "${SDK_SRC}/thirdparty/moltenvk|${ROOT}/patches/moltenvk-1.4.1-encoder-labels.patch"
+  "${SDK_SRC}/thirdparty/moltenvk|${ROOT}/patches/moltenvk-1.4.1-swapchain-1x1.patch"
 )
 
 # Hash of the patches the SDK tree was last patched with, beside the tree (sdk/ is not in git).

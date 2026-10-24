@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 9b3cdf5..504176d 100644
+index 9b3cdf5..8153d5f 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -42,6 +42,13 @@ else()
@@ -16,26 +16,122 @@ index 9b3cdf5..504176d 100644
  if(NOT REXGLUE_USE_D3D12 AND NOT REXGLUE_USE_VULKAN)
      message(FATAL_ERROR "At least one graphics backend must be enabled (REXGLUE_USE_D3D12 or REXGLUE_USE_VULKAN)")
  endif()
+@@ -223,9 +230,13 @@ configure_file(
+ )
+ 
+ # Output directories (multi-config appends /<Config>/ automatically)
+-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${REXGLUE_ROOT}/out/${REX_PLATFORM}")
+-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${REXGLUE_ROOT}/out/${REX_PLATFORM}")
+-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${REXGLUE_ROOT}/out/${REX_PLATFORM}")
++# Where the SDK's libraries and tools are written. Two builds of the same tree (the SDK on its own
++# and as part of a project) need different folders, or they overwrite each other's files.
++set(REXGLUE_OUTPUT_DIR "${REXGLUE_ROOT}/out/${REX_PLATFORM}" CACHE PATH
++    "Folder the SDK's libraries and tools are written to")
++set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${REXGLUE_OUTPUT_DIR}")
++set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${REXGLUE_OUTPUT_DIR}")
++set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${REXGLUE_OUTPUT_DIR}")
+ 
+ # Sanitizer support for debugging memory corruption and undefined behavior
+ if(REXGLUE_ENABLE_SANITIZERS)
 diff --git a/cmake/rexglue_helpers.cmake b/cmake/rexglue_helpers.cmake
-index 41e6dce..587623d 100644
+index 41e6dce..1548018 100644
 --- a/cmake/rexglue_helpers.cmake
 +++ b/cmake/rexglue_helpers.cmake
-@@ -1,8 +1,9 @@
+@@ -1,8 +1,12 @@
  #==========================================================
  # rexglue_helpers.cmake
  #
 -# Three helpers, each with a single responsibility:
-+# Four helpers, each with a single responsibility:
++# Helpers, each with a single responsibility:
  #   rexglue_apply_target_settings(<target>)        - common compile/platform flags
++#   rexglue_get_recomp_options(<var>)              - compile options of generated code
++#   rexglue_apply_recomp_settings(<target> <pch>)  - those options and the generated PCH
++#   rexglue_add_recomp_library(<name> ...)         - object library of generated code
 +#   rexglue_add_host_sources(<target>)             - the SDK sources of a host application
  #   rexglue_configure_target(<target>)             - host application
  #   rexglue_configure_module_target(<target> ...)  - guest DLL module
  #==========================================================
-@@ -63,26 +64,49 @@ function(rexglue_apply_target_settings target_name)
+@@ -63,20 +67,82 @@ function(rexglue_apply_target_settings target_name)
  endfunction()
  
  #==========================================================
 -# rexglue_configure_target(<target>) - Host application
++# rexglue_get_recomp_options(<out_var>) - Options of generated code
+ #
+-# Adds:
+-#   - SDL3 entry point source (windowed_app_main_sdl.cpp)
+-#   - ReXApp base class source (rex_app.cpp)
+-#   - Build-config define for the version stamp
+-#   - $ORIGIN RPATH on UNIX so the host finds librexruntime.so next to itself
+-#   - Windows POST_BUILD copy of TARGET_RUNTIME_DLLS and the FidelityFX DLLs.
+-#     Guest modules colocate with the host (see rexglue_configure_module_target),
+-#     so this single copy handles them transitively.
++# The compile options every file of generated code takes, on top of the
++# common ones: asynchronous exception handling on Windows (guest SEH scopes
++# emit __try/__except, which traps hardware faults only under it) and the
++# debug info level REXGLUE_RECOMP_DEBUG_INFO asks for.
+ #==========================================================
+-function(rexglue_configure_target target_name)
+-    cmake_parse_arguments(ARG "" "" "GPU_PLUGINS" ${ARGN})
++set(REXGLUE_RECOMP_DEBUG_INFO "line-tables-only" CACHE STRING
++    "Debug info level for generated code: line-tables-only, full, or none")
++
++function(rexglue_get_recomp_options out_var)
++    set(_options "")
++    if(WIN32)
++        if(MSVC)
++            list(APPEND _options /EHa)
++        elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
++            list(APPEND _options -fasync-exceptions)
++        endif()
++    endif()
++    if(REXGLUE_RECOMP_DEBUG_INFO STREQUAL "none")
++        list(APPEND _options $<$<CXX_COMPILER_ID:Clang,AppleClang,GNU>:-g0>)
++    elseif(REXGLUE_RECOMP_DEBUG_INFO STREQUAL "line-tables-only")
++        list(APPEND _options $<$<CXX_COMPILER_ID:Clang,AppleClang>:-gline-tables-only>)
++    endif()
++    set(${out_var} "${_options}" PARENT_SCOPE)
++endfunction()
++
++#==========================================================
++# rexglue_apply_recomp_settings(<target> <pch_header>) - Generated code settings
++#
++# The options of generated code and, unless <pch_header> is empty, its
++# precompiled header. The options go on the target as well as on the sources:
++# CMake compiles the header from its own cmake_pch.hxx.cxx, which carries none
++# of the source properties, and clang rejects a PCH whose EH mode disagrees
++# with the TU including it.
++#==========================================================
++function(rexglue_apply_recomp_settings target_name pch_header)
++    rexglue_get_recomp_options(_options)
++    target_compile_options(${target_name} PRIVATE ${_options})
++    if(pch_header)
++        target_precompile_headers(${target_name} PRIVATE "${pch_header}")
++    endif()
++endfunction()
++
++#==========================================================
++# rexglue_add_recomp_library(<name> SOURCES ... INCLUDE_DIRS ... [PCH <header>])
++#   - Object library of generated code
++#
++# The generated sources with everything they compile with: the runtime's
++# headers and definitions, the common flags, and the settings of generated
++# code (the options also go on the sources, so they hold for any target that
++# compiles them). Codegen's CMake builds the generated code with it; a project
++# can also use it to learn how generated code compiles without generating any.
++#==========================================================
++function(rexglue_add_recomp_library name)
++    cmake_parse_arguments(ARG "" "PCH" "SOURCES;INCLUDE_DIRS" ${ARGN})
++    rexglue_get_recomp_options(_options)
++    set_source_files_properties(${ARG_SOURCES} PROPERTIES COMPILE_OPTIONS "${_options}")
++    add_library(${name} OBJECT ${ARG_SOURCES})
++    target_include_directories(${name} PRIVATE ${ARG_INCLUDE_DIRS})
++    target_link_libraries(${name} PRIVATE rex::runtime)
++    rexglue_apply_target_settings(${name})
++    rexglue_apply_recomp_settings(${name} "${ARG_PCH}")
++endfunction()
+ 
++#==========================================================
 +# rexglue_add_host_sources(<target>) - SDK sources of a host application
 +#
 +# Adds the SDL3 entry point (windowed_app_main_sdl.cpp), the ReXApp base class
@@ -46,41 +142,31 @@ index 41e6dce..587623d 100644
 +# code, so it can be built once and linked with code generated elsewhere.
 +#==========================================================
 +function(rexglue_add_host_sources target_name)
-+    target_sources(${target_name} PRIVATE
-+        ${REXGLUE_SHARE_DIR}/windowed_app_main_sdl.cpp
-+        ${REXGLUE_SHARE_DIR}/rex_app.cpp)
-+
-+    target_compile_definitions(${target_name} PRIVATE
-+        REXGLUE_BUILD_CONFIG="$<CONFIG>")
-+
+     target_sources(${target_name} PRIVATE
+         ${REXGLUE_SHARE_DIR}/windowed_app_main_sdl.cpp
+         ${REXGLUE_SHARE_DIR}/rex_app.cpp)
+@@ -84,6 +150,33 @@ function(rexglue_configure_target target_name)
+     target_compile_definitions(${target_name} PRIVATE
+         REXGLUE_BUILD_CONFIG="$<CONFIG>")
+ 
 +    rexglue_apply_target_settings(${target_name})
 +endfunction()
 +
 +#==========================================================
 +# rexglue_configure_target(<target> [GPU_PLUGINS ...] [HOST_OBJECTS <objlib>])
 +#   - Host application
- #
- # Adds:
--#   - SDL3 entry point source (windowed_app_main_sdl.cpp)
--#   - ReXApp base class source (rex_app.cpp)
--#   - Build-config define for the version stamp
++#
++# Adds:
 +#   - the SDK host sources (rexglue_add_host_sources), or, with HOST_OBJECTS,
 +#     links the object library that already has them
- #   - $ORIGIN RPATH on UNIX so the host finds librexruntime.so next to itself
- #   - Windows POST_BUILD copy of TARGET_RUNTIME_DLLS and the FidelityFX DLLs.
- #     Guest modules colocate with the host (see rexglue_configure_module_target),
- #     so this single copy handles them transitively.
- #==========================================================
- function(rexglue_configure_target target_name)
--    cmake_parse_arguments(ARG "" "" "GPU_PLUGINS" ${ARGN})
--
--    target_sources(${target_name} PRIVATE
--        ${REXGLUE_SHARE_DIR}/windowed_app_main_sdl.cpp
--        ${REXGLUE_SHARE_DIR}/rex_app.cpp)
++#   - $ORIGIN RPATH on UNIX so the host finds librexruntime.so next to itself
++#   - Windows POST_BUILD copy of TARGET_RUNTIME_DLLS and the FidelityFX DLLs.
++#     Guest modules colocate with the host (see rexglue_configure_module_target),
++#     so this single copy handles them transitively.
++#==========================================================
++function(rexglue_configure_target target_name)
 +    cmake_parse_arguments(ARG "" "HOST_OBJECTS" "GPU_PLUGINS" ${ARGN})
- 
--    target_compile_definitions(${target_name} PRIVATE
--        REXGLUE_BUILD_CONFIG="$<CONFIG>")
++
 +    if(ARG_HOST_OBJECTS)
 +        # Linked as object files, not as an archive: the linker keeps every
 +        # object, including those whose only role is to replace a weak
@@ -89,9 +175,69 @@ index 41e6dce..587623d 100644
 +    else()
 +        rexglue_add_host_sources(${target_name})
 +    endif()
- 
++
      if(UNIX AND NOT APPLE)
          set_target_properties(${target_name} PROPERTIES
+             INSTALL_RPATH "$ORIGIN"
+diff --git a/cmake/rexglue_install.cmake b/cmake/rexglue_install.cmake
+index d9a64eb..c9f0fa4 100644
+--- a/cmake/rexglue_install.cmake
++++ b/cmake/rexglue_install.cmake
+@@ -51,11 +51,12 @@ install(TARGETS ${REXGLUE_INSTALL_TARGETS}
+     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+ )
+ 
+-# A Debug codegen tool runs an order of magnitude slower, so only Release ships.
++# A Debug codegen tool runs an order of magnitude slower, so only the optimized configurations
++# ship it.
+ install(TARGETS rexglue
+     EXPORT rexglueTargets
+     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+-    CONFIGURATIONS Release
++    CONFIGURATIONS Release RelWithDebInfo
+ )
+ 
+ if(REXGLUE_INSTALL_FIDELITYFX_TARGETS)
+@@ -140,17 +141,17 @@ endif()
+ if(APPLE AND REXGLUE_USE_VULKAN)
+     install(FILES "$<TARGET_FILE:Vulkan::Loader>"
+         DESTINATION ${CMAKE_INSTALL_LIBDIR}
+-        CONFIGURATIONS Release
++        CONFIGURATIONS Release RelWithDebInfo
+         RENAME libvulkan.1.dylib
+     )
+     install(FILES "$<TARGET_FILE:MoltenVK::MoltenVK>"
+         DESTINATION ${CMAKE_INSTALL_LIBDIR}
+-        CONFIGURATIONS Release
++        CONFIGURATIONS Release RelWithDebInfo
+         RENAME libMoltenVK.dylib
+     )
+     install(FILES cmake/MoltenVK_icd.json
+         DESTINATION ${CMAKE_INSTALL_DATADIR}/vulkan/icd.d
+-        CONFIGURATIONS Release
++        CONFIGURATIONS Release RelWithDebInfo
+     )
+ endif()
+ 
+@@ -188,9 +189,13 @@ install(EXPORT rexglueTargets
+ # Register in the CMake User Package Registry after install.
+ # This makes find_package(rexglue) work with no REXSDK env var or CMAKE_PREFIX_PATH.
+ # Multiple SxS installs coexist. Each prefix gets a unique hash entry.
++# REXGLUE_REGISTER_PACKAGE=OFF leaves the registry alone, for an install that is
++# packaged for another machine rather than used from this one.
+ #
+ # Windows: HKCU\Software\Kitware\CMake\Packages\rexglue  (REG_SZ, value name = MD5 hash)
+ # Unix:    ~/.cmake/packages/rexglue/<hash>               (file containing prefix path)
++option(REXGLUE_REGISTER_PACKAGE "Register the installed SDK in the CMake user package registry" ON)
++if(REXGLUE_REGISTER_PACKAGE)
+ install(CODE [[
+     # Normalize path casing on Windows before hashing to avoid duplicate entries
+     if(CMAKE_HOST_WIN32)
+@@ -215,3 +220,4 @@ install(CODE [[
+     message(STATUS "Registered rexglue in CMake user package registry")
+     message(STATUS "  -> ${CMAKE_INSTALL_PREFIX}")
+ ]])
++endif()
 diff --git a/include/rex/graphics/command_processor.h b/include/rex/graphics/command_processor.h
 index da8e432..fa90e59 100644
 --- a/include/rex/graphics/command_processor.h
@@ -822,6 +968,21 @@ index 0be31c4..83be65c 100644
  
  {% if is_dll %}
  // The runtime uses this baked layout for the dispatch table. It must match the
+diff --git a/resources/templates/codegen/sources_cmake.inja b/resources/templates/codegen/sources_cmake.inja
+index 107a495..f792c18 100644
+--- a/resources/templates/codegen/sources_cmake.inja
++++ b/resources/templates/codegen/sources_cmake.inja
+@@ -1,7 +1,8 @@
+ # Auto-generated by rexglue codegen - DO NOT EDIT
+ #
+-# generated/rexglue.cmake pins the compile options onto these sources, so any
+-# target may build them. Add rexglue_apply_recomp_settings() for the PCH.
++# generated/rexglue.cmake builds these with rexglue_add_recomp_library(), which
++# also pins the compile options onto the sources, so any target may build them.
++# Add rexglue_apply_recomp_settings() for the PCH.
+ 
+ set(GENERATED_SOURCES
+     {{ cmake_var("CMAKE_CURRENT_LIST_DIR") }}/{{ project }}_init.cpp
 diff --git a/src/core/memory_posix.cpp b/src/core/memory_posix.cpp
 index b52bf39..13f51dc 100644
 --- a/src/core/memory_posix.cpp

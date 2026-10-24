@@ -1,0 +1,152 @@
+# Builds the player kit (scripts/build-kit.sh) on macOS and Linux: what the launcher needs to build
+# the runtime on a player's machine from their own default.xex (docs/player-runtime-build.md). The
+# kit holds no game data, so it builds here; scripts/kit/check_kit.py checks it before it is kept.
+#
+# It runs when something that defines the kit changes (the SDK patches, the build scripts, the
+# runtime's CMake, this workflow), for release tags, and by hand. A macOS run costs about ten times
+# its minutes on a private repository, so it does not run for every change of the runtime's code.
+
+name: Runtime kit
+
+on:
+  pull_request:
+    paths:
+      - patches/**
+      - scripts/build-kit.sh
+      - scripts/build_moltenvk.sh
+      - scripts/sdk_patches.sh
+      - scripts/sdk_prepare.sh
+      - scripts/kit/**
+      - runtime/CMakeLists.txt
+      - runtime/CMakePresets.json
+      - runtime/tools/kit/**
+      - versions.toml
+      - .github/workflows/runtime-kit.yml
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+# The workflow only reads the repository; the kits are kept as artifacts of the run.
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-kit-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SDK_VERSION: 0.10.0
+
+jobs:
+  kit:
+    name: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: mac-arm64
+            runner: macos-latest
+          # In Ubuntu 22.04 with clang 20, as the SDK builds its own Linux releases: the kit's
+          # libraries then need no newer glibc than 2.35.
+          - platform: linux-amd64
+            runner: ubuntu-latest
+            container: ubuntu:22.04
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
+    env:
+      DEBIAN_FRONTEND: noninteractive
+
+    steps:
+      - name: Install the toolchain (Linux)
+        if: startsWith(matrix.platform, 'linux-')
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl wget gnupg git unzip \
+            lsb-release software-properties-common python3
+          wget -qO llvm.sh https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          ./llvm.sh 20
+          apt-get install -y clang-20 lld-20
+          update-alternatives --install /usr/bin/clang clang /usr/bin/clang-20 200
+          update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-20 200
+          wget -qO- https://apt.kitware.com/keys/kitware-archive-latest.asc | gpg --dearmor -o /usr/share/keyrings/kitware.gpg
+          echo "deb [signed-by=/usr/share/keyrings/kitware.gpg] https://apt.kitware.com/ubuntu/ jammy main" > /etc/apt/sources.list.d/kitware.list
+          wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc | tee /etc/apt/trusted.gpg.d/lunarg.asc
+          wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list http://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
+          add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          apt-get update
+          apt-get install -y cmake ninja-build build-essential g++-13 autoconf python3-venv \
+            libgtk-3-dev libx11-xcb-dev libxss-dev vulkan-sdk \
+            libwayland-dev libwayland-bin wayland-protocols libxkbcommon-dev libdecor-0-dev \
+            libasound2-dev libpulse-dev libpipewire-0.3-dev
+          git config --global --add safe.directory '*'
+
+      - name: Install the toolchain (macOS)
+        if: startsWith(matrix.platform, 'mac-')
+        run: brew install cmake ninja
+
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      # The SDK source at its release tag, with its submodules (third-party code it builds). It is
+      # cached as cloned, before any patch or build touches it.
+      - name: Restore the SDK source
+        id: sdk-source
+        uses: actions/cache/restore@v4
+        with:
+          path: sdk/rexglue-${{ env.SDK_VERSION }}-src
+          key: rexglue-src-${{ env.SDK_VERSION }}-v1
+
+      - name: Get the SDK source
+        if: steps.sdk-source.outputs.cache-hit != 'true'
+        run: |
+          git clone --recursive --shallow-submodules --depth 1 --branch "v${SDK_VERSION}" \
+            https://github.com/rexglue/rexglue-sdk.git "sdk/rexglue-${SDK_VERSION}-src"
+
+      - name: Cache the SDK source
+        if: steps.sdk-source.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: sdk/rexglue-${{ env.SDK_VERSION }}-src
+          key: rexglue-src-${{ env.SDK_VERSION }}-v1
+
+      # The patches apply to a clean tree, as the cache and the clone hold it.
+      - name: Clean the SDK source
+        shell: bash
+        run: |
+          git config --global --add safe.directory '*'
+          src="sdk/rexglue-${SDK_VERSION}-src"
+          git -C "${src}" reset -q --hard
+          git -C "${src}" clean -qfdx
+          git -C "${src}" submodule foreach --quiet --recursive 'git reset -q --hard && git clean -qfdx'
+          rm -f "${src}.patches.sha256"
+
+      # The prebuilt SDK of the release: the build scripts take the Vulkan headers from it.
+      - name: Get the prebuilt SDK
+        shell: bash
+        run: |
+          zip="rexglue-sdk-${SDK_VERSION}-${{ matrix.platform }}.zip"
+          curl -fSL "https://github.com/rexglue/rexglue-sdk/releases/download/v${SDK_VERSION}/${zip}" -o "sdk/${zip}"
+          mkdir -p "sdk/rexglue-${SDK_VERSION}-${{ matrix.platform }}"
+          unzip -q -o "sdk/${zip}" -d "sdk/rexglue-${SDK_VERSION}-${{ matrix.platform }}"
+          rm "sdk/${zip}"
+          chmod +x "sdk/rexglue-${SDK_VERSION}-${{ matrix.platform }}/${{ matrix.platform }}/bin/rexglue"
+
+      - name: Build and check the kit
+        shell: bash
+        env:
+          CC: clang
+          CXX: clang++
+        run: scripts/build-kit.sh
+
+      # tar keeps the files' permissions (the code generator is an executable).
+      - name: Pack the kit
+        shell: bash
+        run: tar -czf "azura-kit-${{ matrix.platform }}.tar.gz" -C "runtime/out/kit/${{ matrix.platform }}" kit
+
+      - name: Keep the kit
+        uses: actions/upload-artifact@v4
+        with:
+          name: azura-kit-${{ matrix.platform }}
+          path: azura-kit-${{ matrix.platform }}.tar.gz
+          retention-days: 30

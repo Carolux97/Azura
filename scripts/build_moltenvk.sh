@@ -13,7 +13,8 @@
 #   1. read the pinned MoltenVK commit and unpatched SHA-256 from versions.toml;
 #   2. locate or clone MoltenVK at that commit (reusing sdk/rexglue-0.10.0-src/thirdparty/moltenvk
 #      when present, otherwise cloning into sdk/moltenvk-src);
-#   3. reset the MoltenVK checkout to the pinned commit and apply patches/moltenvk-*.patch;
+#   3. reset the MoltenVK checkout to the pinned commit and apply patches/moltenvk-*.patch (the
+#      SDK's own tree is patched with the rest of the SDK instead, and only checked);
 #   4. build MoltenVK with CMake + Ninja using the VulkanHeaders shipped in the prebuilt SDK
 #      (no full Xcode installation required — Command Line Tools are sufficient);
 #   5. copy the resulting libMoltenVK.dylib to sdk/patched-moltenvk/libMoltenVK.dylib, write a
@@ -112,14 +113,25 @@ else
   fi
 fi
 
-echo "==> Preparing MoltenVK source at ${MVK_REV}"
-git -C "${MVK_SRC}" checkout -f "${MVK_REV}"
-git -C "${MVK_SRC}" clean -fd
+if [[ "${MVK_SRC}" == "${ROOT}/sdk/rexglue-0.10.0-src/thirdparty/moltenvk" ]]; then
+  # The SDK's own MoltenVK tree is patched with the rest of the SDK (scripts/sdk_patches.sh), since
+  # the SDK builds MoltenVK from it too; it is used as it is.
+  for patch in "${PATCHES[@]}"; do
+    if ! git -C "${MVK_SRC}" apply --reverse --check "${patch}" 2>/dev/null; then
+      echo "$(basename "${patch}") is not applied to ${MVK_SRC}; run scripts/build.sh, which applies it." >&2
+      exit 1
+    fi
+  done
+else
+  echo "==> Preparing MoltenVK source at ${MVK_REV}"
+  git -C "${MVK_SRC}" checkout -f "${MVK_REV}"
+  git -C "${MVK_SRC}" clean -fd
 
-for patch in "${PATCHES[@]}"; do
-  echo "==> Applying $(basename "${patch}")"
-  git -C "${MVK_SRC}" apply "${patch}"
-done
+  for patch in "${PATCHES[@]}"; do
+    echo "==> Applying $(basename "${patch}")"
+    git -C "${MVK_SRC}" apply "${patch}"
+  done
+fi
 
 readonly BUILD_DIR="${OUT_DIR}/build"
 mkdir -p "${BUILD_DIR}"
