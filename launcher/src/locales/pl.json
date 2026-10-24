@@ -259,5 +259,17 @@
     "resetToast": "Saves reset. Automatic backup created.",
     "backupToast": "Backup successfully created",
     "restoreToast": "Save restored successfully"
+  },
+  "gamepad": {
+    "select": "Wybierz",
+    "back": "Wstecz",
+    "section": "Sekcja",
+    "play": "Graj",
+    "type": "Pisz",
+    "delete": "Usuń",
+    "space": "Spacja",
+    "done": "Gotowe",
+    "cancel": "Anuluj",
+    "page": "Strona"
   }
 }

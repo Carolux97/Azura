@@ -259,5 +259,17 @@
     "resetToast": "Saves reset. Automatic backup created.",
     "backupToast": "Backup successfully created",
     "restoreToast": "Save restored successfully"
+  },
+  "gamepad": {
+    "select": "決定",
+    "back": "戻る",
+    "section": "セクション",
+    "play": "プレイ",
+    "type": "入力",
+    "delete": "削除",
+    "space": "スペース",
+    "done": "完了",
+    "cancel": "キャンセル",
+    "page": "ページ"
   }
 }

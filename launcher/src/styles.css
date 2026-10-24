@@ -85,6 +85,95 @@ code, kbd {
 
 :focus-visible { outline: 2px solid var(--imulsion); outline-offset: 2px; }
 
+/* ---------- Controller ---------- */
+
+/* While a controller drives the launcher (gamepadNav.js), the focus is the only cursor: a ring
+   that reads from the sofa, on every control, whatever focused it. */
+.pad-mode :focus { outline: 3px solid var(--imulsion); outline-offset: 3px; box-shadow: 0 0 18px var(--imulsion-glow); }
+.pad-mode .toggle input:focus + .toggle-ui { outline: 3px solid var(--imulsion); outline-offset: 3px; box-shadow: 0 0 18px var(--imulsion-glow); }
+.pad-mode .toggle input:focus { outline: none; box-shadow: none; }
+.pad-mode .tile:focus { outline: none; border-color: var(--imulsion); box-shadow: 0 0 18px var(--imulsion-glow); }
+.pad-mode .ach:focus { outline-offset: -2px; box-shadow: none; background: rgba(255, 184, 28, 0.08); }
+
+.pad-hints {
+  position: fixed;
+  right: 24px;
+  bottom: 18px;
+  z-index: 30;
+  display: flex;
+  gap: 22px;
+  align-items: center;
+  padding: 9px 16px;
+  background: rgba(10, 11, 12, 0.86);
+  border: 1px solid var(--steel-line);
+  border-radius: 6px;
+  backdrop-filter: blur(6px);
+  font-family: var(--font-ui);
+  font-size: 15px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.pad-hints[hidden] { display: none; }
+/* Over the on-screen keyboard, whose bottom it would otherwise cover. */
+.pad-hints.is-keyboard { z-index: 60; }
+
+/* The on-screen keyboard (virtualKeyboard.js): over the whole window, the keys in rows. */
+.vkbd {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  background: rgba(5, 6, 7, 0.72);
+  backdrop-filter: blur(4px);
+}
+.vkbd-panel {
+  display: grid;
+  gap: 14px;
+  padding: 22px 24px 24px;
+  background: var(--panel-solid);
+  border: 1px solid var(--steel-line);
+  border-radius: 8px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+.vkbd-title { font-family: var(--font-ui); font-size: 14px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-dim); }
+.vkbd-display {
+  position: relative;
+  min-height: 46px;
+  padding: 10px 70px 10px 14px;
+  font-family: var(--font-body);
+  font-size: 22px;
+  color: var(--text);
+  background: var(--bg-0);
+  border: 1px solid var(--steel-line);
+  border-radius: 4px;
+  white-space: pre;
+}
+.vkbd-display::after { content: attr(data-count); position: absolute; right: 12px; top: 50%; transform: translateY(-50%); font-size: 13px; color: var(--text-faint); }
+.vkbd-keys { display: grid; gap: 8px; }
+.vkbd-row { display: flex; gap: 8px; justify-content: center; }
+.vkbd-key {
+  min-width: 46px;
+  height: 46px;
+  padding: 0 10px;
+  font-family: var(--font-ui);
+  font-size: 19px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--steel);
+  border: 1px solid var(--steel-line);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.vkbd-key:hover { border-color: var(--steel-hi); }
+.vkbd-key:disabled { opacity: 0.28; cursor: default; }
+.vkbd-key.is-wide { min-width: 110px; font-size: 16px; letter-spacing: 0.06em; text-transform: uppercase; }
+.vkbd-key.is-on { color: var(--bg-0); background: var(--imulsion); border-color: var(--imulsion); }
+.pad-hint { display: inline-flex; align-items: center; gap: 8px; }
+.pad-glyphs { display: inline-flex; gap: 4px; }
+.pad-glyphs svg { height: 24px; width: auto; display: block; }
+
 /* ---------- Backdrop ---------- */
 
 .backdrop { position: fixed; inset: 0; pointer-events: none; z-index: 0; }
@@ -362,6 +451,55 @@ code, kbd {
   animation: none;
 }
 .btn-launch.is-install:hover { color: var(--imulsion-hot); }
+/* Focused (a controller or the Tab key): the cut corners clip any outline, so the focus is drawn
+   around the button by .launch-frame, in the same shape: a light ring and, between it and the
+   button, a thin dark gap, both following the cut corners at the same width as the straight
+   edges (a 45° cut grows by (2 - √2) times the distance out: 22px becomes 24px at 3px and 26px at
+   7px). The button itself is untouched, only brighter, and the Install plate fills like Play. */
+.launch-frame { position: relative; justify-self: start; }
+.launch-frame .btn-launch { z-index: 1; }
+.launch-frame::before,
+.launch-frame::after {
+  content: "";
+  position: absolute;
+  opacity: 0;
+  transition: opacity 0.15s ease-out;
+  pointer-events: none;
+}
+.launch-frame::before {
+  inset: -7px;
+  background: #fff6dc;
+  clip-path: polygon(0 0, calc(100% - 26px) 0, 100% 26px, 100% 100%, 26px 100%, 0 calc(100% - 26px));
+}
+.launch-frame::after {
+  inset: -3px;
+  background: var(--bg-0);
+  clip-path: polygon(0 0, calc(100% - 24px) 0, 100% 24px, 100% 100%, 24px 100%, 0 calc(100% - 24px));
+}
+.launch-frame:has(.btn-launch:focus-visible)::before,
+.launch-frame:has(.btn-launch:focus-visible)::after,
+.pad-mode .launch-frame:has(.btn-launch:focus)::before,
+.pad-mode .launch-frame:has(.btn-launch:focus)::after {
+  opacity: 1;
+}
+.launch-frame:has(.btn-launch:focus-visible)::before,
+.pad-mode .launch-frame:has(.btn-launch:focus)::before {
+  animation: launch-focus 1.4s ease-in-out infinite;
+}
+@keyframes launch-focus {
+  0%, 100% { filter: drop-shadow(0 0 6px rgba(255, 224, 138, 0.6)); }
+  50%      { filter: drop-shadow(0 0 20px rgba(255, 224, 138, 1)); }
+}
+.btn-launch:focus-visible,
+.pad-mode .btn-launch:focus {
+  outline: none;
+  filter: brightness(1.08);
+}
+.btn-launch.is-install:focus-visible,
+.pad-mode .btn-launch.is-install:focus {
+  color: #1a1206;
+  background: linear-gradient(180deg, var(--imulsion-hot) 0%, var(--imulsion) 45%, var(--imulsion-deep) 100%);
+}
 
 @keyframes breathe {
   0%, 100% { filter: drop-shadow(0 0 10px rgba(255, 184, 28, 0.35)); }

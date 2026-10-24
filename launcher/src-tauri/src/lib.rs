@@ -7,6 +7,7 @@ mod achievements;
 mod builder;
 mod disc_image;
 mod game_folder;
+mod gamepad;
 mod install;
 #[cfg(test)]
 mod test_support;
@@ -440,6 +441,8 @@ pub fn run() {
             show_build_log
         ])
         .setup(|app| {
+            // Controllers navigate the interface (gamepad.rs).
+            gamepad::spawn(app.handle().clone());
             // A runtime install the launcher was closed in the middle of is finished first.
             if let Ok(dir) = runtime_dir(app.handle()) {
                 builder::recover(&dir);

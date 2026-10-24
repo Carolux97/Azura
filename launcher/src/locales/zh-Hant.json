@@ -259,5 +259,17 @@
     "resetToast": "Saves reset. Automatic backup created.",
     "backupToast": "Backup successfully created",
     "restoreToast": "Save restored successfully"
+  },
+  "gamepad": {
+    "select": "選擇",
+    "back": "返回",
+    "section": "區段",
+    "play": "開始遊戲",
+    "type": "輸入",
+    "delete": "刪除",
+    "space": "空格",
+    "done": "完成",
+    "cancel": "取消",
+    "page": "頁面"
   }
 }
