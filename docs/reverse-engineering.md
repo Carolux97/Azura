@@ -549,3 +549,21 @@ code generator ignores it) with `address`, `name` and `registers`; the hook is a
 `void Name(PPCRegister& r18, ...)` taking the listed registers, emitted before the instruction at
 `address` (after it with `after_instruction = true`). The guest memory base is
 `rex::system::kernel_state()->memory()->virtual_membase()`.
+
+## Movie audio language (Bink)
+
+The pre-rendered scenes ship as one movie per scene, `GearGame/Movies/<name>_LOC.bik`, with 27
+audio tracks: three dialogue tracks per language and three shared ones (music and effects). How the
+game picks them (**verified** with logs of the calls below, in Spanish):
+
+- The movie player (`sub_823871D8`) opens `Movies\<name>.bik` if it exists; otherwise, for a
+  language other than `INT`, `<name>_<language>.bik`; otherwise `<name>_LOC.bik`.
+- Before opening, `sub_8238A790` calls `BinkSetSoundTrack` (`sub_82FCA250`) with six tracks: the
+  shared 4, 2 and 3, and the language's three, chosen only when the movie's name contains `_LOC`:
+  `INT` (the default) 0, 1, 5; `FRA` 6-8; `ITA` 9-11; `DEU` 12-14; `ESN` 15-17; `ESM` 18-20;
+  `JPN` 21-23; the remaining ones 24-26.
+
+So the game data must keep only the `_LOC` names the disc has. An alias such as `<name>.bik` or
+`<name>_ESN.bik` pointing to `<name>_LOC.bik` makes the game open the multilingual movie under a
+name without `_LOC`, and the scenes play in English whatever the language (seen with symbolic links
+added by hand to a game folder on Linux).
