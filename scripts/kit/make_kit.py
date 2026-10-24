@@ -89,10 +89,30 @@ class Paths:
                     raise KitError(f"{what} still refers to {path}: {token}")
 
 
+def without_missing_search_paths(tokens: list[str]) -> list[str]:
+    """The arguments without search paths (-L, -I, -isystem) to folders that do not exist on this
+    machine. A preset may add one for an optional folder (the Linux presets add sdk/compat/lib for
+    libraries a distribution lacks); where it is missing it adds nothing, and it would only carry
+    this machine's path into the kit."""
+    out, skip = [], False
+    for index, token in enumerate(tokens):
+        if skip:
+            skip = False
+            continue
+        if token == "-isystem" and index + 1 < len(tokens) and not Path(tokens[index + 1]).is_dir():
+            skip = True
+            continue
+        if (token.startswith("-L") or token.startswith("-I")) and len(token) > 2 and not Path(token[2:]).is_dir():
+            continue
+        out.append(token)
+    return out
+
+
 def compile_template(command: str, paths: Paths, source: Path) -> list[str]:
     """The compile command of the probe source, without its input and output: the options every
     file of generated code compiles with."""
     (tokens,) = segments(command)
+    tokens = without_missing_search_paths(tokens)
     out = ["{cxx}"]
     skip = 0
     for index, token in enumerate(tokens[1:], start=1):
@@ -117,7 +137,7 @@ def compile_template(command: str, paths: Paths, source: Path) -> list[str]:
 def link_template(command: str, paths: Paths, output: Path) -> tuple[list[str], list[list[str]]]:
     """The link command of the probe executable as a template, and the commands chained after it."""
     parts = segments(command)
-    link, after = parts[0], parts[1:]
+    link, after = without_missing_search_paths(parts[0]), parts[1:]
     out = ["{cxx}"]
     objects_at = None
     skip = 0
