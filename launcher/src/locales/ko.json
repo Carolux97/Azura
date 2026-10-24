@@ -58,7 +58,8 @@
   },
   "releaseNotes": {
     "title": "버전 {version}의 새로운 기능",
-    "dismiss": "확인"
+    "dismiss": "확인",
+    "show": "새로운 기능"
   },
   "install": {
     "title": "설치",
