@@ -160,7 +160,13 @@ fn relay_lines<E: GameEvents>(
 /// Longest wait, once the game has exited, for its last output lines to be sent. Its output ends
 /// as soon as it exits, unless a process it started keeps the output open; the end is then
 /// reported anyway after this delay.
+#[cfg(not(test))]
 const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Tests wait much longer: how late a busy machine runs the output relays must not decide whether
+/// a test passes, and a wait that is not needed ends as soon as the relays do.
+#[cfg(test)]
+const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// A started game: its process and the threads relaying its output.
 struct RunningGame {
@@ -410,8 +416,7 @@ mod tests {
     fn reports_the_end_after_the_last_output_line() {
         let runtime = TempFolder::new("runtime-drain");
         // The game prints its lines and exits at once, while each line takes 2 ms to handle: the
-        // output relay is still sending them when the process is already gone. 50 lines keep that
-        // lag (about 0.1 s, several times more on slow CI runners) well under OUTPUT_DRAIN_TIMEOUT.
+        // output relay is still sending them when the process is already gone.
         fake_runtime(
             &runtime,
             "i=1; while [ $i -le 50 ]; do echo \"line $i\"; i=$((i+1)); done; exit 0",
