@@ -259,5 +259,17 @@
     "resetToast": "Saves reset. Automatic backup created.",
     "backupToast": "Backup successfully created",
     "restoreToast": "Save restored successfully"
+  },
+  "gamepad": {
+    "select": "Kiválasztás",
+    "back": "Vissza",
+    "section": "Szakasz",
+    "play": "Játék",
+    "type": "Írás",
+    "delete": "Törlés",
+    "space": "Szóköz",
+    "done": "Kész",
+    "cancel": "Mégse",
+    "page": "Oldal"
   }
 }

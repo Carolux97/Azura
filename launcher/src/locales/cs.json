@@ -259,5 +259,17 @@
     "resetToast": "Saves reset. Automatic backup created.",
     "backupToast": "Backup successfully created",
     "restoreToast": "Save restored successfully"
+  },
+  "gamepad": {
+    "select": "Vybrat",
+    "back": "Zpět",
+    "section": "Sekce",
+    "play": "Hrát",
+    "type": "Psát",
+    "delete": "Smazat",
+    "space": "Mezera",
+    "done": "Hotovo",
+    "cancel": "Zrušit",
+    "page": "Stránka"
   }
 }
