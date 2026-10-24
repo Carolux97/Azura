@@ -98,7 +98,10 @@
     "compilerInstalling": "A fordító telepítése…",
     "compilerWaitingApple": "Kövesd az Apple ablakát a Command Line Tools telepítéséhez. A launcher a telepítés után magától folytatja.",
     "compilerCheckAgain": "Ellenőrzés újra",
-    "compilerManual": "Vagy futtasd ezt egy terminálban:"
+    "compilerManual": "Vagy futtasd ezt egy terminálban:",
+    "runtimeNotBuilt": "Még nincs felépítve: az első építés a játékpéldányodból néhány percig tart.",
+    "runtimeUpdateLink": "Frissítés érhető el: néhány másodperc alatt települ.",
+    "runtimeUpdateBuild": "A frissítéshez újra kell építeni a játékot: körülbelül két perc."
   },
   "graphics": {
     "title": "Grafika",

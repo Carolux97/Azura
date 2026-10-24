@@ -128,6 +128,52 @@ pub struct BuildState {
     pub keys: Option<KitKeys>,
     pub xex_sha256: String,
     pub compiler: String,
+    /// The generated code's objects the runtime was linked from, relative to the work folder.
+    #[serde(default)]
+    pub objects: Vec<String>,
+}
+
+/// What it takes to bring the installed runtime up to date with a kit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UpdateKind {
+    /// Nothing: the runtime was built from this kit, for this game, with this compiler.
+    None,
+    /// Linking again: only what the link uses changed (our code, the SDK libraries, the staged
+    /// files), and the generated code's objects are still there. Under a second.
+    Link,
+    /// Building again: the generated code depends on what changed (the code generator, the
+    /// manifest, the headers, the compile commands), or the game or the compiler changed, or
+    /// nothing was built yet. About two minutes, less when codegen leaves most files unchanged.
+    Build,
+}
+
+/// What it takes to bring a runtime built as `state` (or none) up to date with a kit's `keys`,
+/// for the game executable `xex_sha256` and the compiler `compiler`. `installed` says whether the
+/// runtime folder still has its executable; `objects_kept` whether every object `state` lists is
+/// still in the work folder.
+pub fn update_kind(
+    state: Option<&BuildState>,
+    keys: &KitKeys,
+    xex_sha256: &str,
+    compiler: &str,
+    installed: bool,
+    objects_kept: bool,
+) -> UpdateKind {
+    let Some(state) = state else { return UpdateKind::Build };
+    let Some(built) = state.keys.as_ref() else { return UpdateKind::Build };
+    if built.build != keys.build || state.xex_sha256 != xex_sha256 || state.compiler != compiler || !objects_kept {
+        return UpdateKind::Build;
+    }
+    if built.link != keys.link || !installed {
+        return UpdateKind::Link;
+    }
+    UpdateKind::None
+}
+
+/// Whether every object a build state lists is still in the work folder.
+pub fn objects_kept(work: &Path, state: &BuildState) -> bool {
+    !state.objects.is_empty() && state.objects.iter().all(|object| work.join(object).is_file())
 }
 
 /// A step of the build, for the interface.
@@ -381,32 +427,8 @@ fn build_inner(folders: &BuildFolders, manifest: &str, xex_sha256: &str, events:
     let log = Log::create(work)?;
     log.write(&format!("Kit {} ({}), {}\n", kit.revision, kit.platform, compiler.version));
 
-    // A kit whose generated code compiles differently (another build key) leaves nothing to reuse.
-    let state = read_state(work);
-    let objects_dir = work.join("obj");
-    if state.as_ref().and_then(|state| state.keys.as_ref()).map(|keys| keys.build.as_str()) != Some(kit.keys.build.as_str()) {
-        let _ = fs::remove_dir_all(&objects_dir);
-    }
-    fs::create_dir_all(&objects_dir)?;
-
-    // Codegen reads its manifest and the game from the work folder: the manifest as the kit has
-    // it, and game/ as a link to the player's game folder.
-    fs::copy(&kit_manifest, work.join("azura_manifest.toml"))?;
-    let game_link = work.join("game");
-    let _ = fs::remove_file(&game_link);
-    std::os::unix::fs::symlink(folders.game, &game_link)?;
-
-    progress(Phase::Translating, 0, 0);
-    let generator = folders.kit.join(&kit.codegen.generator).to_string_lossy().into_owned();
-    log.run(&[generator, "codegen".into(), "azura_manifest.toml".into()], work)
-        .map_err(|summary| step_failed(Phase::Translating, summary, &log))?;
-    let generated = work.join("generated/default");
-    let sources = generated_sources(&fs::read_to_string(generated.join("sources.cmake"))?);
-    if sources.is_empty() {
-        return Err(step_failed(Phase::Translating, "codegen listed no sources".into(), &log));
-    }
-
     let kit_dir = folders.kit.to_string_lossy().into_owned();
+    let generated = work.join("generated/default");
     let values = |extra: &[(&'static str, String)]| -> Vec<(&'static str, String)> {
         let mut values = vec![
             ("{kit}", kit_dir.clone()),
@@ -417,34 +439,24 @@ fn build_inner(folders: &BuildFolders, manifest: &str, xex_sha256: &str, events:
         values
     };
 
-    let total = sources.len();
-    progress(Phase::Compiling, 0, total);
-    let header = generated.join("azura_pch.h");
-    let pch = objects_dir.join("azura_pch.pch");
-    let pch_command = fill(&kit.compile.precompile, &compiler.command, &[], &values(&[
-        ("{header}", header.to_string_lossy().into_owned()),
-        ("{pch}", pch.to_string_lossy().into_owned()),
-    ]));
-    // The header includes the per-file declaration headers' common part only, so its own content
-    // and the command decide its key.
-    let pch_key = key(&header, &[&pch_command.join(" ")])?;
-    if !up_to_date(&pch, &pch_key) {
-        log.run(&pch_command, work).map_err(|summary| step_failed(Phase::Compiling, summary, &log))?;
-        fs::write(key_file(&pch), &pch_key)?;
-    }
-    let objects = compile_all(&sources, &generated, &objects_dir, &pch_key, |source, object| {
-        fill(&kit.compile.command, &compiler.command, &[], &values(&[
-            ("{pch}", pch.to_string_lossy().into_owned()),
-            ("{source}", source.to_string_lossy().into_owned()),
-            ("{object}", object.to_string_lossy().into_owned()),
-        ]))
-    }, &log, work, |done| progress(Phase::Compiling, done, total))?;
+    // When only what the link uses changed, the generated code's objects are linked again as they
+    // are: no codegen, no compile.
+    let state = read_state(work);
+    let kept = state.as_ref().is_some_and(|state| objects_kept(work, state));
+    let kind = update_kind(state.as_ref(), &kit.keys, xex_sha256, &compiler.version, true, kept);
+    let objects = if kind == UpdateKind::Build {
+        log.write("Building the generated code\n");
+        translate_and_compile(folders, &kit, &kit_manifest, &compiler, state.as_ref(), &values, &log, &progress)?
+    } else {
+        log.write("Linking the kept objects again\n");
+        state.as_ref().map(|state| state.objects.iter().map(|object| work.join(object).to_string_lossy().into_owned()).collect()).unwrap_or_default()
+    };
 
     progress(Phase::Linking, 0, 0);
     let next = folders.runtime.with_extension("next");
     let _ = fs::remove_dir_all(&next);
     fs::create_dir_all(&next)?;
-    let mut all_objects = objects;
+    let mut all_objects = objects.clone();
     all_objects.extend(kit.link.host_objects.iter().map(|path| folders.kit.join(path).to_string_lossy().into_owned()));
     let output = executable_path(&next);
     let command = fill(&kit.link.command, &compiler.command, &all_objects, &values(&[(
@@ -472,12 +484,80 @@ fn build_inner(folders: &BuildFolders, manifest: &str, xex_sha256: &str, events:
         keys: Some(kit.keys.clone()),
         xex_sha256: xex_sha256.to_owned(),
         compiler: compiler.version.clone(),
+        objects: objects
+            .iter()
+            .filter_map(|object| Path::new(object).strip_prefix(work).ok())
+            .map(|object| object.to_string_lossy().into_owned())
+            .collect(),
     };
     fs::write(work.join(STATE_FILE), serde_json::to_string_pretty(&state).unwrap_or_default())?;
     // The generated C++ is only needed to compile; codegen writes it again in half a minute.
     let _ = fs::remove_dir_all(&generated);
     log.write("Installed.\n");
     Ok(())
+}
+
+/// Codegen and the compile: the generated code's objects, in source order. A kit whose generated
+/// code compiles differently (another build key) leaves nothing to reuse, so its objects go first.
+#[allow(clippy::too_many_arguments)]
+fn translate_and_compile(
+    folders: &BuildFolders,
+    kit: &Kit,
+    kit_manifest: &Path,
+    compiler: &toolchain::Compiler,
+    state: Option<&BuildState>,
+    values: &(dyn Fn(&[(&'static str, String)]) -> Vec<(&'static str, String)> + Sync),
+    log: &Log,
+    progress: &(dyn Fn(Phase, usize, usize) + Sync),
+) -> Result<Vec<String>, BuildError> {
+    let work = folders.work;
+    let objects_dir = work.join("obj");
+    if state.and_then(|state| state.keys.as_ref()).map(|keys| keys.build.as_str()) != Some(kit.keys.build.as_str()) {
+        let _ = fs::remove_dir_all(&objects_dir);
+    }
+    fs::create_dir_all(&objects_dir)?;
+
+    // Codegen reads its manifest and the game from the work folder: the manifest as the kit has
+    // it, and game/ as a link to the player's game folder.
+    fs::copy(kit_manifest, work.join("azura_manifest.toml"))?;
+    let game_link = work.join("game");
+    let _ = fs::remove_file(&game_link);
+    std::os::unix::fs::symlink(folders.game, &game_link)?;
+
+    progress(Phase::Translating, 0, 0);
+    let generator = folders.kit.join(&kit.codegen.generator).to_string_lossy().into_owned();
+    log.run(&[generator, "codegen".into(), "azura_manifest.toml".into()], work)
+        .map_err(|summary| step_failed(Phase::Translating, summary, log))?;
+    let generated = work.join("generated/default");
+    let sources = generated_sources(&fs::read_to_string(generated.join("sources.cmake"))?);
+    if sources.is_empty() {
+        return Err(step_failed(Phase::Translating, "codegen listed no sources".into(), log));
+    }
+
+    let total = sources.len();
+    progress(Phase::Compiling, 0, total);
+    let header = generated.join("azura_pch.h");
+    let pch = objects_dir.join("azura_pch.pch");
+    let pch_command = fill(&kit.compile.precompile, &compiler.command, &[], &values(&[
+        ("{header}", header.to_string_lossy().into_owned()),
+        ("{pch}", pch.to_string_lossy().into_owned()),
+    ]));
+    // The header includes only the SDK's headers, which come with the kit (whose build key clears
+    // the objects when they change), so its content, the command and the compiler decide its key:
+    // a compiler rejects a precompiled header another version wrote. Every object's key includes
+    // this one, so a new compiler compiles everything again.
+    let pch_key = key(&header, &[&pch_command.join(" "), &compiler.version])?;
+    if !up_to_date(&pch, &pch_key) {
+        log.run(&pch_command, work).map_err(|summary| step_failed(Phase::Compiling, summary, log))?;
+        fs::write(key_file(&pch), &pch_key)?;
+    }
+    compile_all(&sources, &generated, &objects_dir, &pch_key, |source, object| {
+        fill(&kit.compile.command, &compiler.command, &[], &values(&[
+            ("{pch}", pch.to_string_lossy().into_owned()),
+            ("{source}", source.to_string_lossy().into_owned()),
+            ("{object}", object.to_string_lossy().into_owned()),
+        ]))
+    }, log, work, |done| progress(Phase::Compiling, done, total))
 }
 
 fn step_failed(phase: Phase, summary: String, log: &Log) -> BuildError {
@@ -721,6 +801,28 @@ mod tests {
         let started = std::time::Instant::now();
         build(&folders, &version.manifest, &version.xex_sha256, &Print, &running).unwrap();
         println!("rebuilt in {:.1} s", started.elapsed().as_secs_f64());
+        // A kit whose link changed (our code, the SDK libraries): the kept objects are linked
+        // again, without codegen or compiling. Its other files are links to the real kit's.
+        let relinked_kit = dir.join("kit-new-link");
+        fs::create_dir_all(&relinked_kit).unwrap();
+        for entry in fs::read_dir(&kit).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_name() != "kit.json" {
+                std::os::unix::fs::symlink(entry.path(), relinked_kit.join(entry.file_name())).unwrap();
+            }
+        }
+        let text = fs::read_to_string(kit.join("kit.json")).unwrap();
+        let link = read_kit(&kit).unwrap().keys.link;
+        fs::write(relinked_kit.join("kit.json"), text.replace(&link, "another link key")).unwrap();
+        let state = read_state(&work).unwrap();
+        let new_keys = read_kit(&relinked_kit).unwrap().keys;
+        assert_eq!(update_kind(Some(&state), &new_keys, &version.xex_sha256, &state.compiler, true, objects_kept(&work, &state)), UpdateKind::Link);
+        let started = std::time::Instant::now();
+        let folders = BuildFolders { kit: &relinked_kit, game: &game, work: &work, runtime: &runtime };
+        build(&folders, &version.manifest, &version.xex_sha256, &Print, &running).unwrap();
+        println!("relinked in {:.1} s", started.elapsed().as_secs_f64());
+        assert!(fs::read_to_string(work.join("build.log")).unwrap().contains("Linking the kept objects again"));
+        assert_eq!(read_state(&work).unwrap().keys.unwrap().link, "another link key");
         if let Ok(keep) = std::env::var("AZURA_TEST_KEEP") {
             let _ = fs::remove_dir_all(&keep);
             fs::rename(&runtime, &keep).unwrap();
@@ -747,6 +849,33 @@ mod tests {
             "/a/Application Support/g/x.cpp",
             "/a/Application Support/g/x.h",
         ]));
+    }
+
+    #[test]
+    fn says_what_an_update_takes() {
+        let keys = KitKeys { build: "b1".into(), link: "l1".into() };
+        let state = BuildState {
+            kit_revision: "r".into(),
+            keys: Some(keys.clone()),
+            xex_sha256: "x".into(),
+            compiler: "Apple clang 21.0.0".into(),
+            objects: vec!["obj/a.o".into()],
+        };
+        let kind = |keys: &KitKeys, xex: &str, compiler: &str, installed: bool, kept: bool| {
+            update_kind(Some(&state), keys, xex, compiler, installed, kept)
+        };
+        assert_eq!(kind(&keys, "x", "Apple clang 21.0.0", true, true), UpdateKind::None);
+        let new_link = KitKeys { build: "b1".into(), link: "l2".into() };
+        assert_eq!(kind(&new_link, "x", "Apple clang 21.0.0", true, true), UpdateKind::Link);
+        // The runtime folder lost its executable: linking again brings it back.
+        assert_eq!(kind(&keys, "x", "Apple clang 21.0.0", false, true), UpdateKind::Link);
+        let new_build = KitKeys { build: "b2".into(), link: "l1".into() };
+        assert_eq!(kind(&new_build, "x", "Apple clang 21.0.0", true, true), UpdateKind::Build);
+        assert_eq!(kind(&keys, "another game", "Apple clang 21.0.0", true, true), UpdateKind::Build);
+        assert_eq!(kind(&keys, "x", "Apple clang 22.0.0", true, true), UpdateKind::Build);
+        // The objects to link again are gone.
+        assert_eq!(kind(&new_link, "x", "Apple clang 21.0.0", true, false), UpdateKind::Build);
+        assert_eq!(update_kind(None, &keys, "x", "Apple clang 21.0.0", true, true), UpdateKind::Build);
     }
 
     #[test]

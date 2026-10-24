@@ -81,7 +81,9 @@ export const getSystemInfo = async () => (isNativeApp ? tauri.core.invoke("get_s
 
 /**
  * State of the runtime (see src-tauri/src/install.rs): { installed, buildFound, updateAvailable,
- * path }. A browser has none installed and pretends a build is available.
+ * path, source, updateKind }. `source` is "build" (a project build, copied), "kit" (built here) or
+ * "none"; `updateKind`, for the kit, "link" (seconds) or "build" (minutes). A browser has none
+ * installed and pretends a build is available.
  */
 export const getRuntimeStatus = async () =>
   isNativeApp
