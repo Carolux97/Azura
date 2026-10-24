@@ -34,7 +34,7 @@ index 9b3cdf5..8153d5f 100644
  # Sanitizer support for debugging memory corruption and undefined behavior
  if(REXGLUE_ENABLE_SANITIZERS)
 diff --git a/cmake/rexglue_helpers.cmake b/cmake/rexglue_helpers.cmake
-index 41e6dce..1548018 100644
+index 41e6dce..a389b23 100644
 --- a/cmake/rexglue_helpers.cmake
 +++ b/cmake/rexglue_helpers.cmake
 @@ -1,8 +1,12 @@
@@ -92,7 +92,7 @@ index 41e6dce..1548018 100644
 +    endif()
 +    set(${out_var} "${_options}" PARENT_SCOPE)
 +endfunction()
-+
+ 
 +#==========================================================
 +# rexglue_apply_recomp_settings(<target> <pch_header>) - Generated code settings
 +#
@@ -130,7 +130,7 @@ index 41e6dce..1548018 100644
 +    rexglue_apply_target_settings(${name})
 +    rexglue_apply_recomp_settings(${name} "${ARG_PCH}")
 +endfunction()
- 
++
 +#==========================================================
 +# rexglue_add_host_sources(<target>) - SDK sources of a host application
 +#
@@ -179,6 +179,25 @@ index 41e6dce..1548018 100644
      if(UNIX AND NOT APPLE)
          set_target_properties(${target_name} PROPERTIES
              INSTALL_RPATH "$ORIGIN"
+@@ -109,12 +202,13 @@ function(rexglue_configure_target target_name)
+             COMMAND_EXPAND_LISTS
+             VERBATIM
+         )
+-    elseif(APPLE)
+-        # macOS: $<TARGET_RUNTIME_DLLS> does not resolve imported dylibs, so
++    elseif(UNIX)
++        # macOS and Linux: $<TARGET_RUNTIME_DLLS> only covers Windows DLLs, so
+         # stage the shared runtime libraries explicitly next to the executable
+-        # (paired with the @executable_path rpath above). Everything else the
+-        # runtime links (fmt, spdlog, SDL3, ...) is static. Target names
+-        # differ between an in-tree build and an installed SDK import.
++        # (paired with the @executable_path or $ORIGIN rpath above), which the
++        # executable needs to start. Everything else the runtime links (fmt,
++        # spdlog, SDL3, ...) is static. Target names differ between an in-tree
++        # build and an installed SDK import.
+         foreach(_rexglue_runtime_lib rex::runtime rexruntime rex::TracyClient TracyClient)
+             if(TARGET ${_rexglue_runtime_lib})
+                 add_custom_command(TARGET ${target_name} POST_BUILD
 diff --git a/cmake/rexglue_install.cmake b/cmake/rexglue_install.cmake
 index d9a64eb..c9f0fa4 100644
 --- a/cmake/rexglue_install.cmake
