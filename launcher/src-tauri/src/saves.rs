@@ -33,8 +33,16 @@ pub enum SavesError {
     DestinationHasSaves(String),
     /// The destination is inside the folder being moved (or the other way round).
     NestedFolders,
+    /// The backup asked for does not exist.
+    BackupMissing(String),
     /// A file operation failed.
     Io(String),
+}
+
+impl From<io::Error> for SavesError {
+    fn from(error: io::Error) -> Self {
+        SavesError::Io(error.to_string())
+    }
 }
 
 fn home() -> PathBuf {
@@ -172,26 +180,58 @@ pub fn prepare(saves: &Path, cache: &Path) -> Result<(), SavesError> {
     fs::create_dir_all(cache).map_err(|e| SavesError::Io(format!("{}: {e}", cache.display())))
 }
 
-/// Information about a single save backup.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Backups kept: making one removes the oldest beyond this many.
+pub const MAX_BACKUPS: usize = 10;
+
+/// Why a backup was made: by the player, or by the launcher before it changed the saves. Its tag
+/// ends the backup's folder name (`backup_<seconds>_<tag>`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BackupKind {
+    Manual,
+    BeforeRepair,
+    BeforeReset,
+}
+
+impl BackupKind {
+    fn tag(self) -> &'static str {
+        match self {
+            BackupKind::Manual => "manual",
+            BackupKind::BeforeRepair => "auto_before_repair",
+            BackupKind::BeforeReset => "auto_before_reset",
+        }
+    }
+
+    fn from_tag(tag: &str) -> Option<Self> {
+        [BackupKind::Manual, BackupKind::BeforeRepair, BackupKind::BeforeReset].into_iter().find(|kind| kind.tag() == tag)
+    }
+}
+
+/// A save backup, sent to the interface as JSON; the interface words and formats it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupInfo {
+    /// Its folder name, which restoring it takes.
     pub id: String,
-    pub date: String,
+    /// When it was made, in milliseconds since 1970 (UTC), from its folder name.
+    pub created_ms: Option<u64>,
+    /// Why it was made; `None` for a folder name the launcher does not know.
+    pub kind: Option<BackupKind>,
     pub size_bytes: u64,
 }
 
-/// Status of the game's save data.
+/// The state of the game's saves, sent to the interface as JSON; the interface words it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SaveStatus {
     pub has_saves: bool,
     pub checkpoint_count: usize,
     pub is_corrupted: bool,
+    /// "ok", "corrupted" or "empty".
     pub status: String,
-    pub message: String,
     pub save_path: String,
-    pub last_saved: Option<String>,
+    /// When a checkpoint was last written, in milliseconds since 1970 (UTC).
+    pub last_saved_ms: Option<u64>,
     pub backups: Vec<BackupInfo>,
 }
 
@@ -208,13 +248,10 @@ pub fn find_gears3_content_dir(saves_dir: &Path) -> PathBuf {
     p1
 }
 
-fn backups_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("backups");
-    let _ = fs::create_dir_all(&dir);
+/// The launcher's backups folder, in its app data folder.
+fn backups_dir(app: &AppHandle) -> Result<PathBuf, SavesError> {
+    let dir = app.path().app_data_dir().map_err(|e| SavesError::Io(e.to_string()))?.join("backups");
+    fs::create_dir_all(&dir)?;
     Ok(dir)
 }
 
@@ -232,6 +269,10 @@ fn dir_size(path: &Path) -> u64 {
         }
     }
     total
+}
+
+fn millis(time: std::time::SystemTime) -> Option<u64> {
+    time.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_millis() as u64)
 }
 
 /// Inspects the current state of saved games.
@@ -294,44 +335,22 @@ pub fn inspect_saves(app: &AppHandle, saves_dir: &Path) -> SaveStatus {
         }
     }
 
-    let mut last_saved = None;
-    if let Some(time) = latest_time {
-        if let Ok(elapsed) = time.duration_since(std::time::UNIX_EPOCH) {
-            let secs = elapsed.as_secs();
-            let hours = (secs / 3600) % 24;
-            let minutes = (secs / 60) % 60;
-            last_saved = Some(format!("{:02}:{:02} UTC", hours, minutes));
-        }
-    }
-
-    let backups = list_backups_internal(app);
-
-    let (status, message) = if is_corrupted {
-        (
-            "corrupted".to_string(),
-            "Se detectaron cabeceras huérfanas o incompletas (causa del aviso de datos corruptos).".to_string(),
-        )
+    let status = if is_corrupted {
+        "corrupted"
     } else if has_saves && checkpoint_count > 0 {
-        (
-            "ok".to_string(),
-            format!("Partidas guardadas intactas ({} archivos de punto de control).", checkpoint_count),
-        )
+        "ok"
     } else {
-        (
-            "empty".to_string(),
-            "No hay partidas guardadas activas (listo para iniciar nueva partida limpia).".to_string(),
-        )
+        "empty"
     };
 
     SaveStatus {
         has_saves,
         checkpoint_count,
         is_corrupted,
-        status,
-        message,
+        status: status.to_string(),
         save_path: content_dir.to_string_lossy().to_string(),
-        last_saved,
-        backups,
+        last_saved_ms: latest_time.and_then(millis),
+        backups: backups_dir(app).map(|dir| list_backups(&dir)).unwrap_or_default(),
     }
 }
 
@@ -360,110 +379,106 @@ fn orphaned_headers(headers_dir: &Path, packages_dir: &Path) -> Vec<(PathBuf, Pa
     orphans
 }
 
-/// Removes orphaned headers and their empty package folders. Only runs when the player asks for
-/// it, and backs the saves up first: nothing is deleted if the backup fails.
-pub fn repair_saves_internal(app: &AppHandle, saves_dir: &Path) -> Result<String, String> {
+/// Removes orphaned headers and their empty package folders, and returns how many. Only runs when
+/// the player asks for it, and backs the saves up first: nothing is deleted if the backup fails.
+pub fn repair_saves_internal(app: &AppHandle, saves_dir: &Path) -> Result<usize, SavesError> {
     let content_dir = find_gears3_content_dir(saves_dir);
     let headers_dir = content_dir.join("Headers").join("00000001");
     let packages_dir = content_dir.join("00000001");
     let orphans = orphaned_headers(&headers_dir, &packages_dir);
     if !orphans.is_empty() {
-        create_backup_internal(app, saves_dir, Some("auto_before_repair".into()))?;
+        create_backup(&backups_dir(app)?, &content_dir, BackupKind::BeforeRepair)?;
     }
-    let mut removed_count = 0;
+    let removed = orphans.len();
     for (header, pkg_dir) in orphans {
         let _ = fs::remove_file(&header);
         if pkg_dir.exists() {
             let _ = fs::remove_dir_all(&pkg_dir);
         }
-        removed_count += 1;
     }
-
-    Ok(format!(
-        "Reparación completada. Se eliminaron {} elementos corruptos o huérfanos.",
-        removed_count
-    ))
+    Ok(removed)
 }
 
 /// Performs a complete reset of save data, backing up first.
-pub fn reset_saves_internal(app: &AppHandle, saves_dir: &Path) -> Result<String, String> {
-    // Nothing is deleted if the backup fails.
-    create_backup_internal(app, saves_dir, Some("auto_before_reset".into()))?;
-
+pub fn reset_saves_internal(app: &AppHandle, saves_dir: &Path) -> Result<(), SavesError> {
     let content_dir = find_gears3_content_dir(saves_dir);
+    // Nothing is deleted if the backup fails.
+    create_backup(&backups_dir(app)?, &content_dir, BackupKind::BeforeReset)?;
+
     let headers_dir = content_dir.join("Headers");
     let packages_dir = content_dir.join("00000001");
-
     if headers_dir.exists() {
         let _ = fs::remove_dir_all(&headers_dir);
     }
     if packages_dir.exists() {
         let _ = fs::remove_dir_all(&packages_dir);
     }
-
     let _ = fs::create_dir_all(content_dir.join("Headers").join("00000001"));
     let _ = fs::create_dir_all(content_dir.join("00000001"));
-
-    Ok("Guardado restablecido con éxito. Se ha creado una copia de seguridad automática.".into())
+    Ok(())
 }
 
-/// Creates a backup of current saves.
-pub fn create_backup_internal(app: &AppHandle, saves_dir: &Path, label: Option<String>) -> Result<BackupInfo, String> {
-    let content_dir = find_gears3_content_dir(saves_dir);
-    let b_dir = backups_dir(app)?;
+/// Backs the player's saves up, at their request.
+pub fn create_backup_internal(app: &AppHandle, saves_dir: &Path) -> Result<BackupInfo, SavesError> {
+    create_backup(&backups_dir(app)?, &find_gears3_content_dir(saves_dir), BackupKind::Manual)
+}
 
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-
-    let tag = label.unwrap_or_else(|| "manual".into());
-    let backup_id = format!("backup_{}_{}", timestamp, tag);
-    let target_dir = b_dir.join(&backup_id);
-
+/// Copies `content_dir` into a new backup in `backups`, then keeps only the MAX_BACKUPS newest.
+fn create_backup(backups: &Path, content_dir: &Path, kind: BackupKind) -> Result<BackupInfo, SavesError> {
+    let now = std::time::SystemTime::now();
+    let seconds = now.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let id = format!("backup_{}_{}", seconds, kind.tag());
+    let target = backups.join(&id);
     if content_dir.exists() {
-        copy_entry(&content_dir, &target_dir).map_err(|e| e.to_string())?;
+        copy_entry(content_dir, &target)?;
     } else {
-        fs::create_dir_all(&target_dir).map_err(|e| e.to_string())?;
+        fs::create_dir_all(&target)?;
     }
+    prune_backups(backups, MAX_BACKUPS);
+    Ok(backup_info(&target).unwrap_or(BackupInfo { id, created_ms: millis(now), kind: Some(kind), size_bytes: 0 }))
+}
 
-    let size_bytes = dir_size(&target_dir);
-
-    Ok(BackupInfo {
-        id: backup_id,
-        date: format!("{}", timestamp),
-        size_bytes,
+/// What a backup folder's name and contents say about it: `backup_<seconds>_<tag>`.
+fn backup_info(path: &Path) -> Option<BackupInfo> {
+    let id = path.file_name()?.to_str()?.to_owned();
+    let (seconds, tag) = id.strip_prefix("backup_").and_then(|rest| rest.split_once('_')).unzip();
+    Some(BackupInfo {
+        created_ms: seconds.and_then(|s| s.parse::<u64>().ok()).map(|s| s * 1000),
+        kind: tag.and_then(BackupKind::from_tag),
+        size_bytes: dir_size(path),
+        id,
     })
 }
 
-/// Lists available backups.
-pub fn list_backups_internal(app: &AppHandle) -> Vec<BackupInfo> {
-    let mut result = Vec::new();
-    if let Ok(b_dir) = backups_dir(app) {
-        if let Ok(entries) = fs::read_dir(&b_dir) {
-            for entry in entries.flatten() {
-                if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                    let id = entry.file_name().to_string_lossy().to_string();
-                    let size_bytes = dir_size(&entry.path());
-                    result.push(BackupInfo {
-                        id,
-                        date: "Copia disponible".into(),
-                        size_bytes,
-                    });
-                }
-            }
-        }
-    }
-    result.sort_by(|a, b| b.id.cmp(&a.id));
+/// The backups in `backups`, newest first.
+fn list_backups(backups: &Path) -> Vec<BackupInfo> {
+    let mut result: Vec<BackupInfo> = fs::read_dir(backups)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|entry| entry.file_type().map(|t| t.is_dir()).unwrap_or(false))
+                .filter_map(|entry| backup_info(&entry.path()))
+                .collect()
+        })
+        .unwrap_or_default();
+    result.sort_by(|a, b| b.created_ms.cmp(&a.created_ms).then_with(|| b.id.cmp(&a.id)));
     result
 }
 
-/// Restores a backup.
-pub fn restore_backup_internal(app: &AppHandle, saves_dir: &Path, backup_id: &str) -> Result<String, String> {
+/// Removes the oldest backups in `backups` beyond the `keep` newest.
+fn prune_backups(backups: &Path, keep: usize) {
+    for old in list_backups(backups).into_iter().skip(keep) {
+        let _ = fs::remove_dir_all(backups.join(&old.id));
+    }
+}
+
+/// Restores a backup over the current saves.
+pub fn restore_backup_internal(app: &AppHandle, saves_dir: &Path, backup_id: &str) -> Result<(), SavesError> {
     let b_dir = backups_dir(app)?;
+    // Only a backup folder of the backups folder: an id with a path in it names none.
     let src = b_dir.join(backup_id);
-    if !src.is_dir() {
-        return Err(format!("No existe la copia de seguridad: {}", backup_id));
+    if backup_id.contains(['/', '\\']) || backup_id.starts_with('.') || !src.is_dir() {
+        return Err(SavesError::BackupMissing(backup_id.to_owned()));
     }
 
     // The backup is copied beside the current saves first, and only swapped in once the copy is
@@ -475,17 +490,17 @@ pub fn restore_backup_internal(app: &AppHandle, saves_dir: &Path, backup_id: &st
     let _ = fs::remove_dir_all(&previous);
     if let Err(error) = copy_entry(&src, &restoring) {
         let _ = fs::remove_dir_all(&restoring);
-        return Err(error.to_string());
+        return Err(error.into());
     }
     if content_dir.exists() {
-        fs::rename(&content_dir, &previous).map_err(|e| e.to_string())?;
+        fs::rename(&content_dir, &previous)?;
     }
     if let Err(error) = fs::rename(&restoring, &content_dir) {
         let _ = fs::rename(&previous, &content_dir);
-        return Err(error.to_string());
+        return Err(error.into());
     }
     let _ = fs::remove_dir_all(&previous);
-    Ok("Partida restaurada con éxito.".into())
+    Ok(())
 }
 
 /// Opens the saves directory in the system file manager.
@@ -558,5 +573,43 @@ mod tests {
         fake_user_data(&from);
         assert_eq!(move_saves(&from, &from.join("inner"), false), Err(SavesError::NestedFolders));
         assert_eq!(move_saves(&from, &from, false).unwrap(), 0);
+    }
+
+    #[test]
+    fn a_backup_says_when_and_why_it_was_made() {
+        let dir = TempFolder::new("backup-info");
+        let backups = dir.join("backups");
+        let content = dir.join("content");
+        fs::create_dir_all(content.join("00000001")).unwrap();
+        fs::write(content.join("00000001/checkpoint"), b"save").unwrap();
+        let made = create_backup(&backups, &content, BackupKind::BeforeRepair).unwrap();
+        assert_eq!(made.kind, Some(BackupKind::BeforeRepair));
+        assert!(made.created_ms.is_some());
+        assert_eq!(made.size_bytes, 4);
+        // Folders made by older launchers read the same way; an unknown one still lists.
+        fs::create_dir_all(backups.join("backup_1729000000_manual")).unwrap();
+        fs::create_dir_all(backups.join("something_else")).unwrap();
+        let listed = list_backups(&backups);
+        let old = listed.iter().find(|b| b.id == "backup_1729000000_manual").unwrap();
+        assert_eq!((old.created_ms, old.kind), (Some(1_729_000_000_000), Some(BackupKind::Manual)));
+        let unknown = listed.iter().find(|b| b.id == "something_else").unwrap();
+        assert_eq!((unknown.created_ms, unknown.kind), (None, None));
+        // Newest first; a folder without a date goes last.
+        assert_eq!(listed[0].id, made.id);
+        assert_eq!(listed.last().unwrap().id, "something_else");
+    }
+
+    #[test]
+    fn only_the_newest_backups_are_kept() {
+        let dir = TempFolder::new("backup-prune");
+        let backups = dir.join("backups");
+        for seconds in 1..=12u64 {
+            fs::create_dir_all(backups.join(format!("backup_{}_manual", 1_700_000_000 + seconds))).unwrap();
+        }
+        prune_backups(&backups, MAX_BACKUPS);
+        let kept: Vec<String> = list_backups(&backups).into_iter().map(|b| b.id).collect();
+        assert_eq!(kept.len(), 10);
+        assert_eq!(kept.first().unwrap(), "backup_1700000012_manual");
+        assert_eq!(kept.last().unwrap(), "backup_1700000003_manual");
     }
 }
