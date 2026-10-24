@@ -131,15 +131,31 @@ counts as ten.
 - **macOS jobs, and the small Release jobs** (the version check and the publish), run on the
   project's own Mac: a self-hosted runner with the labels `self-hosted`, `macOS` and `ARM64`, which
   costs no minutes. They wait while that Mac is off or its user is logged out.
-- **Linux jobs** run on GitHub's Ubuntu runners: the Linux kit and AppImage need x86-64 Linux.
-  While the included minutes are used up they cannot run, and a release publishes macOS alone;
-  once Linux can build again, run the Release workflow by hand with "Publish" on to add it to that
-  version's release.
+- **Linux launcher tests** run on the project's own Linux runner, `casaserver-linux`, with the labels
+  `self-hosted`, `Linux` and `X64`: an Ubuntu 22.04 container on Juan Llorca Martínez's TrueNAS
+  server (see below). It costs no minutes and waits while that server is off.
+- **The other Linux jobs** (the Linux kit and AppImage, which need x86-64 Linux) still run on
+  GitHub's Ubuntu runners. While the included minutes are used up they cannot run, and a release
+  publishes macOS alone; once Linux can build again, run the Release workflow by hand with
+  "Publish" on to add it to that version's release.
 
 To set up a runner (once per machine): in the repository, Settings, Actions, Runners, New
 self-hosted runner, pick the machine's system, download the runner it shows into
 `~/actions-runner` (outside the repository) and run the `./config.sh` command it gives, which
 carries a one-off registration token. Then `./svc.sh install` and `./svc.sh start` make it start
 with the session. Jobs run as that user, with its Homebrew, Rust and Node, in
-`~/actions-runner/_work`. A Linux x86-64 runner would also take the Linux jobs if they move to
-`[self-hosted, Linux, X64]`.
+`~/actions-runner/_work`.
+
+The Linux runner lives in `gh-runner`, an unprivileged container (TrueNAS Instances, image Ubuntu
+jammy, 3 CPUs, 3 GiB of memory, autostart) that mounts none of the server's datasets, so a job
+cannot reach them. To set it up again:
+
+1. In the container, as root: `apt-get install openssh-server sudo curl git` and the libraries the
+   Linux launcher job needs (the "Install the Linux libraries Tauri needs" step of
+   `launcher-tests.yml`, plus `pkg-config`), and create a user `runner` without sudo. The step
+   that installs them is skipped on self-hosted runners, since the runner user cannot run apt.
+2. As `runner`, install the runner in `~/actions-runner` as above, with
+   `--labels self-hosted,Linux,X64`, and add to its `.env`: `CARGO_HOME` and `RUSTUP_HOME` under
+   `~/actions-runner` (so a job's Rust stays apart from anything else), and `CARGO_BUILD_JOBS=2`
+   and `CMAKE_BUILD_PARALLEL_LEVEL=2`, so builds leave memory to the server's own apps.
+3. As root: `./svc.sh install runner` and `./svc.sh start` in `~runner/actions-runner`.
