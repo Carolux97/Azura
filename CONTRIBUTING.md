@@ -5,6 +5,19 @@ short-lived branch and a pull request to `main`, reviewed and tested on both pla
 merged. Everything written into the repository (code, comments, commit messages, docs) and on the
 Trello board is in English.
 
+## Contributions from outside the team
+
+The Trello board where the team tracks its work is not public, so the workflow below is for the
+team. If you would like to contribute:
+
+1. **Open an issue first**, describing the bug (with the launcher's log, your system and your game
+   edition) or the change you have in mind, and wait for an answer before writing code: someone may
+   already be on it, or it may not fit the project.
+2. **Then a pull request**, from a branch of your fork, that names the issue in its description
+   instead of a card. Its checks run once a maintainer approves them.
+
+Contributions are accepted under the terms in [License of contributions](#license-of-contributions).
+
 ## Workflow
 
 1. **Card.** Every piece of work starts as a card on the Trello board, in the format below.
