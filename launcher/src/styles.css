@@ -537,6 +537,7 @@ code, kbd {
 .status-list { display: grid; gap: 10px; }
 
 .status { display: flex; gap: 12px; align-items: flex-start; }
+.status[hidden] { display: none; }
 .status strong {
   display: block;
   font-family: var(--font-ui);
