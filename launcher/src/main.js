@@ -30,6 +30,7 @@ import {
   getAppVersion,
   getRuntimeStatus,
   getSystemInfo,
+  getReleaseNotes,
   installRuntime,
   installUpdate,
   isNativeApp,
@@ -42,9 +43,16 @@ import {
   changeSavesFolder,
   createSaveBackup,
   getAchievements,
+  getCompilerStatus,
+  installCompiler,
+  onRuntimeBuildProgress,
+  onGamepadInput,
+  showBuildLog,
   getSaveStatus,
   openSavesFolder,
   pickGameFolder,
+  pickGameImage,
+  onPathDropped,
   pickSavesFolder,
   repairSaves,
   resetSaves,
@@ -52,7 +60,10 @@ import {
   saveSettings,
 } from "./platform.js";
 import { defaultGameLanguage, gameLanguageName } from "./gameLanguages.js";
+import { setupGamepad } from "./gamepadNav.js";
+import { TEXT_RULES } from "./textRules.js";
 import { achievementView } from "./achievements.js";
+import { createBuildTracker } from "./buildProgress.js";
 import { LOCK_ICON, completedBanner, renderAchievementsPage } from "./achievementsPage.js";
 
 const SPORE_COUNT = 26;
@@ -81,6 +92,11 @@ const state = {
   // and whether it is being installed.
   runtime: { installed: false, buildFound: false, updateAvailable: false },
   installingRuntime: false,
+  // The kit build's last progress ({ phase, done, total }), or null when no build runs.
+  buildProgress: null,
+  // The runtime build from the kit the Play view's card shows: its tracker (buildProgress.js) and,
+  // once it failed, why ({ key, vars, log }); null when there is none to show.
+  build: null,
   // Folder for the saves (shown in the Installation view; changed only by moving the saves) and
   // the folder waiting for the player to confirm replacing the saves already in it.
   savesFolder: "",
@@ -109,18 +125,28 @@ const state = {
   achievements: null,
   achievementsView: "list",
   achievementsFilter: "all",
+  // What this launcher version brings ({ version, items }, see platform.getReleaseNotes), and the
+  // version whose notes the player dismissed (saved with the settings).
+  releaseNotes: null,
+  seenReleaseNotes: null,
+  // The C++ compiler the runtime is built with (see platform.getCompilerStatus), or null while it is
+  // first checked; and what the launcher is doing about it: "" (nothing), "checking", "installing"
+  // (the package manager runs) or "waitingForApple" (Apple's install window is open).
+  compiler: null,
+  compilerAction: "",
 };
 
 /** Builds the settings object platform.saveSettings stores (see src-tauri/src/settings.rs). */
 const currentSettings = () => ({
   gameFolder: state.savedGameFolder,
-  userName: state.userName || null,
+  userName: state.userName.trimEnd() || null,
   fullscreen: state.fullscreen,
   graphics: { renderResolution: state.renderResolution },
   uiLanguage: getPreference(),
   gameLanguage: state.gameLanguage,
   gameLanguageChosen: state.gameLanguageChosen,
   achievementsView: state.achievementsView,
+  seenReleaseNotes: state.seenReleaseNotes,
   savesFolder: state.savesFolder,
 });
 
@@ -196,8 +222,12 @@ const runtimeNeedsInstall = () => state.runtime.buildFound && (!state.runtime.in
 
 /** Translation key describing the runtime, and its status tone ("ok", "warn" or "error"). */
 const runtimeState = () => {
-  const { installed, buildFound, updateAvailable } = state.runtime;
+  const { installed, buildFound, updateAvailable, source, updateKind } = state.runtime;
   if (installed && !updateAvailable) return ["install.runtimeInstalled", "ok"];
+  // Built here from the kit: say what an update takes, seconds or minutes.
+  if (source === "kit" && !installed) return ["install.runtimeNotBuilt", "warn"];
+  if (source === "kit" && updateKind === "link") return ["install.runtimeUpdateLink", "warn"];
+  if (source === "kit") return ["install.runtimeUpdateBuild", "warn"];
   if (installed) return ["install.runtimeUpdate", "warn"];
   if (buildFound) return ["install.runtimeNotInstalled", "warn"];
   return ["install.runtimeNoBuild", "error"];
@@ -216,6 +246,39 @@ const refreshRuntime = async () => {
  * Writes the state-dependent parts of the Play view. Without game files the main button becomes
  * "Install", so it never offers to start a game that cannot run.
  */
+/**
+ * The "What's new" panel: this version's notes until the player dismisses them. The notes are in
+ * English (launcher/CHANGELOG.md); the title around them is translated.
+ */
+const renderReleaseNotes = () => {
+  const panel = document.getElementById("release-notes");
+  const notes = state.releaseNotes;
+  panel.hidden = !notes || notes.version === state.seenReleaseNotes;
+  if (panel.hidden) return;
+  document.getElementById("release-notes-title").textContent = t("releaseNotes.title", { version: notes.version });
+  document.getElementById("release-notes-list").replaceChildren(
+    ...notes.items.map((item) => {
+      const line = document.createElement("li");
+      line.textContent = item;
+      return line;
+    }),
+  );
+};
+
+const setupReleaseNotes = async () => {
+  document.getElementById("release-notes-dismiss").addEventListener("click", () => {
+    state.seenReleaseNotes = state.releaseNotes?.version ?? null;
+    persist();
+    renderReleaseNotes();
+  });
+  try {
+    state.releaseNotes = await getReleaseNotes();
+  } catch (error) {
+    console.error("Release notes could not be read:", error);
+  }
+  renderReleaseNotes();
+};
+
 const renderPlay = () => {
   const status = document.getElementById("status-game");
   status.dataset.state = isInstalled() ? "ok" : "warn";
@@ -224,10 +287,20 @@ const renderPlay = () => {
   else if (state.gameCheck) detail = `install.${state.gameCheck.status}`;
   status.querySelector(".status-detail").textContent = t(detail, state.gameCheck ?? {});
 
+  const compilerLine = document.getElementById("status-compiler");
+  compilerLine.dataset.state = state.compiler?.status === "ready" ? "ok" : "warn";
+  compilerLine.querySelector(".status-detail").textContent =
+    state.compiler?.status === "ready" ? state.compiler.version : t(state.compiler ? "status.compilerMissing" : "status.compilerChecking");
+
   const runtime = document.getElementById("status-runtime");
   const [, tone] = runtimeState();
-  runtime.dataset.state = tone === "ok" ? "ok" : "warn";
+  const building = state.installingRuntime && state.runtime.source === "kit";
+  runtime.dataset.state = building ? "progress" : tone === "ok" ? "ok" : "warn";
   const system = state.system;
+  // The heading names the system the launcher runs on (macOS until it is known, as in a browser).
+  const linux = system?.os === "linux";
+  document.getElementById("play-eyebrow").textContent = t("play.eyebrow", { platform: linux ? "Linux" : "macOS" });
+  document.getElementById("play-lede").textContent = t("play.lede", { target: linux ? "Linux" : "Apple Silicon" });
   const platformName = system?.os === "linux"
     ? `Linux ${system.arch}`
     : system?.os === "macos"
@@ -237,6 +310,9 @@ const renderPlay = () => {
   if (!state.runtime.buildFound && !state.runtime.installed) runtimeDetail = t("status.runtimeMissing");
   else if (!state.runtime.installed) runtimeDetail = t("status.runtimeNotInstalled");
   else if (state.runtime.updateAvailable) runtimeDetail = t("status.runtimeUpdate");
+  if (state.runtime.source === "kit" && !state.runtime.installed) runtimeDetail = t("status.runtimeNotBuilt");
+  else if (state.runtime.source === "kit" && state.runtime.updateAvailable) runtimeDetail = t("status.runtimeUpdateKit");
+  if (building) runtimeDetail = t("status.runtimeBuilding");
   runtime.querySelector(".status-detail").textContent = runtimeDetail;
 
   const player = document.getElementById("status-player");
@@ -250,7 +326,18 @@ const renderPlay = () => {
   button.disabled = state.game !== "idle" || state.installingRuntime;
   let label = "play.install";
   let sub = "play.installSub";
-  if (isInstalled()) {
+  const fromKit = state.runtime.source === "kit";
+  if (isInstalled() && building) {
+    label = "play.building";
+    sub = "play.buildingSub";
+  } else if (isInstalled() && fromKit && state.game === "idle" && !state.runtime.installed) {
+    // From the kit the button installs first, and says so; it turns to Play once installed.
+    label = "play.installRuntime";
+    sub = "play.installRuntimeSub";
+  } else if (isInstalled() && fromKit && state.game === "idle" && state.runtime.updateAvailable) {
+    label = "play.update";
+    sub = state.runtime.updateKind === "link" ? "play.updateLinkSub" : "play.updateBuildSub";
+  } else if (isInstalled()) {
     label = { idle: "play.launch", starting: "play.launching", running: "play.running" }[state.game];
     sub = state.game === "idle" && runtimeNeedsInstall() ? "play.runtimeWillInstall" : "play.mode";
   }
@@ -264,10 +351,8 @@ const renderPlay = () => {
   const machine = [chip ?? fallbackMachine, memoryGb ? `${memoryGb} GB` : null].filter(Boolean).join(" · ");
   document.getElementById("status-gpu-detail").textContent = t("status.gpuValue", { machine });
 
-  const date = document.querySelector(".news-item time");
-  date.textContent = new Intl.DateTimeFormat(getLocale(), { dateStyle: "medium" }).format(
-    new Date(`${date.dateTime}T12:00:00`),
-  );
+  renderReleaseNotes();
+  renderBuildCard();
 
   document.getElementById("launcher-version").textContent = t("rail.launcherVersion", { version: state.launcherVersion });
   document.getElementById("runtime-version").textContent = t("rail.runtimeVersion", { version: RUNTIME_VERSION });
@@ -326,6 +411,13 @@ const setupLaunch = () => {
       document.getElementById("pick-game").focus();
       return;
     }
+    // Building from the kit takes minutes: the button then only builds, and turns to Play once the
+    // build is done, so the game does not start while the player may have stepped away. A project
+    // build installs in a second, and Play goes on to start the game.
+    if (runtimeNeedsInstall() && state.runtime.source === "kit") {
+      await runRuntimeInstall();
+      return;
+    }
     document.getElementById("game-log-body").replaceChildren();
     state.game = "starting";
     renderPlay();
@@ -374,24 +466,235 @@ const setupLaunch = () => {
  * succeeded.
  */
 const runRuntimeInstall = async () => {
+  const fromKit = state.runtime.source === "kit";
   state.installingRuntime = true;
-  setLogState("log.installingRuntime");
+  state.buildProgress = null;
+  if (fromKit) {
+    // A build from the kit shows its own card with a bar on Play, not the game log.
+    state.build = { tracker: createBuildTracker(), failed: null };
+    state.build.tracker.update({ phase: "preparing" }, Date.now());
+    startBuildTicker();
+  } else {
+    setLogState("log.installingRuntime");
+  }
   renderInstall();
   renderPlay();
   try {
     state.runtime = await installRuntime();
+    state.build = null;
     toast(t("toast.runtimeInstalled"));
     // The runtime reads the achievements, so they can show now.
     refreshAchievements();
     return true;
   } catch (error) {
-    setLogState("log.installFailed", "error", { detail: String(error) });
+    const [key, vars] = buildErrorMessage(error);
+    if (fromKit) state.build = { ...state.build, failed: { key, vars, log: error?.detail?.log ?? null } };
+    else setLogState(key, "error", vars);
+    if (error?.kind === "noCompiler") refreshCompiler();
     return false;
   } finally {
     state.installingRuntime = false;
+    state.buildProgress = null;
     renderInstall();
     renderPlay();
   }
+};
+
+/** Redraws the build's bar and time left every second while a build runs (the time moves on even
+ * when no file finishes). */
+let buildTicker = null;
+const startBuildTicker = () => {
+  clearInterval(buildTicker);
+  buildTicker = setInterval(() => {
+    if (!state.installingRuntime) {
+      clearInterval(buildTicker);
+      buildTicker = null;
+    }
+    renderBuildCard();
+  }, 1000);
+};
+
+/** "1 min 10 s", "45 s": a duration in the reader's language. */
+const formatDuration = (ms) => {
+  const seconds = Math.max(1, Math.round(ms / 1000));
+  const unit = (value, name) => new Intl.NumberFormat(getLocale(), { style: "unit", unit: name, unitDisplay: "short" }).format(value);
+  if (seconds < 60) return unit(seconds, "second");
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return rest ? `${unit(minutes, "minute")} ${unit(rest, "second")}` : unit(minutes, "minute");
+};
+
+/**
+ * Writes the build card on Play (the step, the bar, the percentage and the time left, or why it
+ * failed with a retry and the log) and the bar in the Installation view.
+ */
+const renderBuildCard = () => {
+  const build = state.build;
+  const card = document.getElementById("build-card");
+  const installBar = document.getElementById("install-build-bar");
+  card.hidden = !build;
+  installBar.hidden = !build || Boolean(build.failed);
+  if (!build) return;
+  const now = Date.now();
+  const tracker = build.tracker;
+  const failed = build.failed;
+  const percent = tracker.percent(now);
+  card.classList.toggle("is-failed", Boolean(failed));
+  document.getElementById("build-card-title").textContent = t(failed ? "build.failedTitle" : "build.title");
+  document.getElementById("build-card-percent").textContent = failed
+    ? ""
+    : new Intl.NumberFormat(getLocale(), { style: "percent" }).format(percent / 100);
+  document.getElementById("build-card-bar").style.width = `${percent}%`;
+  installBar.firstElementChild.style.width = `${percent}%`;
+  let detail;
+  if (failed) {
+    detail = t(failed.key, failed.vars);
+  } else {
+    const progress = state.buildProgress ?? { phase: tracker.phase, done: 0, total: 0 };
+    const step = t(BUILD_PHASE_KEYS[progress.phase] ?? "log.buildPreparing", { done: progress.done, total: progress.total });
+    const remaining = tracker.remainingMs(now);
+    detail = `${step} · ${remaining === null ? t("build.estimating") : t("build.remaining", { time: formatDuration(remaining) })}`;
+  }
+  document.getElementById("build-card-detail").textContent = detail;
+  document.getElementById("build-card-actions").hidden = !failed;
+  document.getElementById("build-card-log").hidden = !failed?.log;
+};
+
+/** Translation key of each step of a kit build, for the log header and the Installation view. */
+const BUILD_PHASE_KEYS = {
+  preparing: "log.buildPreparing",
+  translating: "log.buildTranslating",
+  compiling: "log.buildCompiling",
+  linking: "log.buildLinking",
+  installing: "log.buildInstalling",
+};
+
+/** Translation key and values for a failed runtime install or build (see platform.installRuntime). */
+const buildErrorMessage = (error) => {
+  const detail = error?.detail;
+  switch (error?.kind) {
+    case "noCompiler":
+      return ["log.buildNoCompiler", {}];
+    case "noKit":
+      return ["log.buildNoKit", {}];
+    case "wrongKit":
+      return ["log.buildWrongKit", { detail: detail?.reason ?? "" }];
+    case "unsupportedGame":
+      return ["log.buildUnsupportedGame", {}];
+    case "notEnoughSpace":
+      return ["log.buildNoSpace", { needed: detail?.neededMb ?? 0, free: detail?.freeMb ?? 0 }];
+    case "stepFailed":
+      return ["log.buildStepFailed", {
+        step: t(`log.buildStep.${detail?.phase ?? "preparing"}`),
+        summary: detail?.summary ?? "",
+        log: detail?.log ?? "",
+      }];
+    case "alreadyRunning":
+      return ["log.buildBusy", {}];
+    default:
+      return ["log.installFailed", { detail: typeof detail === "string" ? detail : String(error) }];
+  }
+};
+
+/** Shows a kit build's progress in the log header and the Installation view. */
+const setupBuildProgress = () => {
+  onRuntimeBuildProgress?.((progress) => {
+    state.buildProgress = progress;
+    state.build?.tracker.update(progress, Date.now());
+    renderBuildCard();
+    renderInstall();
+  });
+  document.getElementById("build-card-retry").addEventListener("click", () => {
+    state.build = null;
+    renderBuildCard();
+    runRuntimeInstall();
+  });
+  document.getElementById("build-card-log").addEventListener("click", () => {
+    if (state.build?.failed?.log) showBuildLog(state.build.failed.log).catch((error) => console.error(error));
+  });
+};
+
+/** How often the status is checked while Apple's install window is open, and for how long. */
+const APPLE_TOOLS_POLL_MS = 5000;
+const APPLE_TOOLS_POLL_LIMIT_MS = 60 * 60 * 1000;
+
+/** Writes the compiler's state into its Installation panel: what was found, and how to install it. */
+const renderCompiler = () => {
+  const status = state.compiler;
+  const line = document.getElementById("compiler-check");
+  const install = document.getElementById("install-compiler");
+  const manual = document.getElementById("compiler-manual");
+  const action = state.compilerAction;
+  const ready = status?.status === "ready";
+  line.dataset.state = ready ? "ok" : status ? "error" : "";
+  if (action === "waitingForApple") line.textContent = t("install.compilerWaitingApple");
+  else if (action === "installing") line.textContent = t("install.compilerInstalling");
+  else if (!status || action === "checking") line.textContent = t("install.compilerChecking");
+  else if (ready) line.textContent = t("install.compilerReady", { version: status.version });
+  else if (status.found) line.textContent = t("install.compilerUnusable", { found: status.found, problem: status.problem ?? "" });
+  else line.textContent = t("install.compilerMissing");
+
+  const kind = status?.install?.kind;
+  install.hidden = ready || !status || kind === "manual";
+  install.disabled = action !== "";
+  install.textContent = t(kind === "appleCommandLineTools" ? "install.compilerInstallApple" : "install.compilerInstallPackage");
+  document.getElementById("recheck-compiler").disabled = action !== "";
+  manual.hidden = ready || !status?.manual;
+  document.getElementById("compiler-manual-command").textContent = status?.manual ?? "";
+};
+
+/** Checks the compiler again and redraws what shows it. */
+const refreshCompiler = async () => {
+  try {
+    state.compiler = await getCompilerStatus();
+  } catch (error) {
+    console.error("Checking the compiler failed:", error);
+  }
+  renderCompiler();
+  renderPlay();
+};
+
+/**
+ * Wires the compiler panel. Installing on macOS opens Apple's window and returns at once, so the
+ * status is checked every few seconds until the tools are there or Apple's installer is closed
+ * without installing them; on Linux the package manager runs to the end first.
+ */
+const setupCompiler = () => {
+  document.getElementById("recheck-compiler").addEventListener("click", async () => {
+    state.compilerAction = "checking";
+    renderCompiler();
+    await refreshCompiler();
+    state.compilerAction = "";
+    renderCompiler();
+  });
+
+  document.getElementById("install-compiler").addEventListener("click", async () => {
+    const apple = state.compiler?.install?.kind === "appleCommandLineTools";
+    state.compilerAction = apple ? "waitingForApple" : "installing";
+    renderCompiler();
+    try {
+      await installCompiler();
+      if (apple) {
+        // Until the tools are there, or Apple's installer has closed without installing them.
+        const start = Date.now();
+        while (Date.now() - start < APPLE_TOOLS_POLL_LIMIT_MS) {
+          await new Promise((resolve) => setTimeout(resolve, APPLE_TOOLS_POLL_MS));
+          state.compiler = await getCompilerStatus();
+          if (state.compiler.status === "ready" || !state.compiler.installerRunning) break;
+        }
+      } else {
+        state.compiler = await getCompilerStatus();
+      }
+      if (state.compiler?.status === "ready") toast(t("toast.compilerInstalled", { version: state.compiler.version }));
+    } catch (error) {
+      toast(t("toast.compilerInstallFailed", { detail: String(error) }));
+      await refreshCompiler();
+    } finally {
+      state.compilerAction = "";
+      renderCompiler();
+      renderPlay();
+    }
+  });
 };
 
 /** Writes the folder path and the result of its check into the Installation view. */
@@ -410,7 +713,10 @@ const renderInstall = () => {
   const [runtimeKey, runtimeTone] = runtimeState();
   const runtimeLine = document.getElementById("runtime-check");
   runtimeLine.dataset.state = runtimeTone;
-  runtimeLine.textContent = t(runtimeKey);
+  const progress = state.buildProgress;
+  runtimeLine.textContent = state.installingRuntime && progress
+    ? t(BUILD_PHASE_KEYS[progress.phase] ?? "log.buildPreparing", { done: progress.done, total: progress.total })
+    : t(runtimeKey);
   const runtimeButton = document.getElementById("install-runtime");
   runtimeButton.hidden = !state.runtime.buildFound;
   runtimeButton.disabled = state.installingRuntime || state.game !== "idle" || !runtimeNeedsInstall();
@@ -471,22 +777,30 @@ const applyGameCheck = (check) => {
 };
 
 /**
- * Wires the folder picker. A failed check keeps the previous valid folder in the settings, so a
- * wrong pick never makes the launcher forget a working installation on its next start.
+ * Wires the game pickers: a folder, a disc image (.iso), or either dropped on the Installation
+ * view. A failed check keeps the previous valid game in the settings, so a wrong pick never makes
+ * the launcher forget a working installation on its next start.
  */
 const setupInstall = () => {
-  const button = document.getElementById("pick-game");
-  button.addEventListener("click", async () => {
-    button.disabled = true;
+  const buttons = [document.getElementById("pick-game"), document.getElementById("pick-game-image")];
+  const choose = async (pick) => {
+    buttons.forEach((button) => (button.disabled = true));
     try {
-      const check = await pickGameFolder();
+      const check = await pick();
       if (!check) return; // The user cancelled the picker.
       applyGameCheck(check);
       if (!isNativeApp) toast(t("toast.pick"));
     } catch (error) {
-      console.error("Folder picker failed:", error);
+      console.error("Game picker failed:", error);
     } finally {
-      button.disabled = false;
+      buttons.forEach((button) => (button.disabled = false));
+    }
+  };
+  buttons[0].addEventListener("click", () => choose(pickGameFolder));
+  buttons[1].addEventListener("click", () => choose(pickGameImage));
+  onPathDropped((path) => {
+    if (document.querySelector('.view[data-view="install"]').classList.contains("is-active")) {
+      choose(() => checkGameFolder(path));
     }
   });
 
@@ -518,10 +832,10 @@ const setupInstall = () => {
 
   const playerField = document.getElementById("player-name");
   if (playerField) {
+    // Only what a gamertag may hold stays (textRules.js), however it was typed or pasted.
     playerField.addEventListener("input", () => {
-      if (playerField.value.length > 15) {
-        playerField.value = playerField.value.slice(0, 15);
-      }
+      const clean = TEXT_RULES.gamertag.clean(playerField.value);
+      if (clean !== playerField.value) playerField.value = clean;
       state.userName = playerField.value;
       renderPlay();
       persist();
@@ -895,6 +1209,7 @@ const renderAll = () => {
   renderUpdate();
   renderSaves();
   renderAchievements();
+  renderCompiler();
 };
 
 /**
@@ -917,7 +1232,7 @@ const setupReloadOnFocus = () => {
       const settings = await loadSettings();
       if (!settings) return;
       applyStoredGraphics(settings);
-      state.userName = (settings.userName ?? "").slice(0, 15);
+      state.userName = TEXT_RULES.gamertag.clean(settings.userName ?? "");
       renderGraphics();
       renderInstall();
       renderPlay();
@@ -939,12 +1254,16 @@ const loadSavedSettings = async () => {
 
 createSpores();
 setupNavigation();
+// The controller belongs to the game while it runs.
+setupGamepad({ showView, blocked: () => state.game !== "idle", t, onLocaleChange, onInput: onGamepadInput });
 setupLaunch();
 setupInstall();
 setupGraphics();
 setupLanguages();
 setupSaves();
 setupAchievements();
+setupCompiler();
+setupBuildProgress();
 setupReloadOnFocus();
 
 /**
@@ -964,13 +1283,16 @@ const detectSystem = async () => {
 // The machine is detected before the settings load, because "Automatic" resolves from it.
 await detectSystem();
 await refreshRuntime();
+// In the background: it compiles a small program, and nothing below waits for it.
+refreshCompiler();
 const settings = await loadSavedSettings();
 state.savesFolder = settings.savesFolder ?? "";
 applyStoredGraphics(settings);
-state.userName = (settings.userName ?? "").slice(0, 15);
+state.userName = TEXT_RULES.gamertag.clean(settings.userName ?? "");
 state.gameLanguage = settings.gameLanguage ?? null;
 state.gameLanguageChosen = Boolean(settings.gameLanguageChosen);
 state.achievementsView = achievementView(settings.achievementsView);
+state.seenReleaseNotes = settings.seenReleaseNotes ?? null;
 onLocaleChange(renderAll);
 await initI18n(settings.uiLanguage);
 document.getElementById("ui-language").value = getPreference();
@@ -979,3 +1301,4 @@ await restoreGameFolder(settings.gameFolder);
 if (!state.achievements) refreshAchievements();
 await refreshAndRenderSaves();
 setupUpdates();
+setupReleaseNotes();

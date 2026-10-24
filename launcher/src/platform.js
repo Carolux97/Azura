@@ -11,10 +11,13 @@
  *   { status: "unsupportedVersion", folder, titleId, mediaId, languages }
  *                                                the game, in a build with no manifest yet
  *   { status: "wrongGame", folder, titleId }     an Xbox 360 executable of another game
- *   { status: "notADirectory", folder }          the path is missing or not a folder
+ *   { status: "notADirectory", folder }          the path is missing, or neither a folder nor a file
+ *   { status: "notADiscImage", folder }          a file that is not an Xbox 360 disc image
  *   { status: "missingXex", folder }             no default.xex in it or its subfolders
+ *   { status: "missingXexInImage", folder }      a disc image without default.xex
  *   { status: "invalidXex", folder }             default.xex is not an Xbox 360 executable
- * `folder` is where the executable was found, or the path that was checked when it was not.
+ * The game is a folder or a disc image (.iso). `folder` is where the executable was found (the
+ * disc image itself for one), or the path that was checked when it was not.
  * `languages` lists the engine language codes found in the folder (see gameLanguages.js).
  */
 
@@ -44,7 +47,27 @@ export const pickGameFolder = async () => {
   return tauri.core.invoke("pick_game_folder");
 };
 
-/** Checks a folder chosen in an earlier session. */
+/**
+ * Opens the system file picker for a disc image (.iso) of the game and checks it. Resolves to null
+ * when the user cancels.
+ */
+export const pickGameImage = async () => {
+  if (!isNativeApp) return simulatedCheck("~/Games/Gears of War 3.iso");
+  return tauri.core.invoke("pick_game_image");
+};
+
+/**
+ * Calls `onDrop(path)` with the path of a file or folder dropped on the window. Only in the app: a
+ * browser gives pages no paths.
+ */
+export const onPathDropped = (onDrop) => {
+  if (!isNativeApp) return;
+  tauri.webview.getCurrentWebview().onDragDropEvent((event) => {
+    if (event.payload.type === "drop" && event.payload.paths.length === 1) onDrop(event.payload.paths[0]);
+  });
+};
+
+/** Checks a folder or disc image chosen in an earlier session, or dropped on the window. */
 export const checkGameFolder = async (path) => {
   if (!isNativeApp) return simulatedCheck(path);
   return tauri.core.invoke("check_game_folder", { path });
@@ -80,15 +103,31 @@ export const saveSettings = async (settings) => {
 export const getSystemInfo = async () => (isNativeApp ? tauri.core.invoke("get_system_info") : null);
 
 /**
+ * What this launcher version brings ({ version, items }, from launcher/CHANGELOG.md), or null when
+ * the changelog has no section for it. A browser shows a sample.
+ */
+export const getReleaseNotes = async () =>
+  isNativeApp
+    ? tauri.core.invoke("get_release_notes")
+    : { version: "0.1.0", items: ["Builds the game for this computer from your own copy of Gears of War 3."] };
+
+/**
  * State of the runtime (see src-tauri/src/install.rs): { installed, buildFound, updateAvailable,
- * path }. A browser has none installed and pretends a build is available.
+ * path, source, updateKind }. `source` is "build" (a project build, copied), "kit" (built here) or
+ * "none"; `updateKind`, for the kit, "link" (seconds) or "build" (minutes). A browser has none
+ * installed and pretends a build is available.
  */
 export const getRuntimeStatus = async () =>
   isNativeApp
     ? tauri.core.invoke("get_runtime_status")
     : { installed: false, buildFound: true, updateAvailable: true, path: "" };
 
-/** Installs or updates the runtime from the project's build; resolves to the new state. */
+/**
+ * Installs or updates the runtime: copies the project's build, or builds it from the player kit
+ * and the player's default.xex (`source` "kit" in the state), which takes minutes and reports its
+ * progress through onRuntimeBuildProgress. Resolves to the new state; rejects with { kind, detail }
+ * (see BuildError in src-tauri/src/builder.rs).
+ */
 export const installRuntime = async () =>
   isNativeApp
     ? tauri.core.invoke("install_runtime")
@@ -241,3 +280,39 @@ export const getAchievements = async ({ gameFolder, gameLanguage, uiLocale }) =>
   });
   return { status: "ok", achievements, unlockedCount: 3, earnedGamerscore: 60, totalGamerscore: 1000, completedAt: null };
 };
+
+/**
+ * Whether there is a working C++ compiler to build the runtime with (see src-tauri/src/toolchain.rs):
+ *   { status: "ready", version }
+ *   { status: "missing", found, problem, install: { kind, manager?, command? }, manual, installerRunning }
+ * `install.kind` is "appleCommandLineTools", "packageManager" or "manual". The browser simulation
+ * reports Apple's compiler as installed.
+ */
+export const getCompilerStatus = async () =>
+  isNativeApp ? tauri.core.invoke("get_compiler_status") : { status: "ready", version: "Apple clang 21.0.0" };
+
+/**
+ * Installs the compiler: on macOS it opens Apple's dialog and resolves at once (check the status
+ * again until it is ready); on Linux it resolves once the package manager is done. Rejects with a
+ * message when it cannot install it.
+ */
+export const installCompiler = async () => (isNativeApp ? tauri.core.invoke("install_compiler") : undefined);
+
+/**
+ * Calls `listener` with { phase, done, total } while the runtime is built from the kit: phase is
+ * "preparing", "translating", "compiling" (done of total files), "linking" or "installing".
+ */
+/**
+ * Calls `listener({ action, pressed, family })` for every controller action the app reads
+ * (src-tauri/src/gamepad.rs). Only in the app.
+ */
+export const onGamepadInput = (listener) => {
+  if (isNativeApp) return tauri.event.listen("gamepad-input", (event) => listener(event.payload));
+};
+
+export const onRuntimeBuildProgress = (listener) => {
+  if (isNativeApp) return tauri.event.listen("runtime-build-progress", (event) => listener(event.payload));
+};
+
+/** Shows a build log (the path a failed build reported) in the system's file manager. */
+export const showBuildLog = async (path) => (isNativeApp ? tauri.core.invoke("show_build_log", { path }) : undefined);

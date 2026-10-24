@@ -120,3 +120,23 @@ platform labels.
 - Launcher tests pass: `cargo test` in `launcher/src-tauri` and `npm test` in `launcher`.
 - The runtime builds with `scripts/build.sh`.
 - The diff has no game data, no generated code (`runtime/generated/`) and no signing keys.
+
+## Continuous integration
+
+The workflows run on pull requests (Launcher tests when the launcher changes, Runtime kit when
+what defines the kit changes) and the Release workflow on main only when the launcher's version
+changes, to keep within the GitHub Actions minutes of a private repository, where a macOS minute
+counts as ten.
+
+- **macOS jobs, and the small Release jobs** (the version check and the publish), run on the
+  project's own Mac: a self-hosted runner with the labels `self-hosted`, `macOS` and `ARM64`, which
+  costs no minutes. They wait while that Mac is off or its user is logged out.
+- **Linux jobs** run on GitHub's Ubuntu runners: the Linux kit and AppImage need x86-64 Linux.
+
+To set up a runner (once per machine): in the repository, Settings, Actions, Runners, New
+self-hosted runner, pick the machine's system, download the runner it shows into
+`~/actions-runner` (outside the repository) and run the `./config.sh` command it gives, which
+carries a one-off registration token. Then `./svc.sh install` and `./svc.sh start` make it start
+with the session. Jobs run as that user, with its Homebrew, Rust and Node, in
+`~/actions-runner/_work`. A Linux x86-64 runner would also take the Linux jobs if they move to
+`[self-hosted, Linux, X64]`.

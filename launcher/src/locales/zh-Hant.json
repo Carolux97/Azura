@@ -21,15 +21,22 @@
     "runtimeVersion": "Runtime ReXGlue {version}"
   },
   "play": {
-    "eyebrow": "macOS 原生移植版 · Gears of War 3",
-    "lede": "你的遊戲副本，為 Apple Silicon 重新編譯。",
+    "eyebrow": "{platform} 原生移植版 · Gears of War 3",
+    "lede": "你的遊戲副本，為 {target} 重新編譯。",
     "launch": "開始遊戲",
     "launching": "啟動中",
     "mode": "戰役",
     "install": "安裝",
     "installSub": "設定遊戲檔案",
     "running": "遊玩中",
-    "runtimeWillInstall": "會先安裝執行環境"
+    "runtimeWillInstall": "會先安裝執行環境",
+    "building": "安裝中",
+    "buildingSub": "正在為這台電腦建置遊戲",
+    "installRuntime": "安裝",
+    "installRuntimeSub": "為這台電腦建置遊戲 · 幾分鐘",
+    "update": "更新",
+    "updateLinkSub": "幾秒",
+    "updateBuildSub": "約兩分鐘"
   },
   "status": {
     "gameFiles": "遊戲檔案",
@@ -41,37 +48,46 @@
     "runtimeMissing": "找不到組建",
     "player": "Player",
     "runtimeNotInstalled": "按下「遊玩」時安裝",
-    "runtimeUpdate": "更新已就緒，按下「遊玩」時安裝"
+    "runtimeUpdate": "更新已就緒，按下「遊玩」時安裝",
+    "compiler": "編譯器",
+    "compilerChecking": "檢查中…",
+    "compilerMissing": "未安裝",
+    "runtimeBuilding": "建置中…",
+    "runtimeNotBuilt": "未安裝",
+    "runtimeUpdateKit": "有可用的更新"
   },
-  "news": {
-    "title": "最新消息",
-    "skeleton": "專案的第一個骨架：執行環境、清單檔與啟動器。"
+  "releaseNotes": {
+    "title": "版本 {version} 新功能",
+    "dismiss": "知道了"
   },
   "install": {
     "title": "安裝",
-    "gameFolder": "遊戲資料夾",
-    "gameFolderHelp": "你的 Gears of War 3 副本資料夾，也就是包含 {file} 的資料夾。",
-    "noFolder": "尚未選擇資料夾",
-    "choose": "選擇…",
+    "gameFolder": "遊戲",
+    "gameFolderHelp": "你的 Gears of War 3 副本資料夾（包含 {file} 的資料夾）或其光碟映像檔 (.iso)。也可以直接拖放到這裡。",
+    "noFolder": "尚未選擇遊戲",
+    "choose": "資料夾…",
+    "chooseImage": "光碟映像檔 (.iso)…",
     "languageTitle": "語言與翻譯",
     "languageHelp": "翻譯後遊戲檔案的安裝位置。",
     "gameLanguage": "遊戲語言",
     "translationTarget": "翻譯檔案位置",
     "change": "變更…",
-    "notADirectory": "此路徑不是資料夾，或已不存在。",
+    "notADirectory": "此路徑已不存在。",
+    "notADiscImage": "此檔案不是 Xbox 360 光碟映像檔，或已損壞。",
     "missingXex": "此資料夾及其直接子資料夾中都沒有 default.xex。",
+    "missingXexInImage": "此光碟映像檔中沒有 default.xex。",
     "invalidXex": "default.xex 不是有效的 Xbox 360 執行檔。",
     "ok": "Gears of War 3 · {versionName} 版 · Media ID {mediaId}",
     "unsupportedVersion": "尚未支援此 Gears of War 3 版本（Media ID {mediaId}）。",
     "wrongGame": "這不是 Gears of War 3（Title ID {titleId}）。",
-    "chooseFolderFirst": "請先選擇遊戲資料夾",
+    "chooseFolderFirst": "請先選擇遊戲",
     "playerTitle": "Player Profile",
     "playerHelp": "Gamertag displayed in game lobbies, menus, and multiplayer.",
     "userName": "Gamertag / Username",
     "userNamePlaceholder": "User (up to 15 characters)",
     "defaultUserName": "User",
     "runtimeTitle": "遊戲執行環境",
-    "runtimeHelp": "啟動器所執行的重新編譯遊戲。它從 scripts/build.sh 的組建安裝，有更新的組建時會自動更新。",
+    "runtimeHelp": "為這台電腦重新編譯的遊戲。第一次由啟動器從你的遊戲副本建置（幾分鐘），專案更新時會再建置一次。",
     "runtimeInstalled": "已安裝且為最新。",
     "runtimeUpdate": "有更新的組建可供安裝。",
     "runtimeNotInstalled": "尚未安裝。",
@@ -83,7 +99,22 @@
     "savesHelp": "戰役檢查點與個人檔案的資料夾。變更後，存檔會移到該處。",
     "savesConflict": "{folder} 已有遊戲存檔。要以目前的存檔取代嗎？",
     "savesReplace": "取代",
-    "savesCancel": "取消"
+    "savesCancel": "取消",
+    "compilerTitle": "編譯器",
+    "compilerHelp": "遊戲會以在這台電腦上從你的遊戲副本建置的原生程式碼執行，因此啟動器需要 C++ 編譯器。若沒有，啟動器會安裝。",
+    "compilerChecking": "正在檢查編譯器…",
+    "compilerReady": "已就緒：{version}",
+    "compilerUnusable": "無法使用 {found}：{problem}",
+    "compilerMissing": "找不到編譯器。",
+    "compilerInstallApple": "安裝 Apple 的 Command Line Tools",
+    "compilerInstallPackage": "安裝 clang",
+    "compilerInstalling": "正在安裝編譯器…",
+    "compilerWaitingApple": "請依照 Apple 的視窗安裝 Command Line Tools。安裝完成後，啟動器會自動繼續。",
+    "compilerCheckAgain": "重新檢查",
+    "compilerManual": "或在終端機中執行：",
+    "runtimeNotBuilt": "尚未建置：第一次從你的遊戲副本建置需要幾分鐘。",
+    "runtimeUpdateLink": "有可用的更新：幾秒內即可安裝。",
+    "runtimeUpdateBuild": "更新需要重新建置遊戲：約兩分鐘。"
   },
   "graphics": {
     "title": "圖形",
@@ -151,7 +182,9 @@
     "savesNested": "請選擇不在目前資料夾內（反之亦然）的資料夾。",
     "savesFailed": "移動遊戲存檔失敗：{detail}",
     "runtimeInstalled": "已安裝遊戲執行環境。",
-    "saveFailed": "無法儲存設定：{detail}"
+    "saveFailed": "無法儲存設定：{detail}",
+    "compilerInstalled": "編譯器已就緒：{version}",
+    "compilerInstallFailed": "無法安裝編譯器：{detail}"
   },
   "log": {
     "title": "遊戲記錄",
@@ -167,7 +200,34 @@
     "startFailed": "無法啟動遊戲：{detail}",
     "installingRuntime": "正在安裝遊戲執行環境…",
     "installFailed": "執行環境安裝失敗：{detail}",
-    "savesUnavailable": "無法使用遊戲存檔資料夾：{detail}"
+    "savesUnavailable": "無法使用遊戲存檔資料夾：{detail}",
+    "buildPreparing": "正在準備建置遊戲…",
+    "buildTranslating": "正在轉譯遊戲程式碼…",
+    "buildCompiling": "正在編譯遊戲：{done} / {total} 個檔案",
+    "buildLinking": "正在連結遊戲…",
+    "buildInstalling": "正在安裝遊戲…",
+    "buildNoCompiler": "建置遊戲需要 C++ 編譯器：請在「安裝」中安裝。",
+    "buildNoKit": "此啟動器沒有在這個系統上建置遊戲的工具包。",
+    "buildWrongKit": "啟動器的工具包無法在此使用：{detail}",
+    "buildUnsupportedGame": "請先在「安裝」中選擇支援的遊戲副本。",
+    "buildNoSpace": "可用空間不足以建置遊戲：需要 {needed} MB，可用 {free} MB。",
+    "buildStepFailed": "建置遊戲在「{step}」時失敗：{summary}（完整記錄：{log}）",
+    "buildBusy": "遊戲已在建置或正在執行。",
+    "buildStep": {
+      "preparing": "準備",
+      "translating": "轉譯程式碼",
+      "compiling": "編譯",
+      "linking": "連結",
+      "installing": "安裝"
+    }
+  },
+  "build": {
+    "title": "正在建置遊戲",
+    "failedTitle": "無法建置遊戲",
+    "remaining": "剩餘約 {time}",
+    "estimating": "正在估算剩餘時間…",
+    "retry": "重試",
+    "openLog": "顯示記錄"
   },
   "update": {
     "available": "更新至 {version}",
@@ -199,5 +259,17 @@
     "resetToast": "Saves reset. Automatic backup created.",
     "backupToast": "Backup successfully created",
     "restoreToast": "Save restored successfully"
+  },
+  "gamepad": {
+    "select": "選擇",
+    "back": "返回",
+    "section": "區段",
+    "play": "開始遊戲",
+    "type": "輸入",
+    "delete": "刪除",
+    "space": "空格",
+    "done": "完成",
+    "cancel": "取消",
+    "page": "頁面"
   }
 }

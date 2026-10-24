@@ -30,8 +30,8 @@ npm test
 ## Settings split
 
 Settings live in the app data folder (`~/Library/Application Support/com.gears3azura.launcher/`):
-`runtime/azura.toml` holds what the runtime reads, under its own setting names (the game folder is
-`game_data_root`), and `launcher.toml` what only the launcher uses. The launcher rewrites only its
+`runtime/azura.toml` holds what the runtime reads, under its own setting names (the game, a folder
+or a disc image, is `game_data_root`), and `launcher.toml` what only the launcher uses. The launcher rewrites only its
 own keys in `azura.toml`, keeping comments and anything the in-game menu wrote, and reloads the file
 when its window regains focus.
 
@@ -45,6 +45,53 @@ older launcher (`draw_resolution_scale_x`, with `resolution_auto` in `launcher.t
 `render_resolution`. Everything else (frame rate limit, anti-aliasing, motion blur, filtering, image
 scaling, mouse sensitivity, bindings) is changed in the game's Options menu.
 Both sides read and write the same `azura.toml`.
+
+## Runtime
+
+The runtime is the game recompiled for this computer. Players build it with the launcher from
+their own `default.xex` (`src-tauri/src/builder.rs`, `docs/player-runtime-build.md`): the player
+kit (`scripts/build-kit.sh`, built in CI) holds everything but the game, and `kit.json` the
+commands to build it, which the launcher runs with the machine's compiler. Install in the
+Installation view, or Play when nothing is installed, does it: codegen with the kit's code
+generator in `build/<game build>/` under the app data folder, the generated files compiled one per
+core, the link, and the new runtime folder swapped in by renames, keeping the player's
+`azura.toml` and logs. Each object is reused while its key matches (its source, the command, the
+compiler and the generated headers the compiler reported it used), so an interrupted build
+resumes. Progress arrives as `runtime-build-progress` events.
+
+Updates: `build/<game build>/state.json` records the kit's keys, the game executable's hash, the
+compiler and the objects the installed runtime was linked from. When a newer kit only changes what
+the link uses (our code, the SDK libraries, the staged files) and the objects are still there, the
+runtime is linked again from them in under a second; when the generated code depends on what
+changed (the code generator, the manifest, the headers, the commands), or the game or the compiler
+changed, it is built again, compiling only the files whose key changed. The Installation view says
+which an update takes, and Play installs it before starting the game.
+
+Where the runtime comes from, in order: `AZURA_RUNTIME_BUILD` (a build folder, copied),
+`AZURA_KIT` (a kit folder, built from), a project build when the launcher runs from a checkout
+(copied, as developers do), then the kit bundled with the launcher or the project's kit build.
+
+`cargo test builds_a_runtime -- --ignored` builds a real runtime with the launcher's code, given
+`AZURA_TEST_KIT` (a kit) and `AZURA_TEST_GAME` (a game folder or disc image).
+
+The game is the folder of the player's dump or its disc image (`.iso`), picked with either button
+of the Installation view or dropped on it. A disc image is read in place (`src-tauri/src/disc_image.rs`)
+and the runtime mounts it itself; see `docs/player-runtime-build.md`, section 5.
+
+## Compiler
+
+The runtime is built on the player's machine from their own `default.xex`
+(`docs/player-runtime-build.md`), so the launcher needs a C++ compiler there; the Installation
+view shows its state and installs one when it is missing (`src-tauri/src/toolchain.rs`). A
+compiler counts only when it compiles and links a small C++23 program. On macOS it is Apple's,
+from the Command Line Tools or Xcode; `xcrun` is run only once `xcode-select -p` names a folder,
+since on a Mac without them it would open Apple's install dialog by itself. Installing runs
+`xcode-select --install`, which opens that dialog for the player, and the launcher checks again
+every few seconds until the tools are there or the dialog is closed. On Linux it is the newest
+`clang++` (clang 18 or newer) on the PATH; installing runs the distribution's package manager
+(apt, dnf, pacman or zypper, found from `/etc/os-release`) through `pkexec`. Image-based systems
+(ostree ones such as Bazzite, and SteamOS) get the manual instructions instead. The manual command
+is always shown too.
 
 ## Achievements
 
@@ -62,6 +109,27 @@ file the runtime writes in the saves folder, `achievements/<title ID>.toml`. An 
 original game hid (its flags lack 0x8) is sent to the interface without its name, description,
 gamerscore or artwork until it is unlocked. The section stays locked, with a button to the
 Installation view, until there is a valid game folder and an installed runtime to read it.
+
+## Controllers
+
+The launcher can be driven with a controller. `src-tauri/src/gamepad.rs` reads the controllers
+(the webview's own Gamepad API depends on how each platform's WebKit was built) and sends the
+interface one `gamepad-input` event per action, only while the launcher window has the focus. On
+macOS it uses Apple's GameController framework, the one that receives a DualSense's input over
+Bluetooth (reading the HID device gets only its connection); on Linux, gilrs.
+
+`src/gamepadNav.js` applies the actions: the D-pad and the left stick move the focus to the nearest
+control in that direction (`src/gamepad.js`, within the rail or within the section), South (A,
+Cross) presses, East (B, Circle) cancels a prompt or goes back to Play, the shoulder buttons switch
+sections, Start starts the game; left and right change selects and sliders. South on a text field
+(the gamertag) opens the on-screen keyboard (`src/virtualKeyboard.js`): West deletes, North types a
+space, Start is Done, East cancels. While a controller is in use, a hint bar shows its buttons with
+the glyphs of its family (Xbox and Steam Deck, PlayStation, Nintendo or generic), drawn in
+`src/gamepadGlyphs.js`; the mouse or the keyboard hides it again. Nothing reacts while the game
+runs. A cancel button that should answer East marks itself with `data-pad-back`.
+
+On Linux, building needs libudev (`libudev-dev`), and `cargo test prints_controller_events --
+--ignored --nocapture` prints what each controller sends.
 
 ## Layout
 
@@ -98,31 +166,74 @@ python3 -m http.server 5180 --directory src
 ## Updates and releases
 
 Installed launchers update themselves with Tauri's updater. On start-up the launcher reads
-`latest.json` from the fixed GitHub release `launcher-updates` of this repository; when it lists a
+`latest.json` from the fixed release `launcher-updates` of the releases repository; when it lists a
 newer version, the sidebar offers it, and installing downloads the archive, checks its signature
-against `plugins.updater.pubkey` in `src-tauri/tauri.conf.json` and restarts into it. While the
-repository is private that file cannot be downloaded, so the check fails quietly and nothing is
-offered.
+against `plugins.updater.pubkey` in `src-tauri/tauri.conf.json` and restarts into it. Each launcher
+carries the player kit of its platform, so a new launcher is also how fixes to the game reach
+players: once it has updated, it rebuilds or relinks the runtime from the new kit.
 
-Releases are signed with a key that never enters the repository. Create it once (it asks for a
-password; keep both the file and the password in your password manager: losing either means
-installed launchers can never be updated again):
+Releases are published to a public repository that only holds releases (`RELEASES_REPO` in
+`scripts/release-common.sh`, and the updater endpoint in `tauri.conf.json`), because this
+repository is private and installed launchers download without credentials. It is kept as hard
+to come across as possible: no description, README or topics, and releases titled with the
+version alone.
 
-```bash
-npx tauri signer generate -w ~/.tauri/azura-launcher.key
-```
+### How a release happens
 
-and put the contents of `~/.tauri/azura-launcher.key.pub` in `plugins.updater.pubkey`. Until then
-the release script fails (the build checks that key); debug builds and the app itself are fine.
+Bump the version in `src-tauri/tauri.conf.json`, `package.json` and `src-tauri/Cargo.toml`, and
+add its section to `CHANGELOG.md` (what the version brings, as players see it), in a pull request.
+The section is the update's notes, and the launcher shows it once in Play after it is installed or
+updated (`src-tauri/src/release_notes.rs`; the player's dismissal is `seen_release_notes` in
+`launcher.toml`). A release without it fails, and so does the Rust test that reads the current
+version's notes. When it is merged, the Release workflow (`.github/workflows/release.yml`) sees a
+version that is not released yet and:
 
-To release: bump the version in `src-tauri/tauri.conf.json`, `package.json` and
-`src-tauri/Cargo.toml`, then run
+1. builds the player kits of that commit (the Runtime kit workflow);
+2. builds the launcher on macOS (the `.dmg`, and the `.app.tar.gz` the updater downloads) and on
+   Linux (the AppImage, which is both), each with its kit inside (`scripts/release-launcher.sh`);
+3. publishes both in one release, `launcher-v<version>`, and uploads the `latest.json` that lists
+   both platforms to `launcher-updates` (`scripts/publish-launcher.sh`).
+
+Other pushes to main do not start it. To check the whole pipeline without publishing, run
+the workflow by hand (Actions, Release, Run workflow) with "Publish" off; with it on, it publishes a
+version that is not released yet, which is also how to run a failed release again.
+
+The workflow fails with a clear message when the three versions disagree, or when a version asked
+to be published by hand is already released.
+
+### Keys and secrets
+
+Releases are signed with a key that never enters the repository. It was created once with
+`npx tauri signer generate -w ~/.tauri/azura-launcher.key` (it asks for a password); its public half
+is `plugins.updater.pubkey`. Keep both the file and the password in your password manager: losing
+either means installed launchers can never be updated again.
+
+The workflow needs three repository secrets:
+
+- `TAURI_SIGNING_PRIVATE_KEY`: the contents of `~/.tauri/azura-launcher.key`;
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: its password;
+- `RELEASES_TOKEN`: a fine-grained personal access token with access to the releases repository
+  only and Contents set to read and write, which is what creating releases needs.
+
+### macOS without an Apple Developer ID
+
+The app is signed ad hoc (`bundle.macOS.signingIdentity` is `-`), not with an Apple Developer ID,
+and it is not notarized, so macOS blocks the first launch of a downloaded copy. The player opens it
+once from System Settings, Privacy & Security, "Open Anyway" (Control-click, Open no longer works
+since macOS 15). With a Developer ID, the same build signs and notarizes when Tauri finds Apple's
+credentials in the environment (`APPLE_CERTIFICATE`, `APPLE_ID` and the rest), with no other change.
+
+### Releasing by hand
+
+The same scripts run on a Mac or a Linux machine with the platform's kit
+(`scripts/build-kit.sh`):
 
 ```bash
 TAURI_SIGNING_PRIVATE_KEY=~/.tauri/azura-launcher.key TAURI_SIGNING_PRIVATE_KEY_PASSWORD=... ../scripts/release-launcher.sh --publish
 ```
 
-Without `--publish` it only builds into `dist/<version>/`.
+Without `--publish` it only builds into `dist/<version>/`. A release by hand carries only the
+platform it was built on, so Linux launchers are not offered it; the workflow is the normal way.
 
 ## Current state
 

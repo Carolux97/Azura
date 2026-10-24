@@ -14,6 +14,7 @@
 #include <imgui.h>
 
 #include <rex/cvar.h>
+#include <rex/image_info.h>
 #include <rex/perf/counter.h>
 #include <rex/rex_app.h>
 #include <rex/runtime.h>
@@ -23,6 +24,7 @@
 
 #include "achievement_export.h"
 #include "achievement_toast.h"
+#include "input/player_assignment.h"
 #include "menu/menu_patches.h"
 #include "menu/pc_options.h"
 #include "prompts/button_prompts.h"
@@ -36,6 +38,12 @@ REXCVAR_DECLARE(std::string, perf_log_csv);
 #if defined(__APPLE__)
 #include "platform_mac.h"
 #endif
+
+// The recompiled game image, defined in the code `rexglue codegen` writes from the player's
+// default.xex (azura_init.cpp). Declared here rather than taken from the generated headers, so
+// this code compiles without any generated code: it is linked with it later, on the machine that
+// generates it.
+extern const rex::PPCImageInfo PPCImageConfig;
 
 class AzuraApp : public rex::ReXApp {
  public:
@@ -98,6 +106,8 @@ class AzuraApp : public rex::ReXApp {
   // and route Quit Game to a normal window close (OnClosing shuts the title down).
   void OnPreLaunchModule() override {
     REXLOG_INFO("[Azura] Active gamertag / user_name: '{}'", REXCVAR_GET(user_name));
+    // Before the game polls a controller: which controller plays which player (player_assignment.h).
+    azura::input::InstallPlayerAssignment(runtime());
     // The frame rate limit of the Video menu (azura.toml) sets the guest's vertical blanks.
     azura::menu::ApplyFrameRateLimit();
     // The Video menu's sharpness shows as soon as it changes: the presenter takes it again on the
