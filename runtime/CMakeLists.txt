@@ -50,6 +50,7 @@ set(AZURA_SOURCES
     src/class_dump.cpp
     src/render_queue.cpp
     src/relaunch.cpp
+    src/perf_marker.cpp
     src/shader_compile_overlay.cpp
     src/menu/coalesced.cpp
     src/input/install_player_assignment.cpp

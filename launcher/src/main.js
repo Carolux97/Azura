@@ -360,11 +360,21 @@ const renderPlay = () => {
   button.querySelector(".btn-launch-sub").textContent = t(sub);
   renderLogState();
 
-  // "Apple M4 · 24 GB" or "AMD Ryzen · 32 GB"; a browser cannot tell, so it names the platform only.
-  const { chip, memoryGb } = state.system ?? {};
-  const fallbackMachine = state.system?.os === "linux" ? "Linux PC · Vulkan" : "Apple Silicon";
-  const machine = [chip ?? fallbackMachine, memoryGb ? `${memoryGb} GB` : null].filter(Boolean).join(" · ");
-  document.getElementById("status-gpu-detail").textContent = t("status.gpuValue", { machine });
+  // macOS: the chip is the GPU too, "Apple M4 · 24 GB · Metal". Linux: the processor
+  // and memory ("AMD Ryzen 7 · 32 GB") and the graphics cards apart. A browser cannot tell, so it
+  // names the platform only.
+  const { chip, memoryGb, gpus = [] } = state.system ?? {};
+  const memory = memoryGb ? `${memoryGb} GB` : null;
+  document.getElementById("status-cpu").hidden = !linux;
+  if (linux) {
+    document.getElementById("status-cpu-detail").textContent = [chip ?? "Linux PC", memory].filter(Boolean).join(" · ");
+    document.getElementById("status-gpu-detail").textContent = gpus.length
+      ? t("status.gpuValueLinux", { gpu: gpus.join(" + ") })
+      : t("status.gpuUnknown");
+  } else {
+    const machine = [chip ?? "Apple Silicon", memory].filter(Boolean).join(" · ");
+    document.getElementById("status-gpu-detail").textContent = t("status.gpuValue", { machine });
+  }
 
   renderReleaseNotes();
   renderBuildCard();
