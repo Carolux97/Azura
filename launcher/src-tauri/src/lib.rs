@@ -235,6 +235,23 @@ async fn install_runtime(
     get_runtime_status(app).await.map_err(builder::BuildError::Io)
 }
 
+/// Shows a failed build's log in the system's file manager. Only a `build.log` inside the
+/// launcher's build folder is shown: the path comes from the interface.
+#[tauri::command]
+async fn show_build_log(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let builds = app.path().app_data_dir().map_err(|e| e.to_string())?.join("build");
+    let log = std::path::PathBuf::from(&path).canonicalize().map_err(|e| e.to_string())?;
+    let builds = builds.canonicalize().map_err(|e| e.to_string())?;
+    if !log.starts_with(&builds) || log.file_name().and_then(|name| name.to_str()) != Some("build.log") {
+        return Err(format!("not a build log: {path}"));
+    }
+    #[cfg(target_os = "macos")]
+    let status = std::process::Command::new("open").arg("-R").arg(&log).status();
+    #[cfg(not(target_os = "macos"))]
+    let status = std::process::Command::new("xdg-open").arg(log.parent().unwrap_or(&log)).status();
+    status.map(|_| ()).map_err(|e| e.to_string())
+}
+
 /// Starts the game with the chosen saves folder. Its output and its end arrive as `game-output`
 /// and `game-exit` events.
 #[tauri::command]
@@ -405,7 +422,8 @@ pub fn run() {
             open_saves_folder,
             get_achievements,
             get_compiler_status,
-            install_compiler
+            install_compiler,
+            show_build_log
         ])
         .setup(|app| {
             // A runtime install the launcher was closed in the middle of is finished first.

@@ -115,6 +115,21 @@
           </div>
         </div>
 
+        <!-- A runtime build from the kit: its step, a bar and the time left, or why it failed;
+             renderBuildCard() fills it. -->
+        <div class="panel build-card" id="build-card" hidden>
+          <div class="build-card-head">
+            <h2 class="panel-title" id="build-card-title"></h2>
+            <span class="build-card-percent" id="build-card-percent"></span>
+          </div>
+          <div class="build-bar"><span id="build-card-bar"></span></div>
+          <p class="help build-card-detail" id="build-card-detail"></p>
+          <div class="build-card-actions" id="build-card-actions" hidden>
+            <button class="btn btn-small btn-primary" id="build-card-retry" data-i18n="build.retry"></button>
+            <button class="btn btn-small" id="build-card-log" data-i18n="build.openLog"></button>
+          </div>
+        </div>
+
         <!-- Game log: shown while the game runs and after it ends or fails to start. -->
         <div class="panel log-panel" id="game-log" hidden>
           <div class="log-head">
@@ -155,6 +170,7 @@
             <p class="check" id="runtime-check"></p>
             <button class="btn" id="install-runtime"></button>
           </div>
+          <div class="build-bar" id="install-build-bar" hidden><span></span></div>
         </div>
         <!-- The C++ compiler the runtime is built with; renderCompiler() fills it. -->
         <div class="panel">

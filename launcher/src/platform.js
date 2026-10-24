@@ -273,3 +273,6 @@ export const installCompiler = async () => (isNativeApp ? tauri.core.invoke("ins
 export const onRuntimeBuildProgress = (listener) => {
   if (isNativeApp) return tauri.event.listen("runtime-build-progress", (event) => listener(event.payload));
 };
+
+/** Shows a build log (the path a failed build reported) in the system's file manager. */
+export const showBuildLog = async (path) => (isNativeApp ? tauri.core.invoke("show_build_log", { path }) : undefined);

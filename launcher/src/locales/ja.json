@@ -208,6 +208,14 @@
       "installing": "インストール"
     }
   },
+  "build": {
+    "title": "ゲームをビルドしています",
+    "failedTitle": "ゲームをビルドできませんでした",
+    "remaining": "残り約 {time}",
+    "estimating": "残り時間を計算しています…",
+    "retry": "再試行",
+    "openLog": "ログを表示"
+  },
   "update": {
     "available": "{version} に更新",
     "downloading": "アップデートをダウンロード中… {percent}",

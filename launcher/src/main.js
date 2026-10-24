@@ -45,6 +45,7 @@ import {
   getCompilerStatus,
   installCompiler,
   onRuntimeBuildProgress,
+  showBuildLog,
   getSaveStatus,
   openSavesFolder,
   pickGameFolder,
@@ -56,6 +57,7 @@ import {
 } from "./platform.js";
 import { defaultGameLanguage, gameLanguageName } from "./gameLanguages.js";
 import { achievementView } from "./achievements.js";
+import { createBuildTracker } from "./buildProgress.js";
 import { LOCK_ICON, completedBanner, renderAchievementsPage } from "./achievementsPage.js";
 
 const SPORE_COUNT = 26;
@@ -86,6 +88,9 @@ const state = {
   installingRuntime: false,
   // The kit build's last progress ({ phase, done, total }), or null when no build runs.
   buildProgress: null,
+  // The runtime build from the kit the Play view's card shows: its tracker (buildProgress.js) and,
+  // once it failed, why ({ key, vars, log }); null when there is none to show.
+  build: null,
   // Folder for the saves (shown in the Installation view; changed only by moving the saves) and
   // the folder waiting for the player to confirm replacing the saves already in it.
   savesFolder: "",
@@ -288,6 +293,8 @@ const renderPlay = () => {
     new Date(`${date.dateTime}T12:00:00`),
   );
 
+  renderBuildCard();
+
   document.getElementById("launcher-version").textContent = t("rail.launcherVersion", { version: state.launcherVersion });
   document.getElementById("runtime-version").textContent = t("rail.runtimeVersion", { version: RUNTIME_VERSION });
 };
@@ -393,20 +400,30 @@ const setupLaunch = () => {
  * succeeded.
  */
 const runRuntimeInstall = async () => {
+  const fromKit = state.runtime.source === "kit";
   state.installingRuntime = true;
   state.buildProgress = null;
-  setLogState(state.runtime.source === "kit" ? "log.buildPreparing" : "log.installingRuntime");
+  if (fromKit) {
+    // A build from the kit shows its own card with a bar on Play, not the game log.
+    state.build = { tracker: createBuildTracker(), failed: null };
+    state.build.tracker.update({ phase: "preparing" }, Date.now());
+    startBuildTicker();
+  } else {
+    setLogState("log.installingRuntime");
+  }
   renderInstall();
   renderPlay();
   try {
     state.runtime = await installRuntime();
+    state.build = null;
     toast(t("toast.runtimeInstalled"));
     // The runtime reads the achievements, so they can show now.
     refreshAchievements();
     return true;
   } catch (error) {
     const [key, vars] = buildErrorMessage(error);
-    setLogState(key, "error", vars);
+    if (fromKit) state.build = { ...state.build, failed: { key, vars, log: error?.detail?.log ?? null } };
+    else setLogState(key, "error", vars);
     if (error?.kind === "noCompiler") refreshCompiler();
     return false;
   } finally {
@@ -415,6 +432,66 @@ const runRuntimeInstall = async () => {
     renderInstall();
     renderPlay();
   }
+};
+
+/** Redraws the build's bar and time left every second while a build runs (the time moves on even
+ * when no file finishes). */
+let buildTicker = null;
+const startBuildTicker = () => {
+  clearInterval(buildTicker);
+  buildTicker = setInterval(() => {
+    if (!state.installingRuntime) {
+      clearInterval(buildTicker);
+      buildTicker = null;
+    }
+    renderBuildCard();
+  }, 1000);
+};
+
+/** "1 min 10 s", "45 s": a duration in the reader's language. */
+const formatDuration = (ms) => {
+  const seconds = Math.max(1, Math.round(ms / 1000));
+  const unit = (value, name) => new Intl.NumberFormat(getLocale(), { style: "unit", unit: name, unitDisplay: "short" }).format(value);
+  if (seconds < 60) return unit(seconds, "second");
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return rest ? `${unit(minutes, "minute")} ${unit(rest, "second")}` : unit(minutes, "minute");
+};
+
+/**
+ * Writes the build card on Play (the step, the bar, the percentage and the time left, or why it
+ * failed with a retry and the log) and the bar in the Installation view.
+ */
+const renderBuildCard = () => {
+  const build = state.build;
+  const card = document.getElementById("build-card");
+  const installBar = document.getElementById("install-build-bar");
+  card.hidden = !build;
+  installBar.hidden = !build || Boolean(build.failed);
+  if (!build) return;
+  const now = Date.now();
+  const tracker = build.tracker;
+  const failed = build.failed;
+  const percent = tracker.percent(now);
+  card.classList.toggle("is-failed", Boolean(failed));
+  document.getElementById("build-card-title").textContent = t(failed ? "build.failedTitle" : "build.title");
+  document.getElementById("build-card-percent").textContent = failed
+    ? ""
+    : new Intl.NumberFormat(getLocale(), { style: "percent" }).format(percent / 100);
+  document.getElementById("build-card-bar").style.width = `${percent}%`;
+  installBar.firstElementChild.style.width = `${percent}%`;
+  let detail;
+  if (failed) {
+    detail = t(failed.key, failed.vars);
+  } else {
+    const progress = state.buildProgress ?? { phase: tracker.phase, done: 0, total: 0 };
+    const step = t(BUILD_PHASE_KEYS[progress.phase] ?? "log.buildPreparing", { done: progress.done, total: progress.total });
+    const remaining = tracker.remainingMs(now);
+    detail = `${step} · ${remaining === null ? t("build.estimating") : t("build.remaining", { time: formatDuration(remaining) })}`;
+  }
+  document.getElementById("build-card-detail").textContent = detail;
+  document.getElementById("build-card-actions").hidden = !failed;
+  document.getElementById("build-card-log").hidden = !failed?.log;
 };
 
 /** Translation key of each step of a kit build, for the log header and the Installation view. */
@@ -457,8 +534,17 @@ const buildErrorMessage = (error) => {
 const setupBuildProgress = () => {
   onRuntimeBuildProgress?.((progress) => {
     state.buildProgress = progress;
-    setLogState(BUILD_PHASE_KEYS[progress.phase] ?? "log.buildPreparing", "", { done: progress.done, total: progress.total });
+    state.build?.tracker.update(progress, Date.now());
+    renderBuildCard();
     renderInstall();
+  });
+  document.getElementById("build-card-retry").addEventListener("click", () => {
+    state.build = null;
+    renderBuildCard();
+    runRuntimeInstall();
+  });
+  document.getElementById("build-card-log").addEventListener("click", () => {
+    if (state.build?.failed?.log) showBuildLog(state.build.failed.log).catch((error) => console.error(error));
   });
 };
 
