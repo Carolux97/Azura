@@ -12,5 +12,7 @@ indented lines.
   image (.iso), with every fix of the project, and installs the compiler it needs when it is
   missing.
 - Updates itself and the game when a new version is published: most game fixes install in seconds.
+- Can be used with a controller (Xbox, PlayStation, Nintendo and others), with the buttons of the
+  controller in hand on screen and an on-screen keyboard to type.
 - Display mode, render resolution, game language and gamertag, saves you can move and back up, and
   the achievements with their artwork.
