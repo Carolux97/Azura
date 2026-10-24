@@ -116,6 +116,12 @@
               <span class="dot"></span>
               <div><strong data-i18n="status.runtime"></strong><span class="status-detail"></span></div>
             </div>
+            <!-- On Linux the processor and the graphics card are separate entries; on macOS the chip
+                 is both, so only the GPU entry shows. -->
+            <div class="status" id="status-cpu" data-state="ok" hidden>
+              <span class="dot"></span>
+              <div><strong data-i18n="status.cpu"></strong><span class="status-detail" id="status-cpu-detail"></span></div>
+            </div>
             <div class="status" data-state="ok">
               <span class="dot"></span>
               <div><strong data-i18n="status.gpu"></strong><span class="status-detail" id="status-gpu-detail"></span></div>
