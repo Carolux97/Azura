@@ -259,5 +259,17 @@
     "resetToast": "Saves reset. Automatic backup created.",
     "backupToast": "Backup successfully created",
     "restoreToast": "Save restored successfully"
+  },
+  "gamepad": {
+    "select": "Выбрать",
+    "back": "Назад",
+    "section": "Раздел",
+    "play": "Играть",
+    "type": "Ввод",
+    "delete": "Удалить",
+    "space": "Пробел",
+    "done": "Готово",
+    "cancel": "Отмена",
+    "page": "Страница"
   }
 }

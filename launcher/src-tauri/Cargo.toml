@@ -28,3 +28,14 @@ libc = "0.2"
 toml = "1.1.8"
 toml_edit = "0.25.17"
 tauri-plugin-updater = "2.13.1"
+
+# Controllers, to navigate the launcher (gamepad.rs): Apple's GameController framework on macOS,
+# gilrs elsewhere.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = "0.3"
+objc2-game-controller = "0.3"
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+gilrs = "0.11"

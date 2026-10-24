@@ -293,6 +293,14 @@ export const installCompiler = async () => (isNativeApp ? tauri.core.invoke("ins
  * Calls `listener` with { phase, done, total } while the runtime is built from the kit: phase is
  * "preparing", "translating", "compiling" (done of total files), "linking" or "installing".
  */
+/**
+ * Calls `listener({ action, pressed, family })` for every controller action the app reads
+ * (src-tauri/src/gamepad.rs). Only in the app.
+ */
+export const onGamepadInput = (listener) => {
+  if (isNativeApp) return tauri.event.listen("gamepad-input", (event) => listener(event.payload));
+};
+
 export const onRuntimeBuildProgress = (listener) => {
   if (isNativeApp) return tauri.event.listen("runtime-build-progress", (event) => listener(event.payload));
 };
