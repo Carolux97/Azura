@@ -38,6 +38,7 @@ endif()
 set(AZURA_SOURCES
     src/main.cpp
     src/achievement_export.cpp
+    src/ambient_occlusion.cpp
     src/achievement_toast.cpp
     src/hooks.cpp
     src/script_hooks.cpp
@@ -160,27 +161,6 @@ endif()
 if(REXSDK_DIR AND EXISTS "${AZURA_COMPAT_INCLUDE}" AND TARGET azura_recomp)
     target_include_directories(azura_recomp PRIVATE "${AZURA_COMPAT_INCLUDE}")
 endif()
-
-# Post-codegen patch: codegen writes azura_register.cpp as one function of ~57,000 registration
-# calls, which takes clang close to ten minutes to compile (its cost grows faster than linearly
-# with function size), and codegen rewrites it whenever the set of functions changes.
-# tools/split_register.py splits it into small functions (seconds to compile) without changing
-# what is registered. It runs after every codegen, including the one the build itself re-runs, and
-# before the generated code compiles.
-find_package(Python3 COMPONENTS Interpreter REQUIRED)
-set(AZURA_GENERATED_DIR ${CMAKE_CURRENT_SOURCE_DIR}/generated/default)
-set(AZURA_SPLIT_STAMP ${AZURA_GENERATED_DIR}/split_register.build.stamp)
-add_custom_command(
-    OUTPUT ${AZURA_SPLIT_STAMP}
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/split_register.py
-            ${AZURA_GENERATED_DIR}/azura_register.cpp
-    COMMAND ${CMAKE_COMMAND} -E touch ${AZURA_SPLIT_STAMP}
-    DEPENDS ${AZURA_GENERATED_DIR}/codegen.build.stamp
-            ${CMAKE_CURRENT_SOURCE_DIR}/tools/split_register.py
-    COMMENT "Splitting the function registration into small functions"
-    VERBATIM)
-add_custom_target(azura_split_register DEPENDS ${AZURA_SPLIT_STAMP})
-add_dependencies(azura_recomp azura_split_register)
 
 # The runtime loads its settings from azura.toml beside the executable. The documented defaults
 # are installed next to it as azura.default.toml on every build; the user's azura.toml is never

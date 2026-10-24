@@ -179,15 +179,6 @@ if [[ ! -f "${CODEGEN_STAMP}" || -n "${GENERATOR}" ]]; then
   rm -f "${CODEGEN_STAMP}"
 fi
 
-# Linux only: community fixes applied to the recompiled code (see runtime/scripts/patch_game_code.py).
-# The generated code exists once codegen has run, which the build target below triggers first.
-if [[ "${PLATFORM}" == linux-* ]]; then
-  echo "==> Ensuring the recompiled code is up to date"
-  (cd "${RUNTIME_DIR}" && cmake --build --preset "${PRESET}-${CONFIG}" --target azura_codegen)
-  echo "==> Applying engine fixes to the recompiled code"
-  python3 "${RUNTIME_DIR}/scripts/patch_game_code.py" "${RUNTIME_DIR}/generated/default"
-fi
-
 echo "==> Building (${CONFIG})"
 (cd "${RUNTIME_DIR}" && cmake --build --preset "${PRESET}-${CONFIG}")
 

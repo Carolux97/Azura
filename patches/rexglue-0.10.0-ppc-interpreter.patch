@@ -427,10 +427,39 @@ index 24894f2..0ebd353 100644
  // Comparison Builders (CMP*, CMPL*)
  //=============================================================================
 diff --git a/src/codegen/codegen_writer.cpp b/src/codegen/codegen_writer.cpp
-index a0484fb..1b7d99d 100644
+index a0484fb..0dee9c4 100644
 --- a/src/codegen/codegen_writer.cpp
 +++ b/src/codegen/codegen_writer.cpp
-@@ -168,9 +168,12 @@ bool CodegenWriter::write(bool force) {
+@@ -35,6 +35,28 @@
+ 
+ namespace {
+ 
++// SetFunction calls per function of the generated registration. A compiler's time for a single
++// function grows faster than linearly with its size: one function holding every call (about
++// 57,000 in a large game) takes clang close to ten minutes, while functions of this size take
++// about a second and a half each.
++constexpr size_t kRegisterChunkSize = 2000;
++
++// The functions the registration hands to the dispatcher (the ones inside the code range, and the
++// imports), in chunks of kRegisterChunkSize, each written as its own function.
++nlohmann::json buildRegisterChunks(const nlohmann::json& functionsJson) {
++  nlohmann::json chunks = nlohmann::json::array();
++  for (const auto& fn : functionsJson) {
++    if (fn["below_code_base"].get<bool>() && !fn["is_import"].get<bool>()) {
++      continue;
++    }
++    if (chunks.empty() || chunks.back().size() == kRegisterChunkSize) {
++      chunks.push_back(nlohmann::json::array());
++    }
++    chunks.back().push_back({{"address", fn["address"]}, {"name", fn["name"]}});
++  }
++  return chunks;
++}
++
+ nlohmann::json buildTemplateData(const rex::codegen::CodegenContext& ctx,
+                                  const std::vector<const rex::codegen::FunctionNode*>& functions,
+                                  const std::unordered_map<uint32_t, std::string>& rexcrtByAddr) {
+@@ -168,9 +190,12 @@ bool CodegenWriter::write(bool force) {
    unchangedFiles_.clear();
  
    // --- Validation gate (from recompile.cpp) ---
@@ -444,6 +473,14 @@ index a0484fb..1b7d99d 100644
 +                     blocking);
      return false;
    }
+ 
+@@ -233,6 +258,7 @@ bool CodegenWriter::write(bool force) {
+   // Generate {project}_register.cpp (registration function for hash-based dispatch)
+   REXCODEGEN_TRACE("Recompile: generating {}_register.cpp", projectName);
+   tmplData["is_dll"] = ctx_.isDllModule();
++  tmplData["register_chunks"] = buildRegisterChunks(tmplData["functions"]);
+   out = renderWithJson(registry, "codegen/register_cpp", tmplData);
+   SaveCurrentOutData(fmt::format("{}_register.cpp", projectName));
  
 diff --git a/src/codegen/instruction_dispatch.cpp b/src/codegen/instruction_dispatch.cpp
 index 40ae269..510f463 100644
