@@ -16,6 +16,82 @@ index 9b3cdf5..504176d 100644
  if(NOT REXGLUE_USE_D3D12 AND NOT REXGLUE_USE_VULKAN)
      message(FATAL_ERROR "At least one graphics backend must be enabled (REXGLUE_USE_D3D12 or REXGLUE_USE_VULKAN)")
  endif()
+diff --git a/cmake/rexglue_helpers.cmake b/cmake/rexglue_helpers.cmake
+index 41e6dce..587623d 100644
+--- a/cmake/rexglue_helpers.cmake
++++ b/cmake/rexglue_helpers.cmake
+@@ -1,8 +1,9 @@
+ #==========================================================
+ # rexglue_helpers.cmake
+ #
+-# Three helpers, each with a single responsibility:
++# Four helpers, each with a single responsibility:
+ #   rexglue_apply_target_settings(<target>)        - common compile/platform flags
++#   rexglue_add_host_sources(<target>)             - the SDK sources of a host application
+ #   rexglue_configure_target(<target>)             - host application
+ #   rexglue_configure_module_target(<target> ...)  - guest DLL module
+ #==========================================================
+@@ -63,26 +64,49 @@ function(rexglue_apply_target_settings target_name)
+ endfunction()
+ 
+ #==========================================================
+-# rexglue_configure_target(<target>) - Host application
++# rexglue_add_host_sources(<target>) - SDK sources of a host application
++#
++# Adds the SDL3 entry point (windowed_app_main_sdl.cpp), the ReXApp base class
++# (rex_app.cpp) and the build-config define of the version stamp to <target>,
++# with the common flags. <target> is the host executable itself, or an object
++# library holding the host's code that is linked into it later (see HOST_OBJECTS
++# of rexglue_configure_target): that library compiles without any generated
++# code, so it can be built once and linked with code generated elsewhere.
++#==========================================================
++function(rexglue_add_host_sources target_name)
++    target_sources(${target_name} PRIVATE
++        ${REXGLUE_SHARE_DIR}/windowed_app_main_sdl.cpp
++        ${REXGLUE_SHARE_DIR}/rex_app.cpp)
++
++    target_compile_definitions(${target_name} PRIVATE
++        REXGLUE_BUILD_CONFIG="$<CONFIG>")
++
++    rexglue_apply_target_settings(${target_name})
++endfunction()
++
++#==========================================================
++# rexglue_configure_target(<target> [GPU_PLUGINS ...] [HOST_OBJECTS <objlib>])
++#   - Host application
+ #
+ # Adds:
+-#   - SDL3 entry point source (windowed_app_main_sdl.cpp)
+-#   - ReXApp base class source (rex_app.cpp)
+-#   - Build-config define for the version stamp
++#   - the SDK host sources (rexglue_add_host_sources), or, with HOST_OBJECTS,
++#     links the object library that already has them
+ #   - $ORIGIN RPATH on UNIX so the host finds librexruntime.so next to itself
+ #   - Windows POST_BUILD copy of TARGET_RUNTIME_DLLS and the FidelityFX DLLs.
+ #     Guest modules colocate with the host (see rexglue_configure_module_target),
+ #     so this single copy handles them transitively.
+ #==========================================================
+ function(rexglue_configure_target target_name)
+-    cmake_parse_arguments(ARG "" "" "GPU_PLUGINS" ${ARGN})
+-
+-    target_sources(${target_name} PRIVATE
+-        ${REXGLUE_SHARE_DIR}/windowed_app_main_sdl.cpp
+-        ${REXGLUE_SHARE_DIR}/rex_app.cpp)
++    cmake_parse_arguments(ARG "" "HOST_OBJECTS" "GPU_PLUGINS" ${ARGN})
+ 
+-    target_compile_definitions(${target_name} PRIVATE
+-        REXGLUE_BUILD_CONFIG="$<CONFIG>")
++    if(ARG_HOST_OBJECTS)
++        # Linked as object files, not as an archive: the linker keeps every
++        # object, including those whose only role is to replace a weak
++        # function of the generated code.
++        target_link_libraries(${target_name} PRIVATE ${ARG_HOST_OBJECTS})
++    else()
++        rexglue_add_host_sources(${target_name})
++    endif()
+ 
+     if(UNIX AND NOT APPLE)
+         set_target_properties(${target_name} PROPERTIES
 diff --git a/include/rex/graphics/command_processor.h b/include/rex/graphics/command_processor.h
 index da8e432..fa90e59 100644
 --- a/include/rex/graphics/command_processor.h

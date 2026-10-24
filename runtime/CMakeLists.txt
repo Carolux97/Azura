@@ -2,6 +2,11 @@
 #
 # The recompiled game code in generated/ is produced from your own default.xex by `rexglue codegen`
 # and is not part of this repository. scripts/build.sh runs the whole sequence.
+#
+# Our own code (runtime/src, with the SDK's host sources) is the object library azura_host, which
+# needs no generated code: it builds without a default.xex, and the executable links it with the
+# code generated from one. That split lets our code be built once and linked on another machine
+# with the code generated there (docs/player-runtime-build.md).
 
 cmake_minimum_required(VERSION 3.25)
 project(azura LANGUAGES C CXX)
@@ -10,23 +15,25 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # `rexglue codegen` writes this file. It declares the generated sources and the
-# rexglue_setup_target() helper used below, so the runtime cannot be configured before codegen has
-# run. On a first build, with the SDK built from source (REXSDK_DIR), only the SDK is configured:
-# scripts/build.sh builds the patched code generator (target rexglue) here, runs codegen with it
-# and configures again.
+# rexglue_setup_target() helper used below, so the executable cannot be configured before codegen
+# has run. Without it, with the SDK built from source (REXSDK_DIR), the SDK and our own code are
+# configured on their own: a first build of scripts/build.sh builds the patched code generator
+# (target rexglue) there, runs codegen with it and configures again, and azura_host and the tests
+# build without any game files.
 set(AZURA_REXGLUE_CMAKE ${CMAKE_CURRENT_SOURCE_DIR}/generated/rexglue.cmake)
-if(NOT EXISTS ${AZURA_REXGLUE_CMAKE})
-    if(REXSDK_DIR)
-        add_subdirectory(${REXSDK_DIR} rexglue-sdk)
-        message(STATUS "generated/rexglue.cmake not found: only the SDK is configured, to build "
-                       "the code generator that writes it")
-        return()
-    endif()
+if(EXISTS ${AZURA_REXGLUE_CMAKE})
+    include(${AZURA_REXGLUE_CMAKE})
+elseif(REXSDK_DIR)
+    add_subdirectory(${REXSDK_DIR} rexglue-sdk)
+else()
     message(FATAL_ERROR
         "generated/rexglue.cmake not found. Put your default.xex in runtime/game/ and run "
         "scripts/build.sh, which runs `rexglue codegen` before configuring.")
 endif()
-include(${AZURA_REXGLUE_CMAKE})
+# rexglue_add_host_sources() and the HOST_OBJECTS option come from our SDK patches.
+if(NOT COMMAND rexglue_add_host_sources)
+    message(FATAL_ERROR "The runtime needs the patched ReXGlue SDK source tree (REXSDK_DIR); see scripts/build.sh.")
+endif()
 
 set(AZURA_SOURCES
     src/main.cpp
@@ -58,7 +65,64 @@ endif()
 # __FILE__ strings of log messages).
 add_compile_options(-fmacro-prefix-map=${CMAKE_SOURCE_DIR}=. -ffile-prefix-map=${CMAKE_SOURCE_DIR}=.)
 
-add_executable(azura ${AZURA_SOURCES})
+# Our code and the SDK's host sources (its SDL entry point and ReXApp). An object library rather
+# than a static archive: the executable gets every object, including the hooks that replace a
+# function of the generated code by defining it again (the generated definition is weak), which a
+# linker would leave out of an archive since the symbol is already defined.
+add_library(azura_host OBJECT ${AZURA_SOURCES})
+target_include_directories(azura_host PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(azura_host PRIVATE rex::runtime)
+rexglue_add_host_sources(azura_host)
+
+# With the SDK built from source (preset mac-arm64-sdk-source), the SDK's public headers include
+# imgui.h, but the SDK does not pass imgui's folder on to its consumers the way the packaged SDK
+# does (there, imgui.h sits in the SDK's include folder). Take it from the imgui target.
+if(REXSDK_DIR AND TARGET imgui)
+    target_include_directories(azura_host PRIVATE $<TARGET_PROPERTY:imgui,INTERFACE_INCLUDE_DIRECTORIES>)
+endif()
+# Optional extra headers for the build machine (on Linux, the ALSA and PulseAudio headers a
+# distribution may lack), in sdk/compat/include when present; nothing in the repository creates it.
+set(AZURA_COMPAT_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/../sdk/compat/include")
+if(REXSDK_DIR AND EXISTS "${AZURA_COMPAT_INCLUDE}")
+    target_include_directories(azura_host PRIVATE "${AZURA_COMPAT_INCLUDE}")
+endif()
+
+# Review tool for the button prompt designs: renders every glyph into a PNG without running the
+# game. Not part of the normal build: cmake --build --preset <preset> --target azura_glyph_sheet
+add_executable(azura_glyph_sheet EXCLUDE_FROM_ALL
+    tools/glyph_sheet.cpp
+    src/prompts/glyph_art.cpp
+    src/prompts/glyph_raster.cpp
+)
+
+# Unit tests for the button prompt engine (synthetic data only). Catch2 comes with the SDK source
+# tree; it is added here on its own so the SDK's much larger test suite is not built.
+# Run: ctest --test-dir out/build/mac-arm64-sdk-source -C RelWithDebInfo
+if(REXSDK_DIR)
+    if(NOT TARGET Catch2::Catch2WithMain)
+        add_subdirectory(${REXSDK_DIR}/thirdparty/catch2 catch2 EXCLUDE_FROM_ALL)
+    endif()
+    enable_testing()
+    add_executable(azura_prompts_tests
+        tests/prompts_tests.cpp
+        src/prompts/glyph_art.cpp
+        src/prompts/glyph_raster.cpp
+        src/prompts/xenos_dxt5.cpp
+    )
+    target_link_libraries(azura_prompts_tests PRIVATE Catch2::Catch2WithMain)
+    add_test(NAME azura_prompts_tests COMMAND azura_prompts_tests)
+endif()
+
+# Everything below links our code with the generated code, which needs codegen to have run.
+if(NOT EXISTS ${AZURA_REXGLUE_CMAKE})
+    message(STATUS "generated/rexglue.cmake not found: only the SDK, our code (azura_host) and the "
+                   "tests are configured")
+    return()
+endif()
+
+# Every object comes from azura_host and the generated code (azura_recomp); the executable has no
+# sources of its own.
+add_executable(azura)
 
 # The SDK stages MoltenVK's ICD file from ${REXGLUE_ROOT}/cmake, a variable only the packaged SDK
 # defines. When the SDK is built from source, its source tree is that root.
@@ -67,8 +131,9 @@ if(REXSDK_DIR AND NOT REXGLUE_ROOT)
 endif()
 
 # GPU_PLUGINS xenos stages librexgpu-xenos.dylib next to the executable; on macOS the SDK also
-# stages the Vulkan loader and MoltenVK.
-rexglue_setup_target(azura GPU_PLUGINS xenos)
+# stages the Vulkan loader and MoltenVK. HOST_OBJECTS links azura_host instead of compiling the
+# SDK's host sources into the executable again.
+rexglue_setup_target(azura GPU_PLUGINS xenos HOST_OBJECTS azura_host)
 if(APPLE)
     target_link_libraries(azura PRIVATE "-framework Cocoa")
 endif()
@@ -92,20 +157,8 @@ if(AZURA_MOLTENVK_TARGET)
     add_dependencies(azura_stage_moltenvk azura)
 endif()
 
-# With the SDK built from source (preset mac-arm64-sdk-source), the SDK's public headers include
-# imgui.h, but the SDK does not pass imgui's folder on to its consumers the way the packaged SDK
-# does (there, imgui.h sits in the SDK's include folder). Take it from the imgui target.
-if(REXSDK_DIR AND TARGET imgui)
-    target_include_directories(azura PRIVATE $<TARGET_PROPERTY:imgui,INTERFACE_INCLUDE_DIRECTORIES>)
-endif()
-# Optional extra headers for the build machine (on Linux, the ALSA and PulseAudio headers a
-# distribution may lack), in sdk/compat/include when present; nothing in the repository creates it.
-set(AZURA_COMPAT_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/../sdk/compat/include")
-if(REXSDK_DIR AND EXISTS "${AZURA_COMPAT_INCLUDE}")
-    target_include_directories(azura PRIVATE "${AZURA_COMPAT_INCLUDE}")
-    if(TARGET azura_recomp)
-        target_include_directories(azura_recomp PRIVATE "${AZURA_COMPAT_INCLUDE}")
-    endif()
+if(REXSDK_DIR AND EXISTS "${AZURA_COMPAT_INCLUDE}" AND TARGET azura_recomp)
+    target_include_directories(azura_recomp PRIVATE "${AZURA_COMPAT_INCLUDE}")
 endif()
 
 # Post-codegen patch: codegen writes azura_register.cpp as one function of ~57,000 registration
@@ -158,30 +211,4 @@ if(APPLE)
                  if (img) $.NSWorkspace.sharedWorkspace.setIconForFileOptions(img, '$<TARGET_FILE:azura>', 0);"
         COMMENT "Setting macOS icon on the runtime executable"
         VERBATIM)
-endif()
-
-# Review tool for the button prompt designs: renders every glyph into a PNG without running the
-# game. Not part of the normal build: cmake --build --preset <preset> --target azura_glyph_sheet
-add_executable(azura_glyph_sheet EXCLUDE_FROM_ALL
-    tools/glyph_sheet.cpp
-    src/prompts/glyph_art.cpp
-    src/prompts/glyph_raster.cpp
-)
-
-# Unit tests for the button prompt engine (synthetic data only). Catch2 comes with the SDK source
-# tree; it is added here on its own so the SDK's much larger test suite is not built.
-# Run: ctest --test-dir out/build/mac-arm64-sdk-source -C RelWithDebInfo
-if(REXSDK_DIR)
-    if(NOT TARGET Catch2::Catch2WithMain)
-        add_subdirectory(${REXSDK_DIR}/thirdparty/catch2 catch2 EXCLUDE_FROM_ALL)
-    endif()
-    enable_testing()
-    add_executable(azura_prompts_tests
-        tests/prompts_tests.cpp
-        src/prompts/glyph_art.cpp
-        src/prompts/glyph_raster.cpp
-        src/prompts/xenos_dxt5.cpp
-    )
-    target_link_libraries(azura_prompts_tests PRIVATE Catch2::Catch2WithMain)
-    add_test(NAME azura_prompts_tests COMMAND azura_prompts_tests)
 endif()
