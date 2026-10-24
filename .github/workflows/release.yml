@@ -8,6 +8,10 @@
 # "Publish" off it checks the whole pipeline, and pull requests that change the pipeline itself
 # build without publishing.
 #
+# A release publishes the platforms that built: one whose build fails or cannot run (GitHub's Ubuntu
+# runners wait while the included minutes are used up) is left out, and a manual run with "Publish"
+# on adds it to that version's release later.
+#
 # Releases go to the public releases repository (scripts/release-common.sh), since this one is
 # private and installed launchers download without credentials.
 #
@@ -35,7 +39,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: Publish (a new version only); otherwise build without publishing
+        description: Publish (a new version, or the platforms missing from a released one); otherwise build without publishing
         type: boolean
         default: false
 
@@ -82,9 +86,9 @@ jobs:
             build=true
           elif [[ "${MANUAL}" == true ]]; then
             build=true
+            # A released version gets the platforms of this run added to its release.
             if [[ "${MANUAL_PUBLISH}" == true ]]; then
-              echo "::error::This version is already released. Bump it in tauri.conf.json, package.json and Cargo.toml first."
-              exit 1
+              publish=true
             fi
           fi
           echo "build=${build}" >> "${GITHUB_OUTPUT}"
@@ -99,8 +103,10 @@ jobs:
   launcher:
     name: Launcher ${{ matrix.platform }}
     needs: [version, kit]
+    # Each platform builds when its own kit did: a failed kit of the other platform does not stop it.
+    if: ${{ !cancelled() && needs.version.outputs.build == 'true' }}
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         include:
           # On the project's own Mac (a self-hosted runner, see CONTRIBUTING.md): GitHub's macOS
@@ -167,14 +173,15 @@ jobs:
   publish:
     name: Publish
     needs: [version, launcher]
-    if: needs.version.outputs.publish == 'true'
+    # Publishes the platforms that built, even when another one failed; with none, the script fails.
+    if: ${{ !cancelled() && needs.version.outputs.publish == 'true' }}
     # Bash, Node and gh only, like the version check.
     runs-on: [self-hosted, macOS, ARM64]
     steps:
       - name: Check out the repository
         uses: actions/checkout@v7
 
-      # Both platforms' files land in launcher/dist/<version>/, as one machine would leave them.
+      # The platforms' files land in launcher/dist/<version>/, as one machine would leave them.
       - name: Get the releases
         uses: actions/download-artifact@v4
         with:
