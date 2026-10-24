@@ -4090,10 +4090,10 @@ index 0000000..cedc9eb
 +}  // namespace rex::graphics::xsc
 diff --git a/src/graphics/pipeline/shader/xsc/xsc_translator.cpp b/src/graphics/pipeline/shader/xsc/xsc_translator.cpp
 new file mode 100644
-index 0000000..358a9b1
+index 0000000..476b6a7
 --- /dev/null
 +++ b/src/graphics/pipeline/shader/xsc/xsc_translator.cpp
-@@ -0,0 +1,881 @@
+@@ -0,0 +1,914 @@
 +/**
 + * @file        graphics/pipeline/shader/xsc/xsc_translator.cpp
 + * @brief       Xenos shader compiler: translation setup, control flow, operands and results
@@ -4172,6 +4172,9 @@ index 0000000..358a9b1
 +  frag_coord_ = kNoValue;
 +  front_facing_ = kNoValue;
 +  main_switch_.reset();
++  main_switch_as_chain_ = false;
++  main_chain_pc_ = kNoValue;
++  main_chain_section_.reset();
 +  cf_exec_conditional_.reset();
 +  cf_exec_bool_constant_or_predicate_ = 0;
 +  cf_exec_condition_ = false;
@@ -4307,7 +4310,16 @@ index 0000000..358a9b1
 +    var_pc_ = b.CreateVariable(kInt, "xe_var_pc", 0, Storage::kFunction, 0, b.ConstInt(0));
 +  }
 +  b.BeginLoop();
-+  if (has_main_switch) {
++  // In pixel shaders, NVIDIA drivers lose the device on some draws when the program counter
++  // chooses the code to run through an OpSwitch: in SPIR-V, a chain of "if (pc <= label)" sections
++  // is used instead. The sections run from the one of the iteration's program counter to the end,
++  // as the switch cases fall through; leaving the shader breaks out of the loop directly, as no
++  // switch is in between.
++  main_switch_as_chain_ = has_main_switch && is_pixel_shader() && target_ == Target::kSpirv;
++  if (main_switch_as_chain_) {
++    main_chain_pc_ = b.Load(var_pc_);
++    OpenMainChainSection(0);
++  } else if (has_main_switch) {
 +    main_switch_.emplace(b, b.Load(var_pc_));
 +    main_switch_->BeginCase(0, true);
 +  }
@@ -4316,6 +4328,10 @@ index 0000000..358a9b1
 +std::vector<uint8_t> XscShaderTranslator::CompleteTranslation() {
 +  Builder& b = *builder_;
 +  CloseExecConditionals();
++  if (main_chain_section_) {
++    main_chain_section_->End();
++    main_chain_section_.reset();
++  }
 +  if (main_switch_) {
 +    main_switch_->End();
 +    main_switch_.reset();
@@ -4415,15 +4431,32 @@ index 0000000..358a9b1
 +    // Case 0 is opened at the start.
 +    return;
 +  }
-+  assert_true(main_switch_.has_value());
 +  CloseExecConditionals();
++  if (main_switch_as_chain_) {
++    OpenMainChainSection(cf_index);
++    return;
++  }
++  assert_true(main_switch_.has_value());
 +  // The previous case falls through into this one, unless it has already left (exece, jumps).
 +  main_switch_->BeginCase(int32_t(cf_index), true);
 +}
 +
++void XscShaderTranslator::OpenMainChainSection(uint32_t cf_index) {
++  Builder& b = *builder_;
++  // The previous section falls through to this one, unless it has already left (exece, jumps).
++  if (main_chain_section_) {
++    main_chain_section_->End();
++    main_chain_section_.reset();
++  }
++  // The program counter is never negative: pc <= cf_index is pc < cf_index + 1.
++  main_chain_section_.emplace(
++      b, b.Compare(Op::kULessThan, main_chain_pc_, b.ConstInt(int32_t(cf_index) + 1)));
++}
++
 +void XscShaderTranslator::BreakFromMain() {
-+  // Leaves the main switch, after which the main loop is left too; without labels, leaves the
-+  // main loop directly. Guest loops are jumps, so no host loop or switch is in between.
++  // Leaves the main switch, after which the main loop is left too; without labels or with the
++  // chain of sections, leaves the main loop directly. Guest loops are jumps, so no host loop or
++  // switch is in between.
 +  builder_->Break();
 +}
 +
@@ -4977,10 +5010,10 @@ index 0000000..358a9b1
 +}  // namespace rex::graphics::xsc
 diff --git a/src/graphics/pipeline/shader/xsc/xsc_translator.h b/src/graphics/pipeline/shader/xsc/xsc_translator.h
 new file mode 100644
-index 0000000..76b8fa3
+index 0000000..7fb0ff0
 --- /dev/null
 +++ b/src/graphics/pipeline/shader/xsc/xsc_translator.h
-@@ -0,0 +1,279 @@
+@@ -0,0 +1,287 @@
 +/**
 + * @file        graphics/pipeline/shader/xsc/xsc_translator.h
 + * @brief       Xenos shader compiler (XSC): lowers Xenos microcode into the XSC IR and emits it
@@ -5243,6 +5276,14 @@ index 0000000..76b8fa3
 +
 +  // The main switch over labels, if the shader has any.
 +  std::optional<Builder::Switch> main_switch_;
++  // Pixel shaders emitted as SPIR-V choose the code to run with a chain of "if (pc <= label)"
++  // sections instead of the main switch, as the SPIR-V translator does: whether this shader does,
++  // the program counter of the iteration and the open section.
++  bool main_switch_as_chain_ = false;
++  ValueId main_chain_pc_ = kNoValue;
++  std::optional<Builder::If> main_chain_section_;
++  // Closes the open section and opens "if (pc <= cf_index)".
++  void OpenMainChainSection(uint32_t cf_index);
 +
 +  // Exec-level and instruction-level conditionals, as in the SPIR-V translator.
 +  std::optional<Builder::If> cf_exec_conditional_;
