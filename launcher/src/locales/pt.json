@@ -74,7 +74,7 @@
     "userNamePlaceholder": "User (até 15 caracteres)",
     "defaultUserName": "User",
     "runtimeTitle": "Runtime do jogo",
-    "runtimeHelp": "O jogo recompilado que o launcher inicia. É instalado a partir da compilação do scripts/build.sh e atualizado quando houver uma mais recente.",
+    "runtimeHelp": "O jogo recompilado para este computador. Na primeira vez, o launcher o constrói a partir da sua própria cópia do jogo (alguns minutos), e de novo quando o projeto o atualiza.",
     "runtimeInstalled": "Instalado e atualizado.",
     "runtimeUpdate": "Uma compilação mais recente está pronta para instalar.",
     "runtimeNotInstalled": "Ainda não instalado.",
@@ -184,7 +184,26 @@
     "startFailed": "Não foi possível iniciar o jogo: {detail}",
     "installingRuntime": "Instalando o runtime do jogo…",
     "installFailed": "Falha ao instalar o runtime: {detail}",
-    "savesUnavailable": "A pasta de jogos salvos não está disponível: {detail}"
+    "savesUnavailable": "A pasta de jogos salvos não está disponível: {detail}",
+    "buildPreparing": "Preparando a construção do jogo…",
+    "buildTranslating": "Traduzindo o código do jogo…",
+    "buildCompiling": "Compilando o jogo: {done} de {total} arquivos",
+    "buildLinking": "Vinculando o jogo…",
+    "buildInstalling": "Instalando o jogo…",
+    "buildNoCompiler": "É necessário um compilador C++ para construir o jogo: instale-o em Instalação.",
+    "buildNoKit": "Este launcher não tem kit para construir o jogo neste sistema.",
+    "buildWrongKit": "O kit do launcher não pode ser usado aqui: {detail}",
+    "buildUnsupportedGame": "Escolha antes uma cópia compatível do jogo em Instalação.",
+    "buildNoSpace": "Espaço livre insuficiente para construir o jogo: são necessários {needed} MB e há {free} MB livres.",
+    "buildStepFailed": "A construção do jogo falhou durante \"{step}\": {summary} (log completo: {log})",
+    "buildBusy": "O jogo já está sendo construído ou está em execução.",
+    "buildStep": {
+      "preparing": "preparação",
+      "translating": "tradução do código",
+      "compiling": "compilação",
+      "linking": "vinculação",
+      "installing": "instalação"
+    }
   },
   "update": {
     "available": "Atualizar para {version}",

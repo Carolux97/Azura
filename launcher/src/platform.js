@@ -88,7 +88,12 @@ export const getRuntimeStatus = async () =>
     ? tauri.core.invoke("get_runtime_status")
     : { installed: false, buildFound: true, updateAvailable: true, path: "" };
 
-/** Installs or updates the runtime from the project's build; resolves to the new state. */
+/**
+ * Installs or updates the runtime: copies the project's build, or builds it from the player kit
+ * and the player's default.xex (`source` "kit" in the state), which takes minutes and reports its
+ * progress through onRuntimeBuildProgress. Resolves to the new state; rejects with { kind, detail }
+ * (see BuildError in src-tauri/src/builder.rs).
+ */
 export const installRuntime = async () =>
   isNativeApp
     ? tauri.core.invoke("install_runtime")
@@ -258,3 +263,11 @@ export const getCompilerStatus = async () =>
  * message when it cannot install it.
  */
 export const installCompiler = async () => (isNativeApp ? tauri.core.invoke("install_compiler") : undefined);
+
+/**
+ * Calls `listener` with { phase, done, total } while the runtime is built from the kit: phase is
+ * "preparing", "translating", "compiling" (done of total files), "linking" or "installing".
+ */
+export const onRuntimeBuildProgress = (listener) => {
+  if (isNativeApp) return tauri.event.listen("runtime-build-progress", (event) => listener(event.payload));
+};

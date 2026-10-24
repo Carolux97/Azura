@@ -44,6 +44,7 @@ import {
   getAchievements,
   getCompilerStatus,
   installCompiler,
+  onRuntimeBuildProgress,
   getSaveStatus,
   openSavesFolder,
   pickGameFolder,
@@ -83,6 +84,8 @@ const state = {
   // and whether it is being installed.
   runtime: { installed: false, buildFound: false, updateAvailable: false },
   installingRuntime: false,
+  // The kit build's last progress ({ phase, done, total }), or null when no build runs.
+  buildProgress: null,
   // Folder for the saves (shown in the Installation view; changed only by moving the saves) and
   // the folder waiting for the player to confirm replacing the saves already in it.
   savesFolder: "",
@@ -387,7 +390,8 @@ const setupLaunch = () => {
  */
 const runRuntimeInstall = async () => {
   state.installingRuntime = true;
-  setLogState("log.installingRuntime");
+  state.buildProgress = null;
+  setLogState(state.runtime.source === "kit" ? "log.buildPreparing" : "log.installingRuntime");
   renderInstall();
   renderPlay();
   try {
@@ -397,13 +401,61 @@ const runRuntimeInstall = async () => {
     refreshAchievements();
     return true;
   } catch (error) {
-    setLogState("log.installFailed", "error", { detail: String(error) });
+    const [key, vars] = buildErrorMessage(error);
+    setLogState(key, "error", vars);
+    if (error?.kind === "noCompiler") refreshCompiler();
     return false;
   } finally {
     state.installingRuntime = false;
+    state.buildProgress = null;
     renderInstall();
     renderPlay();
   }
+};
+
+/** Translation key of each step of a kit build, for the log header and the Installation view. */
+const BUILD_PHASE_KEYS = {
+  preparing: "log.buildPreparing",
+  translating: "log.buildTranslating",
+  compiling: "log.buildCompiling",
+  linking: "log.buildLinking",
+  installing: "log.buildInstalling",
+};
+
+/** Translation key and values for a failed runtime install or build (see platform.installRuntime). */
+const buildErrorMessage = (error) => {
+  const detail = error?.detail;
+  switch (error?.kind) {
+    case "noCompiler":
+      return ["log.buildNoCompiler", {}];
+    case "noKit":
+      return ["log.buildNoKit", {}];
+    case "wrongKit":
+      return ["log.buildWrongKit", { detail: detail?.reason ?? "" }];
+    case "unsupportedGame":
+      return ["log.buildUnsupportedGame", {}];
+    case "notEnoughSpace":
+      return ["log.buildNoSpace", { needed: detail?.neededMb ?? 0, free: detail?.freeMb ?? 0 }];
+    case "stepFailed":
+      return ["log.buildStepFailed", {
+        step: t(`log.buildStep.${detail?.phase ?? "preparing"}`),
+        summary: detail?.summary ?? "",
+        log: detail?.log ?? "",
+      }];
+    case "alreadyRunning":
+      return ["log.buildBusy", {}];
+    default:
+      return ["log.installFailed", { detail: typeof detail === "string" ? detail : String(error) }];
+  }
+};
+
+/** Shows a kit build's progress in the log header and the Installation view. */
+const setupBuildProgress = () => {
+  onRuntimeBuildProgress?.((progress) => {
+    state.buildProgress = progress;
+    setLogState(BUILD_PHASE_KEYS[progress.phase] ?? "log.buildPreparing", "", { done: progress.done, total: progress.total });
+    renderInstall();
+  });
 };
 
 /** How often the status is checked while Apple's install window is open, and for how long. */
@@ -505,7 +557,10 @@ const renderInstall = () => {
   const [runtimeKey, runtimeTone] = runtimeState();
   const runtimeLine = document.getElementById("runtime-check");
   runtimeLine.dataset.state = runtimeTone;
-  runtimeLine.textContent = t(runtimeKey);
+  const progress = state.buildProgress;
+  runtimeLine.textContent = state.installingRuntime && progress
+    ? t(BUILD_PHASE_KEYS[progress.phase] ?? "log.buildPreparing", { done: progress.done, total: progress.total })
+    : t(runtimeKey);
   const runtimeButton = document.getElementById("install-runtime");
   runtimeButton.hidden = !state.runtime.buildFound;
   runtimeButton.disabled = state.installingRuntime || state.game !== "idle" || !runtimeNeedsInstall();
@@ -1042,6 +1097,7 @@ setupLanguages();
 setupSaves();
 setupAchievements();
 setupCompiler();
+setupBuildProgress();
 setupReloadOnFocus();
 
 /**

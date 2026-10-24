@@ -74,7 +74,7 @@
     "userNamePlaceholder": "User (up to 15 characters)",
     "defaultUserName": "User",
     "runtimeTitle": "遊戲執行環境",
-    "runtimeHelp": "啟動器所執行的重新編譯遊戲。它從 scripts/build.sh 的組建安裝，有更新的組建時會自動更新。",
+    "runtimeHelp": "為這台電腦重新編譯的遊戲。第一次由啟動器從你的遊戲副本建置（幾分鐘），專案更新時會再建置一次。",
     "runtimeInstalled": "已安裝且為最新。",
     "runtimeUpdate": "有更新的組建可供安裝。",
     "runtimeNotInstalled": "尚未安裝。",
@@ -184,7 +184,26 @@
     "startFailed": "無法啟動遊戲：{detail}",
     "installingRuntime": "正在安裝遊戲執行環境…",
     "installFailed": "執行環境安裝失敗：{detail}",
-    "savesUnavailable": "無法使用遊戲存檔資料夾：{detail}"
+    "savesUnavailable": "無法使用遊戲存檔資料夾：{detail}",
+    "buildPreparing": "正在準備建置遊戲…",
+    "buildTranslating": "正在轉譯遊戲程式碼…",
+    "buildCompiling": "正在編譯遊戲：{done} / {total} 個檔案",
+    "buildLinking": "正在連結遊戲…",
+    "buildInstalling": "正在安裝遊戲…",
+    "buildNoCompiler": "建置遊戲需要 C++ 編譯器：請在「安裝」中安裝。",
+    "buildNoKit": "此啟動器沒有在這個系統上建置遊戲的工具包。",
+    "buildWrongKit": "啟動器的工具包無法在此使用：{detail}",
+    "buildUnsupportedGame": "請先在「安裝」中選擇支援的遊戲副本。",
+    "buildNoSpace": "可用空間不足以建置遊戲：需要 {needed} MB，可用 {free} MB。",
+    "buildStepFailed": "建置遊戲在「{step}」時失敗：{summary}（完整記錄：{log}）",
+    "buildBusy": "遊戲已在建置或正在執行。",
+    "buildStep": {
+      "preparing": "準備",
+      "translating": "轉譯程式碼",
+      "compiling": "編譯",
+      "linking": "連結",
+      "installing": "安裝"
+    }
   },
   "update": {
     "available": "更新至 {version}",

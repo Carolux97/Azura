@@ -74,7 +74,7 @@
     "userNamePlaceholder": "User (up to 15 characters)",
     "defaultUserName": "User",
     "runtimeTitle": "ゲームランタイム",
-    "runtimeHelp": "ランチャーが起動する再コンパイル済みのゲームです。scripts/build.sh のビルドからインストールされ、新しいビルドがあれば更新されます。",
+    "runtimeHelp": "このコンピュータ向けに再コンパイルされたゲームです。初回はお持ちのゲームからランチャーがビルドし（数分）、プロジェクトの更新時にも再ビルドします。",
     "runtimeInstalled": "インストール済み・最新です。",
     "runtimeUpdate": "新しいビルドをインストールできます。",
     "runtimeNotInstalled": "まだインストールされていません。",
@@ -184,7 +184,26 @@
     "startFailed": "ゲームを起動できませんでした：{detail}",
     "installingRuntime": "ゲームランタイムをインストールしています…",
     "installFailed": "ランタイムのインストールに失敗しました: {detail}",
-    "savesUnavailable": "セーブデータのフォルダを利用できません: {detail}"
+    "savesUnavailable": "セーブデータのフォルダを利用できません: {detail}",
+    "buildPreparing": "ゲームのビルドを準備しています…",
+    "buildTranslating": "ゲームのコードを変換しています…",
+    "buildCompiling": "ゲームをコンパイルしています: {total} 個中 {done} 個",
+    "buildLinking": "ゲームをリンクしています…",
+    "buildInstalling": "ゲームをインストールしています…",
+    "buildNoCompiler": "ゲームのビルドには C++ コンパイラが必要です。インストールで導入してください。",
+    "buildNoKit": "このランチャーには、このシステムでゲームをビルドするキットがありません。",
+    "buildWrongKit": "ランチャーのキットはここでは使えません: {detail}",
+    "buildUnsupportedGame": "先にインストールで対応するゲームを選んでください。",
+    "buildNoSpace": "ゲームのビルドに必要な空き容量がありません: 必要 {needed} MB、空き {free} MB。",
+    "buildStepFailed": "ゲームのビルドが「{step}」で失敗しました: {summary}（完全なログ: {log}）",
+    "buildBusy": "ゲームはすでにビルド中か、実行中です。",
+    "buildStep": {
+      "preparing": "準備",
+      "translating": "コードの変換",
+      "compiling": "コンパイル",
+      "linking": "リンク",
+      "installing": "インストール"
+    }
   },
   "update": {
     "available": "{version} に更新",

@@ -260,6 +260,12 @@ fn minimum_major() -> u32 {
     }
 }
 
+/// The compiler the runtime is built with, when there is a working one.
+pub fn compiler() -> Option<Compiler> {
+    let compiler = find_compiler()?;
+    judge(&compiler, minimum_major(), probe).ok().map(|_| compiler)
+}
+
 /// What a compiler that is there means: its version when it can build the runtime, otherwise
 /// the problem. `probe` compiles and links the test program with it; it only runs for a compiler
 /// new enough, since an old one is reported as such either way.

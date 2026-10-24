@@ -74,7 +74,7 @@
     "wrongGame": "Esto no es Gears of War 3 (Title ID {titleId}).",
     "chooseFolderFirst": "Elige primero la carpeta del juego",
     "runtimeTitle": "Runtime del juego",
-    "runtimeHelp": "El juego recompilado que arranca el launcher. Se instala a partir de la compilación de scripts/build.sh y se actualiza cuando hay una más nueva.",
+    "runtimeHelp": "El juego recompilado para este ordenador. La primera vez, el launcher lo construye a partir de tu propia copia del juego (unos minutos), y de nuevo cuando el proyecto lo actualiza.",
     "runtimeInstalled": "Instalado y al día.",
     "runtimeUpdate": "Hay una compilación más nueva lista para instalar.",
     "runtimeNotInstalled": "Todavía no está instalado.",
@@ -184,7 +184,26 @@
     "startFailed": "No se pudo iniciar el juego: {detail}",
     "installingRuntime": "Instalando el runtime del juego…",
     "installFailed": "No se pudo instalar el runtime: {detail}",
-    "savesUnavailable": "La carpeta de partidas guardadas no está disponible: {detail}"
+    "savesUnavailable": "La carpeta de partidas guardadas no está disponible: {detail}",
+    "buildPreparing": "Preparando la construcción del juego…",
+    "buildTranslating": "Traduciendo el código del juego…",
+    "buildCompiling": "Compilando el juego: {done} de {total} ficheros",
+    "buildLinking": "Enlazando el juego…",
+    "buildInstalling": "Instalando el juego…",
+    "buildNoCompiler": "Hace falta un compilador de C++ para construir el juego: instálalo en Instalación.",
+    "buildNoKit": "Este launcher no tiene kit para construir el juego en este sistema.",
+    "buildWrongKit": "El kit del launcher no sirve aquí: {detail}",
+    "buildUnsupportedGame": "Elige antes una copia compatible del juego en Instalación.",
+    "buildNoSpace": "No hay espacio libre suficiente para construir el juego: hacen falta {needed} MB y hay {free} MB libres.",
+    "buildStepFailed": "La construcción del juego ha fallado al {step}: {summary} (log completo: {log})",
+    "buildBusy": "El juego ya se está construyendo o está en marcha.",
+    "buildStep": {
+      "preparing": "prepararla",
+      "translating": "traducir el código",
+      "compiling": "compilar",
+      "linking": "enlazar",
+      "installing": "instalar"
+    }
   },
   "update": {
     "available": "Actualizar a {version}",
