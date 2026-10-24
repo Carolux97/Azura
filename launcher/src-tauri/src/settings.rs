@@ -9,7 +9,9 @@
 //!   ever rewrites its own keys and keeps everything else, comments included.
 //! - `launcher.toml`: what only the launcher uses (interface language, chosen preset, which game
 //!   language was picked, how the Achievements section shows them, and the saves folder, which the runtime receives on the command line;
-//!   see `saves.rs`). The game language also reaches the runtime as `user_language`.
+//!   see `saves.rs`). The game language also reaches the runtime as `user_language`, and as
+//!   `user_country`, the console's country, which the game weighs with the language to pick a
+//!   regional variant (Spanish from Spain, ESN, or Latin American, ESM).
 //!
 //! Graphics values are passed through as found: a key missing from `azura.toml` is sent as
 //! `null`, and the interface fills it from the selected preset (the preset table lives in
@@ -40,6 +42,7 @@ const RUNTIME_CONFIG_HEADER: &str = "\
 const KEY_GAME_DATA_ROOT: &str = "game_data_root";
 const KEY_USER_NAME: &str = "user_name";
 const KEY_USER_LANGUAGE: &str = "user_language";
+const KEY_USER_COUNTRY: &str = "user_country";
 const KEY_GPU_PLUGIN: &str = "gpu_plugin";
 const KEY_FULLSCREEN: &str = "fullscreen";
 /// Render resolution of the game's Video menu ("auto", "1280x720", "2560x1440" or "3840x2160").
@@ -69,6 +72,28 @@ fn console_language(code: &str) -> Option<i64> {
         "PTB" => 9,
         "POL" => 11,
         "RUS" => 12,
+        _ => return None,
+    })
+}
+
+/// Console country ID (the SDK's country table in `xam_locale.cpp`) for an engine language code: the
+/// country of that language's edition, so the game picks the variant the player chose rather than
+/// another one of the same language (without a country the SDK reports the United States, and the
+/// game looks for Latin American Spanish, ESM, before Spain's, ESN). English (INT) keeps the SDK's
+/// default, the United States; Czech and Hungarian have no console language, so no country either.
+fn console_country(code: &str) -> Option<i64> {
+    Some(match code {
+        "ESN" => 31,  // Spain
+        "ESM" => 71,  // Mexico
+        "FRA" => 34,  // France
+        "DEU" => 24,  // Germany
+        "ITA" => 50,  // Italy
+        "PTB" => 13,  // Brazil
+        "POL" => 82,  // Poland
+        "RUS" => 88,  // Russia
+        "JPN" => 53,  // Japan
+        "KOR" => 56,  // Korea
+        "CHN" => 101, // Taiwan (traditional Chinese)
         _ => return None,
     })
 }
@@ -332,6 +357,11 @@ impl SettingsPaths {
         );
         set_or_remove(
             &mut runtime,
+            KEY_USER_COUNTRY,
+            settings.game_language.as_deref().and_then(console_country).map(value),
+        );
+        set_or_remove(
+            &mut runtime,
             KEY_RENDER_RESOLUTION,
             graphics.render_resolution.as_deref().map(value),
         );
@@ -441,6 +471,7 @@ mod tests {
             "fullscreen = true",
             "game_data_root = \"/Games/Gears of War 3\"",
             "user_language = 5",
+            "user_country = 31",
             "render_resolution = \"2560x1440\"",
         ] {
             assert!(text.contains(line), "missing `{line}` in:\n{text}");
@@ -575,5 +606,25 @@ mod tests {
         assert!(paths.load().is_err());
         assert!(paths.save(&sample_settings()).is_err());
         assert_eq!(fs::read_to_string(&config).unwrap(), "this is = = not toml");
+    }
+
+    #[test]
+    fn the_country_follows_the_game_language() {
+        let dir = temp_folder("country");
+        let paths = SettingsPaths::new(&dir);
+        let mut settings = sample_settings();
+        let country = |dir: &Path| {
+            let text = fs::read_to_string(dir.join(RUNTIME_CONFIG)).unwrap();
+            text.lines().find(|line| line.starts_with("user_country")).map(str::to_owned)
+        };
+        paths.save(&settings).unwrap();
+        assert_eq!(country(&dir).as_deref(), Some("user_country = 31"));
+        settings.game_language = Some("FRA".into());
+        paths.save(&settings).unwrap();
+        assert_eq!(country(&dir).as_deref(), Some("user_country = 34"));
+        // English keeps the SDK's default (the United States): no country is written.
+        settings.game_language = Some("INT".into());
+        paths.save(&settings).unwrap();
+        assert_eq!(country(&dir), None);
     }
 }
