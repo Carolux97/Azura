@@ -1,9 +1,9 @@
 diff --git a/src/graphics/pipeline/shader/xsc/bench/xsc_bench.mm b/src/graphics/pipeline/shader/xsc/bench/xsc_bench.mm
 new file mode 100644
-index 0000000..9289490
+index 0000000..129b6cf
 --- /dev/null
 +++ b/src/graphics/pipeline/shader/xsc/bench/xsc_bench.mm
-@@ -0,0 +1,1382 @@
+@@ -0,0 +1,1388 @@
 +/**
 + * @file        graphics/pipeline/shader/xsc/bench/xsc_bench.mm
 + * @brief       Offline bench for the Xenos shader compiler: translates the game's real shaders
@@ -47,6 +47,7 @@ index 0000000..9289490
 +#include <rex/string/buffer.h>
 +
 +#include "../../../../metal/metal_spirv.h"
++#include "../xsc_msl.h"
 +#include "../xsc_translator.h"
 +
 +namespace fs = std::filesystem;
@@ -257,6 +258,11 @@ index 0000000..9289490
 +  MTLCompileOptions* options = [MTLCompileOptions new];
 +  options.languageVersion = MTLLanguageVersion3_0;
 +  options.mathMode = MTLMathModeSafe;
++  // XSC's entry point without rasterization is built only with its macro.
++  const std::string& entry_point = translated.msl.entry_point;
++  if (entry_point.size() > 7 && entry_point.compare(entry_point.size() - 7, 7, "_norast") == 0) {
++    options.preprocessorMacros = @{@(xsc::kMslNoRasterizationMacro) : @"1"};
++  }
 +  NSError* error = nil;
 +  id<MTLLibrary> library = [device newLibraryWithSource:@(translated.msl.source.c_str())
 +                                                options:options
@@ -2114,10 +2120,10 @@ index 0000000..6d2d864
 +}  // namespace rex::graphics::xsc
 diff --git a/src/graphics/pipeline/shader/xsc/xsc_msl.cpp b/src/graphics/pipeline/shader/xsc/xsc_msl.cpp
 new file mode 100644
-index 0000000..1c0bb7f
+index 0000000..5538e9d
 --- /dev/null
 +++ b/src/graphics/pipeline/shader/xsc/xsc_msl.cpp
-@@ -0,0 +1,812 @@
+@@ -0,0 +1,817 @@
 +/**
 + * @file        graphics/pipeline/shader/xsc/xsc_msl.cpp
 + * @brief       MSL emitter of the Xenos shader compiler
@@ -2132,7 +2138,9 @@ index 0000000..1c0bb7f
 + * shared memory, 1-5 the constant buffers, textures and samplers in binding order, and the vertex
 + * outputs named as SPIRV-Cross names them. A vertex shader has a second entry point, with the
 + * name suffixed by _norast, for pipelines without rasterization (returning nothing, as Metal
-+ * requires there).
++ * requires there). The two are alternatives of the preprocessor macro kMslNoRasterizationMacro, so
++ * compiling the source builds only the one needed: building both made the first Metal compilation
++ * of a vertex shader take about 70% longer (measured on an M4).
 + */
 +
 +#include "xsc_msl.h"
@@ -2372,14 +2380,17 @@ index 0000000..1c0bb7f
 +    out_ = std::move(head);
 +    // The SPIR-V shaders follow Vulkan clip space, where -Y is the top: flipped for Metal as
 +    // SPIRV-Cross does for the SPIR-V translator's vertex shaders.
++    out_ += fmt::format("#ifndef {}\n", kMslNoRasterizationMacro);
 +    out_ += fmt::format(
 +        "vertex XeVertexOut {}({})\n{{\n{}    out.gl_Position.y = -(out.gl_Position.y);\n"
-+        "    return out;\n}}\n\n",
++        "    return out;\n}}\n",
 +        program_.entry_point, parameter_text, body);
++    out_ += "#else\n";
 +    // Flipped there too, like SPIRV-Cross, though nothing reads it.
 +    out_ += fmt::format(
 +        "vertex void {}_norast({})\n{{\n{}    out.gl_Position.y = -(out.gl_Position.y);\n}}\n",
 +        program_.entry_point, parameter_text, body);
++    out_ += "#endif\n";
 +    return std::move(out_);
 +  }
 +
@@ -2932,10 +2943,10 @@ index 0000000..1c0bb7f
 +}  // namespace rex::graphics::xsc
 diff --git a/src/graphics/pipeline/shader/xsc/xsc_msl.h b/src/graphics/pipeline/shader/xsc/xsc_msl.h
 new file mode 100644
-index 0000000..271f880
+index 0000000..8e7e6a1
 --- /dev/null
 +++ b/src/graphics/pipeline/shader/xsc/xsc_msl.h
-@@ -0,0 +1,20 @@
+@@ -0,0 +1,25 @@
 +/**
 + * @file        graphics/pipeline/shader/xsc/xsc_msl.h
 + * @brief       MSL emitter of the Xenos shader compiler
@@ -2951,6 +2962,11 @@ index 0000000..271f880
 +#include "xsc_ir.h"
 +
 +namespace rex::graphics::xsc {
++
++// The preprocessor macro that selects a vertex shader's entry point for pipelines without
++// rasterization (the entry point's name with _norast) instead of the usual one, when the MSL is
++// compiled with it defined. One compilation then builds one of them, not both.
++constexpr const char* kMslNoRasterizationMacro = "XE_NORAST";
 +
 +// Writes the program as Metal Shading Language source with the program's entry point.
 +std::string EmitMsl(const Program& program);

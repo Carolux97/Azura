@@ -709,10 +709,10 @@ index a318f2c..6751e8d 100644
  
  /// Device ordinal N feeds guest user N. Synthetic devices feed user 0.
 diff --git a/include/rex/perf/counter.h b/include/rex/perf/counter.h
-index 83f0dff..8def116 100644
+index 83f0dff..168106f 100644
 --- a/include/rex/perf/counter.h
 +++ b/include/rex/perf/counter.h
-@@ -24,6 +24,37 @@ enum class CounterId : uint16_t {
+@@ -24,6 +24,43 @@ enum class CounterId : uint16_t {
    kFrameTimeUs,
    kFps,
  
@@ -744,13 +744,19 @@ index 83f0dff..8def116 100644
 +  kPipelineCreations,          // Render pipeline states created (newRenderPipelineStateWithDescriptor)
 +  kPipelineCreationUs,
 +  kDrawsSkippedForPipelines,   // Draws skipped while their pipeline is made in the background
++  // Time guest draws kept the command processor thread on work that can stall the frame (Metal
++  // backend): translating their shaders, loading their textures, and getting their pipeline (which
++  // waits for it to be made when it cannot be made in the background)
++  kDrawShaderTranslationUs,
++  kDrawTextureLoadUs,
++  kDrawPipelineUs,
 +  kOcclusionQueries,           // Occlusion query results written to guest memory (Metal, Vulkan)
 +  kOcclusionQueriesZero,       // Of those, results with no sample visible
 +
    // GPU
    kDrawCalls,
    kCommandBufferStalls,
-@@ -59,6 +90,7 @@ enum class CounterId : uint16_t {
+@@ -59,6 +96,7 @@ enum class CounterId : uint16_t {
    kHostGpuWaits,          // Times the command processor blocked until the host GPU finished
    kHostGpuWaitUs,         // Time spent in those waits
    kMemexportReadbacks,    // Draws whose memexport output was read back to guest memory
@@ -758,6 +764,17 @@ index 83f0dff..8def116 100644
    kResolves,              // Guest resolves (EDRAM to memory copies)
    // Why the open render pass was ended (each ended pass adds to one of these)
    kRenderPassEndsTargetChange,  // A draw to other render targets
+@@ -81,6 +119,10 @@ enum class CounterId : uint16_t {
+   // Guest draws that continue a render pass begun for a render target transfer
+   kDrawsInTransferPasses,
+ 
++  // Marks the player sets with a key while playing (the runtime's bind_perf_marker key), to find the
++  // frames they noticed in the CSV
++  kMarkers,
++
+   kCount  // sentinel -- must be last
+ };
+ 
 diff --git a/include/rex/system/interfaces/graphics.h b/include/rex/system/interfaces/graphics.h
 index d54df86..74913c7 100644
 --- a/include/rex/system/interfaces/graphics.h
@@ -1056,10 +1073,10 @@ index b52bf39..13f51dc 100644
  
  void* MapFileView(FileMappingHandle handle, void* base_address, size_t length, PageAccess access,
 diff --git a/src/core/perf/counter.cpp b/src/core/perf/counter.cpp
-index d3f26eb..8c92ad6 100644
+index d3f26eb..f04a74e 100644
 --- a/src/core/perf/counter.cpp
 +++ b/src/core/perf/counter.cpp
-@@ -46,6 +46,26 @@ std::array<std::atomic<int64_t>, kNumCounters> g_snapshot{};
+@@ -46,6 +46,29 @@ std::array<std::atomic<int64_t>, kNumCounters> g_snapshot{};
  constexpr const char* kCounterNames[] = {
      "frame_time_us",
      "fps",
@@ -1081,12 +1098,15 @@ index d3f26eb..8c92ad6 100644
 +    "pipeline_creations",
 +    "pipeline_creation_us",
 +    "draws_skipped_for_pipelines",
++    "draw_shader_translation_us",
++    "draw_texture_load_us",
++    "draw_pipeline_us",
 +    "occlusion_queries",
 +    "occlusion_queries_zero",
      "draw_calls",
      "command_buffer_stalls",
      "vertices_processed",
-@@ -70,6 +90,7 @@ constexpr const char* kCounterNames[] = {
+@@ -70,6 +93,7 @@ constexpr const char* kCounterNames[] = {
      "host_gpu_waits",
      "host_gpu_wait_us",
      "memexport_readbacks",
@@ -1094,7 +1114,15 @@ index d3f26eb..8c92ad6 100644
      "resolves",
      "pass_ends_target_change",
      "pass_ends_draw_barriers",
-@@ -94,6 +115,26 @@ static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must matc
+@@ -86,6 +110,7 @@ constexpr const char* kCounterNames[] = {
+     "uploads_for_textures",
+     "uploads_after_textures",
+     "draws_in_transfer_passes",
++    "markers",
+ };
+ static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must match CounterId enum");
+ 
+@@ -94,6 +119,29 @@ static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must matc
  constexpr bool kIsGauge[] = {
      false,  // kFrameTimeUs       (set each frame)
      false,  // kFps               (set each frame)
@@ -1116,12 +1144,15 @@ index d3f26eb..8c92ad6 100644
 +    false,  // kPipelineCreations
 +    false,  // kPipelineCreationUs
 +    false,  // kDrawsSkippedForPipelines
++    false,  // kDrawShaderTranslationUs
++    false,  // kDrawTextureLoadUs
++    false,  // kDrawPipelineUs
 +    false,  // kOcclusionQueries
 +    false,  // kOcclusionQueriesZero
      false,  // kDrawCalls
      false,  // kCommandBufferStalls
      false,  // kVerticesProcessed
-@@ -118,6 +159,7 @@ constexpr bool kIsGauge[] = {
+@@ -118,6 +166,7 @@ constexpr bool kIsGauge[] = {
      false,  // kHostGpuWaits
      false,  // kHostGpuWaitUs
      false,  // kMemexportReadbacks
@@ -1129,6 +1160,14 @@ index d3f26eb..8c92ad6 100644
      false,  // kResolves
      false,  // kRenderPassEndsTargetChange
      false,  // kRenderPassEndsDrawBarriers
+@@ -134,6 +183,7 @@ constexpr bool kIsGauge[] = {
+     false,  // kUploadsForTextures
+     false,  // kUploadsAfterTextures
+     false,  // kDrawsInTransferPasses
++    false,  // kMarkers
+ };
+ static_assert(std::size(kIsGauge) == kNumCounters, "kIsGauge must match CounterId enum");
+ 
 diff --git a/src/graphics/CMakeLists.txt b/src/graphics/CMakeLists.txt
 index 0d8f8af..935e88b 100644
 --- a/src/graphics/CMakeLists.txt
@@ -1866,10 +1905,10 @@ index 0000000..b432d7c
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_command_processor.mm b/src/graphics/metal/metal_command_processor.mm
 new file mode 100644
-index 0000000..beb68a2
+index 0000000..677bd57
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.mm
-@@ -0,0 +1,2435 @@
+@@ -0,0 +1,2486 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.mm
 + * @brief       Xenos command processing with Metal
@@ -1900,6 +1939,7 @@ index 0000000..beb68a2
 +#include <rex/logging.h>
 +#include <rex/math.h>
 +#include <rex/memory/utils.h>
++#include <rex/perf/counter.h>
 +#include <rex/thread.h>
 +#include <rex/ui/keybinds.h>
 +
@@ -1934,6 +1974,33 @@ index 0000000..beb68a2
 +    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 +
 +namespace rex::graphics::metal {
++
++namespace {
++
++// Adds the microseconds from its construction to its destruction to a per-frame counter, for the
++// work a guest draw does on the command processor thread. Nothing without performance counters.
++class ScopedCounterMicroseconds {
++ public:
++#ifdef REXGLUE_ENABLE_PERF_COUNTERS
++  explicit ScopedCounterMicroseconds(rex::perf::CounterId id)
++      : id_(id), start_(std::chrono::steady_clock::now()) {}
++  ~ScopedCounterMicroseconds() {
++    rex::perf::IncrementCounter(id_, std::chrono::duration_cast<std::chrono::microseconds>(
++                                         std::chrono::steady_clock::now() - start_)
++                                         .count());
++  }
++
++ private:
++  rex::perf::CounterId id_;
++  std::chrono::steady_clock::time_point start_;
++#else
++  explicit ScopedCounterMicroseconds(rex::perf::CounterId) {}
++#endif
++  ScopedCounterMicroseconds(const ScopedCounterMicroseconds&) = delete;
++  ScopedCounterMicroseconds& operator=(const ScopedCounterMicroseconds&) = delete;
++};
++
++}  // namespace
 +
 +// The gamma ramp shaders of the Vulkan backend, converted to MSL at initialization.
 +namespace shaders {
@@ -3316,20 +3383,44 @@ index 0000000..beb68a2
 +      pixel_shader ? static_cast<MetalShader::MetalTranslation*>(
 +                         pixel_shader->GetOrCreateTranslation(pixel_shader_modification.value))
 +                   : nullptr;
-+  if (!pipeline_cache_->EnsureShadersTranslated(vertex_shader_translation,
-+                                                pixel_shader_translation)) {
-+    return false;
++  // With async_shader_compilation, a draw whose shaders or pipeline are not ready yet is skipped
++  // while the creation threads make them, unless skipping would lose side effects (memexport) or
++  // it has no pixel shader (depth-only draws whose absence would show).
++  bool pipeline_async = REXCVAR_GET(async_shader_compilation) && pixel_shader != nullptr &&
++                        !memexport_writes_possible;
++  bool shaders_pending = false;
++  {
++    ScopedCounterMicroseconds timer(rex::perf::CounterId::kDrawShaderTranslationUs);
++    if (!pipeline_cache_->PrepareShadersForDraw(vertex_shader_translation,
++                                                pixel_shader_translation, pipeline_async,
++                                                shaders_pending)) {
++      return false;
++    }
 +  }
 +
 +  uint32_t normalized_color_mask =
 +      pixel_shader ? draw_util::GetNormalizedColorMask(regs, pixel_shader->writes_color_targets())
 +                   : 0;
 +
++  if (shaders_pending) {
++    // Skipped like a draw whose pipeline is pending, after the render targets are set up as that
++    // one would be. Its textures, which need the translation, are not requested.
++    if (!render_target_cache_->Update(is_rasterization_done, normalized_depth_control,
++                                      normalized_color_mask, *vertex_shader)) {
++      return false;
++    }
++    PERF_counter_inc(kDrawsSkippedForPipelines);
++    return true;
++  }
++
 +  // Load the textures before the render pass is entered (may dispatch and copy).
 +  uint32_t used_texture_mask =
 +      vertex_shader->GetUsedTextureMaskAfterTranslation() |
 +      (pixel_shader != nullptr ? pixel_shader->GetUsedTextureMaskAfterTranslation() : 0);
-+  texture_cache_->RequestTextures(used_texture_mask);
++  {
++    ScopedCounterMicroseconds timer(rex::perf::CounterId::kDrawTextureLoadUs);
++    texture_cache_->RequestTextures(used_texture_mask);
++  }
 +
 +  // Set up the render targets - this may perform transfers.
 +  if (!render_target_cache_->Update(is_rasterization_done, normalized_depth_control,
@@ -3338,20 +3429,19 @@ index 0000000..beb68a2
 +  }
 +  const MetalRenderPass& render_pass = render_target_cache_->last_update_render_pass();
 +
-+  // Create the pipeline. With async_shader_compilation, a draw whose pipeline is not ready yet is
-+  // skipped while the creation threads make it, unless skipping would lose side effects
-+  // (memexport) or it has no pixel shader (depth-only draws whose absence would show).
-+  bool pipeline_async = REXCVAR_GET(async_shader_compilation) && pixel_shader != nullptr &&
-+                        !memexport_writes_possible;
++  // Create the pipeline, or skip the draw while it is made (pipeline_async above).
 +  id<MTLRenderPipelineState> pipeline;
 +  MetalDrawState draw_state;
 +  bool pipeline_pending = false;
-+  if (!pipeline_cache_->ConfigurePipeline(vertex_shader_translation, pixel_shader_translation,
-+                                          primitive_processing_result, normalized_depth_control,
-+                                          normalized_color_mask,
-+                                          render_target_cache_->last_update_render_pass_formats(),
-+                                          pipeline_async, pipeline, draw_state, pipeline_pending)) {
-+    return false;
++  {
++    ScopedCounterMicroseconds timer(rex::perf::CounterId::kDrawPipelineUs);
++    if (!pipeline_cache_->ConfigurePipeline(
++            vertex_shader_translation, pixel_shader_translation, primitive_processing_result,
++            normalized_depth_control, normalized_color_mask,
++            render_target_cache_->last_update_render_pass_formats(), pipeline_async, pipeline,
++            draw_state, pipeline_pending)) {
++      return false;
++    }
 +  }
 +  if (pipeline_pending) {
 +    PERF_counter_inc(kDrawsSkippedForPipelines);
@@ -4731,10 +4821,10 @@ index 0000000..796de0e
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_pipeline_cache.h b/src/graphics/metal/metal_pipeline_cache.h
 new file mode 100644
-index 0000000..05ac182
+index 0000000..1217613
 --- /dev/null
 +++ b/src/graphics/metal/metal_pipeline_cache.h
-@@ -0,0 +1,260 @@
+@@ -0,0 +1,283 @@
 +/**
 + * @file        graphics/metal/metal_pipeline_cache.h
 + * @brief       Guest shader translation and render pipeline states for the Metal backend
@@ -4803,7 +4893,13 @@ index 0000000..05ac182
 +    bool is_xsc() const { return is_xsc_; }
 +    void set_is_xsc(bool is_xsc) { is_xsc_ = is_xsc; }
 +
++    // Where the translation is: translations may be made on the creation threads, so the command
++    // processor thread reads the translation's results only once this says kTranslated.
++    enum class TranslationState : uint8_t { kNotTranslated, kQueued, kTranslated };
++    std::atomic<TranslationState>& translation_state() { return translation_state_; }
++
 +   private:
++    std::atomic<TranslationState> translation_state_{TranslationState::kNotTranslated};
 +    // Pipelines may be created on several threads at once.
 +    std::mutex function_mutex_;
 +    // Indexed by whether rasterization is disabled.
@@ -4874,8 +4970,12 @@ index 0000000..05ac182
 +      const Shader& shader, uint32_t interpolator_mask, uint32_t param_gen_pos,
 +      reg::RB_DEPTHCONTROL normalized_depth_control) const;
 +
-+  bool EnsureShadersTranslated(MetalShader::MetalTranslation* vertex_shader,
-+                               MetalShader::MetalTranslation* pixel_shader);
++  // Makes sure a draw's shaders are translated. With allow_async, a shader not translated yet is
++  // left to the creation threads and pending_out is set: the draw is to be skipped. Without it,
++  // they are translated here. Returns false if a shader cannot be translated.
++  bool PrepareShadersForDraw(MetalShader::MetalTranslation* vertex_shader,
++                             MetalShader::MetalTranslation* pixel_shader, bool allow_async,
++                             bool& pending_out);
 +
 +  // The render pipeline state and the per-draw encoder state for the current guest state. With
 +  // allow_async, a pipeline that is not created yet is left to the creation threads and
@@ -4940,12 +5040,18 @@ index 0000000..05ac182
 +    static constexpr uint32_t kVersion = 0x20201219;
 +  });
 +
-+  // Translates a shader modification on the command processor thread if not done yet.
-+  bool EnsureTranslated(MetalShader::MetalTranslation& translation);
++  // Translates a shader modification if not done yet, on any thread (one translation at a time).
++  // With compile_function, it then queues the compilation of its Metal function, so the function
++  // is ready before a pipeline needs it; the preload leaves that to the pipelines it queues.
++  bool EnsureTranslated(MetalShader::MetalTranslation& translation, bool compile_function = true);
 +  // Creates the state object of a pending pipeline (on any thread). Returns whether it is ready.
 +  bool EnsurePipelineCreated(Pipeline& pipeline);
 +  // Queues a pending pipeline for the creation threads, a draw's pipelines before preloaded ones.
 +  void QueuePipelineCreation(Pipeline& pipeline, bool for_draw);
++  // Queues a shader translation a draw is waiting for, and the compilation of a translated
++  // shader's Metal function, for the creation threads.
++  void QueueTranslation(MetalShader::MetalTranslation& translation);
++  void QueueFunctionCompilation(MetalShader::MetalTranslation& translation);
 +  void CreationThread();
 +  void StorePipeline(const Pipeline& pipeline);
 +  struct DepthStencilKey {
@@ -4973,6 +5079,9 @@ index 0000000..05ac182
 +  // The Xenos shader compiler, if shader_compiler is xsc.
 +  std::unique_ptr<xsc::XscShaderTranslator> xsc_translator_;
 +  rex::string::StringBuffer ucode_disasm_buffer_;
++  // The translators keep state per translation, so translations are made one at a time, whichever
++  // thread makes them.
++  std::mutex translation_mutex_;
 +
 +  std::unordered_map<uint64_t, MetalShader*> shaders_;
 +  // By the hash of the description. Only the command processor thread adds to it or looks in it;
@@ -4984,7 +5093,11 @@ index 0000000..05ac182
 +  std::vector<std::unique_ptr<rex::thread::Thread>> creation_threads_;
 +  std::mutex creation_queue_mutex_;
 +  std::condition_variable creation_queue_condition_;
++  // Taken in this order: translations draws wait for, pipelines draws wait for, Metal functions
++  // of translated shaders, preloaded pipelines.
++  std::deque<MetalShader::MetalTranslation*> translation_queue_;
 +  std::deque<Pipeline*> creation_queue_for_draws_;
++  std::deque<MetalShader::MetalTranslation*> function_queue_;
 +  std::deque<Pipeline*> creation_queue_preload_;
 +  bool creation_threads_shutdown_ = false;
 +
@@ -4997,10 +5110,10 @@ index 0000000..05ac182
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_pipeline_cache.mm b/src/graphics/metal/metal_pipeline_cache.mm
 new file mode 100644
-index 0000000..790a6f8
+index 0000000..857da58
 --- /dev/null
 +++ b/src/graphics/metal/metal_pipeline_cache.mm
-@@ -0,0 +1,972 @@
+@@ -0,0 +1,1053 @@
 +/**
 + * @file        graphics/metal/metal_pipeline_cache.mm
 + * @brief       Guest shader translation and render pipeline states for the Metal backend
@@ -5029,6 +5142,7 @@ index 0000000..790a6f8
 +#include <rex/perf/counter.h>
 +#include <rex/types.h>
 +
++#include "../pipeline/shader/xsc/xsc_msl.h"
 +#include "metal_command_processor.h"
 +#include "metal_render_target_cache.h"
 +#include "metal_spirv.h"
@@ -5163,12 +5277,13 @@ index 0000000..790a6f8
 +  std::string name;
 +  if (is_xsc_) {
 +    // The Xenos shader compiler's binary is the MSL source, with a second entry point for vertex
-+    // shaders in pipelines without rasterization.
++    // shaders in pipelines without rasterization, built instead of the first with its macro.
 +    const std::vector<uint8_t>& source = translated_binary();
 +    msl.source.assign(source.begin(), source.end());
 +    msl.entry_point = xsc::XscShaderTranslator::GetEntryPointName(metal_shader, modification());
 +    if (variant) {
 +      msl.entry_point += "_norast";
++      msl.preprocessor_macro = xsc::kMslNoRasterizationMacro;
 +    }
 +    name = msl.entry_point;
 +  } else {
@@ -5280,7 +5395,9 @@ index 0000000..790a6f8
 +  {
 +    std::lock_guard<std::mutex> lock(creation_queue_mutex_);
 +    creation_threads_shutdown_ = true;
++    translation_queue_.clear();
 +    creation_queue_for_draws_.clear();
++    function_queue_.clear();
 +    creation_queue_preload_.clear();
 +  }
 +  creation_queue_condition_.notify_all();
@@ -5390,9 +5507,18 @@ index 0000000..790a6f8
 +  return modification;
 +}
 +
-+bool MetalPipelineCache::EnsureTranslated(MetalShader::MetalTranslation& translation) {
++bool MetalPipelineCache::EnsureTranslated(MetalShader::MetalTranslation& translation,
++                                          bool compile_function) {
++  using TranslationState = MetalShader::MetalTranslation::TranslationState;
++  if (translation.translation_state().load(std::memory_order_acquire) ==
++      TranslationState::kTranslated) {
++    return translation.is_valid();
++  }
++  std::lock_guard<std::mutex> lock(translation_mutex_);
 +  if (!translation.is_translated()) {
 +    [[maybe_unused]] auto translation_start = std::chrono::steady_clock::now();
++    // A no-op for the shaders of draws, which the command processor thread analyzes first; the
++    // preloaded ones are analyzed here, on that thread.
 +    translation.shader().AnalyzeUcode(ucode_disasm_buffer_);
 +    // The Xenos shader compiler first if enabled; what it does not support yet goes to the
 +    // SPIR-V translator. Both fill the same texture and sampler bindings.
@@ -5404,16 +5530,47 @@ index 0000000..790a6f8
 +    if (!translated) {
 +      REXGPU_ERROR("Metal: shader {:016X} translation failed",
 +                   translation.shader().ucode_data_hash());
-+      return false;
++    }
++    // The first compilation of a new shader costs tens of milliseconds, so it starts now rather
++    // than when a pipeline needs the function (on the command processor thread, for draws that
++    // cannot be skipped).
++    if (compile_function && translation.is_valid()) {
++      QueueFunctionCompilation(translation);
 +    }
 +  }
++  translation.translation_state().store(TranslationState::kTranslated, std::memory_order_release);
 +  return translation.is_valid();
 +}
 +
-+bool MetalPipelineCache::EnsureShadersTranslated(MetalShader::MetalTranslation* vertex_shader,
-+                                                 MetalShader::MetalTranslation* pixel_shader) {
++bool MetalPipelineCache::PrepareShadersForDraw(MetalShader::MetalTranslation* vertex_shader,
++                                               MetalShader::MetalTranslation* pixel_shader,
++                                               bool allow_async, bool& pending_out) {
++  using TranslationState = MetalShader::MetalTranslation::TranslationState;
++  pending_out = false;
++  bool async = allow_async && !creation_threads_.empty();
 +  for (MetalShader::MetalTranslation* translation : {vertex_shader, pixel_shader}) {
-+    if (translation && !EnsureTranslated(*translation)) {
++    if (!translation) {
++      continue;
++    }
++    TranslationState state = translation->translation_state().load(std::memory_order_acquire);
++    if (state == TranslationState::kTranslated) {
++      if (!translation->is_valid()) {
++        return false;
++      }
++      continue;
++    }
++    if (async) {
++      // Queued once; the draws that need it meanwhile are skipped.
++      if (state == TranslationState::kNotTranslated &&
++          translation->translation_state().compare_exchange_strong(state,
++                                                                   TranslationState::kQueued)) {
++        QueueTranslation(*translation);
++      }
++      pending_out = true;
++      continue;
++    }
++    // Needed now: translated here, or after a creation thread that is translating it.
++    if (!EnsureTranslated(*translation)) {
 +      return false;
 +    }
 +  }
@@ -5655,24 +5812,60 @@ index 0000000..790a6f8
 +  creation_queue_condition_.notify_one();
 +}
 +
++void MetalPipelineCache::QueueTranslation(MetalShader::MetalTranslation& translation) {
++  {
++    std::lock_guard<std::mutex> lock(creation_queue_mutex_);
++    translation_queue_.push_back(&translation);
++  }
++  creation_queue_condition_.notify_one();
++}
++
++void MetalPipelineCache::QueueFunctionCompilation(MetalShader::MetalTranslation& translation) {
++  {
++    std::lock_guard<std::mutex> lock(creation_queue_mutex_);
++    function_queue_.push_back(&translation);
++  }
++  creation_queue_condition_.notify_one();
++}
++
 +void MetalPipelineCache::CreationThread() {
 +  while (true) {
-+    Pipeline* pipeline;
++    MetalShader::MetalTranslation* translation = nullptr;
++    MetalShader::MetalTranslation* function_translation = nullptr;
++    Pipeline* pipeline = nullptr;
 +    {
 +      std::unique_lock<std::mutex> lock(creation_queue_mutex_);
 +      creation_queue_condition_.wait(lock, [this] {
-+        return creation_threads_shutdown_ || !creation_queue_for_draws_.empty() ||
++        return creation_threads_shutdown_ || !translation_queue_.empty() ||
++               !creation_queue_for_draws_.empty() || !function_queue_.empty() ||
 +               !creation_queue_preload_.empty();
 +      });
 +      if (creation_threads_shutdown_) {
 +        return;
 +      }
-+      std::deque<Pipeline*>& queue =
-+          creation_queue_for_draws_.empty() ? creation_queue_preload_ : creation_queue_for_draws_;
-+      pipeline = queue.front();
-+      queue.pop_front();
++      if (!translation_queue_.empty()) {
++        translation = translation_queue_.front();
++        translation_queue_.pop_front();
++      } else if (!creation_queue_for_draws_.empty()) {
++        pipeline = creation_queue_for_draws_.front();
++        creation_queue_for_draws_.pop_front();
++      } else if (!function_queue_.empty()) {
++        function_translation = function_queue_.front();
++        function_queue_.pop_front();
++      } else {
++        pipeline = creation_queue_preload_.front();
++        creation_queue_preload_.pop_front();
++      }
 +    }
-+    EnsurePipelineCreated(*pipeline);
++    if (translation) {
++      // Queues its function's compilation when done.
++      EnsureTranslated(*translation);
++    } else if (function_translation) {
++      // Vertex shaders in pipelines without rasterization use a variant made when needed.
++      function_translation->GetOrCreateFunction(command_processor_.device());
++    } else {
++      EnsurePipelineCreated(*pipeline);
++    }
 +  }
 +}
 +
@@ -5777,8 +5970,8 @@ index 0000000..790a6f8
 +    std::fflush(pipeline_storage_file_);
 +  }
 +
-+  // Translate the stored pipelines' shaders here (the translators are used on this thread only),
-+  // and leave the Metal compilation to the creation threads, so the game starts meanwhile.
++  // Translate the stored pipelines' shaders here, and leave the Metal compilation to the creation
++  // threads, so the game starts meanwhile.
 +  auto start = std::chrono::steady_clock::now();
 +  auto get_translation = [this](uint64_t hash,
 +                                uint64_t modification) -> MetalShader::MetalTranslation* {
@@ -5788,7 +5981,8 @@ index 0000000..790a6f8
 +    }
 +    auto* translation = static_cast<MetalShader::MetalTranslation*>(
 +        shader_it->second->GetOrCreateTranslation(modification));
-+    return EnsureTranslated(*translation) ? translation : nullptr;
++    // Its pipelines compile its functions, queued right after.
++    return EnsureTranslated(*translation, false) ? translation : nullptr;
 +  };
 +  uint32_t queued = 0;
 +  for (const PipelineDescription& description : descriptions) {
@@ -11565,10 +11759,10 @@ index 0000000..b09177b
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_spirv.h b/src/graphics/metal/metal_spirv.h
 new file mode 100644
-index 0000000..10c6138
+index 0000000..a901193
 --- /dev/null
 +++ b/src/graphics/metal/metal_spirv.h
-@@ -0,0 +1,72 @@
+@@ -0,0 +1,75 @@
 +/**
 + * @file        graphics/metal/metal_spirv.h
 + * @brief       SPIR-V to Metal Shading Language conversion for the Metal backend
@@ -11616,6 +11810,9 @@ index 0000000..10c6138
 +  // Whether the shader reads the sizes of its buffers from kMslBufferSizesIndex (for runtime
 +  // array lengths).
 +  bool needs_buffer_sizes = false;
++  // A preprocessor macro defined for the compilation (empty for none), which selects one of the
++  // entry points of a source that has alternatives.
++  std::string preprocessor_macro;
 +};
 +
 +// Argument table index of SPIRV-Cross's buffer of buffer sizes, the same in every stage.
@@ -11643,10 +11840,10 @@ index 0000000..10c6138
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_spirv.mm b/src/graphics/metal/metal_spirv.mm
 new file mode 100644
-index 0000000..be82093
+index 0000000..c2d1f96
 --- /dev/null
 +++ b/src/graphics/metal/metal_spirv.mm
-@@ -0,0 +1,205 @@
+@@ -0,0 +1,208 @@
 +/**
 + * @file        graphics/metal/metal_spirv.mm
 + * @brief       SPIR-V to Metal Shading Language conversion for the Metal backend
@@ -11805,6 +12002,9 @@ index 0000000..be82093
 +  MTLCompileOptions* options = [MTLCompileOptions new];
 +  options.languageVersion = MTLLanguageVersion3_0;
 +  options.mathMode = MTLMathModeSafe;
++  if (!shader.preprocessor_macro.empty()) {
++    options.preprocessorMacros = @{@(shader.preprocessor_macro.c_str()) : @"1"};
++  }
 +  NSError* error = nil;
 +  id<MTLLibrary> library = [device newLibraryWithSource:@(shader.source.c_str())
 +                                                options:options
@@ -15768,6 +15968,38 @@ index c9f7ed6..bf37992 100644
    // Every pad on this user belongs to the same player, so all of them buzz.
    // Only pads decide the result: synthetic devices accept any vibration and
    // would otherwise report success for a pad that never rumbled.
+diff --git a/src/input/sdl/sdl_input_driver.cpp b/src/input/sdl/sdl_input_driver.cpp
+index 82a252c..3dcec80 100644
+--- a/src/input/sdl/sdl_input_driver.cpp
++++ b/src/input/sdl/sdl_input_driver.cpp
+@@ -18,8 +18,13 @@
+ #include <rex/input/flags.h>
+ #include <rex/input/sdl/sdl_input_driver.h>
+ #include <rex/logging.h>
++#include <rex/perf/counter.h>
+ #include <rex/ui/virtual_key.h>
+ 
++REXCVAR_DEFINE_BOOL(perf_marker_button, false, "Input",
++                    "Debugging aid for perf_log_csv: the Back button (View on Xbox controllers, "
++                    "Create or Share on PlayStation ones) marks the current frame in the CSV "
++                    "instead of reaching the game");
+ REXCVAR_DEFINE_STRING(hid_mappings_file, "gamecontrollerdb.txt", "Input",
+                       "Path to SDL gamecontroller mappings file");
+ 
+@@ -600,6 +605,13 @@ void SDLInputDriver::OnControllerDeviceButtonChangedLocked(const SDL_Event& even
+     return;
+   }
+   auto xbutton = xbutton_lookup.at(event.gbutton.button);
++  if (xbutton == X_INPUT_GAMEPAD_BACK && REXCVAR_GET(perf_marker_button)) {
++    if (event.gbutton.down) {
++      rex::perf::IncrementCounter(rex::perf::CounterId::kMarkers);
++      REXLOG_INFO("Performance marker (controller)");
++    }
++    return;
++  }
+   // Pressed or released?
+   if (event.gbutton.down) {
+     if (xbutton == X_INPUT_GAMEPAD_GUIDE && !REXCVAR_GET(guide_button)) {
 diff --git a/src/system/runtime.cpp b/src/system/runtime.cpp
 index c10694c..2225156 100644
 --- a/src/system/runtime.cpp
