@@ -243,7 +243,7 @@ impl BuildEvents for tauri::AppHandle {
 pub struct BuildFolders<'a> {
     /// The kit.
     pub kit: &'a Path,
-    /// The player's game folder (where default.xex is).
+    /// The player's game: the folder where default.xex is, or a disc image.
     pub game: &'a Path,
     /// This game build's work folder (`build/<id>/` under the app data folder).
     pub work: &'a Path,
@@ -523,12 +523,23 @@ fn translate_and_compile(
     fs::create_dir_all(&objects_dir)?;
     fs::write(&objects_key_file, &kit.keys.build)?;
 
-    // Codegen reads its manifest and the game from the work folder: the manifest as the kit has
-    // it, and game/ as a link to the player's game folder.
+    // Codegen reads its manifest and the game's executable from the work folder: the manifest as
+    // the kit has it, and game/default.xex, the only file of the game it reads. game/ is a link to
+    // the player's game folder, or, for a disc image, a folder with the executable copied out of it.
     fs::copy(kit_manifest, work.join("azura_manifest.toml"))?;
-    let game_link = work.join("game");
-    let _ = fs::remove_file(&game_link);
-    std::os::unix::fs::symlink(folders.game, &game_link)?;
+    let game_dir = work.join("game");
+    match fs::symlink_metadata(&game_dir) {
+        Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(&game_dir)?,
+        Ok(_) => fs::remove_file(&game_dir)?,
+        Err(_) => {}
+    }
+    if folders.game.is_file() {
+        fs::create_dir_all(&game_dir)?;
+        crate::game_folder::copy_xex_from_image(folders.game, &game_dir.join(crate::game_folder::XEX_FILE_NAME))
+            .map_err(|error| step_failed(Phase::Translating, format!("could not read the disc image: {error}"), log))?;
+    } else {
+        std::os::unix::fs::symlink(folders.game, &game_dir)?;
+    }
 
     progress(Phase::Translating, 0, 0);
     let generator = folders.kit.join(&kit.codegen.generator).to_string_lossy().into_owned();

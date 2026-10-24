@@ -49,6 +49,8 @@ import {
   getSaveStatus,
   openSavesFolder,
   pickGameFolder,
+  pickGameImage,
+  onPathDropped,
   pickSavesFolder,
   repairSaves,
   resetSaves,
@@ -733,22 +735,30 @@ const applyGameCheck = (check) => {
 };
 
 /**
- * Wires the folder picker. A failed check keeps the previous valid folder in the settings, so a
- * wrong pick never makes the launcher forget a working installation on its next start.
+ * Wires the game pickers: a folder, a disc image (.iso), or either dropped on the Installation
+ * view. A failed check keeps the previous valid game in the settings, so a wrong pick never makes
+ * the launcher forget a working installation on its next start.
  */
 const setupInstall = () => {
-  const button = document.getElementById("pick-game");
-  button.addEventListener("click", async () => {
-    button.disabled = true;
+  const buttons = [document.getElementById("pick-game"), document.getElementById("pick-game-image")];
+  const choose = async (pick) => {
+    buttons.forEach((button) => (button.disabled = true));
     try {
-      const check = await pickGameFolder();
+      const check = await pick();
       if (!check) return; // The user cancelled the picker.
       applyGameCheck(check);
       if (!isNativeApp) toast(t("toast.pick"));
     } catch (error) {
-      console.error("Folder picker failed:", error);
+      console.error("Game picker failed:", error);
     } finally {
-      button.disabled = false;
+      buttons.forEach((button) => (button.disabled = false));
+    }
+  };
+  buttons[0].addEventListener("click", () => choose(pickGameFolder));
+  buttons[1].addEventListener("click", () => choose(pickGameImage));
+  onPathDropped((path) => {
+    if (document.querySelector('.view[data-view="install"]').classList.contains("is-active")) {
+      choose(() => checkGameFolder(path));
     }
   });
 
