@@ -29,7 +29,9 @@
     "install": "Instalovat",
     "installSub": "Nastavte herní soubory",
     "running": "Hraje se",
-    "runtimeWillInstall": "Nejprve nainstaluje běhové prostředí"
+    "runtimeWillInstall": "Nejprve nainstaluje běhové prostředí",
+    "building": "SESTAVOVÁNÍ",
+    "buildingSub": "Hra se sestavuje pro tento počítač"
   },
   "status": {
     "gameFiles": "Herní soubory",
@@ -44,7 +46,8 @@
     "runtimeUpdate": "Aktualizace připravena, nainstaluje se po stisknutí Hrát",
     "compiler": "Kompilátor",
     "compilerChecking": "Kontrola…",
-    "compilerMissing": "Nenainstalováno"
+    "compilerMissing": "Nenainstalováno",
+    "runtimeBuilding": "Sestavuje se…"
   },
   "news": {
     "title": "Novinky",

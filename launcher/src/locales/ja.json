@@ -29,7 +29,9 @@
     "install": "インストール",
     "installSub": "ゲームファイルを設定",
     "running": "プレイ中",
-    "runtimeWillInstall": "先にランタイムをインストールします"
+    "runtimeWillInstall": "先にランタイムをインストールします",
+    "building": "ビルド中",
+    "buildingSub": "このコンピュータ向けにゲームをビルドしています"
   },
   "status": {
     "gameFiles": "ゲームファイル",
@@ -44,7 +46,8 @@
     "runtimeUpdate": "アップデートの準備完了。「プレイ」を押すとインストールされます",
     "compiler": "コンパイラ",
     "compilerChecking": "確認中…",
-    "compilerMissing": "未インストール"
+    "compilerMissing": "未インストール",
+    "runtimeBuilding": "ビルド中…"
   },
   "news": {
     "title": "お知らせ",
