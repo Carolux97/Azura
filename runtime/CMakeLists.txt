@@ -52,6 +52,8 @@ set(AZURA_SOURCES
     src/relaunch.cpp
     src/shader_compile_overlay.cpp
     src/menu/coalesced.cpp
+    src/input/install_player_assignment.cpp
+    src/input/player_assignment.cpp
     src/menu/menu_patches.cpp
     src/menu/pc_options.cpp
     src/prompts/button_prompts.cpp
@@ -101,7 +103,7 @@ add_executable(azura_glyph_sheet EXCLUDE_FROM_ALL
     src/prompts/glyph_raster.cpp
 )
 
-# Unit tests for the button prompt engine (synthetic data only). Catch2 comes with the SDK source
+# Unit tests for the button prompt engine and the controller assignment (synthetic data only). Catch2 comes with the SDK source
 # tree; it is added here on its own so the SDK's much larger test suite is not built.
 # Run: ctest --test-dir out/build/mac-arm64-sdk-source -C RelWithDebInfo
 if(REXSDK_DIR)
@@ -117,6 +119,11 @@ if(REXSDK_DIR)
     )
     target_link_libraries(azura_prompts_tests PRIVATE Catch2::Catch2WithMain)
     add_test(NAME azura_prompts_tests COMMAND azura_prompts_tests)
+    # Which controller plays which player: the policy alone, with the SDK's input headers.
+    add_executable(azura_input_tests tests/input_tests.cpp src/input/player_assignment.cpp)
+    target_include_directories(azura_input_tests PRIVATE src ${REXSDK_DIR}/include)
+    target_link_libraries(azura_input_tests PRIVATE Catch2::Catch2WithMain)
+    add_test(NAME azura_input_tests COMMAND azura_input_tests)
 endif()
 
 # The SDK stages MoltenVK's ICD file from ${REXGLUE_ROOT}/cmake, a variable only the packaged SDK
