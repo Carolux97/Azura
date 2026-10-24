@@ -54,18 +54,22 @@ jobs:
           - platform: mac-arm64
             runner: [self-hosted, macOS, ARM64]
           # In Ubuntu 22.04 with clang 20, as the SDK builds its own Linux releases: the kit's
-          # libraries then need no newer glibc than 2.35.
+          # libraries then need no newer glibc than 2.35. On the project's own Linux runner, an
+          # Ubuntu 22.04 container with the toolchain installed (see CONTRIBUTING.md), since the
+          # repository's included minutes are used up. On GitHub's runners it would be
+          # `runner: ubuntu-latest` with `container: ubuntu:22.04`, where the next step installs
+          # the toolchain.
           - platform: linux-amd64
-            runner: ubuntu-latest
-            container: ubuntu:22.04
+            runner: [self-hosted, Linux, X64]
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container }}
     env:
       DEBIAN_FRONTEND: noninteractive
 
     steps:
+      # As root, in GitHub's container; the project's own runner has it installed and no root.
       - name: Install the toolchain (Linux)
-        if: startsWith(matrix.platform, 'linux-')
+        if: startsWith(matrix.platform, 'linux-') && runner.environment == 'github-hosted'
         run: |
           apt-get update
           apt-get install -y --no-install-recommends ca-certificates curl wget gnupg git unzip \

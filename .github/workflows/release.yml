@@ -114,8 +114,10 @@ jobs:
           - platform: mac-arm64
             runner: [self-hosted, macOS, ARM64]
           # Ubuntu 22.04, as the Linux kit is built: the AppImage then needs no newer glibc than 2.35.
+          # On the project's own Linux runner, an Ubuntu 22.04 container (see CONTRIBUTING.md),
+          # since the repository's included minutes are used up; on GitHub's, `ubuntu-22.04`.
           - platform: linux-amd64
-            runner: ubuntu-22.04
+            runner: [self-hosted, Linux, X64]
     runs-on: ${{ matrix.runner }}
 
     steps:
@@ -127,8 +129,9 @@ jobs:
         with:
           node-version: 22
 
+      # The project's own runner has them installed already and no sudo.
       - name: Install the Linux libraries Tauri needs
-        if: startsWith(matrix.platform, 'linux-')
+        if: startsWith(matrix.platform, 'linux-') && runner.environment == 'github-hosted'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
@@ -157,10 +160,13 @@ jobs:
         run: npm ci
 
       # The key reaches the build through the environment only; Tauri reads it and never prints it.
+      # The AppImage tools Tauri downloads are AppImages themselves: they extract themselves
+      # instead of mounting with FUSE, which an unprivileged container has not got.
       - name: Build the release
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPIMAGE_EXTRACT_AND_RUN: 1
         run: scripts/release-launcher.sh
 
       - name: Keep the release

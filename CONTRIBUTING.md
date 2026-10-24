@@ -131,13 +131,12 @@ counts as ten.
 - **macOS jobs, and the small Release jobs** (the version check and the publish), run on the
   project's own Mac: a self-hosted runner with the labels `self-hosted`, `macOS` and `ARM64`, which
   costs no minutes. They wait while that Mac is off or its user is logged out.
-- **Linux launcher tests** run on the project's own Linux runner, `casaserver-linux`, with the labels
-  `self-hosted`, `Linux` and `X64`: an Ubuntu 22.04 container on Juan Llorca Martínez's TrueNAS
-  server (see below). It costs no minutes and waits while that server is off.
-- **The other Linux jobs** (the Linux kit and AppImage, which need x86-64 Linux) still run on
-  GitHub's Ubuntu runners. While the included minutes are used up they cannot run, and a release
-  publishes macOS alone; once Linux can build again, run the Release workflow by hand with
-  "Publish" on to add it to that version's release.
+- **Linux jobs** (the launcher tests, the Linux kit and the AppImage, which need x86-64 Linux) run
+  on the project's own Linux runner, `casaserver-linux`, with the labels `self-hosted`, `Linux` and
+  `X64`: an Ubuntu 22.04 container on Juan Llorca Martínez's TrueNAS server (see below). It costs
+  no minutes and waits while that server is off. A release that could not build Linux publishes
+  macOS alone; run the Release workflow by hand with "Publish" on to add Linux to that version's
+  release.
 
 To set up a runner (once per machine): in the repository, Settings, Actions, Runners, New
 self-hosted runner, pick the machine's system, download the runner it shows into
@@ -151,9 +150,35 @@ jammy, 3 CPUs, 3 GiB of memory, autostart) that mounts none of the server's data
 cannot reach them. To set it up again:
 
 1. In the container, as root: `apt-get install openssh-server sudo curl git` and the libraries the
-   Linux launcher job needs (the "Install the Linux libraries Tauri needs" step of
-   `launcher-tests.yml`, plus `pkg-config`), and create a user `runner` without sudo. The step
-   that installs them is skipped on self-hosted runners, since the runner user cannot run apt.
+   Linux launcher jobs need (the "Install the Linux libraries Tauri needs" step of `release.yml`,
+   plus `pkg-config`), the kit's toolchain (below), and create a user `runner` without sudo. The
+   steps that install them are skipped on self-hosted runners, since the runner user cannot run
+   apt. The kit's toolchain is what the "Install the toolchain (Linux)" step of `runtime-kit.yml`
+   installs on GitHub's runners: clang 20 as `clang`, CMake from Kitware, the Vulkan SDK from
+   LunarG and the development libraries of the SDK:
+
+   ```bash
+   apt-get update
+   apt-get install -y --no-install-recommends ca-certificates curl wget gnupg git unzip \
+     lsb-release software-properties-common python3
+   wget -qO llvm.sh https://apt.llvm.org/llvm.sh && chmod +x llvm.sh && ./llvm.sh 20
+   apt-get install -y clang-20 lld-20
+   update-alternatives --install /usr/bin/clang clang /usr/bin/clang-20 200
+   update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-20 200
+   wget -qO- https://apt.kitware.com/keys/kitware-archive-latest.asc | gpg --dearmor -o /usr/share/keyrings/kitware.gpg
+   echo "deb [signed-by=/usr/share/keyrings/kitware.gpg] https://apt.kitware.com/ubuntu/ jammy main" > /etc/apt/sources.list.d/kitware.list
+   wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc | tee /etc/apt/trusted.gpg.d/lunarg.asc
+   wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list http://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
+   add-apt-repository -y ppa:ubuntu-toolchain-r/test
+   apt-get update
+   apt-get install -y cmake ninja-build build-essential g++-13 autoconf python3-venv \
+     libgtk-3-dev libx11-xcb-dev libxss-dev vulkan-sdk \
+     libwayland-dev libwayland-bin wayland-protocols libxkbcommon-dev libdecor-0-dev \
+     libasound2-dev libpulse-dev libpipewire-0.3-dev file libfuse2
+   ```
+
+   The AppImage is built with `APPIMAGE_EXTRACT_AND_RUN=1` (set by `release.yml`), so its tools
+   need no FUSE device in the container.
 2. As `runner`, install the runner in `~/actions-runner` as above, with
    `--labels self-hosted,Linux,X64`, and add to its `.env`: `CARGO_HOME` and `RUSTUP_HOME` under
    `~/actions-runner` (so a job's Rust stays apart from anything else), and `CARGO_BUILD_JOBS=2`
