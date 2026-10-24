@@ -132,6 +132,9 @@ counts as ten.
   project's own Mac: a self-hosted runner with the labels `self-hosted`, `macOS` and `ARM64`, which
   costs no minutes. They wait while that Mac is off or its user is logged out.
 - **Linux jobs** run on GitHub's Ubuntu runners: the Linux kit and AppImage need x86-64 Linux.
+  While the included minutes are used up they cannot run, and a release publishes macOS alone;
+  once Linux can build again, run the Release workflow by hand with "Publish" on to add it to that
+  version's release.
 
 To set up a runner (once per machine): in the repository, Settings, Actions, Runners, New
 self-hosted runner, pick the machine's system, download the runner it shows into
