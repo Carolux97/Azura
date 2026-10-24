@@ -372,19 +372,26 @@ or better on a 1080p display.
 
 ## 14. Upscaling: AMD CAS and Apple MetalFX
 
-The Upscaling choice of the game's Video menu (`present_effect`) offered bilinear, CAS and FSR, but
-the SDK only accepts CAS and FSR with the FidelityFX SDK, which the macOS build lacks: on Metal it
-was always bilinear. Now each platform offers what it supports, and the menu row is a list of our
-own whose values are those `present_effect` accepts in that build (`rex::cvar::GetFlagInfo`): on
-macOS bilinear, AMD CAS and Apple MetalFX; on Linux what its build has.
+The Upscaling choice of the game's Video menu (`present_effect`) is a list of our own. Its values
+are those `present_effect` accepts in that build (`rex::cvar::GetFlagInfo`) that the running
+presenter draws on this GPU (`Presenter::SupportsGuestOutputEffect`, asked through
+`azura::menu::SetUpscalingSupport`):
+
+- the Metal presenter: bilinear, AMD CAS, and Apple MetalFX where the GPU supports its spatial
+  scaler;
+- the Vulkan presenter (Linux, and macOS through MoltenVK): bilinear, AMD CAS and AMD FSR 1, from
+  the SDK's prebuilt SPIR-V shaders, without the FidelityFX SDK. The temporal FSR 2 and 3 need the
+  FidelityFX SDK and are not offered.
+
+A saved value the presenter does not draw shows and runs as bilinear, with one line in the log.
 
 - **CAS** runs the SDK's prebuilt FidelityFX CAS shaders (the Vulkan presenter's), converted to
   MSL at start-up, with the chain the FidelityFX paint flow uses: sharpening when the guest output
   already has the window's size, otherwise resampling by up to 2x along each axis, the rest
   bilinear through an intermediate texture.
 - **Sharpness.** The Video menu's Sharpness slider (`upscaling_sharpness`, 0 to 1, card 66) sets
-  `present_cas_additional_sharpness` (and, with the FidelityFX SDK, lowers
-  `present_fsr_sharpness_reduction` from its default 0.2 to 0) and applies as the slider moves:
+  `present_cas_additional_sharpness` (and lowers `present_fsr_sharpness_reduction` from its
+  default 0.2 to 0) and applies as the slider moves:
   the row's live change callback (docs/reverse-engineering.md, "Live changes") has
   `Presenter::RefreshGuestOutputSharpnessFromUIThread` take them again, and the next paint uses
   them. MetalFX and bilinear have no sharpening, so the row only shows with CAS (or FSR).

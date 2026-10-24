@@ -139,6 +139,15 @@ class AzuraApp : public rex::ReXApp {
     // Again now that the window exists, so it gets the icon too (see platform_mac.mm).
     AutoConfigureMacAppIcon();
 #endif
+    // The upscaling row lists the effects the presenter draws on this GPU and backend.
+    azura::menu::SetUpscalingSupport([this](const std::string& name) {
+      auto* graphics_system = runtime() ? runtime()->graphics_system() : nullptr;
+      auto* presenter = graphics_system ? graphics_system->presenter() : nullptr;
+      if (!presenter) return true;
+      rex::ui::Presenter::GuestOutputPaintConfig::Effect effect;
+      return rex::ui::Presenter::GuestOutputPaintConfig::EffectFromName(name, effect) &&
+             presenter->SupportsGuestOutputEffect(effect);
+    });
     azura::menu::InstallMenuPatches(runtime());
     // A notice while the GPU backend compiles shaders in the background, from the shader storage
     // preload that runs right after this hook to the shaders of new areas while playing.
@@ -220,6 +229,7 @@ class AzuraApp : public rex::ReXApp {
     perf_marker_.reset();
     shutting_down_ = true;
     azura::menu::SetSharpnessChangedHandler(nullptr);
+    azura::menu::SetUpscalingSupport(nullptr);
     if (auto* graphics_system = runtime()->graphics_system()) {
       graphics_system->SetShaderCompilationStartedCallback(nullptr);
     }
