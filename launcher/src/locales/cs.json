@@ -21,15 +21,22 @@
     "runtimeVersion": "Runtime ReXGlue {version}"
   },
   "play": {
-    "eyebrow": "Nativní port pro macOS · Gears of War 3",
-    "lede": "Vaše kopie hry, překompilovaná pro Apple Silicon.",
+    "eyebrow": "Nativní port pro {platform} · Gears of War 3",
+    "lede": "Vaše kopie hry, překompilovaná pro {target}.",
     "launch": "Hrát",
     "launching": "Spouštění",
     "mode": "Kampaň",
     "install": "Instalovat",
     "installSub": "Nastavte herní soubory",
     "running": "Hraje se",
-    "runtimeWillInstall": "Nejprve nainstaluje běhové prostředí"
+    "runtimeWillInstall": "Nejprve nainstaluje běhové prostředí",
+    "building": "INSTALACE",
+    "buildingSub": "Hra se sestavuje pro tento počítač",
+    "installRuntime": "INSTALOVAT",
+    "installRuntimeSub": "Sestaví hru pro tento počítač · několik minut",
+    "update": "AKTUALIZOVAT",
+    "updateLinkSub": "Pár sekund",
+    "updateBuildSub": "Asi dvě minuty"
   },
   "status": {
     "gameFiles": "Herní soubory",
@@ -41,37 +48,46 @@
     "runtimeMissing": "Žádné sestavení nenalezeno",
     "player": "Player",
     "runtimeNotInstalled": "Nainstaluje se po stisknutí Hrát",
-    "runtimeUpdate": "Aktualizace připravena, nainstaluje se po stisknutí Hrát"
+    "runtimeUpdate": "Aktualizace připravena, nainstaluje se po stisknutí Hrát",
+    "compiler": "Kompilátor",
+    "compilerChecking": "Kontrola…",
+    "compilerMissing": "Nenainstalováno",
+    "runtimeBuilding": "Sestavuje se…",
+    "runtimeNotBuilt": "Nenainstalováno",
+    "runtimeUpdateKit": "Je k dispozici aktualizace"
   },
-  "news": {
-    "title": "Novinky",
-    "skeleton": "První kostra projektu: runtime, manifest a launcher."
+  "releaseNotes": {
+    "title": "Novinky ve verzi {version}",
+    "dismiss": "Rozumím"
   },
   "install": {
     "title": "Instalace",
-    "gameFolder": "Složka hry",
-    "gameFolderHelp": "Složka s vaší kopií Gears of War 3, která obsahuje {file}.",
-    "noFolder": "Není vybrána žádná složka",
-    "choose": "Vybrat…",
+    "gameFolder": "Hra",
+    "gameFolderHelp": "Složka s vaší kopií Gears of War 3 (ta, která obsahuje {file}) nebo její obraz disku (.iso). Můžete je sem také přetáhnout.",
+    "noFolder": "Není vybrána žádná hra",
+    "choose": "Složka…",
+    "chooseImage": "Obraz disku (.iso)…",
     "languageTitle": "Jazyk a překlad",
     "languageHelp": "Kam nainstalovat přeložené soubory hry.",
     "gameLanguage": "Jazyk hry",
     "translationTarget": "Umístění překladu",
     "change": "Změnit…",
-    "notADirectory": "Tato cesta není složka, nebo už neexistuje.",
+    "notADirectory": "Tato cesta už neexistuje.",
+    "notADiscImage": "Tento soubor není obraz disku Xbox 360, nebo je poškozený.",
     "missingXex": "V této složce ani v jejích přímých podsložkách není default.xex.",
+    "missingXexInImage": "Tento obraz disku neobsahuje default.xex.",
     "invalidXex": "default.xex není platný spustitelný soubor Xbox 360.",
     "ok": "Gears of War 3 · Edice {versionName} · Media ID {mediaId}",
     "unsupportedVersion": "Tato edice Gears of War 3 (Media ID {mediaId}) zatím není podporována.",
     "wrongGame": "Toto není Gears of War 3 (Title ID {titleId}).",
-    "chooseFolderFirst": "Nejprve vyberte složku hry",
+    "chooseFolderFirst": "Nejprve vyberte hru",
     "playerTitle": "Player Profile",
     "playerHelp": "Gamertag displayed in game lobbies, menus, and multiplayer.",
     "userName": "Gamertag / Username",
     "userNamePlaceholder": "User (up to 15 characters)",
     "defaultUserName": "User",
     "runtimeTitle": "Běhové prostředí hry",
-    "runtimeHelp": "Překompilovaná hra, kterou launcher spouští. Instaluje se ze sestavení scripts/build.sh a aktualizuje, když je k dispozici novější.",
+    "runtimeHelp": "Hra překompilovaná pro tento počítač. Poprvé ji launcher sestaví z vaší kopie hry (několik minut) a znovu, když ji projekt aktualizuje.",
     "runtimeInstalled": "Nainstalováno a aktuální.",
     "runtimeUpdate": "Novější sestavení je připraveno k instalaci.",
     "runtimeNotInstalled": "Zatím nenainstalováno.",
@@ -83,7 +99,22 @@
     "savesHelp": "Složka pro kontrolní body kampaně a profil. Při změně se uložené hry přesunou tam.",
     "savesConflict": "{folder} už obsahuje uložené hry. Nahradit je vašimi současnými uloženými hrami?",
     "savesReplace": "Nahradit",
-    "savesCancel": "Zrušit"
+    "savesCancel": "Zrušit",
+    "compilerTitle": "Kompilátor",
+    "compilerHelp": "Hra běží jako nativní kód sestavený na tomto počítači z vaší kopie, takže launcher potřebuje kompilátor C++. Pokud chybí, launcher ho nainstaluje.",
+    "compilerChecking": "Kontrola kompilátoru…",
+    "compilerReady": "Připraveno: {version}",
+    "compilerUnusable": "{found} nelze použít: {problem}",
+    "compilerMissing": "Nebyl nalezen žádný kompilátor.",
+    "compilerInstallApple": "Nainstalovat Command Line Tools od Applu",
+    "compilerInstallPackage": "Nainstalovat clang",
+    "compilerInstalling": "Instalace kompilátoru…",
+    "compilerWaitingApple": "Postupujte podle okna Applu a nainstalujte Command Line Tools. Launcher po instalaci sám pokračuje.",
+    "compilerCheckAgain": "Zkontrolovat znovu",
+    "compilerManual": "Nebo spusťte v terminálu:",
+    "runtimeNotBuilt": "Zatím nesestaveno: první sestavení z vaší kopie hry trvá několik minut.",
+    "runtimeUpdateLink": "Je připravena aktualizace: nainstaluje se za pár sekund.",
+    "runtimeUpdateBuild": "Aktualizace vyžaduje znovu sestavit hru: asi dvě minuty."
   },
   "graphics": {
     "title": "Grafika",
@@ -151,7 +182,9 @@
     "savesNested": "Vyberte složku, která není uvnitř současné (ani naopak).",
     "savesFailed": "Přesun uložených her selhal: {detail}",
     "runtimeInstalled": "Běhové prostředí hry nainstalováno.",
-    "saveFailed": "Nastavení se nepodařilo uložit: {detail}"
+    "saveFailed": "Nastavení se nepodařilo uložit: {detail}",
+    "compilerInstalled": "Kompilátor připraven: {version}",
+    "compilerInstallFailed": "Kompilátor se nepodařilo nainstalovat: {detail}"
   },
   "log": {
     "title": "Záznam hry",
@@ -167,7 +200,34 @@
     "startFailed": "Hru se nepodařilo spustit: {detail}",
     "installingRuntime": "Instaluje se běhové prostředí hry…",
     "installFailed": "Instalace běhového prostředí selhala: {detail}",
-    "savesUnavailable": "Složka uložených her není dostupná: {detail}"
+    "savesUnavailable": "Složka uložených her není dostupná: {detail}",
+    "buildPreparing": "Příprava sestavení hry…",
+    "buildTranslating": "Překlad kódu hry…",
+    "buildCompiling": "Kompilace hry: {done} z {total} souborů",
+    "buildLinking": "Linkování hry…",
+    "buildInstalling": "Instalace hry…",
+    "buildNoCompiler": "K sestavení hry je potřeba kompilátor C++: nainstalujte ho v Instalaci.",
+    "buildNoKit": "Tento launcher nemá sadu pro sestavení hry v tomto systému.",
+    "buildWrongKit": "Sadu launcheru zde nelze použít: {detail}",
+    "buildUnsupportedGame": "Nejprve v Instalaci vyberte podporovanou kopii hry.",
+    "buildNoSpace": "Nedostatek volného místa pro sestavení hry: potřeba {needed} MB, volno {free} MB.",
+    "buildStepFailed": "Sestavení hry selhalo v kroku „{step}“: {summary} (celý záznam: {log})",
+    "buildBusy": "Hra se už sestavuje nebo běží.",
+    "buildStep": {
+      "preparing": "příprava",
+      "translating": "překlad kódu",
+      "compiling": "kompilace",
+      "linking": "linkování",
+      "installing": "instalace"
+    }
+  },
+  "build": {
+    "title": "Sestavování hry",
+    "failedTitle": "Hru se nepodařilo sestavit",
+    "remaining": "zbývá asi {time}",
+    "estimating": "odhad zbývajícího času…",
+    "retry": "Zkusit znovu",
+    "openLog": "Zobrazit záznam"
   },
   "update": {
     "available": "Aktualizovat na {version}",
@@ -199,5 +259,17 @@
     "resetToast": "Saves reset. Automatic backup created.",
     "backupToast": "Backup successfully created",
     "restoreToast": "Save restored successfully"
+  },
+  "gamepad": {
+    "select": "Vybrat",
+    "back": "Zpět",
+    "section": "Sekce",
+    "play": "Hrát",
+    "type": "Psát",
+    "delete": "Smazat",
+    "space": "Mezera",
+    "done": "Hotovo",
+    "cancel": "Zrušit",
+    "page": "Stránka"
   }
 }

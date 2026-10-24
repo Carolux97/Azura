@@ -74,6 +74,12 @@ mnk_sensitivity = 1.0
 # matching keybind below, so put the key you want shown first.
 controller_icons = "auto"
 
+# Players on this computer (1 to 4). With 1, every controller plays player 1: the one in your hands
+# drives the prompts and the vibration, whatever order they were connected in. With more (split
+# screen co-op), each controller becomes the player it first presses something for, in order; the
+# keyboard and mouse are player 1's.
+local_players = 1
+
 # ---------- Keybinds (Xbox 360 -> PC Gears of War 3) ----------
 keybind_a = "Space"                    # A: cover / roll / sprint / confirm in menus
 keybind_b = "F,Backspace"              # B: melee (F) / back in menus (Backspace)

@@ -1,12 +1,13 @@
 //! Launcher self-update, on top of Tauri's updater plugin.
 //!
 //! The plugin reads `latest.json` from the endpoint in `tauri.conf.json` (a release asset of the
-//! project's GitHub repository), compares its version with the running one and, when newer,
-//! downloads the update archive and checks its signature against the public key in the config
-//! before replacing the app. `scripts/release-launcher.sh` produces both files.
+//! releases repository), compares its version with the running one and, when newer, downloads the
+//! update archive and checks its signature against the public key in the config before replacing
+//! the app. `scripts/release-launcher.sh` and `scripts/publish-launcher.sh` produce both files.
 //!
-//! This only updates the launcher. The game runtime is built on the player's Mac from their own
-//! copy of the game, so it is not something the updater can download.
+//! The game runtime is not downloaded: it is built on the player's machine from their own copy of
+//! the game. A new launcher brings a new player kit, and the builder then rebuilds or relinks the
+//! runtime from it (`builder.rs`).
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};

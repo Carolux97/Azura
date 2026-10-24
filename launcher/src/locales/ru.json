@@ -21,15 +21,22 @@
     "runtimeVersion": "Runtime ReXGlue {version}"
   },
   "play": {
-    "eyebrow": "Нативный порт для macOS · Gears of War 3",
-    "lede": "Ваша копия игры, перекомпилированная для Apple Silicon.",
+    "eyebrow": "Нативный порт для {platform} · Gears of War 3",
+    "lede": "Ваша копия игры, перекомпилированная для {target}.",
     "launch": "Играть",
     "launching": "Запуск",
     "mode": "Кампания",
     "install": "Установить",
     "installSub": "Настройте файлы игры",
     "running": "В игре",
-    "runtimeWillInstall": "Сначала установит среду выполнения"
+    "runtimeWillInstall": "Сначала установит среду выполнения",
+    "building": "УСТАНОВКА",
+    "buildingSub": "Игра собирается для этого компьютера",
+    "installRuntime": "УСТАНОВИТЬ",
+    "installRuntimeSub": "Собирает игру для этого компьютера · несколько минут",
+    "update": "ОБНОВИТЬ",
+    "updateLinkSub": "Несколько секунд",
+    "updateBuildSub": "Около двух минут"
   },
   "status": {
     "gameFiles": "Файлы игры",
@@ -41,37 +48,46 @@
     "runtimeMissing": "Сборка не найдена",
     "player": "Player",
     "runtimeNotInstalled": "Установится при нажатии «Играть»",
-    "runtimeUpdate": "Обновление готово, установится при нажатии «Играть»"
+    "runtimeUpdate": "Обновление готово, установится при нажатии «Играть»",
+    "compiler": "Компилятор",
+    "compilerChecking": "Проверка…",
+    "compilerMissing": "Не установлен",
+    "runtimeBuilding": "Собирается…",
+    "runtimeNotBuilt": "Не установлен",
+    "runtimeUpdateKit": "Доступно обновление"
   },
-  "news": {
-    "title": "Новости",
-    "skeleton": "Первый каркас проекта: runtime, манифест и лаунчер."
+  "releaseNotes": {
+    "title": "Что нового в версии {version}",
+    "dismiss": "Понятно"
   },
   "install": {
     "title": "Установка",
-    "gameFolder": "Папка игры",
-    "gameFolderHelp": "Папка с вашей копией Gears of War 3, в которой лежит {file}.",
-    "noFolder": "Папка не выбрана",
-    "choose": "Выбрать…",
+    "gameFolder": "Игра",
+    "gameFolderHelp": "Папка с вашей копией Gears of War 3 (в которой лежит {file}) или её образ диска (.iso). Любой из них можно также перетащить сюда.",
+    "noFolder": "Игра не выбрана",
+    "choose": "Папка…",
+    "chooseImage": "Образ диска (.iso)…",
     "languageTitle": "Язык и перевод",
     "languageHelp": "Куда установить переведённые файлы игры.",
     "gameLanguage": "Язык игры",
     "translationTarget": "Папка перевода",
     "change": "Изменить…",
-    "notADirectory": "Этот путь не является папкой или больше не существует.",
+    "notADirectory": "Этот путь больше не существует.",
+    "notADiscImage": "Этот файл не является образом диска Xbox 360 или повреждён.",
     "missingXex": "Нет default.xex ни в этой папке, ни во вложенных в неё папках первого уровня.",
+    "missingXexInImage": "В этом образе диска нет default.xex.",
     "invalidXex": "default.xex не является корректным исполняемым файлом Xbox 360.",
     "ok": "Gears of War 3 · Издание {versionName} · Media ID {mediaId}",
     "unsupportedVersion": "Это издание Gears of War 3 (Media ID {mediaId}) пока не поддерживается.",
     "wrongGame": "Это не Gears of War 3 (Title ID {titleId}).",
-    "chooseFolderFirst": "Сначала выберите папку игры",
+    "chooseFolderFirst": "Сначала выберите игру",
     "playerTitle": "Player Profile",
     "playerHelp": "Gamertag displayed in game lobbies, menus, and multiplayer.",
     "userName": "Gamertag / Username",
     "userNamePlaceholder": "User (up to 15 characters)",
     "defaultUserName": "User",
     "runtimeTitle": "Среда выполнения игры",
-    "runtimeHelp": "Перекомпилированная игра, которую запускает лаунчер. Устанавливается из сборки scripts/build.sh и обновляется, когда появляется более новая.",
+    "runtimeHelp": "Игра, перекомпилированная для этого компьютера. В первый раз лаунчер собирает её из вашей копии игры (несколько минут), а затем снова при обновлении проекта.",
     "runtimeInstalled": "Установлено, последняя версия.",
     "runtimeUpdate": "Готова к установке более новая сборка.",
     "runtimeNotInstalled": "Ещё не установлено.",
@@ -83,7 +99,22 @@
     "savesHelp": "Папка для контрольных точек кампании и профиля. При её смене сохранения переносятся туда.",
     "savesConflict": "В {folder} уже есть сохранения. Заменить их текущими сохранениями?",
     "savesReplace": "Заменить",
-    "savesCancel": "Отмена"
+    "savesCancel": "Отмена",
+    "compilerTitle": "Компилятор",
+    "compilerHelp": "Игра работает как нативный код, собранный на этом компьютере из вашей копии, поэтому лаунчеру нужен компилятор C++. Если его нет, лаунчер его установит.",
+    "compilerChecking": "Проверка компилятора…",
+    "compilerReady": "Готов: {version}",
+    "compilerUnusable": "{found} не подходит: {problem}",
+    "compilerMissing": "Компилятор не найден.",
+    "compilerInstallApple": "Установить Command Line Tools от Apple",
+    "compilerInstallPackage": "Установить clang",
+    "compilerInstalling": "Установка компилятора…",
+    "compilerWaitingApple": "Следуйте указаниям в окне Apple, чтобы установить Command Line Tools. Лаунчер продолжит сам после установки.",
+    "compilerCheckAgain": "Проверить снова",
+    "compilerManual": "Или выполните в терминале:",
+    "runtimeNotBuilt": "Ещё не собрано: первая сборка из вашей копии игры занимает несколько минут.",
+    "runtimeUpdateLink": "Обновление готово: устанавливается за несколько секунд.",
+    "runtimeUpdateBuild": "Обновление требует пересобрать игру: около двух минут."
   },
   "graphics": {
     "title": "Графика",
@@ -151,7 +182,9 @@
     "savesNested": "Выберите папку, которая не находится внутри текущей (и наоборот).",
     "savesFailed": "Не удалось перенести сохранения: {detail}",
     "runtimeInstalled": "Среда выполнения игры установлена.",
-    "saveFailed": "Не удалось сохранить настройки: {detail}"
+    "saveFailed": "Не удалось сохранить настройки: {detail}",
+    "compilerInstalled": "Компилятор готов: {version}",
+    "compilerInstallFailed": "Не удалось установить компилятор: {detail}"
   },
   "log": {
     "title": "Журнал игры",
@@ -167,7 +200,34 @@
     "startFailed": "Не удалось запустить игру: {detail}",
     "installingRuntime": "Установка среды выполнения игры…",
     "installFailed": "Не удалось установить среду выполнения: {detail}",
-    "savesUnavailable": "Папка сохранений недоступна: {detail}"
+    "savesUnavailable": "Папка сохранений недоступна: {detail}",
+    "buildPreparing": "Подготовка сборки игры…",
+    "buildTranslating": "Перевод кода игры…",
+    "buildCompiling": "Компиляция игры: {done} из {total} файлов",
+    "buildLinking": "Компоновка игры…",
+    "buildInstalling": "Установка игры…",
+    "buildNoCompiler": "Для сборки игры нужен компилятор C++: установите его в разделе «Установка».",
+    "buildNoKit": "У этого лаунчера нет набора для сборки игры в этой системе.",
+    "buildWrongKit": "Набор лаунчера здесь не подходит: {detail}",
+    "buildUnsupportedGame": "Сначала выберите поддерживаемую копию игры в разделе «Установка».",
+    "buildNoSpace": "Недостаточно свободного места для сборки игры: нужно {needed} МБ, свободно {free} МБ.",
+    "buildStepFailed": "Сборка игры не удалась на этапе «{step}»: {summary} (полный журнал: {log})",
+    "buildBusy": "Игра уже собирается или запущена.",
+    "buildStep": {
+      "preparing": "подготовка",
+      "translating": "перевод кода",
+      "compiling": "компиляция",
+      "linking": "компоновка",
+      "installing": "установка"
+    }
+  },
+  "build": {
+    "title": "Сборка игры",
+    "failedTitle": "Не удалось собрать игру",
+    "remaining": "осталось около {time}",
+    "estimating": "оценка оставшегося времени…",
+    "retry": "Повторить",
+    "openLog": "Показать журнал"
   },
   "update": {
     "available": "Обновить до {version}",
@@ -199,5 +259,17 @@
     "resetToast": "Saves reset. Automatic backup created.",
     "backupToast": "Backup successfully created",
     "restoreToast": "Save restored successfully"
+  },
+  "gamepad": {
+    "select": "Выбрать",
+    "back": "Назад",
+    "section": "Раздел",
+    "play": "Играть",
+    "type": "Ввод",
+    "delete": "Удалить",
+    "space": "Пробел",
+    "done": "Готово",
+    "cancel": "Отмена",
+    "page": "Страница"
   }
 }
