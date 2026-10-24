@@ -30,7 +30,7 @@
     "installSub": "Set up the game files",
     "running": "Playing",
     "runtimeWillInstall": "Installs the runtime first",
-    "building": "BUILDING",
+    "building": "INSTALLING",
     "buildingSub": "The game is being built for this computer"
   },
   "status": {

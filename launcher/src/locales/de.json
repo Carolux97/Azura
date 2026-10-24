@@ -30,7 +30,7 @@
     "installSub": "Spieldateien einrichten",
     "running": "Läuft",
     "runtimeWillInstall": "Installiert zuerst die Runtime",
-    "building": "WIRD GEBAUT",
+    "building": "WIRD INSTALLIERT",
     "buildingSub": "Das Spiel wird für diesen Computer gebaut"
   },
   "status": {

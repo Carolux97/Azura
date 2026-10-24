@@ -30,7 +30,7 @@
     "installSub": "Configura i file di gioco",
     "running": "In gioco",
     "runtimeWillInstall": "Installa prima il runtime",
-    "building": "IN COSTRUZIONE",
+    "building": "INSTALLAZIONE",
     "buildingSub": "Il gioco viene costruito per questo computer"
   },
   "status": {

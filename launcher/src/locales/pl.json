@@ -30,7 +30,7 @@
     "installSub": "Skonfiguruj pliki gry",
     "running": "W grze",
     "runtimeWillInstall": "Najpierw instaluje środowisko",
-    "building": "BUDOWANIE",
+    "building": "INSTALOWANIE",
     "buildingSub": "Gra jest budowana dla tego komputera"
   },
   "status": {
