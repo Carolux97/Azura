@@ -16041,6 +16041,148 @@ index c10694c..2225156 100644
      return false;
    }
    REXSYS_DEBUG("  Mounted {} at {}", abs_game_root.string(), mount_path);
+diff --git a/src/system/xsocket.cpp b/src/system/xsocket.cpp
+index 2d13ac8..492ba5b 100644
+--- a/src/system/xsocket.cpp
++++ b/src/system/xsocket.cpp
+@@ -9,9 +9,12 @@
+  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
+  */
+ 
++#include <cerrno>
+ #include <cstring>
+ 
+ #include <rex/kernel/xam/module.h>
++#include <rex/logging.h>
++#include <rex/memory/utils.h>
+ #include <rex/platform.h>
+ #include <rex/system/kernel_state.h>
+ #include <rex/system/xsocket.h>
+@@ -28,11 +31,56 @@
+ #include <arpa/inet.h>
+ #include <netinet/in.h>
+ #include <netinet/ip.h>
++#include <sys/ioctl.h>
+ #include <sys/socket.h>
+ #endif
+ 
+ namespace rex::system {
+ 
++namespace {
++
++#if !REX_PLATFORM_WIN32
++// Titles pass Winsock's numbers for socket options and ioctlsocket commands. macOS shares them with
++// Winsock; Linux does not, so they are translated to the host's names here.
++constexpr uint32_t kWinsockSolSocket = 0xFFFF;
++constexpr uint32_t kWinsockFionbio = 0x8004667E;   // set non-blocking mode
++constexpr uint32_t kWinsockFionread = 0x4004667F;  // bytes waiting to be read
++
++// The host option for a Winsock SOL_SOCKET option whose value is a 32-bit integer, or -1.
++int HostIntSocketOption(uint32_t optname) {
++  switch (optname) {
++    case 0x0004:
++      return SO_REUSEADDR;
++    case 0x0008:
++      return SO_KEEPALIVE;
++    case 0x0010:
++      return SO_DONTROUTE;
++    case 0x0020:
++      return SO_BROADCAST;
++    case 0x0100:
++      return SO_OOBINLINE;
++    case 0x1001:
++      return SO_SNDBUF;
++    case 0x1002:
++      return SO_RCVBUF;
++    case 0x1003:
++      return SO_SNDLOWAT;
++    case 0x1004:
++      return SO_RCVLOWAT;
++    default:
++      return -1;
++  }
++}
++
++// Linux lets only privileged processes bind ports below this one (net.ipv4.ip_unprivileged_port_start);
++// the console had no such limit, and titles bind them (Unreal Engine 3 tries ports 1000 to 1019).
++constexpr uint16_t kFirstUnprivilegedPort = 1024;
++// A privileged port the host refuses is bound this much higher instead: 1000 becomes 11000.
++constexpr uint16_t kPrivilegedPortOffset = 10000;
++#endif
++
++}  // namespace
++
+ XSocket::XSocket(KernelState* kernel_state) : XObject(kernel_state, kObjectType) {}
+ 
+ XSocket::XSocket(KernelState* kernel_state, uint64_t native_handle)
+@@ -76,7 +124,20 @@ X_STATUS XSocket::SetOption(uint32_t level, uint32_t optname, void* optval_ptr,
+     return X_STATUS_SUCCESS;
+   }
+ 
++#if !REX_PLATFORM_WIN32
++  // Integer SOL_SOCKET options: the host's option number, and the value byte-swapped from the
++  // guest's big-endian memory. Other options go through unchanged.
++  const int host_optname = level == kWinsockSolSocket ? HostIntSocketOption(optname) : -1;
++  int ret;
++  if (host_optname >= 0 && optlen >= sizeof(uint32_t)) {
++    const int value = static_cast<int32_t>(rex::memory::load_and_swap<uint32_t>(optval_ptr));
++    ret = setsockopt(native_handle_, SOL_SOCKET, host_optname, &value, sizeof(value));
++  } else {
++    ret = setsockopt(native_handle_, level, optname, (char*)optval_ptr, optlen);
++  }
++#else
+   int ret = setsockopt(native_handle_, level, optname, (char*)optval_ptr, optlen);
++#endif
+   if (ret < 0) {
+     // TODO: WSAGetLastError()
+     return X_STATUS_UNSUCCESSFUL;
+@@ -91,7 +152,25 @@ X_STATUS XSocket::SetOption(uint32_t level, uint32_t optname, void* optval_ptr,
+ }
+ 
+ X_STATUS XSocket::IOControl(uint32_t cmd, uint8_t* arg_ptr) {
++#if !REX_PLATFORM_WIN32
++  // The argument is a big-endian 32-bit integer in guest memory: read for FIONBIO, written for
++  // FIONREAD. Other commands go through unchanged.
++  int ret;
++  if (cmd == kWinsockFionbio) {
++    int value = rex::memory::load_and_swap<uint32_t>(arg_ptr) != 0;
++    ret = ioctl(static_cast<int>(native_handle_), FIONBIO, &value);
++  } else if (cmd == kWinsockFionread) {
++    int value = 0;
++    ret = ioctl(static_cast<int>(native_handle_), FIONREAD, &value);
++    if (ret >= 0) {
++      rex::memory::store_and_swap<uint32_t>(arg_ptr, static_cast<uint32_t>(value));
++    }
++  } else {
++    ret = rex::net::socket_ioctl(native_handle_, cmd, arg_ptr);
++  }
++#else
+   int ret = rex::net::socket_ioctl(native_handle_, cmd, arg_ptr);
++#endif
+   if (ret < 0) {
+     // TODO: Get last error
+     return X_STATUS_UNSUCCESSFUL;
+@@ -111,6 +190,20 @@ X_STATUS XSocket::Connect(N_XSOCKADDR* name, int name_len) {
+ 
+ X_STATUS XSocket::Bind(N_XSOCKADDR_IN* name, int name_len) {
+   int ret = bind(native_handle_, (sockaddr*)name, name_len);
++#if !REX_PLATFORM_WIN32
++  // A privileged port the host refuses is bound higher instead; the title keeps the port it asked
++  // for (bound_port_), since nothing it reads tells it the host's.
++  const uint16_t port = name->sin_port;
++  if (ret < 0 && errno == EACCES && port != 0 && port < kFirstUnprivilegedPort) {
++    N_XSOCKADDR_IN host_name = *name;
++    host_name.sin_port = static_cast<uint16_t>(port + kPrivilegedPortOffset);
++    ret = bind(native_handle_, (sockaddr*)&host_name, name_len);
++    if (ret == 0) {
++      REXKRNL_INFO("Socket port {} is bound as host port {}: ports below {} need privileges here",
++                   port, port + kPrivilegedPortOffset, kFirstUnprivilegedPort);
++    }
++  }
++#endif
+   if (ret < 0) {
+     return X_STATUS_UNSUCCESSFUL;
+   }
 diff --git a/src/ui/imgui_drawer.cpp b/src/ui/imgui_drawer.cpp
 index f270f3c..1e4d411 100644
 --- a/src/ui/imgui_drawer.cpp
