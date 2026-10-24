@@ -74,7 +74,7 @@
     "userNamePlaceholder": "User (up to 15 characters)",
     "defaultUserName": "User",
     "runtimeTitle": "Běhové prostředí hry",
-    "runtimeHelp": "Překompilovaná hra, kterou launcher spouští. Instaluje se ze sestavení scripts/build.sh a aktualizuje, když je k dispozici novější.",
+    "runtimeHelp": "Hra překompilovaná pro tento počítač. Poprvé ji launcher sestaví z vaší kopie hry (několik minut) a znovu, když ji projekt aktualizuje.",
     "runtimeInstalled": "Nainstalováno a aktuální.",
     "runtimeUpdate": "Novější sestavení je připraveno k instalaci.",
     "runtimeNotInstalled": "Zatím nenainstalováno.",
@@ -184,7 +184,26 @@
     "startFailed": "Hru se nepodařilo spustit: {detail}",
     "installingRuntime": "Instaluje se běhové prostředí hry…",
     "installFailed": "Instalace běhového prostředí selhala: {detail}",
-    "savesUnavailable": "Složka uložených her není dostupná: {detail}"
+    "savesUnavailable": "Složka uložených her není dostupná: {detail}",
+    "buildPreparing": "Příprava sestavení hry…",
+    "buildTranslating": "Překlad kódu hry…",
+    "buildCompiling": "Kompilace hry: {done} z {total} souborů",
+    "buildLinking": "Linkování hry…",
+    "buildInstalling": "Instalace hry…",
+    "buildNoCompiler": "K sestavení hry je potřeba kompilátor C++: nainstalujte ho v Instalaci.",
+    "buildNoKit": "Tento launcher nemá sadu pro sestavení hry v tomto systému.",
+    "buildWrongKit": "Sadu launcheru zde nelze použít: {detail}",
+    "buildUnsupportedGame": "Nejprve v Instalaci vyberte podporovanou kopii hry.",
+    "buildNoSpace": "Nedostatek volného místa pro sestavení hry: potřeba {needed} MB, volno {free} MB.",
+    "buildStepFailed": "Sestavení hry selhalo v kroku „{step}“: {summary} (celý záznam: {log})",
+    "buildBusy": "Hra se už sestavuje nebo běží.",
+    "buildStep": {
+      "preparing": "příprava",
+      "translating": "překlad kódu",
+      "compiling": "kompilace",
+      "linking": "linkování",
+      "installing": "instalace"
+    }
   },
   "update": {
     "available": "Aktualizovat na {version}",

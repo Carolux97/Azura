@@ -74,7 +74,7 @@
     "wrongGame": "This is not Gears of War 3 (Title ID {titleId}).",
     "chooseFolderFirst": "Choose the game folder first",
     "runtimeTitle": "Game runtime",
-    "runtimeHelp": "The recompiled game the launcher starts. It is installed from the build made with scripts/build.sh and updated whenever there is a newer one.",
+    "runtimeHelp": "The game recompiled for this computer. The first time, the launcher builds it from your own copy of the game (a few minutes), and again when the project updates it.",
     "runtimeInstalled": "Installed and up to date.",
     "runtimeUpdate": "A newer build is ready to install.",
     "runtimeNotInstalled": "Not installed yet.",
@@ -184,7 +184,26 @@
     "startFailed": "The game could not start: {detail}",
     "installingRuntime": "Installing the game runtime…",
     "installFailed": "Installing the runtime failed: {detail}",
-    "savesUnavailable": "The saved games folder is not available: {detail}"
+    "savesUnavailable": "The saved games folder is not available: {detail}",
+    "buildPreparing": "Preparing to build the game…",
+    "buildTranslating": "Translating the game's code…",
+    "buildCompiling": "Compiling the game: {done} of {total} files",
+    "buildLinking": "Linking the game…",
+    "buildInstalling": "Installing the game…",
+    "buildNoCompiler": "A C++ compiler is needed to build the game: install it in Installation.",
+    "buildNoKit": "This launcher has no kit to build the game with on this system.",
+    "buildWrongKit": "The launcher's kit cannot be used here: {detail}",
+    "buildUnsupportedGame": "Choose a supported copy of the game in Installation first.",
+    "buildNoSpace": "Not enough free space to build the game: {needed} MB needed, {free} MB free.",
+    "buildStepFailed": "Building the game failed while {step}: {summary} (full log: {log})",
+    "buildBusy": "The game is being built already, or it is running.",
+    "buildStep": {
+      "preparing": "preparing",
+      "translating": "translating the code",
+      "compiling": "compiling",
+      "linking": "linking",
+      "installing": "installing"
+    }
   },
   "update": {
     "available": "Update to {version}",

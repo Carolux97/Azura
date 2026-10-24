@@ -4,6 +4,7 @@
 //! window that shows it and exposes the commands the interface calls through `invoke`.
 
 mod achievements;
+mod builder;
 mod game_folder;
 mod install;
 #[cfg(test)]
@@ -122,20 +123,107 @@ async fn get_achievements(
     Ok(achievements::build_state(&export, &export_dir, &unlocks, &languages))
 }
 
-/// Reports whether the runtime is installed and whether a newer build can be installed.
-#[tauri::command]
-async fn get_runtime_status(app: tauri::AppHandle) -> Result<RuntimeStatus, String> {
-    Ok(install::status(&runtime_dir(&app)?, install::find_build().as_deref()))
+/// Where the runtime comes from. A developer's explicit choice wins (`AZURA_RUNTIME_BUILD`, then
+/// `AZURA_KIT`); then a project build, when the launcher runs from a checkout that has one; then
+/// the player kit (bundled with the launcher, or the project's kit build), which is how players
+/// get it.
+enum RuntimeSource {
+    Build(std::path::PathBuf),
+    Kit(std::path::PathBuf),
+    None,
 }
 
-/// Installs (or updates) the runtime from the project's build (see `install.rs`). `async`: it
-/// copies about a hundred megabytes.
+fn runtime_source(app: &tauri::AppHandle) -> RuntimeSource {
+    if std::env::var_os("AZURA_RUNTIME_BUILD").is_some() {
+        if let Some(build) = install::find_build() {
+            return RuntimeSource::Build(build);
+        }
+    }
+    if std::env::var_os(builder::KIT_ENV).is_none() {
+        if let Some(build) = install::find_build() {
+            return RuntimeSource::Build(build);
+        }
+    }
+    let resources = app.path().resource_dir().ok();
+    builder::find_kit(resources.as_deref()).map(RuntimeSource::Kit).unwrap_or(RuntimeSource::None)
+}
+
+/// The game build in the saved game folder, for building the runtime from it: its folder and its
+/// entry in the registry.
+fn game_build(app: &tauri::AppHandle) -> Result<(std::path::PathBuf, versions::KnownVersion), builder::BuildError> {
+    let settings = settings_paths(app).and_then(|paths| paths.load()).map_err(builder::BuildError::Io)?;
+    let folder = settings.game_folder.ok_or(builder::BuildError::UnsupportedGame)?;
+    let registry = Registry::bundled();
+    let FolderCheck::Ok { folder, version_id, .. } = game_folder::check_folder(Path::new(&folder), &registry) else {
+        return Err(builder::BuildError::UnsupportedGame);
+    };
+    let version = registry.versions.into_iter().find(|version| version.id == version_id).ok_or(builder::BuildError::UnsupportedGame)?;
+    Ok((std::path::PathBuf::from(folder), version))
+}
+
+/// The work folder the runtime of a game build is built in.
+fn work_dir(app: &tauri::AppHandle, version: &versions::KnownVersion) -> Result<std::path::PathBuf, String> {
+    Ok(app.path().app_data_dir().map_err(|e| e.to_string())?.join("build").join(&version.id))
+}
+
+/// Reports whether the runtime is installed and whether it has to be installed again: from a
+/// project build, when the build is newer; from the kit, when the installed runtime was not built
+/// from this kit for the game in the saved folder.
 #[tauri::command]
-async fn install_runtime(app: tauri::AppHandle) -> Result<RuntimeStatus, String> {
-    let build = install::find_build().ok_or_else(|| "no runtime build found".to_string())?;
+async fn get_runtime_status(app: tauri::AppHandle) -> Result<RuntimeStatus, String> {
     let dir = runtime_dir(&app)?;
-    install::install(&build, &dir)?;
-    Ok(install::status(&dir, Some(&build)))
+    match runtime_source(&app) {
+        RuntimeSource::Build(build) => Ok(install::status(&dir, Some(&build))),
+        RuntimeSource::None => Ok(install::status(&dir, None)),
+        RuntimeSource::Kit(kit) => {
+            let mut status = install::status(&dir, None);
+            status.source = "kit";
+            status.build_found = true;
+            let built = builder::read_kit(&kit).ok().zip(game_build(&app).ok()).is_some_and(|(kit, (_, version))| {
+                work_dir(&app, &version)
+                    .ok()
+                    .and_then(|work| builder::read_state(&work))
+                    .is_some_and(|state| state.xex_sha256 == version.xex_sha256 && state.keys.as_ref() == Some(&kit.keys))
+            });
+            status.update_available = !status.installed || !built;
+            Ok(status)
+        }
+    }
+}
+
+/// Only one runtime build runs at a time.
+static BUILDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Installs (or updates) the runtime: copies a project build (see `install.rs`), or builds it here
+/// from the player kit and the player's default.xex (see `builder.rs`), sending its progress as
+/// `runtime-build-progress` events. `async`: a build takes minutes.
+#[tauri::command]
+async fn install_runtime(
+    app: tauri::AppHandle,
+    process: tauri::State<'_, GameProcess>,
+) -> Result<RuntimeStatus, builder::BuildError> {
+    if process.is_running() {
+        return Err(builder::BuildError::AlreadyRunning);
+    }
+    let dir = runtime_dir(&app).map_err(builder::BuildError::Io)?;
+    match runtime_source(&app) {
+        RuntimeSource::Build(build) => {
+            install::install(&build, &dir).map_err(builder::BuildError::Io)?;
+        }
+        RuntimeSource::Kit(kit) => {
+            let (game, version) = game_build(&app)?;
+            let work = work_dir(&app, &version).map_err(builder::BuildError::Io)?;
+            let events = app.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                let folders = builder::BuildFolders { kit: &kit, game: &game, work: &work, runtime: &dir };
+                builder::build(&folders, &version.manifest, &version.xex_sha256, &events, &BUILDING)
+            })
+            .await
+            .map_err(|e| builder::BuildError::Io(e.to_string()))??;
+        }
+        RuntimeSource::None => return Err(builder::BuildError::NoKit),
+    }
+    get_runtime_status(app).await.map_err(builder::BuildError::Io)
 }
 
 /// Starts the game with the chosen saves folder. Its output and its end arrive as `game-output`
@@ -311,6 +399,10 @@ pub fn run() {
             install_compiler
         ])
         .setup(|app| {
+            // A runtime install the launcher was closed in the middle of is finished first.
+            if let Ok(dir) = runtime_dir(app.handle()) {
+                builder::recover(&dir);
+            }
             // Debug builds log to the terminal that started them; release builds stay quiet.
             if cfg!(debug_assertions) {
                 app.handle().plugin(

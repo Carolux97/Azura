@@ -74,7 +74,7 @@
     "userNamePlaceholder": "User (up to 15 characters)",
     "defaultUserName": "User",
     "runtimeTitle": "Játék futtatókörnyezet",
-    "runtimeHelp": "Az újrafordított játék, amelyet a launcher indít. A scripts/build.sh buildjéből települ, és frissül, ha van újabb.",
+    "runtimeHelp": "Az erre a számítógépre újrafordított játék. Először a launcher a saját játékpéldányodból építi fel (néhány perc), majd újra, amikor a projekt frissíti.",
     "runtimeInstalled": "Telepítve és naprakész.",
     "runtimeUpdate": "Egy újabb build telepítésre kész.",
     "runtimeNotInstalled": "Még nincs telepítve.",
@@ -184,7 +184,26 @@
     "startFailed": "A játékot nem sikerült elindítani: {detail}",
     "installingRuntime": "A játék futtatókörnyezetének telepítése…",
     "installFailed": "A futtatókörnyezet telepítése sikertelen: {detail}",
-    "savesUnavailable": "A mentések mappája nem érhető el: {detail}"
+    "savesUnavailable": "A mentések mappája nem érhető el: {detail}",
+    "buildPreparing": "A játék építésének előkészítése…",
+    "buildTranslating": "A játék kódjának fordítása…",
+    "buildCompiling": "A játék fordítása: {done}/{total} fájl",
+    "buildLinking": "A játék linkelése…",
+    "buildInstalling": "A játék telepítése…",
+    "buildNoCompiler": "A játék építéséhez C++ fordító kell: telepítsd a Telepítés részben.",
+    "buildNoKit": "Ennek a launchernek nincs készlete a játék építéséhez ezen a rendszeren.",
+    "buildWrongKit": "A launcher készlete itt nem használható: {detail}",
+    "buildUnsupportedGame": "Előbb válassz egy támogatott játékpéldányt a Telepítés részben.",
+    "buildNoSpace": "Nincs elég szabad hely a játék építéséhez: {needed} MB kell, {free} MB szabad.",
+    "buildStepFailed": "A játék építése sikertelen a(z) „{step}” lépésnél: {summary} (teljes napló: {log})",
+    "buildBusy": "A játék már épül vagy fut.",
+    "buildStep": {
+      "preparing": "előkészítés",
+      "translating": "kódfordítás",
+      "compiling": "fordítás",
+      "linking": "linkelés",
+      "installing": "telepítés"
+    }
   },
   "update": {
     "available": "Frissítés erre: {version}",
