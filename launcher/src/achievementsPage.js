@@ -104,6 +104,8 @@ const listRow = (achievement, ctx, compact = false) => {
   if (achievement.unlocked && achievement.unlockedAt && !compact) {
     row.append(el("span", "ach-when", ctx.t("achievements.unlockedOn"), el("b", "", formatDate(achievement.unlockedAt, ctx))));
   }
+  // Focusable, so the keyboard and a controller go through the list (and scroll it) row by row.
+  row.tabIndex = 0;
   return row;
 };
 

@@ -21,15 +21,22 @@
     "runtimeVersion": "Runtime ReXGlue {version}"
   },
   "play": {
-    "eyebrow": "macOS 네이티브 포트 · Gears of War 3",
-    "lede": "내 게임을 Apple Silicon용으로 다시 컴파일했습니다.",
+    "eyebrow": "{platform} 네이티브 포트 · Gears of War 3",
+    "lede": "내 게임을 {target}용으로 다시 컴파일했습니다.",
     "launch": "플레이",
     "launching": "시작 중",
     "mode": "캠페인",
     "install": "설치",
     "installSub": "게임 파일 설정",
     "running": "플레이 중",
-    "runtimeWillInstall": "먼저 런타임을 설치합니다"
+    "runtimeWillInstall": "먼저 런타임을 설치합니다",
+    "building": "설치 중",
+    "buildingSub": "이 컴퓨터용으로 게임을 빌드하는 중입니다",
+    "installRuntime": "설치",
+    "installRuntimeSub": "이 컴퓨터용으로 게임 빌드 · 몇 분",
+    "update": "업데이트",
+    "updateLinkSub": "몇 초",
+    "updateBuildSub": "약 2분"
   },
   "status": {
     "gameFiles": "게임 파일",
@@ -41,37 +48,46 @@
     "runtimeMissing": "빌드를 찾을 수 없음",
     "player": "Player",
     "runtimeNotInstalled": "플레이를 누르면 설치됩니다",
-    "runtimeUpdate": "업데이트 준비 완료, 플레이를 누르면 설치됩니다"
+    "runtimeUpdate": "업데이트 준비 완료, 플레이를 누르면 설치됩니다",
+    "compiler": "컴파일러",
+    "compilerChecking": "확인 중…",
+    "compilerMissing": "설치되지 않음",
+    "runtimeBuilding": "빌드 중…",
+    "runtimeNotBuilt": "설치되지 않음",
+    "runtimeUpdateKit": "업데이트 있음"
   },
-  "news": {
-    "title": "새 소식",
-    "skeleton": "첫 프로젝트 골격: 런타임, 매니페스트, 런처."
+  "releaseNotes": {
+    "title": "버전 {version}의 새로운 기능",
+    "dismiss": "확인"
   },
   "install": {
     "title": "설치",
-    "gameFolder": "게임 폴더",
-    "gameFolderHelp": "{file} 파일이 들어 있는 Gears of War 3 사본 폴더입니다.",
-    "noFolder": "선택한 폴더 없음",
-    "choose": "선택…",
+    "gameFolder": "게임",
+    "gameFolderHelp": "{file} 파일이 들어 있는 Gears of War 3 사본 폴더 또는 그 디스크 이미지(.iso)입니다. 둘 중 하나를 여기로 끌어다 놓을 수도 있습니다.",
+    "noFolder": "선택한 게임 없음",
+    "choose": "폴더…",
+    "chooseImage": "디스크 이미지(.iso)…",
     "languageTitle": "언어 및 번역",
     "languageHelp": "번역된 게임 파일을 설치할 위치입니다.",
     "gameLanguage": "게임 언어",
     "translationTarget": "번역 파일 위치",
     "change": "변경…",
-    "notADirectory": "이 경로는 폴더가 아니거나 더 이상 존재하지 않습니다.",
+    "notADirectory": "이 경로는 더 이상 존재하지 않습니다.",
+    "notADiscImage": "이 파일은 Xbox 360 디스크 이미지가 아니거나 손상되었습니다.",
     "missingXex": "이 폴더와 바로 아래 폴더에 default.xex가 없습니다.",
+    "missingXexInImage": "이 디스크 이미지에는 default.xex가 없습니다.",
     "invalidXex": "default.xex가 올바른 Xbox 360 실행 파일이 아닙니다.",
     "ok": "Gears of War 3 · {versionName} 에디션 · Media ID {mediaId}",
     "unsupportedVersion": "이 Gears of War 3 에디션(Media ID {mediaId})은 아직 지원되지 않습니다.",
     "wrongGame": "Gears of War 3가 아닙니다(Title ID {titleId}).",
-    "chooseFolderFirst": "먼저 게임 폴더를 선택하세요",
+    "chooseFolderFirst": "먼저 게임을 선택하세요",
     "playerTitle": "Player Profile",
     "playerHelp": "Gamertag displayed in game lobbies, menus, and multiplayer.",
     "userName": "Gamertag / Username",
     "userNamePlaceholder": "User (up to 15 characters)",
     "defaultUserName": "User",
     "runtimeTitle": "게임 런타임",
-    "runtimeHelp": "런처가 실행하는 재컴파일된 게임입니다. scripts/build.sh 빌드에서 설치되며 더 새로운 빌드가 있으면 업데이트됩니다.",
+    "runtimeHelp": "이 컴퓨터용으로 다시 컴파일한 게임입니다. 처음에는 런처가 사용자의 게임 사본으로 빌드하고(몇 분), 프로젝트가 업데이트되면 다시 빌드합니다.",
     "runtimeInstalled": "설치됨, 최신 상태입니다.",
     "runtimeUpdate": "설치할 수 있는 새 빌드가 있습니다.",
     "runtimeNotInstalled": "아직 설치되지 않았습니다.",
@@ -83,7 +99,22 @@
     "savesHelp": "캠페인 체크포인트와 프로필이 저장되는 폴더입니다. 변경하면 저장된 게임이 그곳으로 이동합니다.",
     "savesConflict": "{folder}에 이미 저장된 게임이 있습니다. 현재 저장된 게임으로 바꾸시겠습니까?",
     "savesReplace": "바꾸기",
-    "savesCancel": "취소"
+    "savesCancel": "취소",
+    "compilerTitle": "컴파일러",
+    "compilerHelp": "게임은 사용자의 사본으로 이 컴퓨터에서 빌드한 네이티브 코드로 실행되므로 런처에 C++ 컴파일러가 필요합니다. 없으면 런처가 설치합니다.",
+    "compilerChecking": "컴파일러 확인 중…",
+    "compilerReady": "준비됨: {version}",
+    "compilerUnusable": "{found}을(를) 사용할 수 없습니다: {problem}",
+    "compilerMissing": "컴파일러를 찾을 수 없습니다.",
+    "compilerInstallApple": "Apple Command Line Tools 설치",
+    "compilerInstallPackage": "clang 설치",
+    "compilerInstalling": "컴파일러 설치 중…",
+    "compilerWaitingApple": "Apple 창의 안내에 따라 Command Line Tools를 설치하세요. 설치가 끝나면 런처가 알아서 계속합니다.",
+    "compilerCheckAgain": "다시 확인",
+    "compilerManual": "또는 터미널에서 다음을 실행하세요:",
+    "runtimeNotBuilt": "아직 빌드되지 않았습니다: 게임 사본으로 처음 빌드하는 데 몇 분이 걸립니다.",
+    "runtimeUpdateLink": "업데이트가 준비되었습니다: 몇 초 만에 설치됩니다.",
+    "runtimeUpdateBuild": "업데이트하려면 게임을 다시 빌드해야 합니다: 약 2분."
   },
   "graphics": {
     "title": "그래픽",
@@ -151,7 +182,9 @@
     "savesNested": "현재 폴더 안에 있지 않은(또는 그 반대가 아닌) 폴더를 선택하세요.",
     "savesFailed": "저장된 게임 이동 실패: {detail}",
     "runtimeInstalled": "게임 런타임을 설치했습니다.",
-    "saveFailed": "설정을 저장할 수 없습니다: {detail}"
+    "saveFailed": "설정을 저장할 수 없습니다: {detail}",
+    "compilerInstalled": "컴파일러 준비됨: {version}",
+    "compilerInstallFailed": "컴파일러를 설치할 수 없습니다: {detail}"
   },
   "log": {
     "title": "게임 로그",
@@ -167,7 +200,34 @@
     "startFailed": "게임을 시작할 수 없습니다: {detail}",
     "installingRuntime": "게임 런타임을 설치하는 중…",
     "installFailed": "런타임 설치 실패: {detail}",
-    "savesUnavailable": "저장된 게임 폴더를 사용할 수 없습니다: {detail}"
+    "savesUnavailable": "저장된 게임 폴더를 사용할 수 없습니다: {detail}",
+    "buildPreparing": "게임 빌드 준비 중…",
+    "buildTranslating": "게임 코드 변환 중…",
+    "buildCompiling": "게임 컴파일 중: 파일 {total}개 중 {done}개",
+    "buildLinking": "게임 링크 중…",
+    "buildInstalling": "게임 설치 중…",
+    "buildNoCompiler": "게임을 빌드하려면 C++ 컴파일러가 필요합니다. 설치에서 설치하세요.",
+    "buildNoKit": "이 런처에는 이 시스템에서 게임을 빌드할 키트가 없습니다.",
+    "buildWrongKit": "런처의 키트를 여기서 사용할 수 없습니다: {detail}",
+    "buildUnsupportedGame": "먼저 설치에서 지원되는 게임 사본을 선택하세요.",
+    "buildNoSpace": "게임을 빌드할 여유 공간이 부족합니다: {needed} MB 필요, {free} MB 남음.",
+    "buildStepFailed": "게임 빌드가 '{step}' 단계에서 실패했습니다: {summary} (전체 로그: {log})",
+    "buildBusy": "게임이 이미 빌드 중이거나 실행 중입니다.",
+    "buildStep": {
+      "preparing": "준비",
+      "translating": "코드 변환",
+      "compiling": "컴파일",
+      "linking": "링크",
+      "installing": "설치"
+    }
+  },
+  "build": {
+    "title": "게임 빌드 중",
+    "failedTitle": "게임을 빌드할 수 없습니다",
+    "remaining": "약 {time} 남음",
+    "estimating": "남은 시간 계산 중…",
+    "retry": "다시 시도",
+    "openLog": "로그 보기"
   },
   "update": {
     "available": "{version}(으)로 업데이트",
@@ -199,5 +259,17 @@
     "resetToast": "Saves reset. Automatic backup created.",
     "backupToast": "Backup successfully created",
     "restoreToast": "Save restored successfully"
+  },
+  "gamepad": {
+    "select": "선택",
+    "back": "뒤로",
+    "section": "섹션",
+    "play": "플레이",
+    "type": "입력",
+    "delete": "삭제",
+    "space": "스페이스",
+    "done": "완료",
+    "cancel": "취소",
+    "page": "페이지"
   }
 }

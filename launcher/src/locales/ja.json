@@ -21,15 +21,22 @@
     "runtimeVersion": "Runtime ReXGlue {version}"
   },
   "play": {
-    "eyebrow": "macOS ネイティブ移植版 · Gears of War 3",
-    "lede": "お持ちのゲームを Apple Silicon 向けに再コンパイル。",
+    "eyebrow": "{platform} ネイティブ移植版 · Gears of War 3",
+    "lede": "お持ちのゲームを {target} 向けに再コンパイル。",
     "launch": "プレイ",
     "launching": "起動中",
     "mode": "キャンペーン",
     "install": "インストール",
     "installSub": "ゲームファイルを設定",
     "running": "プレイ中",
-    "runtimeWillInstall": "先にランタイムをインストールします"
+    "runtimeWillInstall": "先にランタイムをインストールします",
+    "building": "インストール中",
+    "buildingSub": "このコンピュータ向けにゲームをビルドしています",
+    "installRuntime": "インストール",
+    "installRuntimeSub": "このコンピュータ向けにゲームをビルド · 数分",
+    "update": "更新",
+    "updateLinkSub": "数秒",
+    "updateBuildSub": "約 2 分"
   },
   "status": {
     "gameFiles": "ゲームファイル",
@@ -41,37 +48,46 @@
     "runtimeMissing": "ビルドが見つかりません",
     "player": "Player",
     "runtimeNotInstalled": "「プレイ」を押すとインストールされます",
-    "runtimeUpdate": "アップデートの準備完了。「プレイ」を押すとインストールされます"
+    "runtimeUpdate": "アップデートの準備完了。「プレイ」を押すとインストールされます",
+    "compiler": "コンパイラ",
+    "compilerChecking": "確認中…",
+    "compilerMissing": "未インストール",
+    "runtimeBuilding": "ビルド中…",
+    "runtimeNotBuilt": "未インストール",
+    "runtimeUpdateKit": "更新があります"
   },
-  "news": {
-    "title": "お知らせ",
-    "skeleton": "プロジェクトの最初の骨組み：ランタイム、マニフェスト、ランチャー。"
+  "releaseNotes": {
+    "title": "バージョン {version} の新機能",
+    "dismiss": "OK"
   },
   "install": {
     "title": "インストール",
-    "gameFolder": "ゲームフォルダー",
-    "gameFolderHelp": "{file} が入っている、Gears of War 3 のコピーのフォルダーです。",
-    "noFolder": "フォルダーが選択されていません",
-    "choose": "選択…",
+    "gameFolder": "ゲーム",
+    "gameFolderHelp": "{file} が入っている Gears of War 3 のコピーのフォルダー、またはそのディスクイメージ (.iso) です。どちらもここにドロップできます。",
+    "noFolder": "ゲームが選択されていません",
+    "choose": "フォルダー…",
+    "chooseImage": "ディスクイメージ (.iso)…",
     "languageTitle": "言語と翻訳",
     "languageHelp": "翻訳済みゲームファイルのインストール先です。",
     "gameLanguage": "ゲームの言語",
     "translationTarget": "翻訳の保存先",
     "change": "変更…",
-    "notADirectory": "このパスはフォルダーではないか、存在しません。",
+    "notADirectory": "このパスは存在しません。",
+    "notADiscImage": "このファイルは Xbox 360 のディスクイメージではないか、破損しています。",
     "missingXex": "このフォルダーとその直下のフォルダーに default.xex がありません。",
+    "missingXexInImage": "このディスクイメージには default.xex がありません。",
     "invalidXex": "default.xex は有効な Xbox 360 実行ファイルではありません。",
     "ok": "Gears of War 3 · {versionName} 版 · Media ID {mediaId}",
     "unsupportedVersion": "この Gears of War 3 のエディション（Media ID {mediaId}）はまだサポートされていません。",
     "wrongGame": "これは Gears of War 3 ではありません（Title ID {titleId}）。",
-    "chooseFolderFirst": "先にゲームフォルダーを選択してください",
+    "chooseFolderFirst": "先にゲームを選択してください",
     "playerTitle": "Player Profile",
     "playerHelp": "Gamertag displayed in game lobbies, menus, and multiplayer.",
     "userName": "Gamertag / Username",
     "userNamePlaceholder": "User (up to 15 characters)",
     "defaultUserName": "User",
     "runtimeTitle": "ゲームランタイム",
-    "runtimeHelp": "ランチャーが起動する再コンパイル済みのゲームです。scripts/build.sh のビルドからインストールされ、新しいビルドがあれば更新されます。",
+    "runtimeHelp": "このコンピュータ向けに再コンパイルされたゲームです。初回はお持ちのゲームからランチャーがビルドし（数分）、プロジェクトの更新時にも再ビルドします。",
     "runtimeInstalled": "インストール済み・最新です。",
     "runtimeUpdate": "新しいビルドをインストールできます。",
     "runtimeNotInstalled": "まだインストールされていません。",
@@ -83,7 +99,22 @@
     "savesHelp": "キャンペーンのチェックポイントとプロフィールのフォルダです。変更するとセーブデータがそこへ移動します。",
     "savesConflict": "{folder} には既にセーブデータがあります。現在のセーブデータで置き換えますか？",
     "savesReplace": "置き換える",
-    "savesCancel": "キャンセル"
+    "savesCancel": "キャンセル",
+    "compilerTitle": "コンパイラ",
+    "compilerHelp": "ゲームはお持ちのコピーからこのコンピュータでビルドしたネイティブコードとして動作するため、ランチャーには C++ コンパイラが必要です。ない場合はランチャーがインストールします。",
+    "compilerChecking": "コンパイラを確認しています…",
+    "compilerReady": "準備完了: {version}",
+    "compilerUnusable": "{found} は使用できません: {problem}",
+    "compilerMissing": "コンパイラが見つかりません。",
+    "compilerInstallApple": "Apple の Command Line Tools をインストール",
+    "compilerInstallPackage": "clang をインストール",
+    "compilerInstalling": "コンパイラをインストールしています…",
+    "compilerWaitingApple": "Apple のウインドウに従って Command Line Tools をインストールしてください。インストール後、ランチャーは自動で続行します。",
+    "compilerCheckAgain": "再確認",
+    "compilerManual": "またはターミナルで次を実行:",
+    "runtimeNotBuilt": "まだビルドされていません: お持ちのゲームからの初回ビルドには数分かかります。",
+    "runtimeUpdateLink": "更新があります: 数秒でインストールされます。",
+    "runtimeUpdateBuild": "更新にはゲームの再ビルドが必要です: 約 2 分。"
   },
   "graphics": {
     "title": "グラフィック",
@@ -151,7 +182,9 @@
     "savesNested": "現在のフォルダの中にない（またはその逆でない）フォルダを選んでください。",
     "savesFailed": "セーブデータの移動に失敗しました: {detail}",
     "runtimeInstalled": "ゲームランタイムをインストールしました。",
-    "saveFailed": "設定を保存できませんでした: {detail}"
+    "saveFailed": "設定を保存できませんでした: {detail}",
+    "compilerInstalled": "コンパイラの準備完了: {version}",
+    "compilerInstallFailed": "コンパイラをインストールできませんでした: {detail}"
   },
   "log": {
     "title": "ゲームログ",
@@ -167,7 +200,34 @@
     "startFailed": "ゲームを起動できませんでした：{detail}",
     "installingRuntime": "ゲームランタイムをインストールしています…",
     "installFailed": "ランタイムのインストールに失敗しました: {detail}",
-    "savesUnavailable": "セーブデータのフォルダを利用できません: {detail}"
+    "savesUnavailable": "セーブデータのフォルダを利用できません: {detail}",
+    "buildPreparing": "ゲームのビルドを準備しています…",
+    "buildTranslating": "ゲームのコードを変換しています…",
+    "buildCompiling": "ゲームをコンパイルしています: {total} 個中 {done} 個",
+    "buildLinking": "ゲームをリンクしています…",
+    "buildInstalling": "ゲームをインストールしています…",
+    "buildNoCompiler": "ゲームのビルドには C++ コンパイラが必要です。インストールで導入してください。",
+    "buildNoKit": "このランチャーには、このシステムでゲームをビルドするキットがありません。",
+    "buildWrongKit": "ランチャーのキットはここでは使えません: {detail}",
+    "buildUnsupportedGame": "先にインストールで対応するゲームを選んでください。",
+    "buildNoSpace": "ゲームのビルドに必要な空き容量がありません: 必要 {needed} MB、空き {free} MB。",
+    "buildStepFailed": "ゲームのビルドが「{step}」で失敗しました: {summary}（完全なログ: {log}）",
+    "buildBusy": "ゲームはすでにビルド中か、実行中です。",
+    "buildStep": {
+      "preparing": "準備",
+      "translating": "コードの変換",
+      "compiling": "コンパイル",
+      "linking": "リンク",
+      "installing": "インストール"
+    }
+  },
+  "build": {
+    "title": "ゲームをビルドしています",
+    "failedTitle": "ゲームをビルドできませんでした",
+    "remaining": "残り約 {time}",
+    "estimating": "残り時間を計算しています…",
+    "retry": "再試行",
+    "openLog": "ログを表示"
   },
   "update": {
     "available": "{version} に更新",
@@ -199,5 +259,17 @@
     "resetToast": "Saves reset. Automatic backup created.",
     "backupToast": "Backup successfully created",
     "restoreToast": "Save restored successfully"
+  },
+  "gamepad": {
+    "select": "決定",
+    "back": "戻る",
+    "section": "セクション",
+    "play": "プレイ",
+    "type": "入力",
+    "delete": "削除",
+    "space": "スペース",
+    "done": "完了",
+    "cancel": "キャンセル",
+    "page": "ページ"
   }
 }

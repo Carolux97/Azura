@@ -8,11 +8,15 @@
 #include <iterator>
 #include <map>
 #include <memory>
+#include <span>
 #include <system_error>
 #include <vector>
 
 #include <rex/cvar.h>
+#include <rex/filesystem.h>
 #include <rex/filesystem/devices/host_path_device.h>
+#include <rex/filesystem/entry.h>
+#include <rex/filesystem/file.h>
 #include <rex/filesystem/vfs.h>
 #include <rex/logging.h>
 #include <rex/runtime.h>
@@ -229,6 +233,18 @@ bool ReadFile(const std::filesystem::path& path, std::vector<uint8_t>& out) {
   return true;
 }
 
+// Reads a game file through the runtime's file system, which serves it from the game folder or
+// from the disc image alike.
+bool ReadGameFile(rex::filesystem::Entry* entry, std::vector<uint8_t>& out) {
+  rex::filesystem::File* file = nullptr;
+  if (XFAILED(entry->Open(rex::filesystem::FileAccess::kFileReadData, &file)) || !file) return false;
+  out.resize(entry->size());
+  size_t read = 0;
+  const auto status = file->ReadSync(std::span<uint8_t>(out), 0, &read);
+  file->Destroy();
+  return XSUCCEEDED(status) && read == out.size();
+}
+
 }  // namespace
 
 int PatchMenus(Coalesced& coalesced) {
@@ -266,7 +282,12 @@ int PatchMenus(Coalesced& coalesced) {
 
 void InstallMenuPatches(rex::Runtime* runtime) {
   namespace fs = std::filesystem;
-  const fs::path cooked = runtime->game_data_root() / "GearGame" / "CookedXbox360";
+  auto* vfs = runtime->file_system();
+  rex::filesystem::Entry* cooked = vfs->ResolvePath(std::string(kGameMount) + "\\GearGame\\CookedXbox360");
+  if (!cooked) {
+    REXLOG_WARN("[Azura menu] The game has no GearGame\\CookedXbox360; no menu changes applied");
+    return;
+  }
   const fs::path cache_root = runtime->cache_root().empty() ? runtime->user_data_root() : runtime->cache_root();
   const fs::path overlay = cache_root / "menu_overlay";
   std::error_code ec;
@@ -278,11 +299,12 @@ void InstallMenuPatches(rex::Runtime* runtime) {
 
   std::vector<std::string> patched;
   int quit_option = -1;
-  for (const auto& entry : fs::directory_iterator(cooked, ec)) {
-    const std::string file_name = entry.path().filename().string();
-    if (Lower(file_name).rfind("coalesced_", 0) != 0 || Lower(entry.path().extension().string()) != ".bin") continue;
+  for (const auto& entry : cooked->children()) {
+    const std::string file_name = entry->name();
+    const std::string lower = Lower(file_name);
+    if (lower.rfind("coalesced_", 0) != 0 || !lower.ends_with(".bin")) continue;
     std::vector<uint8_t> data;
-    auto coalesced = ReadFile(entry.path(), data) ? ParseCoalesced(data) : std::nullopt;
+    auto coalesced = ReadGameFile(entry.get(), data) ? ParseCoalesced(data) : std::nullopt;
     if (!coalesced) {
       REXLOG_WARN("[Azura menu] {} is not a coalesced file the menu patch understands; left as is", file_name);
       continue;
@@ -306,7 +328,6 @@ void InstallMenuPatches(rex::Runtime* runtime) {
     return;
   }
 
-  auto* vfs = runtime->file_system();
   auto device = std::make_unique<rex::filesystem::HostPathDevice>(kOverlayMount, overlay, true);
   if (!device->Initialize() || !vfs->RegisterDevice(std::move(device))) {
     REXLOG_ERROR("[Azura menu] Cannot mount {}", overlay.string());

@@ -21,15 +21,22 @@
     "runtimeVersion": "Runtime ReXGlue {version}"
   },
   "play": {
-    "eyebrow": "Port nativo per macOS · Gears of War 3",
-    "lede": "La tua copia del gioco, ricompilata per Apple Silicon.",
+    "eyebrow": "Port nativo per {platform} · Gears of War 3",
+    "lede": "La tua copia del gioco, ricompilata per {target}.",
     "launch": "Gioca",
     "launching": "Avvio",
     "mode": "Campagna",
     "install": "Installa",
     "installSub": "Configura i file di gioco",
     "running": "In gioco",
-    "runtimeWillInstall": "Installa prima il runtime"
+    "runtimeWillInstall": "Installa prima il runtime",
+    "building": "INSTALLAZIONE",
+    "buildingSub": "Il gioco viene costruito per questo computer",
+    "installRuntime": "INSTALLA",
+    "installRuntimeSub": "Costruisce il gioco per questo computer · qualche minuto",
+    "update": "AGGIORNA",
+    "updateLinkSub": "Pochi secondi",
+    "updateBuildSub": "Circa due minuti"
   },
   "status": {
     "gameFiles": "File di gioco",
@@ -41,37 +48,46 @@
     "runtimeMissing": "Nessuna compilazione trovata",
     "player": "Giocatore",
     "runtimeNotInstalled": "Si installerà premendo Gioca",
-    "runtimeUpdate": "Aggiornamento pronto, si installerà premendo Gioca"
+    "runtimeUpdate": "Aggiornamento pronto, si installerà premendo Gioca",
+    "compiler": "Compilatore",
+    "compilerChecking": "Verifica…",
+    "compilerMissing": "Non installato",
+    "runtimeBuilding": "In costruzione…",
+    "runtimeNotBuilt": "Non installato",
+    "runtimeUpdateKit": "Aggiornamento disponibile"
   },
-  "news": {
-    "title": "Novità",
-    "skeleton": "Prima struttura del progetto: runtime, manifest e launcher."
+  "releaseNotes": {
+    "title": "Novità della versione {version}",
+    "dismiss": "Ho capito"
   },
   "install": {
     "title": "Installazione",
-    "gameFolder": "Cartella del gioco",
-    "gameFolderHelp": "La cartella della tua copia di Gears of War 3, quella che contiene {file}.",
-    "noFolder": "Nessuna cartella selezionata",
-    "choose": "Scegli…",
+    "gameFolder": "Gioco",
+    "gameFolderHelp": "La cartella della tua copia di Gears of War 3 (quella che contiene {file}) o la sua immagine disco (.iso). Puoi anche trascinare qui l'una o l'altra.",
+    "noFolder": "Nessun gioco selezionato",
+    "choose": "Cartella…",
+    "chooseImage": "Immagine disco (.iso)…",
     "languageTitle": "Lingua e traduzione",
     "languageHelp": "Dove installare i file tradotti del gioco.",
     "gameLanguage": "Lingua del gioco",
     "translationTarget": "Destinazione della traduzione",
     "change": "Cambia…",
-    "notADirectory": "Questo percorso non è una cartella o non esiste più.",
+    "notADirectory": "Questo percorso non esiste più.",
+    "notADiscImage": "Questo file non è un'immagine disco Xbox 360, oppure è danneggiato.",
     "missingXex": "Nessun default.xex in questa cartella né nelle sue sottocartelle dirette.",
+    "missingXexInImage": "Questa immagine disco non contiene default.xex.",
     "invalidXex": "default.xex non è un eseguibile Xbox 360 valido.",
     "ok": "Gears of War 3 · Edizione {versionName} · Media ID {mediaId}",
     "unsupportedVersion": "Questa edizione di Gears of War 3 (Media ID {mediaId}) non è ancora supportata.",
     "wrongGame": "Questo non è Gears of War 3 (Title ID {titleId}).",
-    "chooseFolderFirst": "Scegli prima la cartella del gioco",
+    "chooseFolderFirst": "Scegli prima il gioco",
     "playerTitle": "Profilo giocatore",
     "playerHelp": "Gamertag visualizzato nelle lobby, nei menu e nel multigiocatore.",
     "userName": "Gamertag / Nome utente",
     "userNamePlaceholder": "User (max 15 caratteri)",
     "defaultUserName": "User",
     "runtimeTitle": "Runtime del gioco",
-    "runtimeHelp": "Il gioco ricompilato che avvia il launcher. Viene installato dalla compilazione di scripts/build.sh e aggiornato quando ce n'è una più recente.",
+    "runtimeHelp": "Il gioco ricompilato per questo computer. La prima volta il launcher lo costruisce dalla tua copia del gioco (qualche minuto), e di nuovo quando il progetto lo aggiorna.",
     "runtimeInstalled": "Installato e aggiornato.",
     "runtimeUpdate": "Una compilazione più recente è pronta da installare.",
     "runtimeNotInstalled": "Non ancora installato.",
@@ -83,7 +99,22 @@
     "savesHelp": "Cartella dei checkpoint della campagna e del profilo. Cambiandola, i salvataggi vengono spostati lì.",
     "savesConflict": "{folder} contiene già dei salvataggi. Sostituirli con i salvataggi attuali?",
     "savesReplace": "Sostituisci",
-    "savesCancel": "Annulla"
+    "savesCancel": "Annulla",
+    "compilerTitle": "Compilatore",
+    "compilerHelp": "Il gioco gira come codice nativo compilato su questo computer dalla tua copia, quindi il launcher ha bisogno di un compilatore C++. Se manca, lo installa.",
+    "compilerChecking": "Verifica del compilatore…",
+    "compilerReady": "Pronto: {version}",
+    "compilerUnusable": "{found} non è utilizzabile: {problem}",
+    "compilerMissing": "Nessun compilatore trovato.",
+    "compilerInstallApple": "Installa i Command Line Tools di Apple",
+    "compilerInstallPackage": "Installa clang",
+    "compilerInstalling": "Installazione del compilatore…",
+    "compilerWaitingApple": "Segui la finestra di Apple per installare i Command Line Tools. Il launcher prosegue da solo una volta installati.",
+    "compilerCheckAgain": "Verifica di nuovo",
+    "compilerManual": "Oppure esegui questo in un terminale:",
+    "runtimeNotBuilt": "Non ancora costruito: la prima costruzione dalla tua copia del gioco richiede qualche minuto.",
+    "runtimeUpdateLink": "È pronto un aggiornamento: si installa in pochi secondi.",
+    "runtimeUpdateBuild": "Un aggiornamento richiede di ricostruire il gioco: circa due minuti."
   },
   "graphics": {
     "title": "Grafica",
@@ -151,7 +182,9 @@
     "savesNested": "Scegli una cartella che non sia dentro quella attuale (né viceversa).",
     "savesFailed": "Spostamento dei salvataggi non riuscito: {detail}",
     "runtimeInstalled": "Runtime del gioco installato.",
-    "saveFailed": "Impossibile salvare le impostazioni: {detail}"
+    "saveFailed": "Impossibile salvare le impostazioni: {detail}",
+    "compilerInstalled": "Compilatore pronto: {version}",
+    "compilerInstallFailed": "Impossibile installare il compilatore: {detail}"
   },
   "log": {
     "title": "Registro del gioco",
@@ -167,7 +200,34 @@
     "startFailed": "Impossibile avviare il gioco: {detail}",
     "installingRuntime": "Installazione del runtime del gioco…",
     "installFailed": "Installazione del runtime non riuscita: {detail}",
-    "savesUnavailable": "La cartella dei salvataggi non è disponibile: {detail}"
+    "savesUnavailable": "La cartella dei salvataggi non è disponibile: {detail}",
+    "buildPreparing": "Preparazione della costruzione del gioco…",
+    "buildTranslating": "Traduzione del codice del gioco…",
+    "buildCompiling": "Compilazione del gioco: {done} file su {total}",
+    "buildLinking": "Collegamento del gioco…",
+    "buildInstalling": "Installazione del gioco…",
+    "buildNoCompiler": "Per costruire il gioco serve un compilatore C++: installalo in Installazione.",
+    "buildNoKit": "Questo launcher non ha un kit per costruire il gioco su questo sistema.",
+    "buildWrongKit": "Il kit del launcher non è utilizzabile qui: {detail}",
+    "buildUnsupportedGame": "Scegli prima una copia del gioco supportata in Installazione.",
+    "buildNoSpace": "Spazio libero insufficiente per costruire il gioco: servono {needed} MB, liberi {free} MB.",
+    "buildStepFailed": "La costruzione del gioco non è riuscita durante «{step}»: {summary} (log completo: {log})",
+    "buildBusy": "Il gioco è già in costruzione o in esecuzione.",
+    "buildStep": {
+      "preparing": "preparazione",
+      "translating": "traduzione del codice",
+      "compiling": "compilazione",
+      "linking": "collegamento",
+      "installing": "installazione"
+    }
+  },
+  "build": {
+    "title": "Costruzione del gioco",
+    "failedTitle": "Non è stato possibile costruire il gioco",
+    "remaining": "circa {time} rimanenti",
+    "estimating": "stima del tempo rimanente…",
+    "retry": "Riprova",
+    "openLog": "Mostra il log"
   },
   "update": {
     "available": "Aggiorna a {version}",
@@ -199,5 +259,17 @@
     "resetToast": "Saves reset. Automatic backup created.",
     "backupToast": "Backup successfully created",
     "restoreToast": "Save restored successfully"
+  },
+  "gamepad": {
+    "select": "Seleziona",
+    "back": "Indietro",
+    "section": "Sezione",
+    "play": "Gioca",
+    "type": "Scrivi",
+    "delete": "Cancella",
+    "space": "Spazio",
+    "done": "Fatto",
+    "cancel": "Annulla",
+    "page": "Pagina"
   }
 }

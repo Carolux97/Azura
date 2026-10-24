@@ -79,18 +79,22 @@
       <!-- PLAY -->
       <section class="view is-active" data-view="play" aria-labelledby="play-title">
         <header class="hero">
-          <p class="eyebrow" data-i18n="play.eyebrow"></p>
+          <!-- Both name the system the launcher runs on; renderPlay() fills them. -->
+          <p class="eyebrow" id="play-eyebrow"></p>
           <h1 id="play-title" class="wordmark">AZURA</h1>
-          <p class="lede" data-i18n="play.lede"></p>
+          <p class="lede" id="play-lede"></p>
         </header>
 
         <div class="play-row">
           <!-- Its label and action depend on the installation: "Play" when the game files are set,
                "Install" (which opens the Installation view) when they are not. See renderPlay(). -->
-          <button class="btn-launch" id="launch">
-            <span class="btn-launch-label"></span>
-            <span class="btn-launch-sub"></span>
-          </button>
+          <!-- The frame around it draws its focus: the button's cut corners clip anything outside it. -->
+          <div class="launch-frame">
+            <button class="btn-launch" id="launch">
+              <span class="btn-launch-label"></span>
+              <span class="btn-launch-sub"></span>
+            </button>
+          </div>
           <div class="status-list">
             <div class="status" id="status-game" data-state="warn">
               <span class="dot"></span>
@@ -100,6 +104,10 @@
               <span class="dot"></span>
               <div><strong data-i18n="status.player"></strong><span class="status-detail" id="status-player-detail"></span></div>
             </div>
+            <div class="status" id="status-compiler" data-state="warn">
+              <span class="dot"></span>
+              <div><strong data-i18n="status.compiler"></strong><span class="status-detail"></span></div>
+            </div>
             <div class="status" id="status-runtime" data-state="warn">
               <span class="dot"></span>
               <div><strong data-i18n="status.runtime"></strong><span class="status-detail"></span></div>
@@ -108,6 +116,21 @@
               <span class="dot"></span>
               <div><strong data-i18n="status.gpu"></strong><span class="status-detail" id="status-gpu-detail"></span></div>
             </div>
+          </div>
+        </div>
+
+        <!-- A runtime build from the kit: its step, a bar and the time left, or why it failed;
+             renderBuildCard() fills it. -->
+        <div class="panel build-card" id="build-card" hidden>
+          <div class="build-card-head">
+            <h2 class="panel-title" id="build-card-title"></h2>
+            <span class="build-card-percent" id="build-card-percent"></span>
+          </div>
+          <div class="build-bar"><span id="build-card-bar"></span></div>
+          <p class="help build-card-detail" id="build-card-detail"></p>
+          <div class="build-card-actions" id="build-card-actions" hidden>
+            <button class="btn btn-small btn-primary" id="build-card-retry" data-i18n="build.retry"></button>
+            <button class="btn btn-small" id="build-card-log" data-i18n="build.openLog"></button>
           </div>
         </div>
 
@@ -121,12 +144,14 @@
           <pre class="log-body" id="game-log-body"></pre>
         </div>
 
-        <div class="panel news">
-          <h2 class="panel-title" data-i18n="news.title"></h2>
-          <article class="news-item">
-            <time datetime="2026-10-16"></time>
-            <p data-i18n="news.skeleton"></p>
-          </article>
+        <!-- What this launcher version brings, once after it is installed or updated (from
+             launcher/CHANGELOG.md); renderReleaseNotes() fills it. -->
+        <div class="panel release-notes" id="release-notes" hidden>
+          <div class="release-notes-head">
+            <h2 class="panel-title" id="release-notes-title"></h2>
+            <button class="btn btn-small" id="release-notes-dismiss" data-pad-back data-i18n="releaseNotes.dismiss"></button>
+          </div>
+          <ul class="release-notes-list" id="release-notes-list"></ul>
         </div>
       </section>
 
@@ -139,6 +164,7 @@
           <div class="path-row">
             <input class="path" id="game-path" type="text" readonly data-i18n-attr="placeholder:install.noFolder">
             <button class="btn" id="pick-game" data-i18n="install.choose"></button>
+            <button class="btn" id="pick-game-image" data-i18n="install.chooseImage"></button>
           </div>
           <!-- Result of checking the folder; renderInstall() fills it. -->
           <p class="check" id="game-check" hidden></p>
@@ -151,6 +177,21 @@
             <p class="check" id="runtime-check"></p>
             <button class="btn" id="install-runtime"></button>
           </div>
+          <div class="build-bar" id="install-build-bar" hidden><span></span></div>
+        </div>
+        <!-- The C++ compiler the runtime is built with; renderCompiler() fills it. -->
+        <div class="panel">
+          <h2 class="panel-title" data-i18n="install.compilerTitle"></h2>
+          <p class="help" data-i18n="install.compilerHelp"></p>
+          <p class="check" id="compiler-check"></p>
+          <div class="compiler-actions">
+            <button class="btn btn-primary" id="install-compiler" hidden></button>
+            <button class="btn" id="recheck-compiler" data-i18n="install.compilerCheckAgain"></button>
+          </div>
+          <p class="help compiler-manual" id="compiler-manual" hidden>
+            <span data-i18n="install.compilerManual"></span>
+            <code id="compiler-manual-command"></code>
+          </p>
         </div>
         <div class="panel">
           <h2 class="panel-title" data-i18n="install.savesTitle"></h2>
@@ -163,7 +204,7 @@
           <div class="path-row" id="saves-conflict" hidden>
             <p class="check" data-state="error" id="saves-conflict-text"></p>
             <button class="btn" id="saves-replace" data-i18n="install.savesReplace"></button>
-            <button class="btn" id="saves-cancel" data-i18n="install.savesCancel"></button>
+            <button class="btn" id="saves-cancel" data-pad-back data-i18n="install.savesCancel"></button>
           </div>
         </div>
         <div class="panel">
@@ -182,7 +223,7 @@
           <div class="field-grid">
             <label class="field">
               <span data-i18n="install.userName"></span>
-              <input class="path" id="player-name" type="text" maxlength="15" data-i18n-attr="placeholder:install.userNamePlaceholder">
+              <input class="path" id="player-name" type="text" maxlength="15" data-text-rule="gamertag" data-i18n-attr="placeholder:install.userNamePlaceholder">
             </label>
           </div>
         </div>
@@ -310,6 +351,10 @@
       </section>
     </main>
   </div>
+
+  <!-- The controller buttons and what they do, while a controller is in use (gamepadNav.js). Outside
+       the shell, so it stays above the on-screen keyboard. -->
+  <div class="pad-hints" id="pad-hints" hidden></div>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 

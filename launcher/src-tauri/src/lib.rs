@@ -4,14 +4,19 @@
 //! window that shows it and exposes the commands the interface calls through `invoke`.
 
 mod achievements;
+mod builder;
+mod disc_image;
 mod game_folder;
+mod gamepad;
 mod install;
+mod release_notes;
 #[cfg(test)]
 mod test_support;
 mod runtime;
 mod saves;
 mod settings;
 mod system;
+mod toolchain;
 mod updater;
 mod versions;
 
@@ -24,6 +29,7 @@ use runtime::{GameProcess, LaunchError, LaunchFolders};
 use saves::{BackupInfo, SaveStatus, SavesError};
 use settings::{Settings, SettingsPaths};
 use system::SystemInfo;
+use toolchain::CompilerStatus;
 use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
 use updater::UpdateInfo;
@@ -36,6 +42,15 @@ use versions::Registry;
 #[tauri::command]
 async fn pick_game_folder(app: tauri::AppHandle) -> Option<FolderCheck> {
     let picked = app.dialog().file().blocking_pick_folder()?;
+    let path = picked.into_path().ok()?;
+    Some(game_folder::check_folder(&path, &Registry::bundled()))
+}
+
+/// Opens the native file picker for a disc image (`.iso`) of the game and checks it. Returns
+/// `None` when the user cancels. `async` for the same reason as `pick_game_folder`.
+#[tauri::command]
+async fn pick_game_image(app: tauri::AppHandle) -> Option<FolderCheck> {
+    let picked = app.dialog().file().add_filter("Xbox 360 disc image", &["iso"]).blocking_pick_file()?;
     let path = picked.into_path().ok()?;
     Some(game_folder::check_folder(&path, &Registry::bundled()))
 }
@@ -120,20 +135,136 @@ async fn get_achievements(
     Ok(achievements::build_state(&export, &export_dir, &unlocks, &languages))
 }
 
-/// Reports whether the runtime is installed and whether a newer build can be installed.
-#[tauri::command]
-async fn get_runtime_status(app: tauri::AppHandle) -> Result<RuntimeStatus, String> {
-    Ok(install::status(&runtime_dir(&app)?, install::find_build().as_deref()))
+/// Where the runtime comes from. A developer's explicit choice wins (`AZURA_RUNTIME_BUILD`, then
+/// `AZURA_KIT`); then a project build, when the launcher runs from a checkout that has one; then
+/// the player kit (bundled with the launcher, or the project's kit build), which is how players
+/// get it.
+enum RuntimeSource {
+    Build(std::path::PathBuf),
+    Kit(std::path::PathBuf),
+    None,
 }
 
-/// Installs (or updates) the runtime from the project's build (see `install.rs`). `async`: it
-/// copies about a hundred megabytes.
+fn runtime_source(app: &tauri::AppHandle) -> RuntimeSource {
+    if std::env::var_os("AZURA_RUNTIME_BUILD").is_some() {
+        if let Some(build) = install::find_build() {
+            return RuntimeSource::Build(build);
+        }
+    }
+    if std::env::var_os(builder::KIT_ENV).is_none() {
+        if let Some(build) = install::find_build() {
+            return RuntimeSource::Build(build);
+        }
+    }
+    let resources = app.path().resource_dir().ok();
+    builder::find_kit(resources.as_deref()).map(RuntimeSource::Kit).unwrap_or(RuntimeSource::None)
+}
+
+/// The game build in the saved game folder, for building the runtime from it: its folder and its
+/// entry in the registry.
+fn game_build(app: &tauri::AppHandle) -> Result<(std::path::PathBuf, versions::KnownVersion), builder::BuildError> {
+    let settings = settings_paths(app).and_then(|paths| paths.load()).map_err(builder::BuildError::Io)?;
+    let folder = settings.game_folder.ok_or(builder::BuildError::UnsupportedGame)?;
+    let registry = Registry::bundled();
+    let FolderCheck::Ok { folder, version_id, .. } = game_folder::check_folder(Path::new(&folder), &registry) else {
+        return Err(builder::BuildError::UnsupportedGame);
+    };
+    let version = registry.versions.into_iter().find(|version| version.id == version_id).ok_or(builder::BuildError::UnsupportedGame)?;
+    Ok((std::path::PathBuf::from(folder), version))
+}
+
+/// The work folder the runtime of a game build is built in.
+fn work_dir(app: &tauri::AppHandle, version: &versions::KnownVersion) -> Result<std::path::PathBuf, String> {
+    Ok(app.path().app_data_dir().map_err(|e| e.to_string())?.join("build").join(&version.id))
+}
+
+/// Reports whether the runtime is installed and whether it has to be installed again: from a
+/// project build, when the build is newer; from the kit, when the installed runtime was not built
+/// from this kit for the game in the saved folder.
 #[tauri::command]
-async fn install_runtime(app: tauri::AppHandle) -> Result<RuntimeStatus, String> {
-    let build = install::find_build().ok_or_else(|| "no runtime build found".to_string())?;
+async fn get_runtime_status(app: tauri::AppHandle) -> Result<RuntimeStatus, String> {
     let dir = runtime_dir(&app)?;
-    install::install(&build, &dir)?;
-    Ok(install::status(&dir, Some(&build)))
+    match runtime_source(&app) {
+        RuntimeSource::Build(build) => Ok(install::status(&dir, Some(&build))),
+        RuntimeSource::None => Ok(install::status(&dir, None)),
+        RuntimeSource::Kit(kit) => {
+            let mut status = install::status(&dir, None);
+            status.source = "kit";
+            status.build_found = true;
+            let kind = match (builder::read_kit(&kit), game_build(&app)) {
+                (Ok(kit), Ok((_, version))) => {
+                    let work = work_dir(&app, &version)?;
+                    let state = builder::read_state(&work);
+                    // Installed means built here from the kit for this game: a runtime folder
+                    // that holds an executable from elsewhere (a copied project build) is not.
+                    status.installed &= state.as_ref().is_some_and(|state| state.xex_sha256 == version.xex_sha256);
+                    let kept = state.as_ref().is_some_and(|state| builder::objects_kept(&work, state));
+                    let compiler = toolchain::compiler_version().unwrap_or_default();
+                    builder::update_kind(state.as_ref(), &kit.keys, &version.xex_sha256, &compiler, status.installed, kept)
+                }
+                _ => builder::UpdateKind::Build,
+            };
+            status.update_available = kind != builder::UpdateKind::None;
+            status.update_kind = match kind {
+                builder::UpdateKind::None => None,
+                builder::UpdateKind::Link => Some("link"),
+                builder::UpdateKind::Build => Some("build"),
+            };
+            Ok(status)
+        }
+    }
+}
+
+/// Only one runtime build runs at a time.
+static BUILDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Installs (or updates) the runtime: copies a project build (see `install.rs`), or builds it here
+/// from the player kit and the player's default.xex (see `builder.rs`), sending its progress as
+/// `runtime-build-progress` events. `async`: a build takes minutes.
+#[tauri::command]
+async fn install_runtime(
+    app: tauri::AppHandle,
+    process: tauri::State<'_, GameProcess>,
+) -> Result<RuntimeStatus, builder::BuildError> {
+    if process.is_running() {
+        return Err(builder::BuildError::AlreadyRunning);
+    }
+    let dir = runtime_dir(&app).map_err(builder::BuildError::Io)?;
+    match runtime_source(&app) {
+        RuntimeSource::Build(build) => {
+            install::install(&build, &dir).map_err(builder::BuildError::Io)?;
+        }
+        RuntimeSource::Kit(kit) => {
+            let (game, version) = game_build(&app)?;
+            let work = work_dir(&app, &version).map_err(builder::BuildError::Io)?;
+            let events = app.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                let folders = builder::BuildFolders { kit: &kit, game: &game, work: &work, runtime: &dir };
+                builder::build(&folders, &version.manifest, &version.xex_sha256, &events, &BUILDING)
+            })
+            .await
+            .map_err(|e| builder::BuildError::Io(e.to_string()))??;
+        }
+        RuntimeSource::None => return Err(builder::BuildError::NoKit),
+    }
+    get_runtime_status(app).await.map_err(builder::BuildError::Io)
+}
+
+/// Shows a failed build's log in the system's file manager. Only a `build.log` inside the
+/// launcher's build folder is shown: the path comes from the interface.
+#[tauri::command]
+async fn show_build_log(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let builds = app.path().app_data_dir().map_err(|e| e.to_string())?.join("build");
+    let log = std::path::PathBuf::from(&path).canonicalize().map_err(|e| e.to_string())?;
+    let builds = builds.canonicalize().map_err(|e| e.to_string())?;
+    if !log.starts_with(&builds) || log.file_name().and_then(|name| name.to_str()) != Some("build.log") {
+        return Err(format!("not a build log: {path}"));
+    }
+    #[cfg(target_os = "macos")]
+    let status = std::process::Command::new("open").arg("-R").arg(&log).status();
+    #[cfg(not(target_os = "macos"))]
+    let status = std::process::Command::new("xdg-open").arg(log.parent().unwrap_or(&log)).status();
+    status.map(|_| ()).map_err(|e| e.to_string())
 }
 
 /// Starts the game with the chosen saves folder. Its output and its end arrive as `game-output`
@@ -246,10 +377,31 @@ async fn save_settings(app: tauri::AppHandle, settings: Settings) -> Result<(), 
     settings_paths(&app)?.save(&settings)
 }
 
+/// Whether there is a working C++ compiler to build the runtime with, and how to install one
+/// otherwise (see `toolchain.rs`). `async`: it compiles a small test program.
+#[tauri::command]
+async fn get_compiler_status() -> CompilerStatus {
+    toolchain::status()
+}
+
+/// Installs the compiler: opens Apple's Command Line Tools dialog on macOS (the interface then
+/// checks the status until they are there), or runs the package manager on Linux and waits.
+#[tauri::command]
+async fn install_compiler() -> Result<(), String> {
+    toolchain::install()
+}
+
 /// Describes this Mac (chip, memory), for the status lines and the "Auto" preset.
 #[tauri::command]
 async fn get_system_info() -> SystemInfo {
     system::system_info()
+}
+
+/// What this launcher version brings, for the "What's new" panel (see `release_notes.rs`).
+/// `None` when the changelog has no section for it.
+#[tauri::command]
+async fn get_release_notes(app: tauri::AppHandle) -> Option<release_notes::ReleaseNotes> {
+    release_notes::current(&app.package_info().version.to_string())
 }
 
 /// Checks whether a newer launcher version is published (see `updater.rs`).
@@ -273,10 +425,12 @@ pub fn run() {
         .manage(GameProcess::default())
         .invoke_handler(tauri::generate_handler![
             pick_game_folder,
+            pick_game_image,
             check_game_folder,
             load_settings,
             save_settings,
             get_system_info,
+            get_release_notes,
             get_runtime_status,
             install_runtime,
             launch_game,
@@ -290,9 +444,18 @@ pub fn run() {
             create_save_backup,
             restore_save_backup,
             open_saves_folder,
-            get_achievements
+            get_achievements,
+            get_compiler_status,
+            install_compiler,
+            show_build_log
         ])
         .setup(|app| {
+            // Controllers navigate the interface (gamepad.rs).
+            gamepad::spawn(app.handle().clone());
+            // A runtime install the launcher was closed in the middle of is finished first.
+            if let Ok(dir) = runtime_dir(app.handle()) {
+                builder::recover(&dir);
+            }
             // Debug builds log to the terminal that started them; release builds stay quiet.
             if cfg!(debug_assertions) {
                 app.handle().plugin(

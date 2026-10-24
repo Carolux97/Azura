@@ -21,15 +21,22 @@
     "runtimeVersion": "Runtime ReXGlue {version}"
   },
   "play": {
-    "eyebrow": "Native macOS port · Gears of War 3",
-    "lede": "Your copy of the game, recompiled for Apple Silicon.",
+    "eyebrow": "Native {platform} port · Gears of War 3",
+    "lede": "Your copy of the game, recompiled for {target}.",
     "launch": "Play",
     "launching": "Starting",
     "mode": "Campaign",
     "install": "Install",
     "installSub": "Set up the game files",
     "running": "Playing",
-    "runtimeWillInstall": "Installs the runtime first"
+    "runtimeWillInstall": "Installs the runtime first",
+    "building": "INSTALLING",
+    "buildingSub": "The game is being built for this computer",
+    "installRuntime": "INSTALL",
+    "installRuntimeSub": "Builds the game for this computer · a few minutes",
+    "update": "UPDATE",
+    "updateLinkSub": "A few seconds",
+    "updateBuildSub": "About two minutes"
   },
   "status": {
     "gameFiles": "Game files",
@@ -41,18 +48,25 @@
     "gpuValue": "{machine} · Vulkan on Metal",
     "runtimeMissing": "No build found",
     "runtimeNotInstalled": "Installs when you press Play",
-    "runtimeUpdate": "Update ready, installs when you press Play"
+    "runtimeUpdate": "Update ready, installs when you press Play",
+    "compiler": "Compiler",
+    "compilerChecking": "Checking…",
+    "compilerMissing": "Not installed",
+    "runtimeBuilding": "Building…",
+    "runtimeNotBuilt": "Not installed",
+    "runtimeUpdateKit": "Update available"
   },
-  "news": {
-    "title": "News",
-    "skeleton": "First project skeleton: runtime, manifest and launcher."
+  "releaseNotes": {
+    "title": "What's new in {version}",
+    "dismiss": "Got it"
   },
   "install": {
     "title": "Installation",
-    "gameFolder": "Game folder",
-    "gameFolderHelp": "The folder of your Gears of War 3 dump, the one that contains {file}.",
-    "noFolder": "No folder selected",
-    "choose": "Choose…",
+    "gameFolder": "Game",
+    "gameFolderHelp": "The folder of your Gears of War 3 dump (the one that contains {file}) or its disc image (.iso). You can also drop either here.",
+    "noFolder": "No game selected",
+    "choose": "Folder…",
+    "chooseImage": "Disc image (.iso)…",
     "languageTitle": "Game language",
     "languageHelp": "Language for text and voice audio detected in your game folder.",
     "gameLanguage": "Game language",
@@ -63,15 +77,17 @@
     "userName": "Gamertag / Username",
     "userNamePlaceholder": "User (up to 15 characters)",
     "defaultUserName": "User",
-    "notADirectory": "That path is not a folder, or it no longer exists.",
+    "notADirectory": "That path no longer exists.",
+    "notADiscImage": "That file is not an Xbox 360 disc image, or it is damaged.",
     "missingXex": "No default.xex in this folder or in the folders right inside it.",
+    "missingXexInImage": "This disc image has no default.xex.",
     "invalidXex": "default.xex is not a valid Xbox 360 executable.",
     "ok": "Gears of War 3 · {versionName} edition · Media ID {mediaId}",
     "unsupportedVersion": "This edition of Gears of War 3 (Media ID {mediaId}) is not supported yet.",
     "wrongGame": "This is not Gears of War 3 (Title ID {titleId}).",
-    "chooseFolderFirst": "Choose the game folder first",
+    "chooseFolderFirst": "Choose the game first",
     "runtimeTitle": "Game runtime",
-    "runtimeHelp": "The recompiled game the launcher starts. It is installed from the build made with scripts/build.sh and updated whenever there is a newer one.",
+    "runtimeHelp": "The game recompiled for this computer. The first time, the launcher builds it from your own copy of the game (a few minutes), and again when the project updates it.",
     "runtimeInstalled": "Installed and up to date.",
     "runtimeUpdate": "A newer build is ready to install.",
     "runtimeNotInstalled": "Not installed yet.",
@@ -83,7 +99,22 @@
     "savesHelp": "Folder for your campaign checkpoints and profile. Changing it moves your saves there.",
     "savesConflict": "{folder} already holds saved games. Replace them with your current saves?",
     "savesReplace": "Replace",
-    "savesCancel": "Cancel"
+    "savesCancel": "Cancel",
+    "compilerTitle": "Compiler",
+    "compilerHelp": "The game runs as native code built on this computer from your own copy, so the launcher needs a C++ compiler. It installs one if it is missing.",
+    "compilerChecking": "Checking the compiler…",
+    "compilerReady": "Ready: {version}",
+    "compilerUnusable": "{found} cannot be used: {problem}",
+    "compilerMissing": "No compiler found.",
+    "compilerInstallApple": "Install Apple's Command Line Tools",
+    "compilerInstallPackage": "Install clang",
+    "compilerInstalling": "Installing the compiler…",
+    "compilerWaitingApple": "Follow Apple's window to install the Command Line Tools. The launcher goes on by itself once they are installed.",
+    "compilerCheckAgain": "Check again",
+    "compilerManual": "Or run this in a terminal:",
+    "runtimeNotBuilt": "Not built yet: the first build from your copy of the game takes a few minutes.",
+    "runtimeUpdateLink": "An update is ready: it installs in a few seconds.",
+    "runtimeUpdateBuild": "An update needs the game to be built again: about two minutes."
   },
   "graphics": {
     "title": "Graphics",
@@ -151,7 +182,9 @@
     "savesNested": "Choose a folder that is not inside the current one (or the other way round).",
     "savesFailed": "Moving the saved games failed: {detail}",
     "runtimeInstalled": "Game runtime installed.",
-    "saveFailed": "Settings could not be saved: {detail}"
+    "saveFailed": "Settings could not be saved: {detail}",
+    "compilerInstalled": "Compiler ready: {version}",
+    "compilerInstallFailed": "The compiler could not be installed: {detail}"
   },
   "log": {
     "title": "Game log",
@@ -167,7 +200,34 @@
     "startFailed": "The game could not start: {detail}",
     "installingRuntime": "Installing the game runtime…",
     "installFailed": "Installing the runtime failed: {detail}",
-    "savesUnavailable": "The saved games folder is not available: {detail}"
+    "savesUnavailable": "The saved games folder is not available: {detail}",
+    "buildPreparing": "Preparing to build the game…",
+    "buildTranslating": "Translating the game's code…",
+    "buildCompiling": "Compiling the game: {done} of {total} files",
+    "buildLinking": "Linking the game…",
+    "buildInstalling": "Installing the game…",
+    "buildNoCompiler": "A C++ compiler is needed to build the game: install it in Installation.",
+    "buildNoKit": "This launcher has no kit to build the game with on this system.",
+    "buildWrongKit": "The launcher's kit cannot be used here: {detail}",
+    "buildUnsupportedGame": "Choose a supported copy of the game in Installation first.",
+    "buildNoSpace": "Not enough free space to build the game: {needed} MB needed, {free} MB free.",
+    "buildStepFailed": "Building the game failed while {step}: {summary} (full log: {log})",
+    "buildBusy": "The game is being built already, or it is running.",
+    "buildStep": {
+      "preparing": "preparing",
+      "translating": "translating the code",
+      "compiling": "compiling",
+      "linking": "linking",
+      "installing": "installing"
+    }
+  },
+  "build": {
+    "title": "Building the game",
+    "failedTitle": "The game could not be built",
+    "remaining": "about {time} left",
+    "estimating": "estimating the time left…",
+    "retry": "Try again",
+    "openLog": "Show the log"
   },
   "update": {
     "available": "Update to {version}",
@@ -199,6 +259,18 @@
     "resetToast": "Saves reset. Automatic backup created.",
     "backupToast": "Backup successfully created",
     "restoreToast": "Save restored successfully"
+  },
+  "gamepad": {
+    "select": "Select",
+    "back": "Back",
+    "section": "Section",
+    "play": "Play",
+    "type": "Type",
+    "delete": "Delete",
+    "space": "Space",
+    "done": "Done",
+    "cancel": "Cancel",
+    "page": "Page"
   }
 }
 

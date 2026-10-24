@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 9b3cdf5..504176d 100644
+index 9b3cdf5..8153d5f 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -42,6 +42,13 @@ else()
@@ -16,6 +16,228 @@ index 9b3cdf5..504176d 100644
  if(NOT REXGLUE_USE_D3D12 AND NOT REXGLUE_USE_VULKAN)
      message(FATAL_ERROR "At least one graphics backend must be enabled (REXGLUE_USE_D3D12 or REXGLUE_USE_VULKAN)")
  endif()
+@@ -223,9 +230,13 @@ configure_file(
+ )
+ 
+ # Output directories (multi-config appends /<Config>/ automatically)
+-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${REXGLUE_ROOT}/out/${REX_PLATFORM}")
+-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${REXGLUE_ROOT}/out/${REX_PLATFORM}")
+-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${REXGLUE_ROOT}/out/${REX_PLATFORM}")
++# Where the SDK's libraries and tools are written. Two builds of the same tree (the SDK on its own
++# and as part of a project) need different folders, or they overwrite each other's files.
++set(REXGLUE_OUTPUT_DIR "${REXGLUE_ROOT}/out/${REX_PLATFORM}" CACHE PATH
++    "Folder the SDK's libraries and tools are written to")
++set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${REXGLUE_OUTPUT_DIR}")
++set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${REXGLUE_OUTPUT_DIR}")
++set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${REXGLUE_OUTPUT_DIR}")
+ 
+ # Sanitizer support for debugging memory corruption and undefined behavior
+ if(REXGLUE_ENABLE_SANITIZERS)
+diff --git a/cmake/rexglue_helpers.cmake b/cmake/rexglue_helpers.cmake
+index 41e6dce..1548018 100644
+--- a/cmake/rexglue_helpers.cmake
++++ b/cmake/rexglue_helpers.cmake
+@@ -1,8 +1,12 @@
+ #==========================================================
+ # rexglue_helpers.cmake
+ #
+-# Three helpers, each with a single responsibility:
++# Helpers, each with a single responsibility:
+ #   rexglue_apply_target_settings(<target>)        - common compile/platform flags
++#   rexglue_get_recomp_options(<var>)              - compile options of generated code
++#   rexglue_apply_recomp_settings(<target> <pch>)  - those options and the generated PCH
++#   rexglue_add_recomp_library(<name> ...)         - object library of generated code
++#   rexglue_add_host_sources(<target>)             - the SDK sources of a host application
+ #   rexglue_configure_target(<target>)             - host application
+ #   rexglue_configure_module_target(<target> ...)  - guest DLL module
+ #==========================================================
+@@ -63,20 +67,82 @@ function(rexglue_apply_target_settings target_name)
+ endfunction()
+ 
+ #==========================================================
+-# rexglue_configure_target(<target>) - Host application
++# rexglue_get_recomp_options(<out_var>) - Options of generated code
+ #
+-# Adds:
+-#   - SDL3 entry point source (windowed_app_main_sdl.cpp)
+-#   - ReXApp base class source (rex_app.cpp)
+-#   - Build-config define for the version stamp
+-#   - $ORIGIN RPATH on UNIX so the host finds librexruntime.so next to itself
+-#   - Windows POST_BUILD copy of TARGET_RUNTIME_DLLS and the FidelityFX DLLs.
+-#     Guest modules colocate with the host (see rexglue_configure_module_target),
+-#     so this single copy handles them transitively.
++# The compile options every file of generated code takes, on top of the
++# common ones: asynchronous exception handling on Windows (guest SEH scopes
++# emit __try/__except, which traps hardware faults only under it) and the
++# debug info level REXGLUE_RECOMP_DEBUG_INFO asks for.
+ #==========================================================
+-function(rexglue_configure_target target_name)
+-    cmake_parse_arguments(ARG "" "" "GPU_PLUGINS" ${ARGN})
++set(REXGLUE_RECOMP_DEBUG_INFO "line-tables-only" CACHE STRING
++    "Debug info level for generated code: line-tables-only, full, or none")
++
++function(rexglue_get_recomp_options out_var)
++    set(_options "")
++    if(WIN32)
++        if(MSVC)
++            list(APPEND _options /EHa)
++        elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
++            list(APPEND _options -fasync-exceptions)
++        endif()
++    endif()
++    if(REXGLUE_RECOMP_DEBUG_INFO STREQUAL "none")
++        list(APPEND _options $<$<CXX_COMPILER_ID:Clang,AppleClang,GNU>:-g0>)
++    elseif(REXGLUE_RECOMP_DEBUG_INFO STREQUAL "line-tables-only")
++        list(APPEND _options $<$<CXX_COMPILER_ID:Clang,AppleClang>:-gline-tables-only>)
++    endif()
++    set(${out_var} "${_options}" PARENT_SCOPE)
++endfunction()
++
++#==========================================================
++# rexglue_apply_recomp_settings(<target> <pch_header>) - Generated code settings
++#
++# The options of generated code and, unless <pch_header> is empty, its
++# precompiled header. The options go on the target as well as on the sources:
++# CMake compiles the header from its own cmake_pch.hxx.cxx, which carries none
++# of the source properties, and clang rejects a PCH whose EH mode disagrees
++# with the TU including it.
++#==========================================================
++function(rexglue_apply_recomp_settings target_name pch_header)
++    rexglue_get_recomp_options(_options)
++    target_compile_options(${target_name} PRIVATE ${_options})
++    if(pch_header)
++        target_precompile_headers(${target_name} PRIVATE "${pch_header}")
++    endif()
++endfunction()
++
++#==========================================================
++# rexglue_add_recomp_library(<name> SOURCES ... INCLUDE_DIRS ... [PCH <header>])
++#   - Object library of generated code
++#
++# The generated sources with everything they compile with: the runtime's
++# headers and definitions, the common flags, and the settings of generated
++# code (the options also go on the sources, so they hold for any target that
++# compiles them). Codegen's CMake builds the generated code with it; a project
++# can also use it to learn how generated code compiles without generating any.
++#==========================================================
++function(rexglue_add_recomp_library name)
++    cmake_parse_arguments(ARG "" "PCH" "SOURCES;INCLUDE_DIRS" ${ARGN})
++    rexglue_get_recomp_options(_options)
++    set_source_files_properties(${ARG_SOURCES} PROPERTIES COMPILE_OPTIONS "${_options}")
++    add_library(${name} OBJECT ${ARG_SOURCES})
++    target_include_directories(${name} PRIVATE ${ARG_INCLUDE_DIRS})
++    target_link_libraries(${name} PRIVATE rex::runtime)
++    rexglue_apply_target_settings(${name})
++    rexglue_apply_recomp_settings(${name} "${ARG_PCH}")
++endfunction()
+ 
++#==========================================================
++# rexglue_add_host_sources(<target>) - SDK sources of a host application
++#
++# Adds the SDL3 entry point (windowed_app_main_sdl.cpp), the ReXApp base class
++# (rex_app.cpp) and the build-config define of the version stamp to <target>,
++# with the common flags. <target> is the host executable itself, or an object
++# library holding the host's code that is linked into it later (see HOST_OBJECTS
++# of rexglue_configure_target): that library compiles without any generated
++# code, so it can be built once and linked with code generated elsewhere.
++#==========================================================
++function(rexglue_add_host_sources target_name)
+     target_sources(${target_name} PRIVATE
+         ${REXGLUE_SHARE_DIR}/windowed_app_main_sdl.cpp
+         ${REXGLUE_SHARE_DIR}/rex_app.cpp)
+@@ -84,6 +150,33 @@ function(rexglue_configure_target target_name)
+     target_compile_definitions(${target_name} PRIVATE
+         REXGLUE_BUILD_CONFIG="$<CONFIG>")
+ 
++    rexglue_apply_target_settings(${target_name})
++endfunction()
++
++#==========================================================
++# rexglue_configure_target(<target> [GPU_PLUGINS ...] [HOST_OBJECTS <objlib>])
++#   - Host application
++#
++# Adds:
++#   - the SDK host sources (rexglue_add_host_sources), or, with HOST_OBJECTS,
++#     links the object library that already has them
++#   - $ORIGIN RPATH on UNIX so the host finds librexruntime.so next to itself
++#   - Windows POST_BUILD copy of TARGET_RUNTIME_DLLS and the FidelityFX DLLs.
++#     Guest modules colocate with the host (see rexglue_configure_module_target),
++#     so this single copy handles them transitively.
++#==========================================================
++function(rexglue_configure_target target_name)
++    cmake_parse_arguments(ARG "" "HOST_OBJECTS" "GPU_PLUGINS" ${ARGN})
++
++    if(ARG_HOST_OBJECTS)
++        # Linked as object files, not as an archive: the linker keeps every
++        # object, including those whose only role is to replace a weak
++        # function of the generated code.
++        target_link_libraries(${target_name} PRIVATE ${ARG_HOST_OBJECTS})
++    else()
++        rexglue_add_host_sources(${target_name})
++    endif()
++
+     if(UNIX AND NOT APPLE)
+         set_target_properties(${target_name} PROPERTIES
+             INSTALL_RPATH "$ORIGIN"
+diff --git a/cmake/rexglue_install.cmake b/cmake/rexglue_install.cmake
+index d9a64eb..c9f0fa4 100644
+--- a/cmake/rexglue_install.cmake
++++ b/cmake/rexglue_install.cmake
+@@ -51,11 +51,12 @@ install(TARGETS ${REXGLUE_INSTALL_TARGETS}
+     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+ )
+ 
+-# A Debug codegen tool runs an order of magnitude slower, so only Release ships.
++# A Debug codegen tool runs an order of magnitude slower, so only the optimized configurations
++# ship it.
+ install(TARGETS rexglue
+     EXPORT rexglueTargets
+     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+-    CONFIGURATIONS Release
++    CONFIGURATIONS Release RelWithDebInfo
+ )
+ 
+ if(REXGLUE_INSTALL_FIDELITYFX_TARGETS)
+@@ -140,17 +141,17 @@ endif()
+ if(APPLE AND REXGLUE_USE_VULKAN)
+     install(FILES "$<TARGET_FILE:Vulkan::Loader>"
+         DESTINATION ${CMAKE_INSTALL_LIBDIR}
+-        CONFIGURATIONS Release
++        CONFIGURATIONS Release RelWithDebInfo
+         RENAME libvulkan.1.dylib
+     )
+     install(FILES "$<TARGET_FILE:MoltenVK::MoltenVK>"
+         DESTINATION ${CMAKE_INSTALL_LIBDIR}
+-        CONFIGURATIONS Release
++        CONFIGURATIONS Release RelWithDebInfo
+         RENAME libMoltenVK.dylib
+     )
+     install(FILES cmake/MoltenVK_icd.json
+         DESTINATION ${CMAKE_INSTALL_DATADIR}/vulkan/icd.d
+-        CONFIGURATIONS Release
++        CONFIGURATIONS Release RelWithDebInfo
+     )
+ endif()
+ 
+@@ -188,9 +189,13 @@ install(EXPORT rexglueTargets
+ # Register in the CMake User Package Registry after install.
+ # This makes find_package(rexglue) work with no REXSDK env var or CMAKE_PREFIX_PATH.
+ # Multiple SxS installs coexist. Each prefix gets a unique hash entry.
++# REXGLUE_REGISTER_PACKAGE=OFF leaves the registry alone, for an install that is
++# packaged for another machine rather than used from this one.
+ #
+ # Windows: HKCU\Software\Kitware\CMake\Packages\rexglue  (REG_SZ, value name = MD5 hash)
+ # Unix:    ~/.cmake/packages/rexglue/<hash>               (file containing prefix path)
++option(REXGLUE_REGISTER_PACKAGE "Register the installed SDK in the CMake user package registry" ON)
++if(REXGLUE_REGISTER_PACKAGE)
+ install(CODE [[
+     # Normalize path casing on Windows before hashing to avoid duplicate entries
+     if(CMAKE_HOST_WIN32)
+@@ -215,3 +220,4 @@ install(CODE [[
+     message(STATUS "Registered rexglue in CMake user package registry")
+     message(STATUS "  -> ${CMAKE_INSTALL_PREFIX}")
+ ]])
++endif()
 diff --git a/include/rex/graphics/command_processor.h b/include/rex/graphics/command_processor.h
 index da8e432..fa90e59 100644
 --- a/include/rex/graphics/command_processor.h
@@ -448,6 +670,25 @@ index 7b938b9..89a63d8 100644
    std::unique_ptr<rex::thread::Event> creation_completion_event_;
    bool creation_completion_set_event_ = false;
    size_t creation_threads_shutdown_from_ = SIZE_MAX;
+diff --git a/include/rex/input/device_assignment.h b/include/rex/input/device_assignment.h
+index a318f2c..6751e8d 100644
+--- a/include/rex/input/device_assignment.h
++++ b/include/rex/input/device_assignment.h
+@@ -26,6 +26,14 @@ class DeviceAssignment {
+ 
+   /// An empty result means the guest sees X_ERROR_DEVICE_NOT_CONNECTED.
+   virtual void DevicesForUser(uint32_t user_index, std::vector<DeviceId>& out) const = 0;
++
++  /// The device a guest user last pressed something on, among its devices, each time the guest
++  /// polls that user (kInvalid until one is pressed). A policy that hands devices to users as they
++  /// are used (an unclaimed pad becomes a player's when it presses something) reads it here.
++  virtual void OnActive(uint32_t user_index, DeviceId id) {
++    (void)user_index;
++    (void)id;
++  }
+ };
+ 
+ /// Device ordinal N feeds guest user N. Synthetic devices feed user 0.
 diff --git a/include/rex/perf/counter.h b/include/rex/perf/counter.h
 index 83f0dff..8def116 100644
 --- a/include/rex/perf/counter.h
@@ -717,6 +958,50 @@ index aa55a4a..c8bb914 100644
  XE_UI_VULKAN_FUNCTION(vkInvalidateMappedMemoryRanges)
  XE_UI_VULKAN_FUNCTION(vkMapMemory)
  XE_UI_VULKAN_FUNCTION(vkResetCommandPool)
+diff --git a/resources/templates/codegen/register_cpp.inja b/resources/templates/codegen/register_cpp.inja
+index 0be31c4..83be65c 100644
+--- a/resources/templates/codegen/register_cpp.inja
++++ b/resources/templates/codegen/register_cpp.inja
+@@ -5,6 +5,13 @@
+ #include "{{ project }}_init.h"
+ #include <rex/system/function_dispatcher.h>
+ 
++// The calls are split into functions of a few thousand each, which compile in a second or two;
++// a single function with all of them would take the compiler minutes.
++{% for chunk in register_chunks %}
++static void RegisterFunctions_{{ loop.index }}(rex::runtime::IModuleRegistrar* registrar) {
++{% for fn in chunk %}  registrar->SetFunction({{ fn.address }}, {{ fn.name }});
++{% endfor %}}
++{% endfor %}
+ {% if is_dll %}
+ #ifdef _WIN32
+ #define REX_MODULE_EXPORT __declspec(dllexport)
+@@ -17,8 +24,8 @@ void ReXModule_Register(rex::runtime::IModuleRegistrar* registrar) {
+ {% else %}
+ void {{ project }}_RegisterFunctions(rex::runtime::IModuleRegistrar* registrar) {
+ {% endif %}
+-{% for fn in functions %}{% if not fn.below_code_base or fn.is_import %}  registrar->SetFunction({{ fn.address }}, {{ fn.name }});
+-{% endif %}{% endfor %}}
++{% for chunk in register_chunks %}  RegisterFunctions_{{ loop.index }}(registrar);
++{% endfor %}}
+ 
+ {% if is_dll %}
+ // The runtime uses this baked layout for the dispatch table. It must match the
+diff --git a/resources/templates/codegen/sources_cmake.inja b/resources/templates/codegen/sources_cmake.inja
+index 107a495..f792c18 100644
+--- a/resources/templates/codegen/sources_cmake.inja
++++ b/resources/templates/codegen/sources_cmake.inja
+@@ -1,7 +1,8 @@
+ # Auto-generated by rexglue codegen - DO NOT EDIT
+ #
+-# generated/rexglue.cmake pins the compile options onto these sources, so any
+-# target may build them. Add rexglue_apply_recomp_settings() for the PCH.
++# generated/rexglue.cmake builds these with rexglue_add_recomp_library(), which
++# also pins the compile options onto the sources, so any target may build them.
++# Add rexglue_apply_recomp_settings() for the PCH.
+ 
+ set(GENERATED_SOURCES
+     {{ cmake_var("CMAKE_CURRENT_LIST_DIR") }}/{{ project }}_init.cpp
 diff --git a/src/core/memory_posix.cpp b/src/core/memory_posix.cpp
 index b52bf39..13f51dc 100644
 --- a/src/core/memory_posix.cpp
@@ -15437,6 +15722,74 @@ index 4e7ad78..dc26143 100644
      }
    }
  }
+diff --git a/src/input/input_system.cpp b/src/input/input_system.cpp
+index c9f7ed6..bf37992 100644
+--- a/src/input/input_system.cpp
++++ b/src/input/input_system.cpp
+@@ -255,6 +255,7 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
+   if (user_index < kMaxGuestUsers) {
+     active_kind_[user_index].store(static_cast<uint8_t>(KindOf(active_devices_.Active(user_index))),
+                                    std::memory_order_relaxed);
++    assignment_->OnActive(user_index, active_devices_.Active(user_index));
+   }
+ 
+   if (!any) {
+@@ -298,6 +299,14 @@ X_RESULT InputSystem::SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration
+   std::vector<DeviceId> ids;
+   assignment_->DevicesForUser(user_index, ids);
+ 
++  // With several pads on one user, the one in the player's hands buzzes alone: the others are
++  // lying on the table. Until one is pressed (or while the keyboard is in use), all of them do.
++  const DeviceId active = active_devices_.Active(user_index);
++  const DeviceInfo* active_info = DeviceInfoFor(active);
++  if (active_info && !active_info->synthetic && std::find(ids.begin(), ids.end(), active) != ids.end()) {
++    ids.assign(1, active);
++  }
++
+   // Every pad on this user belongs to the same player, so all of them buzz.
+   // Only pads decide the result: synthetic devices accept any vibration and
+   // would otherwise report success for a pad that never rumbled.
+diff --git a/src/system/runtime.cpp b/src/system/runtime.cpp
+index c10694c..2225156 100644
+--- a/src/system/runtime.cpp
++++ b/src/system/runtime.cpp
+@@ -11,6 +11,7 @@
+ 
+ #include <rex/chrono/clock.h>
+ #include <rex/cvar.h>
++#include <rex/filesystem/devices/disc_image_device.h>
+ #include <rex/filesystem/devices/host_path_device.h>
+ #include <rex/filesystem/devices/null_device.h>
+ #include <rex/filesystem/vfs.h>
+@@ -303,16 +304,23 @@ bool Runtime::SetupVfs() {
+     return false;
+   }
+ 
+-  // Mount game_data_root as \Device\Harddisk0\Partition1
++  // Mount game_data_root as \Device\Harddisk0\Partition1: a folder with the host path device, a
++  // disc image (.iso) with the disc image device, which reads its files in place.
+   auto mount_path = "\\Device\\Harddisk0\\Partition1";
+-  auto device = std::make_unique<rex::filesystem::HostPathDevice>(
+-      mount_path, abs_game_root, !REXCVAR_GET(allow_game_relative_writes));
++  std::unique_ptr<rex::filesystem::Device> device;
++  if (std::filesystem::is_regular_file(abs_game_root)) {
++    device = std::make_unique<rex::filesystem::DiscImageDevice>(mount_path, abs_game_root);
++  } else {
++    device = std::make_unique<rex::filesystem::HostPathDevice>(
++        mount_path, abs_game_root, !REXCVAR_GET(allow_game_relative_writes));
++  }
+   if (!device->Initialize()) {
+-    REXSYS_ERROR("Runtime::SetupVfs: Failed to initialize host path device");
++    REXSYS_ERROR("Runtime::SetupVfs: Failed to initialize the game data device for {}",
++                 abs_game_root.string());
+     return false;
+   }
+   if (!file_system_->RegisterDevice(std::move(device))) {
+-    REXSYS_ERROR("Runtime::SetupVfs: Failed to register host path device");
++    REXSYS_ERROR("Runtime::SetupVfs: Failed to register the game data device");
+     return false;
+   }
+   REXSYS_DEBUG("  Mounted {} at {}", abs_game_root.string(), mount_path);
 diff --git a/src/ui/imgui_drawer.cpp b/src/ui/imgui_drawer.cpp
 index f270f3c..1e4d411 100644
 --- a/src/ui/imgui_drawer.cpp
@@ -15601,6 +15954,33 @@ index 7360ed9..11fd26a 100644
  void Presenter::AddUIDrawerFromUIThread(UIDrawer* drawer, size_t z_order) {
    assert_not_null(drawer);
    // Obtain whether the iterator list was empty before erasing in case of
+diff --git a/src/ui/rex_app.cpp b/src/ui/rex_app.cpp
+index 46ff8e5..f811158 100644
+--- a/src/ui/rex_app.cpp
++++ b/src/ui/rex_app.cpp
+@@ -207,7 +207,9 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
+     rex::ShowSimpleMessageBox(rex::SimpleMessageBoxType::Error, msg);
+     return false;
+   }
+-  if (!std::filesystem::is_directory(paths.game_data_root)) {
++  // A folder, or a disc image (.iso) that Runtime::SetupVfs mounts.
++  if (!std::filesystem::is_directory(paths.game_data_root) &&
++      !std::filesystem::is_regular_file(paths.game_data_root)) {
+     auto msg = fmt::format("--game_data_root does not exist: {}", paths.game_data_root.string());
+     REXLOG_ERROR("{}", msg);
+     rex::ShowSimpleMessageBox(rex::SimpleMessageBoxType::Error, msg);
+@@ -262,8 +264,9 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
+   std::string xex_image = "game:\\default.xex";
+   OnLoadXexImage(xex_image);
+ 
+-  // Mirrors the game:\ / d:\ -> game_data_root mapping in Runtime::SetupVfs.
+-  {
++  // Mirrors the game:\ / d:\ -> game_data_root mapping in Runtime::SetupVfs. A disc image has no
++  // host path for the executable: LoadXexImage below reports it when the image lacks it.
++  if (std::filesystem::is_directory(paths.game_data_root)) {
+     constexpr std::string_view kGameDevice = "game:\\";
+     constexpr std::string_view kDDevice = "d:\\";
+     std::string_view tail = xex_image;
 diff --git a/src/ui/vulkan/vulkan_device.cpp b/src/ui/vulkan/vulkan_device.cpp
 index 8197bb4..7838036 100644
 --- a/src/ui/vulkan/vulkan_device.cpp

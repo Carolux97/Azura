@@ -21,15 +21,22 @@
     "runtimeVersion": "Runtime ReXGlue {version}"
   },
   "play": {
-    "eyebrow": "Natív macOS-port · Gears of War 3",
-    "lede": "A saját játékpéldányod, Apple Siliconra újrafordítva.",
+    "eyebrow": "Natív {platform}-port · Gears of War 3",
+    "lede": "A saját játékpéldányod, {target} rendszerre újrafordítva.",
     "launch": "Játék",
     "launching": "Indítás",
     "mode": "Kampány",
     "install": "Telepítés",
     "installSub": "Játékfájlok beállítása",
     "running": "Játékban",
-    "runtimeWillInstall": "Előbb telepíti a futtatókörnyezetet"
+    "runtimeWillInstall": "Előbb telepíti a futtatókörnyezetet",
+    "building": "TELEPÍTÉS",
+    "buildingSub": "A játék épül ehhez a számítógéphez",
+    "installRuntime": "TELEPÍTÉS",
+    "installRuntimeSub": "Felépíti a játékot ehhez a számítógéphez · néhány perc",
+    "update": "FRISSÍTÉS",
+    "updateLinkSub": "Néhány másodperc",
+    "updateBuildSub": "Körülbelül két perc"
   },
   "status": {
     "gameFiles": "Játékfájlok",
@@ -41,37 +48,46 @@
     "runtimeMissing": "Nem található build",
     "player": "Player",
     "runtimeNotInstalled": "A Játék gomb megnyomásakor települ",
-    "runtimeUpdate": "Frissítés kész, a Játék gomb megnyomásakor települ"
+    "runtimeUpdate": "Frissítés kész, a Játék gomb megnyomásakor települ",
+    "compiler": "Fordító",
+    "compilerChecking": "Ellenőrzés…",
+    "compilerMissing": "Nincs telepítve",
+    "runtimeBuilding": "Épül…",
+    "runtimeNotBuilt": "Nincs telepítve",
+    "runtimeUpdateKit": "Frissítés érhető el"
   },
-  "news": {
-    "title": "Hírek",
-    "skeleton": "A projekt első váza: runtime, manifest és launcher."
+  "releaseNotes": {
+    "title": "A(z) {version} verzió újdonságai",
+    "dismiss": "Értem"
   },
   "install": {
     "title": "Telepítés",
-    "gameFolder": "Játékmappa",
-    "gameFolderHelp": "A Gears of War 3 példányod mappája, amely tartalmazza a(z) {file} fájlt.",
-    "noFolder": "Nincs kiválasztott mappa",
-    "choose": "Kiválasztás…",
+    "gameFolder": "Játék",
+    "gameFolderHelp": "A Gears of War 3 példányod mappája (amely tartalmazza a(z) {file} fájlt) vagy a lemezképe (.iso). Bármelyiket ide is húzhatod.",
+    "noFolder": "Nincs kiválasztott játék",
+    "choose": "Mappa…",
+    "chooseImage": "Lemezkép (.iso)…",
     "languageTitle": "Nyelv és fordítás",
     "languageHelp": "Hova kerüljenek a játék lefordított fájljai.",
     "gameLanguage": "Játék nyelve",
     "translationTarget": "Fordítás helye",
     "change": "Módosítás…",
-    "notADirectory": "Ez az elérési út nem mappa, vagy már nem létezik.",
+    "notADirectory": "Ez az elérési út már nem létezik.",
+    "notADiscImage": "Ez a fájl nem Xbox 360 lemezkép, vagy sérült.",
     "missingXex": "Sem ebben a mappában, sem a közvetlen almappáiban nincs default.xex.",
+    "missingXexInImage": "Ez a lemezkép nem tartalmaz default.xex fájlt.",
     "invalidXex": "A default.xex nem érvényes Xbox 360 futtatható fájl.",
     "ok": "Gears of War 3 · {versionName} kiadás · Media ID {mediaId}",
     "unsupportedVersion": "A Gears of War 3 ezen kiadása (Media ID {mediaId}) még nem támogatott.",
     "wrongGame": "Ez nem a Gears of War 3 (Title ID {titleId}).",
-    "chooseFolderFirst": "Előbb válaszd ki a játék mappáját",
+    "chooseFolderFirst": "Előbb válaszd ki a játékot",
     "playerTitle": "Player Profile",
     "playerHelp": "Gamertag displayed in game lobbies, menus, and multiplayer.",
     "userName": "Gamertag / Username",
     "userNamePlaceholder": "User (up to 15 characters)",
     "defaultUserName": "User",
     "runtimeTitle": "Játék futtatókörnyezet",
-    "runtimeHelp": "Az újrafordított játék, amelyet a launcher indít. A scripts/build.sh buildjéből települ, és frissül, ha van újabb.",
+    "runtimeHelp": "Az erre a számítógépre újrafordított játék. Először a launcher a saját játékpéldányodból építi fel (néhány perc), majd újra, amikor a projekt frissíti.",
     "runtimeInstalled": "Telepítve és naprakész.",
     "runtimeUpdate": "Egy újabb build telepítésre kész.",
     "runtimeNotInstalled": "Még nincs telepítve.",
@@ -83,7 +99,22 @@
     "savesHelp": "A kampány ellenőrzőpontjainak és a profilodnak a mappája. Megváltoztatásakor a mentések oda kerülnek.",
     "savesConflict": "{folder} már tartalmaz mentéseket. Lecseréled őket a jelenlegi mentéseidre?",
     "savesReplace": "Csere",
-    "savesCancel": "Mégse"
+    "savesCancel": "Mégse",
+    "compilerTitle": "Fordító",
+    "compilerHelp": "A játék a saját példányodból ezen a számítógépen fordított natív kódként fut, ezért a launchernek C++ fordítóra van szüksége. Ha hiányzik, a launcher telepíti.",
+    "compilerChecking": "A fordító ellenőrzése…",
+    "compilerReady": "Kész: {version}",
+    "compilerUnusable": "A(z) {found} nem használható: {problem}",
+    "compilerMissing": "Nem található fordító.",
+    "compilerInstallApple": "Az Apple Command Line Tools telepítése",
+    "compilerInstallPackage": "clang telepítése",
+    "compilerInstalling": "A fordító telepítése…",
+    "compilerWaitingApple": "Kövesd az Apple ablakát a Command Line Tools telepítéséhez. A launcher a telepítés után magától folytatja.",
+    "compilerCheckAgain": "Ellenőrzés újra",
+    "compilerManual": "Vagy futtasd ezt egy terminálban:",
+    "runtimeNotBuilt": "Még nincs felépítve: az első építés a játékpéldányodból néhány percig tart.",
+    "runtimeUpdateLink": "Frissítés érhető el: néhány másodperc alatt települ.",
+    "runtimeUpdateBuild": "A frissítéshez újra kell építeni a játékot: körülbelül két perc."
   },
   "graphics": {
     "title": "Grafika",
@@ -151,7 +182,9 @@
     "savesNested": "Olyan mappát válassz, amely nincs a jelenlegin belül (és fordítva).",
     "savesFailed": "A mentések áthelyezése sikertelen: {detail}",
     "runtimeInstalled": "A játék futtatókörnyezete telepítve.",
-    "saveFailed": "A beállításokat nem sikerült menteni: {detail}"
+    "saveFailed": "A beállításokat nem sikerült menteni: {detail}",
+    "compilerInstalled": "A fordító kész: {version}",
+    "compilerInstallFailed": "Nem sikerült telepíteni a fordítót: {detail}"
   },
   "log": {
     "title": "Játéknapló",
@@ -167,7 +200,34 @@
     "startFailed": "A játékot nem sikerült elindítani: {detail}",
     "installingRuntime": "A játék futtatókörnyezetének telepítése…",
     "installFailed": "A futtatókörnyezet telepítése sikertelen: {detail}",
-    "savesUnavailable": "A mentések mappája nem érhető el: {detail}"
+    "savesUnavailable": "A mentések mappája nem érhető el: {detail}",
+    "buildPreparing": "A játék építésének előkészítése…",
+    "buildTranslating": "A játék kódjának fordítása…",
+    "buildCompiling": "A játék fordítása: {done}/{total} fájl",
+    "buildLinking": "A játék linkelése…",
+    "buildInstalling": "A játék telepítése…",
+    "buildNoCompiler": "A játék építéséhez C++ fordító kell: telepítsd a Telepítés részben.",
+    "buildNoKit": "Ennek a launchernek nincs készlete a játék építéséhez ezen a rendszeren.",
+    "buildWrongKit": "A launcher készlete itt nem használható: {detail}",
+    "buildUnsupportedGame": "Előbb válassz egy támogatott játékpéldányt a Telepítés részben.",
+    "buildNoSpace": "Nincs elég szabad hely a játék építéséhez: {needed} MB kell, {free} MB szabad.",
+    "buildStepFailed": "A játék építése sikertelen a(z) „{step}” lépésnél: {summary} (teljes napló: {log})",
+    "buildBusy": "A játék már épül vagy fut.",
+    "buildStep": {
+      "preparing": "előkészítés",
+      "translating": "kódfordítás",
+      "compiling": "fordítás",
+      "linking": "linkelés",
+      "installing": "telepítés"
+    }
+  },
+  "build": {
+    "title": "A játék építése",
+    "failedTitle": "Nem sikerült felépíteni a játékot",
+    "remaining": "kb. {time} van hátra",
+    "estimating": "a hátralévő idő becslése…",
+    "retry": "Újra",
+    "openLog": "Napló megjelenítése"
   },
   "update": {
     "available": "Frissítés erre: {version}",
@@ -199,5 +259,17 @@
     "resetToast": "Saves reset. Automatic backup created.",
     "backupToast": "Backup successfully created",
     "restoreToast": "Save restored successfully"
+  },
+  "gamepad": {
+    "select": "Kiválasztás",
+    "back": "Vissza",
+    "section": "Szakasz",
+    "play": "Játék",
+    "type": "Írás",
+    "delete": "Törlés",
+    "space": "Szóköz",
+    "done": "Kész",
+    "cancel": "Mégse",
+    "page": "Oldal"
   }
 }
