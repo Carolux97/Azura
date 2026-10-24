@@ -10,7 +10,9 @@
    compiled with that header, and linked with our compiled code and the SDK's libraries; the
    staged files are copied into a runtime folder. The symbols the player's generated code would
    define (guest functions, the image description) are stubbed out for the link; any other
-   undefined symbol is an error, since the player's link would fail on it too.
+   undefined symbol is an error, since the player's link would fail on it too. On Linux, the
+   executable must also find the kit's shared libraries it needs: RUNPATH $ORIGIN, and those
+   libraries staged beside it.
 
 Usage: check_kit.py --kit DIR --registry versions.toml --work DIR
 """
@@ -176,8 +178,25 @@ def check_commands(kit: Path, work: Path) -> None:
             shutil.copytree(source, target, dirs_exist_ok=True)
         else:
             shutil.copy2(source, target)
+    check_libraries(kit, output)
     print(f"Kit commands work: compiled, linked ({len(host)} host objects) and staged "
           f"{len(description['stage'])} entries")
+
+
+def check_libraries(kit: Path, executable: Path) -> None:
+    """On Linux, that the executable can load the kit's shared libraries it needs: its RUNPATH is
+    $ORIGIN, and each of those libraries is staged beside it. Running it would need the game."""
+    if platform.system() != "Linux":
+        return
+    dynamic = run(["readelf", "-d", str(executable)], "Reading the executable's dynamic section").stdout
+    runpath = re.findall(r"\((?:RUNPATH|RPATH)\)\s+.*?\[(.*)\]", dynamic)
+    if runpath != ["$ORIGIN"]:
+        raise CheckError(f"the executable's RUNPATH is {runpath or 'missing'}, not $ORIGIN")
+    kit_libraries = {path.name for path in (kit / "sdk" / "lib").glob("*.so*")}
+    needed = re.findall(r"\(NEEDED\)\s+.*?\[(.*)\]", dynamic)
+    missing = [name for name in needed if name in kit_libraries and not (executable.parent / name).is_file()]
+    if missing:
+        raise CheckError(f"the executable needs {', '.join(missing)} from the kit, which is not staged beside it")
 
 
 def main() -> int:
