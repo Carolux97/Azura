@@ -57,6 +57,9 @@ def segments(command: str) -> list[list[str]]:
     """A shell command chained with && as its parts, each as a list of arguments."""
     parts, current = [], []
     for token in shlex.split(command):
+        # CMake writes "\$ORIGIN" (the rpath) for the shell, which drops the backslash inside
+        # double quotes; shlex keeps it. The kit's commands run without a shell, so drop it here.
+        token = token.replace("\\$", "$")
         if token == "&&":
             parts.append(current)
             current = []
