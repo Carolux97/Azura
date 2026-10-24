@@ -85,8 +85,9 @@ bool AchievementExportRequested() { return !REXCVAR_GET(export_achievements).emp
 
 int ExportAchievements(const std::filesystem::path& game_data_root) {
   const std::filesystem::path out_dir = REXCVAR_GET(export_achievements);
-  if (game_data_root.empty() || !std::filesystem::is_directory(game_data_root)) {
-    return Fail("game_data_root is not a folder");
+  // A folder, or a disc image (.iso), which the runtime mounts in place.
+  if (game_data_root.empty() || !std::filesystem::exists(game_data_root)) {
+    return Fail("game_data_root is neither a folder nor a disc image");
   }
 
   // The same headless set-up as the SDK's `rexglue init achievements`: tool mode starts the kernel

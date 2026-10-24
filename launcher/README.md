@@ -30,8 +30,8 @@ npm test
 ## Settings split
 
 Settings live in the app data folder (`~/Library/Application Support/com.gears3azura.launcher/`):
-`runtime/azura.toml` holds what the runtime reads, under its own setting names (the game folder is
-`game_data_root`), and `launcher.toml` what only the launcher uses. The launcher rewrites only its
+`runtime/azura.toml` holds what the runtime reads, under its own setting names (the game, a folder
+or a disc image, is `game_data_root`), and `launcher.toml` what only the launcher uses. The launcher rewrites only its
 own keys in `azura.toml`, keeping comments and anything the in-game menu wrote, and reloads the file
 when its window regains focus.
 
@@ -72,7 +72,11 @@ Where the runtime comes from, in order: `AZURA_RUNTIME_BUILD` (a build folder, c
 (copied, as developers do), then the kit bundled with the launcher or the project's kit build.
 
 `cargo test builds_a_runtime -- --ignored` builds a real runtime with the launcher's code, given
-`AZURA_TEST_KIT` (a kit) and `AZURA_TEST_GAME` (a game folder).
+`AZURA_TEST_KIT` (a kit) and `AZURA_TEST_GAME` (a game folder or disc image).
+
+The game is the folder of the player's dump or its disc image (`.iso`), picked with either button
+of the Installation view or dropped on it. A disc image is read in place (`src-tauri/src/disc_image.rs`)
+and the runtime mounts it itself; see `docs/player-runtime-build.md`, section 5.
 
 ## Compiler
 
