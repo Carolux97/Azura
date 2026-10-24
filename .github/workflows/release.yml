@@ -3,17 +3,15 @@
 #
 # A release is published when main has a launcher version that is not released yet: bumping the
 # version in tauri.conf.json, package.json and Cargo.toml is how a release is asked for, so only a
-# push to main that changes tauri.conf.json starts it (a macOS build costs about ten times its
-# minutes on a private repository). It builds only for a version not released yet; by hand with
+# push to main that changes tauri.conf.json starts it. It builds only for a version not released yet; by hand with
 # "Publish" off it checks the whole pipeline, and pull requests that change the pipeline itself
 # build without publishing.
 #
-# A release publishes the platforms that built: one whose build fails or cannot run (GitHub's Ubuntu
-# runners wait while the included minutes are used up) is left out, and a manual run with "Publish"
-# on adds it to that version's release later.
+# A release publishes the platforms that built: one whose build fails is left out, and a manual run
+# with "Publish" on adds it to that version's release later.
 #
-# Releases go to the public releases repository (scripts/release-common.sh), since this one is
-# private and installed launchers download without credentials.
+# Releases go to the releases repository (scripts/release-common.sh), where installed launchers
+# have always looked for them.
 #
 # Secrets:
 #   TAURI_SIGNING_PRIVATE_KEY           the update signing key (its contents)
@@ -56,9 +54,8 @@ concurrency:
 jobs:
   version:
     name: Version
-    # Bash, Node and gh only: on the project's own Mac (a self-hosted runner, see CONTRIBUTING.md),
-    # which costs no GitHub Actions minutes.
-    runs-on: [self-hosted, macOS, ARM64]
+    # Bash, Node and gh only.
+    runs-on: ubuntu-latest
     outputs:
       build: ${{ steps.status.outputs.build }}
       publish: ${{ steps.status.outputs.publish }}
@@ -109,10 +106,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # On the project's own Mac (a self-hosted runner, see CONTRIBUTING.md): GitHub's macOS
-          # runners count ten times their minutes on a private repository.
           - platform: mac-arm64
-            runner: [self-hosted, macOS, ARM64]
+            runner: macos-latest
           # Ubuntu 22.04, as the Linux kit is built: the AppImage then needs no newer glibc than 2.35.
           - platform: linux-amd64
             runner: ubuntu-22.04
@@ -176,7 +171,7 @@ jobs:
     # Publishes the platforms that built, even when another one failed; with none, the script fails.
     if: ${{ !cancelled() && needs.version.outputs.publish == 'true' }}
     # Bash, Node and gh only, like the version check.
-    runs-on: [self-hosted, macOS, ARM64]
+    runs-on: ubuntu-latest
     steps:
       - name: Check out the repository
         uses: actions/checkout@v7

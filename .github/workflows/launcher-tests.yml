@@ -1,8 +1,7 @@
 # Runs the launcher's tests (JavaScript and Rust) on macOS and Linux for every pull request that
 # changes the launcher, to main or stacked on another pull request's branch. Not on pushes to main
 # (what reaches main has passed them in its pull request) nor on pull requests that leave the
-# launcher alone, to spend no GitHub Actions minutes where nothing they test changed: a macOS run
-# costs about ten times its minutes on a private repository. The runtime is not built here: it needs the game's default.xex,
+# launcher alone, since nothing they test changed. The runtime is not built here: it needs the game's default.xex,
 # which cannot be in the repository, so it stays a manual check in each pull request.
 
 name: Launcher tests
@@ -31,14 +30,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macOS on the project's own Mac (a self-hosted runner, see CONTRIBUTING.md): GitHub's
-          # macOS runners count ten times their minutes on a private repository.
           - name: macos
-            runner: [self-hosted, macOS, ARM64]
-          # Linux on the project's own Linux runner, an Ubuntu 22.04 container on a home server
-          # (see CONTRIBUTING.md): the repository's included minutes are used up.
+            runner: macos-latest
           - name: ubuntu
-            runner: [self-hosted, Linux, X64]
+            runner: ubuntu-latest
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
@@ -59,9 +54,9 @@ jobs:
         run: npm test
 
       # Tauri links against the system's web view and GTK on Linux; gilrs (controllers) against
-      # libudev. The project's own runner has them installed already and no sudo.
+      # libudev.
       - name: Install the Linux libraries Tauri needs
-        if: runner.os == 'Linux' && runner.environment == 'github-hosted'
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
