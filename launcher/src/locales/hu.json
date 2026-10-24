@@ -58,7 +58,8 @@
   },
   "releaseNotes": {
     "title": "A(z) {version} verzió újdonságai",
-    "dismiss": "Értem"
+    "dismiss": "Értem",
+    "show": "Újdonságok"
   },
   "install": {
     "title": "Telepítés",

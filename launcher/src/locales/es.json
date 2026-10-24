@@ -58,7 +58,8 @@
   },
   "releaseNotes": {
     "title": "Novedades de la versión {version}",
-    "dismiss": "Entendido"
+    "dismiss": "Entendido",
+    "show": "Novedades"
   },
   "install": {
     "title": "Instalación",
