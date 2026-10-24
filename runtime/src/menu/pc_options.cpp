@@ -75,9 +75,9 @@ struct Option {
   float slider_min = 0, slider_max = 0, slider_step = 0;
 };
 
-// The upscaling effects present_effect accepts in this build of the SDK, in menu order: the Metal
-// presenter's on macOS (CAS, MetalFX), the FidelityFX ones with the FidelityFX SDK, bilinear
-// always. Others it may accept (the experimental temporal FSR) are not offered.
+// The upscaling effects present_effect accepts in this build of the SDK, in menu order. Others it
+// may accept (the experimental temporal FSR) are not offered. The menu shows the ones the running
+// presenter draws (ChoicesOf).
 std::vector<const char*> UpscalingChoices() {
   static const char* const kOffered[] = {"bilinear", "cas", "fsr", "metalfx"};
   std::vector<const char*> choices;
@@ -366,6 +366,28 @@ std::map<int, float> g_started;
 std::string g_prompted_for;
 // Shows a new upscaling_sharpness while the game runs (SetSharpnessChangedHandler).
 std::function<void()> g_sharpness_changed;
+// Whether the running presenter draws a present_effect value (SetUpscalingSupport), behind its own
+// mutex because ChoicesOf runs with g_mutex held and without it.
+std::mutex g_upscaling_support_mutex;
+std::function<bool(const std::string&)> g_upscaling_support;
+
+// The values `option` offers: for the upscaling row, the ones the running presenter draws, so a GPU
+// or backend without an effect does not list it (bilinear when it supports none of them).
+std::vector<const char*> ChoicesOf(const Option& option) {
+  if (option.label != Label::kUpscaling) return option.choices;
+  std::function<bool(const std::string&)> supported;
+  {
+    std::lock_guard lock(g_upscaling_support_mutex);
+    supported = g_upscaling_support;
+  }
+  if (!supported) return option.choices;
+  std::vector<const char*> choices;
+  for (const char* effect : option.choices) {
+    if (supported(effect)) choices.push_back(effect);
+  }
+  if (choices.empty()) choices.push_back("bilinear");
+  return choices;
+}
 
 bool Valid(int option) {
   return option >= 0 && option < static_cast<int>(Options().size());
@@ -397,17 +419,18 @@ float ReadCvar(const Option& option) {
     case Kind::kToggle:
       return value == "true" || value == "1" ? 1.0f : 0.0f;
     case Kind::kChoice: {
-      for (size_t i = 0; i < option.choices.size(); ++i) {
-        if (value == option.choices[i]) return static_cast<float>(i);
+      const std::vector<const char*> choices = ChoicesOf(option);
+      for (size_t i = 0; i < choices.size(); ++i) {
+        if (value == choices[i]) return static_cast<float>(i);
       }
-      // A value the list does not offer (set by hand, or by an older launcher): the nearest one
-      // when the values are numbers, else the first.
+      // A value the list does not offer (set by hand, by an older launcher, or an effect this GPU
+      // does not draw): the nearest one when the values are numbers, else the first.
       size_t nearest = 0;
       try {
         const double wanted = std::stod(value);
         double best = 1e300;
-        for (size_t i = 0; i < option.choices.size(); ++i) {
-          const double distance = std::abs(std::stod(option.choices[i]) - wanted);
+        for (size_t i = 0; i < choices.size(); ++i) {
+          const double distance = std::abs(std::stod(choices[i]) - wanted);
           if (distance < best) {
             best = distance;
             nearest = i;
@@ -442,8 +465,9 @@ std::string FormatValue(const Option& option, float value, bool toml) {
     case Kind::kToggle:
       return value >= 0.5f ? "true" : "false";
     case Kind::kChoice: {
-      const size_t index = std::min(static_cast<size_t>(value < 0 ? 0 : value + 0.5f), option.choices.size() - 1);
-      const std::string& choice = option.choices[index];
+      const std::vector<const char*> choices = ChoicesOf(option);
+      const size_t index = std::min(static_cast<size_t>(value < 0 ? 0 : value + 0.5f), choices.size() - 1);
+      const std::string choice = choices[index];
       const bool number = !choice.empty() && choice.find_first_not_of("0123456789.") == std::string::npos;
       return toml && !number ? std::string("\"") + choice + "\"" : choice;
     }
@@ -634,7 +658,7 @@ bool PcOptionValueNames(int psid, std::vector<std::u16string>& names) {
         language = g_menu_language;
       }
       const Texts& texts = TextsFor(language);
-      for (const char* effect : option.choices) {
+      for (const char* effect : ChoicesOf(option)) {
         const std::string effect_name = effect;
         const char* name = effect_name == "cas"       ? texts.cas
                            : effect_name == "fsr"     ? texts.fsr
@@ -971,6 +995,11 @@ void ApplyRenderResolution() {
               1280 * scale, 720 * scale, scale, texture_memory);
   // These values are the ones the game starts with, not changes waiting for a restart.
   rex::cvar::ClearPendingRestartFlags();
+}
+
+void SetUpscalingSupport(std::function<bool(const std::string&)> supported) {
+  std::lock_guard lock(g_upscaling_support_mutex);
+  g_upscaling_support = std::move(supported);
 }
 
 void SetSharpnessChangedHandler(std::function<void()> handler) {
