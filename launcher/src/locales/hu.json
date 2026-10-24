@@ -41,7 +41,10 @@
     "runtimeMissing": "Nem található build",
     "player": "Player",
     "runtimeNotInstalled": "A Játék gomb megnyomásakor települ",
-    "runtimeUpdate": "Frissítés kész, a Játék gomb megnyomásakor települ"
+    "runtimeUpdate": "Frissítés kész, a Játék gomb megnyomásakor települ",
+    "compiler": "Fordító",
+    "compilerChecking": "Ellenőrzés…",
+    "compilerMissing": "Nincs telepítve"
   },
   "news": {
     "title": "Hírek",
@@ -83,7 +86,19 @@
     "savesHelp": "A kampány ellenőrzőpontjainak és a profilodnak a mappája. Megváltoztatásakor a mentések oda kerülnek.",
     "savesConflict": "{folder} már tartalmaz mentéseket. Lecseréled őket a jelenlegi mentéseidre?",
     "savesReplace": "Csere",
-    "savesCancel": "Mégse"
+    "savesCancel": "Mégse",
+    "compilerTitle": "Fordító",
+    "compilerHelp": "A játék a saját példányodból ezen a számítógépen fordított natív kódként fut, ezért a launchernek C++ fordítóra van szüksége. Ha hiányzik, a launcher telepíti.",
+    "compilerChecking": "A fordító ellenőrzése…",
+    "compilerReady": "Kész: {version}",
+    "compilerUnusable": "A(z) {found} nem használható: {problem}",
+    "compilerMissing": "Nem található fordító.",
+    "compilerInstallApple": "Az Apple Command Line Tools telepítése",
+    "compilerInstallPackage": "clang telepítése",
+    "compilerInstalling": "A fordító telepítése…",
+    "compilerWaitingApple": "Kövesd az Apple ablakát a Command Line Tools telepítéséhez. A launcher a telepítés után magától folytatja.",
+    "compilerCheckAgain": "Ellenőrzés újra",
+    "compilerManual": "Vagy futtasd ezt egy terminálban:"
   },
   "graphics": {
     "title": "Grafika",
@@ -151,7 +166,9 @@
     "savesNested": "Olyan mappát válassz, amely nincs a jelenlegin belül (és fordítva).",
     "savesFailed": "A mentések áthelyezése sikertelen: {detail}",
     "runtimeInstalled": "A játék futtatókörnyezete telepítve.",
-    "saveFailed": "A beállításokat nem sikerült menteni: {detail}"
+    "saveFailed": "A beállításokat nem sikerült menteni: {detail}",
+    "compilerInstalled": "A fordító kész: {version}",
+    "compilerInstallFailed": "Nem sikerült telepíteni a fordítót: {detail}"
   },
   "log": {
     "title": "Játéknapló",

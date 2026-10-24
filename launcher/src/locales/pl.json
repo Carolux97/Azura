@@ -41,7 +41,10 @@
     "runtimeMissing": "Nie znaleziono kompilacji",
     "player": "Player",
     "runtimeNotInstalled": "Zainstaluje się po kliknięciu Graj",
-    "runtimeUpdate": "Aktualizacja gotowa, zainstaluje się po kliknięciu Graj"
+    "runtimeUpdate": "Aktualizacja gotowa, zainstaluje się po kliknięciu Graj",
+    "compiler": "Kompilator",
+    "compilerChecking": "Sprawdzanie…",
+    "compilerMissing": "Niezainstalowany"
   },
   "news": {
     "title": "Nowości",
@@ -83,7 +86,19 @@
     "savesHelp": "Folder punktów kontrolnych kampanii i profilu. Po zmianie zapisy zostaną tam przeniesione.",
     "savesConflict": "{folder} zawiera już zapisy gry. Zastąpić je obecnymi zapisami?",
     "savesReplace": "Zastąp",
-    "savesCancel": "Anuluj"
+    "savesCancel": "Anuluj",
+    "compilerTitle": "Kompilator",
+    "compilerHelp": "Gra działa jako kod natywny zbudowany na tym komputerze z twojej kopii, więc launcher potrzebuje kompilatora C++. Jeśli go brakuje, launcher go instaluje.",
+    "compilerChecking": "Sprawdzanie kompilatora…",
+    "compilerReady": "Gotowy: {version}",
+    "compilerUnusable": "Nie można użyć {found}: {problem}",
+    "compilerMissing": "Nie znaleziono kompilatora.",
+    "compilerInstallApple": "Zainstaluj Command Line Tools firmy Apple",
+    "compilerInstallPackage": "Zainstaluj clang",
+    "compilerInstalling": "Instalowanie kompilatora…",
+    "compilerWaitingApple": "Postępuj zgodnie z oknem Apple, aby zainstalować Command Line Tools. Launcher sam przejdzie dalej po instalacji.",
+    "compilerCheckAgain": "Sprawdź ponownie",
+    "compilerManual": "Albo uruchom to w terminalu:"
   },
   "graphics": {
     "title": "Grafika",
@@ -151,7 +166,9 @@
     "savesNested": "Wybierz folder, który nie znajduje się w obecnym (ani odwrotnie).",
     "savesFailed": "Przeniesienie zapisów nie powiodło się: {detail}",
     "runtimeInstalled": "Środowisko gry zainstalowane.",
-    "saveFailed": "Nie udało się zapisać ustawień: {detail}"
+    "saveFailed": "Nie udało się zapisać ustawień: {detail}",
+    "compilerInstalled": "Kompilator gotowy: {version}",
+    "compilerInstallFailed": "Nie udało się zainstalować kompilatora: {detail}"
   },
   "log": {
     "title": "Dziennik gry",

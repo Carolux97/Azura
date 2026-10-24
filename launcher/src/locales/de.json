@@ -41,7 +41,10 @@
     "runtimeMissing": "Kein Build gefunden",
     "player": "Spieler",
     "runtimeNotInstalled": "Wird beim Klick auf Spielen installiert",
-    "runtimeUpdate": "Update bereit, wird beim Klick auf Spielen installiert"
+    "runtimeUpdate": "Update bereit, wird beim Klick auf Spielen installiert",
+    "compiler": "Compiler",
+    "compilerChecking": "Wird geprüft …",
+    "compilerMissing": "Nicht installiert"
   },
   "news": {
     "title": "Neuigkeiten",
@@ -83,7 +86,19 @@
     "savesHelp": "Ordner für deine Kampagnen-Checkpoints und dein Profil. Beim Ändern werden deine Spielstände dorthin verschoben.",
     "savesConflict": "{folder} enthält bereits Spielstände. Durch deine aktuellen Spielstände ersetzen?",
     "savesReplace": "Ersetzen",
-    "savesCancel": "Abbrechen"
+    "savesCancel": "Abbrechen",
+    "compilerTitle": "Compiler",
+    "compilerHelp": "Das Spiel läuft als nativer Code, der auf diesem Computer aus deiner eigenen Kopie gebaut wird, daher braucht der Launcher einen C++-Compiler. Fehlt er, installiert der Launcher ihn.",
+    "compilerChecking": "Compiler wird geprüft …",
+    "compilerReady": "Bereit: {version}",
+    "compilerUnusable": "{found} ist nicht verwendbar: {problem}",
+    "compilerMissing": "Kein Compiler gefunden.",
+    "compilerInstallApple": "Apples Command Line Tools installieren",
+    "compilerInstallPackage": "clang installieren",
+    "compilerInstalling": "Compiler wird installiert …",
+    "compilerWaitingApple": "Folge Apples Fenster, um die Command Line Tools zu installieren. Der Launcher macht danach von selbst weiter.",
+    "compilerCheckAgain": "Erneut prüfen",
+    "compilerManual": "Oder führe dies in einem Terminal aus:"
   },
   "graphics": {
     "title": "Grafik",
@@ -151,7 +166,9 @@
     "savesNested": "Wähle einen Ordner, der nicht im aktuellen liegt (und umgekehrt).",
     "savesFailed": "Verschieben der Spielstände fehlgeschlagen: {detail}",
     "runtimeInstalled": "Spiel-Runtime installiert.",
-    "saveFailed": "Einstellungen konnten nicht gespeichert werden: {detail}"
+    "saveFailed": "Einstellungen konnten nicht gespeichert werden: {detail}",
+    "compilerInstalled": "Compiler bereit: {version}",
+    "compilerInstallFailed": "Der Compiler konnte nicht installiert werden: {detail}"
   },
   "log": {
     "title": "Spielprotokoll",

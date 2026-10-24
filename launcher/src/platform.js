@@ -241,3 +241,20 @@ export const getAchievements = async ({ gameFolder, gameLanguage, uiLocale }) =>
   });
   return { status: "ok", achievements, unlockedCount: 3, earnedGamerscore: 60, totalGamerscore: 1000, completedAt: null };
 };
+
+/**
+ * Whether there is a working C++ compiler to build the runtime with (see src-tauri/src/toolchain.rs):
+ *   { status: "ready", version }
+ *   { status: "missing", found, problem, install: { kind, manager?, command? }, manual, installerRunning }
+ * `install.kind` is "appleCommandLineTools", "packageManager" or "manual". The browser simulation
+ * reports Apple's compiler as installed.
+ */
+export const getCompilerStatus = async () =>
+  isNativeApp ? tauri.core.invoke("get_compiler_status") : { status: "ready", version: "Apple clang 21.0.0" };
+
+/**
+ * Installs the compiler: on macOS it opens Apple's dialog and resolves at once (check the status
+ * again until it is ready); on Linux it resolves once the package manager is done. Rejects with a
+ * message when it cannot install it.
+ */
+export const installCompiler = async () => (isNativeApp ? tauri.core.invoke("install_compiler") : undefined);

@@ -41,7 +41,10 @@
     "runtimeMissing": "Nenhuma compilação encontrada",
     "player": "Jogador",
     "runtimeNotInstalled": "Será instalado ao clicar em Jogar",
-    "runtimeUpdate": "Atualização pronta, será instalada ao clicar em Jogar"
+    "runtimeUpdate": "Atualização pronta, será instalada ao clicar em Jogar",
+    "compiler": "Compilador",
+    "compilerChecking": "Verificando…",
+    "compilerMissing": "Não instalado"
   },
   "news": {
     "title": "Novidades",
@@ -83,7 +86,19 @@
     "savesHelp": "Pasta dos seus checkpoints de campanha e do seu perfil. Ao mudá-la, seus jogos salvos são movidos para lá.",
     "savesConflict": "{folder} já contém jogos salvos. Substituí-los pelos seus jogos salvos atuais?",
     "savesReplace": "Substituir",
-    "savesCancel": "Cancelar"
+    "savesCancel": "Cancelar",
+    "compilerTitle": "Compilador",
+    "compilerHelp": "O jogo roda como código nativo compilado neste computador a partir da sua própria cópia, então o launcher precisa de um compilador C++. Se faltar, ele o instala.",
+    "compilerChecking": "Verificando o compilador…",
+    "compilerReady": "Pronto: {version}",
+    "compilerUnusable": "{found} não pode ser usado: {problem}",
+    "compilerMissing": "Nenhum compilador encontrado.",
+    "compilerInstallApple": "Instalar as Command Line Tools da Apple",
+    "compilerInstallPackage": "Instalar clang",
+    "compilerInstalling": "Instalando o compilador…",
+    "compilerWaitingApple": "Siga a janela da Apple para instalar as Command Line Tools. O launcher continua sozinho quando estiverem instaladas.",
+    "compilerCheckAgain": "Verificar de novo",
+    "compilerManual": "Ou execute isto em um terminal:"
   },
   "graphics": {
     "title": "Gráficos",
@@ -151,7 +166,9 @@
     "savesNested": "Escolha uma pasta que não esteja dentro da atual (nem o contrário).",
     "savesFailed": "Falha ao mover os jogos salvos: {detail}",
     "runtimeInstalled": "Runtime do jogo instalado.",
-    "saveFailed": "Não foi possível salvar as configurações: {detail}"
+    "saveFailed": "Não foi possível salvar as configurações: {detail}",
+    "compilerInstalled": "Compilador pronto: {version}",
+    "compilerInstallFailed": "Não foi possível instalar o compilador: {detail}"
   },
   "log": {
     "title": "Registro do jogo",

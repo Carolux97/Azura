@@ -41,7 +41,10 @@
     "gpuValue": "{machine} · Vulkan on Metal",
     "runtimeMissing": "No build found",
     "runtimeNotInstalled": "Installs when you press Play",
-    "runtimeUpdate": "Update ready, installs when you press Play"
+    "runtimeUpdate": "Update ready, installs when you press Play",
+    "compiler": "Compiler",
+    "compilerChecking": "Checking…",
+    "compilerMissing": "Not installed"
   },
   "news": {
     "title": "News",
@@ -83,7 +86,19 @@
     "savesHelp": "Folder for your campaign checkpoints and profile. Changing it moves your saves there.",
     "savesConflict": "{folder} already holds saved games. Replace them with your current saves?",
     "savesReplace": "Replace",
-    "savesCancel": "Cancel"
+    "savesCancel": "Cancel",
+    "compilerTitle": "Compiler",
+    "compilerHelp": "The game runs as native code built on this computer from your own copy, so the launcher needs a C++ compiler. It installs one if it is missing.",
+    "compilerChecking": "Checking the compiler…",
+    "compilerReady": "Ready: {version}",
+    "compilerUnusable": "{found} cannot be used: {problem}",
+    "compilerMissing": "No compiler found.",
+    "compilerInstallApple": "Install Apple's Command Line Tools",
+    "compilerInstallPackage": "Install clang",
+    "compilerInstalling": "Installing the compiler…",
+    "compilerWaitingApple": "Follow Apple's window to install the Command Line Tools. The launcher goes on by itself once they are installed.",
+    "compilerCheckAgain": "Check again",
+    "compilerManual": "Or run this in a terminal:"
   },
   "graphics": {
     "title": "Graphics",
@@ -151,7 +166,9 @@
     "savesNested": "Choose a folder that is not inside the current one (or the other way round).",
     "savesFailed": "Moving the saved games failed: {detail}",
     "runtimeInstalled": "Game runtime installed.",
-    "saveFailed": "Settings could not be saved: {detail}"
+    "saveFailed": "Settings could not be saved: {detail}",
+    "compilerInstalled": "Compiler ready: {version}",
+    "compilerInstallFailed": "The compiler could not be installed: {detail}"
   },
   "log": {
     "title": "Game log",

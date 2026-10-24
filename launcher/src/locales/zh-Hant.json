@@ -41,7 +41,10 @@
     "runtimeMissing": "找不到組建",
     "player": "Player",
     "runtimeNotInstalled": "按下「遊玩」時安裝",
-    "runtimeUpdate": "更新已就緒，按下「遊玩」時安裝"
+    "runtimeUpdate": "更新已就緒，按下「遊玩」時安裝",
+    "compiler": "編譯器",
+    "compilerChecking": "檢查中…",
+    "compilerMissing": "未安裝"
   },
   "news": {
     "title": "最新消息",
@@ -83,7 +86,19 @@
     "savesHelp": "戰役檢查點與個人檔案的資料夾。變更後，存檔會移到該處。",
     "savesConflict": "{folder} 已有遊戲存檔。要以目前的存檔取代嗎？",
     "savesReplace": "取代",
-    "savesCancel": "取消"
+    "savesCancel": "取消",
+    "compilerTitle": "編譯器",
+    "compilerHelp": "遊戲會以在這台電腦上從你的遊戲副本建置的原生程式碼執行，因此啟動器需要 C++ 編譯器。若沒有，啟動器會安裝。",
+    "compilerChecking": "正在檢查編譯器…",
+    "compilerReady": "已就緒：{version}",
+    "compilerUnusable": "無法使用 {found}：{problem}",
+    "compilerMissing": "找不到編譯器。",
+    "compilerInstallApple": "安裝 Apple 的 Command Line Tools",
+    "compilerInstallPackage": "安裝 clang",
+    "compilerInstalling": "正在安裝編譯器…",
+    "compilerWaitingApple": "請依照 Apple 的視窗安裝 Command Line Tools。安裝完成後，啟動器會自動繼續。",
+    "compilerCheckAgain": "重新檢查",
+    "compilerManual": "或在終端機中執行："
   },
   "graphics": {
     "title": "圖形",
@@ -151,7 +166,9 @@
     "savesNested": "請選擇不在目前資料夾內（反之亦然）的資料夾。",
     "savesFailed": "移動遊戲存檔失敗：{detail}",
     "runtimeInstalled": "已安裝遊戲執行環境。",
-    "saveFailed": "無法儲存設定：{detail}"
+    "saveFailed": "無法儲存設定：{detail}",
+    "compilerInstalled": "編譯器已就緒：{version}",
+    "compilerInstallFailed": "無法安裝編譯器：{detail}"
   },
   "log": {
     "title": "遊戲記錄",

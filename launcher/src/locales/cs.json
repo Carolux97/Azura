@@ -41,7 +41,10 @@
     "runtimeMissing": "Žádné sestavení nenalezeno",
     "player": "Player",
     "runtimeNotInstalled": "Nainstaluje se po stisknutí Hrát",
-    "runtimeUpdate": "Aktualizace připravena, nainstaluje se po stisknutí Hrát"
+    "runtimeUpdate": "Aktualizace připravena, nainstaluje se po stisknutí Hrát",
+    "compiler": "Kompilátor",
+    "compilerChecking": "Kontrola…",
+    "compilerMissing": "Nenainstalováno"
   },
   "news": {
     "title": "Novinky",
@@ -83,7 +86,19 @@
     "savesHelp": "Složka pro kontrolní body kampaně a profil. Při změně se uložené hry přesunou tam.",
     "savesConflict": "{folder} už obsahuje uložené hry. Nahradit je vašimi současnými uloženými hrami?",
     "savesReplace": "Nahradit",
-    "savesCancel": "Zrušit"
+    "savesCancel": "Zrušit",
+    "compilerTitle": "Kompilátor",
+    "compilerHelp": "Hra běží jako nativní kód sestavený na tomto počítači z vaší kopie, takže launcher potřebuje kompilátor C++. Pokud chybí, launcher ho nainstaluje.",
+    "compilerChecking": "Kontrola kompilátoru…",
+    "compilerReady": "Připraveno: {version}",
+    "compilerUnusable": "{found} nelze použít: {problem}",
+    "compilerMissing": "Nebyl nalezen žádný kompilátor.",
+    "compilerInstallApple": "Nainstalovat Command Line Tools od Applu",
+    "compilerInstallPackage": "Nainstalovat clang",
+    "compilerInstalling": "Instalace kompilátoru…",
+    "compilerWaitingApple": "Postupujte podle okna Applu a nainstalujte Command Line Tools. Launcher po instalaci sám pokračuje.",
+    "compilerCheckAgain": "Zkontrolovat znovu",
+    "compilerManual": "Nebo spusťte v terminálu:"
   },
   "graphics": {
     "title": "Grafika",
@@ -151,7 +166,9 @@
     "savesNested": "Vyberte složku, která není uvnitř současné (ani naopak).",
     "savesFailed": "Přesun uložených her selhal: {detail}",
     "runtimeInstalled": "Běhové prostředí hry nainstalováno.",
-    "saveFailed": "Nastavení se nepodařilo uložit: {detail}"
+    "saveFailed": "Nastavení se nepodařilo uložit: {detail}",
+    "compilerInstalled": "Kompilátor připraven: {version}",
+    "compilerInstallFailed": "Kompilátor se nepodařilo nainstalovat: {detail}"
   },
   "log": {
     "title": "Záznam hry",
