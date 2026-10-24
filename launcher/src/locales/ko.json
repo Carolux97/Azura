@@ -208,6 +208,14 @@
       "installing": "설치"
     }
   },
+  "build": {
+    "title": "게임 빌드 중",
+    "failedTitle": "게임을 빌드할 수 없습니다",
+    "remaining": "약 {time} 남음",
+    "estimating": "남은 시간 계산 중…",
+    "retry": "다시 시도",
+    "openLog": "로그 보기"
+  },
   "update": {
     "available": "{version}(으)로 업데이트",
     "downloading": "업데이트 다운로드 중… {percent}",

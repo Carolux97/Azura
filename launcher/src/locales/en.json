@@ -208,6 +208,14 @@
       "installing": "installing"
     }
   },
+  "build": {
+    "title": "Building the game",
+    "failedTitle": "The game could not be built",
+    "remaining": "about {time} left",
+    "estimating": "estimating the time left…",
+    "retry": "Try again",
+    "openLog": "Show the log"
+  },
   "update": {
     "available": "Update to {version}",
     "downloading": "Downloading update… {percent}",

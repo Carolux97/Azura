@@ -208,6 +208,14 @@
       "installing": "安裝"
     }
   },
+  "build": {
+    "title": "正在建置遊戲",
+    "failedTitle": "無法建置遊戲",
+    "remaining": "剩餘約 {time}",
+    "estimating": "正在估算剩餘時間…",
+    "retry": "重試",
+    "openLog": "顯示記錄"
+  },
   "update": {
     "available": "更新至 {version}",
     "downloading": "正在下載更新… {percent}",

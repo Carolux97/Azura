@@ -208,6 +208,14 @@
       "installing": "instalace"
     }
   },
+  "build": {
+    "title": "Sestavování hry",
+    "failedTitle": "Hru se nepodařilo sestavit",
+    "remaining": "zbývá asi {time}",
+    "estimating": "odhad zbývajícího času…",
+    "retry": "Zkusit znovu",
+    "openLog": "Zobrazit záznam"
+  },
   "update": {
     "available": "Aktualizovat na {version}",
     "downloading": "Stahování aktualizace… {percent}",

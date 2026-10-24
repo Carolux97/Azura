@@ -656,6 +656,31 @@ input[type="range"] { width: 100%; accent-color: var(--imulsion); }
 .backup-item-title { font-weight: 500; font-size: 13px; color: var(--text); }
 .backup-item-meta { font-size: 12px; color: var(--text-dim); }
 
+/* The runtime build's card on Play, and its bar (also in the Installation view). */
+.build-card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.build-card-percent { font-family: var(--font-display); font-size: 30px; color: var(--imulsion); }
+.build-card.is-failed .build-card-percent { color: var(--text-faint); }
+.build-bar {
+  height: 10px;
+  margin: 10px 0 8px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--steel-line);
+  clip-path: polygon(0 0, 100% 0, calc(100% - 6px) 100%, 0 100%);
+}
+.build-bar[hidden] { display: none; }
+.build-bar span {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, var(--imulsion-deep), var(--imulsion) 70%, var(--imulsion-hot));
+  box-shadow: 0 0 12px var(--imulsion-glow);
+  transition: width 0.4s ease-out;
+}
+.build-card.is-failed .build-bar span { background: var(--steel-hi); box-shadow: none; }
+.build-card-detail { margin: 0; word-break: break-word; }
+.build-card-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.build-card-actions[hidden] { display: none; }
+
 /* The compiler's buttons, below its state, wrapping in narrow windows. */
 .compiler-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
 .compiler-actions .btn[hidden] { display: none; }
