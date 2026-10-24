@@ -31,7 +31,12 @@
     "running": "Játékban",
     "runtimeWillInstall": "Előbb telepíti a futtatókörnyezetet",
     "building": "TELEPÍTÉS",
-    "buildingSub": "A játék épül ehhez a számítógéphez"
+    "buildingSub": "A játék épül ehhez a számítógéphez",
+    "installRuntime": "TELEPÍTÉS",
+    "installRuntimeSub": "Felépíti a játékot ehhez a számítógéphez · néhány perc",
+    "update": "FRISSÍTÉS",
+    "updateLinkSub": "Néhány másodperc",
+    "updateBuildSub": "Körülbelül két perc"
   },
   "status": {
     "gameFiles": "Játékfájlok",
@@ -47,7 +52,9 @@
     "compiler": "Fordító",
     "compilerChecking": "Ellenőrzés…",
     "compilerMissing": "Nincs telepítve",
-    "runtimeBuilding": "Épül…"
+    "runtimeBuilding": "Épül…",
+    "runtimeNotBuilt": "Nincs telepítve",
+    "runtimeUpdateKit": "Frissítés érhető el"
   },
   "news": {
     "title": "Hírek",

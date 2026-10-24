@@ -31,7 +31,12 @@
     "running": "W grze",
     "runtimeWillInstall": "Najpierw instaluje środowisko",
     "building": "INSTALOWANIE",
-    "buildingSub": "Gra jest budowana dla tego komputera"
+    "buildingSub": "Gra jest budowana dla tego komputera",
+    "installRuntime": "ZAINSTALUJ",
+    "installRuntimeSub": "Buduje grę dla tego komputera · kilka minut",
+    "update": "AKTUALIZUJ",
+    "updateLinkSub": "Kilka sekund",
+    "updateBuildSub": "Około dwóch minut"
   },
   "status": {
     "gameFiles": "Pliki gry",
@@ -47,7 +52,9 @@
     "compiler": "Kompilator",
     "compilerChecking": "Sprawdzanie…",
     "compilerMissing": "Niezainstalowany",
-    "runtimeBuilding": "Budowanie…"
+    "runtimeBuilding": "Budowanie…",
+    "runtimeNotBuilt": "Niezainstalowany",
+    "runtimeUpdateKit": "Dostępna aktualizacja"
   },
   "news": {
     "title": "Nowości",
