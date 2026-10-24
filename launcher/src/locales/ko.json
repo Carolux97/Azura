@@ -41,7 +41,10 @@
     "runtimeMissing": "빌드를 찾을 수 없음",
     "player": "Player",
     "runtimeNotInstalled": "플레이를 누르면 설치됩니다",
-    "runtimeUpdate": "업데이트 준비 완료, 플레이를 누르면 설치됩니다"
+    "runtimeUpdate": "업데이트 준비 완료, 플레이를 누르면 설치됩니다",
+    "compiler": "컴파일러",
+    "compilerChecking": "확인 중…",
+    "compilerMissing": "설치되지 않음"
   },
   "news": {
     "title": "새 소식",
@@ -83,7 +86,19 @@
     "savesHelp": "캠페인 체크포인트와 프로필이 저장되는 폴더입니다. 변경하면 저장된 게임이 그곳으로 이동합니다.",
     "savesConflict": "{folder}에 이미 저장된 게임이 있습니다. 현재 저장된 게임으로 바꾸시겠습니까?",
     "savesReplace": "바꾸기",
-    "savesCancel": "취소"
+    "savesCancel": "취소",
+    "compilerTitle": "컴파일러",
+    "compilerHelp": "게임은 사용자의 사본으로 이 컴퓨터에서 빌드한 네이티브 코드로 실행되므로 런처에 C++ 컴파일러가 필요합니다. 없으면 런처가 설치합니다.",
+    "compilerChecking": "컴파일러 확인 중…",
+    "compilerReady": "준비됨: {version}",
+    "compilerUnusable": "{found}을(를) 사용할 수 없습니다: {problem}",
+    "compilerMissing": "컴파일러를 찾을 수 없습니다.",
+    "compilerInstallApple": "Apple Command Line Tools 설치",
+    "compilerInstallPackage": "clang 설치",
+    "compilerInstalling": "컴파일러 설치 중…",
+    "compilerWaitingApple": "Apple 창의 안내에 따라 Command Line Tools를 설치하세요. 설치가 끝나면 런처가 알아서 계속합니다.",
+    "compilerCheckAgain": "다시 확인",
+    "compilerManual": "또는 터미널에서 다음을 실행하세요:"
   },
   "graphics": {
     "title": "그래픽",
@@ -151,7 +166,9 @@
     "savesNested": "현재 폴더 안에 있지 않은(또는 그 반대가 아닌) 폴더를 선택하세요.",
     "savesFailed": "저장된 게임 이동 실패: {detail}",
     "runtimeInstalled": "게임 런타임을 설치했습니다.",
-    "saveFailed": "설정을 저장할 수 없습니다: {detail}"
+    "saveFailed": "설정을 저장할 수 없습니다: {detail}",
+    "compilerInstalled": "컴파일러 준비됨: {version}",
+    "compilerInstallFailed": "컴파일러를 설치할 수 없습니다: {detail}"
   },
   "log": {
     "title": "게임 로그",

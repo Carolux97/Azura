@@ -41,7 +41,10 @@
     "runtimeMissing": "Сборка не найдена",
     "player": "Player",
     "runtimeNotInstalled": "Установится при нажатии «Играть»",
-    "runtimeUpdate": "Обновление готово, установится при нажатии «Играть»"
+    "runtimeUpdate": "Обновление готово, установится при нажатии «Играть»",
+    "compiler": "Компилятор",
+    "compilerChecking": "Проверка…",
+    "compilerMissing": "Не установлен"
   },
   "news": {
     "title": "Новости",
@@ -83,7 +86,19 @@
     "savesHelp": "Папка для контрольных точек кампании и профиля. При её смене сохранения переносятся туда.",
     "savesConflict": "В {folder} уже есть сохранения. Заменить их текущими сохранениями?",
     "savesReplace": "Заменить",
-    "savesCancel": "Отмена"
+    "savesCancel": "Отмена",
+    "compilerTitle": "Компилятор",
+    "compilerHelp": "Игра работает как нативный код, собранный на этом компьютере из вашей копии, поэтому лаунчеру нужен компилятор C++. Если его нет, лаунчер его установит.",
+    "compilerChecking": "Проверка компилятора…",
+    "compilerReady": "Готов: {version}",
+    "compilerUnusable": "{found} не подходит: {problem}",
+    "compilerMissing": "Компилятор не найден.",
+    "compilerInstallApple": "Установить Command Line Tools от Apple",
+    "compilerInstallPackage": "Установить clang",
+    "compilerInstalling": "Установка компилятора…",
+    "compilerWaitingApple": "Следуйте указаниям в окне Apple, чтобы установить Command Line Tools. Лаунчер продолжит сам после установки.",
+    "compilerCheckAgain": "Проверить снова",
+    "compilerManual": "Или выполните в терминале:"
   },
   "graphics": {
     "title": "Графика",
@@ -151,7 +166,9 @@
     "savesNested": "Выберите папку, которая не находится внутри текущей (и наоборот).",
     "savesFailed": "Не удалось перенести сохранения: {detail}",
     "runtimeInstalled": "Среда выполнения игры установлена.",
-    "saveFailed": "Не удалось сохранить настройки: {detail}"
+    "saveFailed": "Не удалось сохранить настройки: {detail}",
+    "compilerInstalled": "Компилятор готов: {version}",
+    "compilerInstallFailed": "Не удалось установить компилятор: {detail}"
   },
   "log": {
     "title": "Журнал игры",

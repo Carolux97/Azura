@@ -100,6 +100,10 @@
               <span class="dot"></span>
               <div><strong data-i18n="status.player"></strong><span class="status-detail" id="status-player-detail"></span></div>
             </div>
+            <div class="status" id="status-compiler" data-state="warn">
+              <span class="dot"></span>
+              <div><strong data-i18n="status.compiler"></strong><span class="status-detail"></span></div>
+            </div>
             <div class="status" id="status-runtime" data-state="warn">
               <span class="dot"></span>
               <div><strong data-i18n="status.runtime"></strong><span class="status-detail"></span></div>
@@ -151,6 +155,20 @@
             <p class="check" id="runtime-check"></p>
             <button class="btn" id="install-runtime"></button>
           </div>
+        </div>
+        <!-- The C++ compiler the runtime is built with; renderCompiler() fills it. -->
+        <div class="panel">
+          <h2 class="panel-title" data-i18n="install.compilerTitle"></h2>
+          <p class="help" data-i18n="install.compilerHelp"></p>
+          <p class="check" id="compiler-check"></p>
+          <div class="compiler-actions">
+            <button class="btn btn-primary" id="install-compiler" hidden></button>
+            <button class="btn" id="recheck-compiler" data-i18n="install.compilerCheckAgain"></button>
+          </div>
+          <p class="help compiler-manual" id="compiler-manual" hidden>
+            <span data-i18n="install.compilerManual"></span>
+            <code id="compiler-manual-command"></code>
+          </p>
         </div>
         <div class="panel">
           <h2 class="panel-title" data-i18n="install.savesTitle"></h2>

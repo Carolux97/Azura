@@ -41,7 +41,10 @@
     "runtimeMissing": "Aucune compilation trouvée",
     "player": "Joueur",
     "runtimeNotInstalled": "S'installera en appuyant sur Jouer",
-    "runtimeUpdate": "Mise à jour prête, s'installera en appuyant sur Jouer"
+    "runtimeUpdate": "Mise à jour prête, s'installera en appuyant sur Jouer",
+    "compiler": "Compilateur",
+    "compilerChecking": "Vérification…",
+    "compilerMissing": "Non installé"
   },
   "news": {
     "title": "Nouveautés",
@@ -83,7 +86,19 @@
     "savesHelp": "Dossier de vos points de contrôle de campagne et de votre profil. Le changer y déplace vos sauvegardes.",
     "savesConflict": "{folder} contient déjà des sauvegardes. Les remplacer par vos sauvegardes actuelles ?",
     "savesReplace": "Remplacer",
-    "savesCancel": "Annuler"
+    "savesCancel": "Annuler",
+    "compilerTitle": "Compilateur",
+    "compilerHelp": "Le jeu tourne en code natif compilé sur cet ordinateur à partir de votre propre copie : le launcher a donc besoin d'un compilateur C++. S'il manque, il l'installe.",
+    "compilerChecking": "Vérification du compilateur…",
+    "compilerReady": "Prêt : {version}",
+    "compilerUnusable": "{found} ne convient pas : {problem}",
+    "compilerMissing": "Aucun compilateur trouvé.",
+    "compilerInstallApple": "Installer les Command Line Tools d'Apple",
+    "compilerInstallPackage": "Installer clang",
+    "compilerInstalling": "Installation du compilateur…",
+    "compilerWaitingApple": "Suivez la fenêtre d'Apple pour installer les Command Line Tools. Le launcher continue tout seul une fois installées.",
+    "compilerCheckAgain": "Vérifier à nouveau",
+    "compilerManual": "Ou exécutez ceci dans un terminal :"
   },
   "graphics": {
     "title": "Graphismes",
@@ -151,7 +166,9 @@
     "savesNested": "Choisissez un dossier qui n'est pas dans le dossier actuel (ni l'inverse).",
     "savesFailed": "Échec du déplacement des sauvegardes : {detail}",
     "runtimeInstalled": "Runtime du jeu installé.",
-    "saveFailed": "Impossible d'enregistrer les réglages : {detail}"
+    "saveFailed": "Impossible d'enregistrer les réglages : {detail}",
+    "compilerInstalled": "Compilateur prêt : {version}",
+    "compilerInstallFailed": "Impossible d'installer le compilateur : {detail}"
   },
   "log": {
     "title": "Journal du jeu",

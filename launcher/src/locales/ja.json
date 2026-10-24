@@ -41,7 +41,10 @@
     "runtimeMissing": "ビルドが見つかりません",
     "player": "Player",
     "runtimeNotInstalled": "「プレイ」を押すとインストールされます",
-    "runtimeUpdate": "アップデートの準備完了。「プレイ」を押すとインストールされます"
+    "runtimeUpdate": "アップデートの準備完了。「プレイ」を押すとインストールされます",
+    "compiler": "コンパイラ",
+    "compilerChecking": "確認中…",
+    "compilerMissing": "未インストール"
   },
   "news": {
     "title": "お知らせ",
@@ -83,7 +86,19 @@
     "savesHelp": "キャンペーンのチェックポイントとプロフィールのフォルダです。変更するとセーブデータがそこへ移動します。",
     "savesConflict": "{folder} には既にセーブデータがあります。現在のセーブデータで置き換えますか？",
     "savesReplace": "置き換える",
-    "savesCancel": "キャンセル"
+    "savesCancel": "キャンセル",
+    "compilerTitle": "コンパイラ",
+    "compilerHelp": "ゲームはお持ちのコピーからこのコンピュータでビルドしたネイティブコードとして動作するため、ランチャーには C++ コンパイラが必要です。ない場合はランチャーがインストールします。",
+    "compilerChecking": "コンパイラを確認しています…",
+    "compilerReady": "準備完了: {version}",
+    "compilerUnusable": "{found} は使用できません: {problem}",
+    "compilerMissing": "コンパイラが見つかりません。",
+    "compilerInstallApple": "Apple の Command Line Tools をインストール",
+    "compilerInstallPackage": "clang をインストール",
+    "compilerInstalling": "コンパイラをインストールしています…",
+    "compilerWaitingApple": "Apple のウインドウに従って Command Line Tools をインストールしてください。インストール後、ランチャーは自動で続行します。",
+    "compilerCheckAgain": "再確認",
+    "compilerManual": "またはターミナルで次を実行:"
   },
   "graphics": {
     "title": "グラフィック",
@@ -151,7 +166,9 @@
     "savesNested": "現在のフォルダの中にない（またはその逆でない）フォルダを選んでください。",
     "savesFailed": "セーブデータの移動に失敗しました: {detail}",
     "runtimeInstalled": "ゲームランタイムをインストールしました。",
-    "saveFailed": "設定を保存できませんでした: {detail}"
+    "saveFailed": "設定を保存できませんでした: {detail}",
+    "compilerInstalled": "コンパイラの準備完了: {version}",
+    "compilerInstallFailed": "コンパイラをインストールできませんでした: {detail}"
   },
   "log": {
     "title": "ゲームログ",

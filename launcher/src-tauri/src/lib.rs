@@ -12,6 +12,7 @@ mod runtime;
 mod saves;
 mod settings;
 mod system;
+mod toolchain;
 mod updater;
 mod versions;
 
@@ -24,6 +25,7 @@ use runtime::{GameProcess, LaunchError, LaunchFolders};
 use saves::{BackupInfo, SaveStatus, SavesError};
 use settings::{Settings, SettingsPaths};
 use system::SystemInfo;
+use toolchain::CompilerStatus;
 use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
 use updater::UpdateInfo;
@@ -246,6 +248,20 @@ async fn save_settings(app: tauri::AppHandle, settings: Settings) -> Result<(), 
     settings_paths(&app)?.save(&settings)
 }
 
+/// Whether there is a working C++ compiler to build the runtime with, and how to install one
+/// otherwise (see `toolchain.rs`). `async`: it compiles a small test program.
+#[tauri::command]
+async fn get_compiler_status() -> CompilerStatus {
+    toolchain::status()
+}
+
+/// Installs the compiler: opens Apple's Command Line Tools dialog on macOS (the interface then
+/// checks the status until they are there), or runs the package manager on Linux and waits.
+#[tauri::command]
+async fn install_compiler() -> Result<(), String> {
+    toolchain::install()
+}
+
 /// Describes this Mac (chip, memory), for the status lines and the "Auto" preset.
 #[tauri::command]
 async fn get_system_info() -> SystemInfo {
@@ -290,7 +306,9 @@ pub fn run() {
             create_save_backup,
             restore_save_backup,
             open_saves_folder,
-            get_achievements
+            get_achievements,
+            get_compiler_status,
+            install_compiler
         ])
         .setup(|app| {
             // Debug builds log to the terminal that started them; release builds stay quiet.
