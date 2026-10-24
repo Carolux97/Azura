@@ -208,6 +208,14 @@
       "installing": "telepítés"
     }
   },
+  "build": {
+    "title": "A játék építése",
+    "failedTitle": "Nem sikerült felépíteni a játékot",
+    "remaining": "kb. {time} van hátra",
+    "estimating": "a hátralévő idő becslése…",
+    "retry": "Újra",
+    "openLog": "Napló megjelenítése"
+  },
   "update": {
     "available": "Frissítés erre: {version}",
     "downloading": "Frissítés letöltése… {percent}",

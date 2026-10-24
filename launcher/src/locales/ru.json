@@ -208,6 +208,14 @@
       "installing": "установка"
     }
   },
+  "build": {
+    "title": "Сборка игры",
+    "failedTitle": "Не удалось собрать игру",
+    "remaining": "осталось около {time}",
+    "estimating": "оценка оставшегося времени…",
+    "retry": "Повторить",
+    "openLog": "Показать журнал"
+  },
   "update": {
     "available": "Обновить до {version}",
     "downloading": "Загрузка обновления… {percent}",
