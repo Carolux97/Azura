@@ -259,5 +259,17 @@
     "resetToast": "Saves reset. Automatic backup created.",
     "backupToast": "Backup successfully created",
     "restoreToast": "Save restored successfully"
+  },
+  "gamepad": {
+    "select": "선택",
+    "back": "뒤로",
+    "section": "섹션",
+    "play": "플레이",
+    "type": "입력",
+    "delete": "삭제",
+    "space": "스페이스",
+    "done": "완료",
+    "cancel": "취소",
+    "page": "페이지"
   }
 }

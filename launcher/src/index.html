@@ -87,10 +87,13 @@
         <div class="play-row">
           <!-- Its label and action depend on the installation: "Play" when the game files are set,
                "Install" (which opens the Installation view) when they are not. See renderPlay(). -->
-          <button class="btn-launch" id="launch">
-            <span class="btn-launch-label"></span>
-            <span class="btn-launch-sub"></span>
-          </button>
+          <!-- The frame around it draws its focus: the button's cut corners clip anything outside it. -->
+          <div class="launch-frame">
+            <button class="btn-launch" id="launch">
+              <span class="btn-launch-label"></span>
+              <span class="btn-launch-sub"></span>
+            </button>
+          </div>
           <div class="status-list">
             <div class="status" id="status-game" data-state="warn">
               <span class="dot"></span>
@@ -198,7 +201,7 @@
           <div class="path-row" id="saves-conflict" hidden>
             <p class="check" data-state="error" id="saves-conflict-text"></p>
             <button class="btn" id="saves-replace" data-i18n="install.savesReplace"></button>
-            <button class="btn" id="saves-cancel" data-i18n="install.savesCancel"></button>
+            <button class="btn" id="saves-cancel" data-pad-back data-i18n="install.savesCancel"></button>
           </div>
         </div>
         <div class="panel">
@@ -217,7 +220,7 @@
           <div class="field-grid">
             <label class="field">
               <span data-i18n="install.userName"></span>
-              <input class="path" id="player-name" type="text" maxlength="15" data-i18n-attr="placeholder:install.userNamePlaceholder">
+              <input class="path" id="player-name" type="text" maxlength="15" data-text-rule="gamertag" data-i18n-attr="placeholder:install.userNamePlaceholder">
             </label>
           </div>
         </div>
@@ -345,6 +348,10 @@
       </section>
     </main>
   </div>
+
+  <!-- The controller buttons and what they do, while a controller is in use (gamepadNav.js). Outside
+       the shell, so it stays above the on-screen keyboard. -->
+  <div class="pad-hints" id="pad-hints" hidden></div>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
