@@ -155,8 +155,10 @@ std::string ParamValue(const uint8_t* base, const std::string& type, uint32_t ad
   return raw;
 }
 
-// "Class.Function(param=value, ...)" for a frame about to run.
-std::string DescribeCall(const uint8_t* base, uint32_t frame) {
+// "Class.Function(param=value, ...)" for a frame about to run. With `result`, the address the
+// caller passed for the return value, ReturnValue is read there: a script function returns into
+// the caller's result, not into its own ReturnValue local.
+std::string DescribeCall(const uint8_t* base, uint32_t frame, uint32_t result = 0) {
   const uint32_t function = LoadU32(base, frame + kFrameNode);
   const uint32_t locals = LoadU32(base, frame + kFrameLocals);
   std::string text = ObjectName(base, LoadU32(base, function + kObjectOuter)) + "." + ObjectName(base, function) + "(";
@@ -165,7 +167,9 @@ std::string DescribeCall(const uint8_t* base, uint32_t frame) {
     const uint64_t flags = (uint64_t(LoadU32(base, prop + kPropertyFlags)) << 32) | LoadU32(base, prop + kPropertyFlags + 4);
     if (!(flags & kPropertyParm)) break;  // parameters come first; locals follow
     const std::string type = ObjectName(base, LoadU32(base, prop + kObjectClass));
-    text += (first ? "" : ", ") + ObjectName(base, prop) + "=" + ParamValue(base, type, locals + LoadU32(base, prop + kPropertyOffset));
+    const std::string name = ObjectName(base, prop);
+    const uint32_t address = result && name == "ReturnValue" ? result : locals + LoadU32(base, prop + kPropertyOffset);
+    text += (first ? "" : ", ") + name + "=" + ParamValue(base, type, address);
     first = false;
   }
   return text + ")";
@@ -1069,6 +1073,12 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     }
     if (function && InList(REXCVAR_GET(script_trace_args), ObjectName(base, function))) {
       REXLOG_INFO("[Azura script] call {}", DescribeCall(base, frame));
+      const uint32_t result = ctx.r5.u32;
+      __imp__sub_822DF9E0(ctx, base);
+      // Logged again on return, when the out parameters and the caller's result hold what it
+      // produced.
+      REXLOG_INFO("[Azura script] return {}", DescribeCall(base, frame, result));
+      return;
     }
   }
   __imp__sub_822DF9E0(ctx, base);
