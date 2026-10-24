@@ -90,6 +90,11 @@ rexglue_add_host_sources(azura_host)
 if(REXSDK_DIR AND TARGET imgui)
     target_include_directories(azura_host PRIVATE $<TARGET_PROPERTY:imgui,INTERFACE_INCLUDE_DIRECTORIES>)
 endif()
+# The same for renderdoc_app.h, which the SDK's Vulkan headers include (through
+# rex/ui/renderdoc_api.h).
+if(REXSDK_DIR AND TARGET renderdoc)
+    target_include_directories(azura_host PRIVATE $<TARGET_PROPERTY:renderdoc,INTERFACE_INCLUDE_DIRECTORIES>)
+endif()
 # Optional extra headers for the build machine (on Linux, the ALSA and PulseAudio headers a
 # distribution may lack), in sdk/compat/include when present; nothing in the repository creates it.
 set(AZURA_COMPAT_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/../sdk/compat/include")
