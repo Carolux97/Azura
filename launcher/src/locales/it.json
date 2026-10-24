@@ -29,7 +29,9 @@
     "install": "Installa",
     "installSub": "Configura i file di gioco",
     "running": "In gioco",
-    "runtimeWillInstall": "Installa prima il runtime"
+    "runtimeWillInstall": "Installa prima il runtime",
+    "building": "IN COSTRUZIONE",
+    "buildingSub": "Il gioco viene costruito per questo computer"
   },
   "status": {
     "gameFiles": "File di gioco",
@@ -44,7 +46,8 @@
     "runtimeUpdate": "Aggiornamento pronto, si installerà premendo Gioca",
     "compiler": "Compilatore",
     "compilerChecking": "Verifica…",
-    "compilerMissing": "Non installato"
+    "compilerMissing": "Non installato",
+    "runtimeBuilding": "In costruzione…"
   },
   "news": {
     "title": "Novità",

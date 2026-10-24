@@ -250,7 +250,8 @@ const renderPlay = () => {
 
   const runtime = document.getElementById("status-runtime");
   const [, tone] = runtimeState();
-  runtime.dataset.state = tone === "ok" ? "ok" : "warn";
+  const building = state.installingRuntime && state.runtime.source === "kit";
+  runtime.dataset.state = building ? "progress" : tone === "ok" ? "ok" : "warn";
   const system = state.system;
   const platformName = system?.os === "linux"
     ? `Linux ${system.arch}`
@@ -261,6 +262,7 @@ const renderPlay = () => {
   if (!state.runtime.buildFound && !state.runtime.installed) runtimeDetail = t("status.runtimeMissing");
   else if (!state.runtime.installed) runtimeDetail = t("status.runtimeNotInstalled");
   else if (state.runtime.updateAvailable) runtimeDetail = t("status.runtimeUpdate");
+  if (building) runtimeDetail = t("status.runtimeBuilding");
   runtime.querySelector(".status-detail").textContent = runtimeDetail;
 
   const player = document.getElementById("status-player");
@@ -274,7 +276,10 @@ const renderPlay = () => {
   button.disabled = state.game !== "idle" || state.installingRuntime;
   let label = "play.install";
   let sub = "play.installSub";
-  if (isInstalled()) {
+  if (isInstalled() && building) {
+    label = "play.building";
+    sub = "play.buildingSub";
+  } else if (isInstalled()) {
     label = { idle: "play.launch", starting: "play.launching", running: "play.running" }[state.game];
     sub = state.game === "idle" && runtimeNeedsInstall() ? "play.runtimeWillInstall" : "play.mode";
   }
@@ -350,6 +355,13 @@ const setupLaunch = () => {
     if (!isInstalled()) {
       showView("install");
       document.getElementById("pick-game").focus();
+      return;
+    }
+    // Building from the kit takes minutes: the button then only builds, and turns to Play once the
+    // build is done, so the game does not start while the player may have stepped away. A project
+    // build installs in a second, and Play goes on to start the game.
+    if (runtimeNeedsInstall() && state.runtime.source === "kit") {
+      await runRuntimeInstall();
       return;
     }
     document.getElementById("game-log-body").replaceChildren();

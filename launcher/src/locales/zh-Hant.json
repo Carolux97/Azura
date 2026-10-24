@@ -29,7 +29,9 @@
     "install": "安裝",
     "installSub": "設定遊戲檔案",
     "running": "遊玩中",
-    "runtimeWillInstall": "會先安裝執行環境"
+    "runtimeWillInstall": "會先安裝執行環境",
+    "building": "建置中",
+    "buildingSub": "正在為這台電腦建置遊戲"
   },
   "status": {
     "gameFiles": "遊戲檔案",
@@ -44,7 +46,8 @@
     "runtimeUpdate": "更新已就緒，按下「遊玩」時安裝",
     "compiler": "編譯器",
     "compilerChecking": "檢查中…",
-    "compilerMissing": "未安裝"
+    "compilerMissing": "未安裝",
+    "runtimeBuilding": "建置中…"
   },
   "news": {
     "title": "最新消息",

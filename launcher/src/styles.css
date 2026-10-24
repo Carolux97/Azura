@@ -408,6 +408,13 @@ code, kbd {
   box-shadow: 0 0 8px var(--ok);
 }
 .status[data-state="warn"] .dot { background: var(--crimson); box-shadow: 0 0 8px var(--crimson); }
+/* Something is under way (the runtime being built): amber, fading slowly in and out. */
+.status[data-state="progress"] .dot {
+  background: var(--imulsion);
+  box-shadow: 0 0 8px var(--imulsion-glow);
+  animation: status-progress 2.4s ease-in-out infinite;
+}
+@keyframes status-progress { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
 
 .news-item { display: grid; grid-template-columns: 110px 1fr; gap: 12px; }
 .news-item time { color: var(--imulsion); font-family: var(--font-ui); font-weight: 600; letter-spacing: 0.06em; }
