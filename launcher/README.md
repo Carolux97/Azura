@@ -172,11 +172,10 @@ against `plugins.updater.pubkey` in `src-tauri/tauri.conf.json` and restarts int
 carries the player kit of its platform, so a new launcher is also how fixes to the game reach
 players: once it has updated, it rebuilds or relinks the runtime from the new kit.
 
-Releases are published to a public repository that only holds releases (`RELEASES_REPO` in
-`scripts/release-common.sh`, and the updater endpoint in `tauri.conf.json`), because this
-repository is private and installed launchers download without credentials. It is kept as hard
-to come across as possible: no description, README or topics, and releases titled with the
-version alone.
+Releases are published to [Carolux97/gears3-azura-releases](https://github.com/Carolux97/gears3-azura-releases),
+a repository that only holds releases (`RELEASES_REPO` in `scripts/release-common.sh`, and the
+updater endpoint in `tauri.conf.json`). Launchers installed before it was renamed from
+`Carolux97/files` keep finding it through GitHub's redirect of the old name.
 
 ### How a release happens
 
