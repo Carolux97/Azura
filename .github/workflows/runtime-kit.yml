@@ -49,8 +49,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # On the project's own Mac (a self-hosted runner, see CONTRIBUTING.md): GitHub's macOS
+          # runners count ten times their minutes on a private repository.
           - platform: mac-arm64
-            runner: macos-latest
+            runner: [self-hosted, macOS, ARM64]
           # In Ubuntu 22.04 with clang 20, as the SDK builds its own Linux releases: the kit's
           # libraries then need no newer glibc than 2.35.
           - platform: linux-amd64
