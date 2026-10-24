@@ -127,7 +127,11 @@
     "fullscreen": "전체 화면",
     "renderResolution": "렌더링 해상도",
     "original": "원본",
-    "resolutionAuto": "자동 ({size})"
+    "resolutionAuto": "자동 ({size})",
+    "gpu": "그래픽 카드",
+    "gpuAuto": "자동 ({name})",
+    "gpuDiscrete": "외장",
+    "gpuIntegrated": "내장"
   },
   "achievements": {
     "title": "도전 과제",
@@ -188,7 +192,8 @@
     "runtimeInstalled": "게임 런타임을 설치했습니다.",
     "saveFailed": "설정을 저장할 수 없습니다: {detail}",
     "compilerInstalled": "컴파일러 준비됨: {version}",
-    "compilerInstallFailed": "컴파일러를 설치할 수 없습니다: {detail}"
+    "compilerInstallFailed": "컴파일러를 설치할 수 없습니다: {detail}",
+    "gpuMissing": "선택한 그래픽 카드가 이 컴퓨터에 없습니다. 자동으로 선택된 카드를 사용합니다."
   },
   "log": {
     "title": "게임 로그",

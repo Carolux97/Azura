@@ -8,6 +8,7 @@ mod builder;
 mod disc_image;
 mod game_folder;
 mod gamepad;
+mod gpus;
 mod install;
 mod release_notes;
 #[cfg(test)]
@@ -30,7 +31,7 @@ use saves::{BackupInfo, SaveStatus, SavesError};
 use settings::{Settings, SettingsPaths};
 use system::SystemInfo;
 use toolchain::CompilerStatus;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 use updater::UpdateInfo;
 use versions::Registry;
@@ -283,7 +284,29 @@ async fn launch_game(
     let saves = paths.saves_folder().map_err(LaunchError::SavesUnavailable)?;
     saves::prepare(&saves, &cache).map_err(|e| LaunchError::SavesUnavailable(format!("{e:?}")))?;
     let folders = LaunchFolders { runtime: &runtime, game: game.as_deref(), saves: &saves, cache: &cache };
-    process.launch(app, &folders)
+    // The chosen graphics card, checked against the cards present (on Linux; macOS has one).
+    let chosen = paths.load().map_err(LaunchError::StartFailed)?.gpu;
+    let devices = if chosen.is_some() && !cfg!(target_os = "macos") {
+        gpus::list_from_runtime(&runtime).ok().map(|list| list.devices)
+    } else {
+        None
+    };
+    let gpu = gpus::launch_choice(chosen.as_deref(), devices.as_deref(), gpus::prime_offload_available());
+    if gpu.chosen_missing {
+        let _ = app.emit(GPU_MISSING_EVENT, ());
+    }
+    process.launch(app, &folders, &gpu)
+}
+
+/// Event sent when the chosen graphics card is not in the computer any more, before the game starts
+/// with the automatic choice.
+const GPU_MISSING_EVENT: &str = "gpu-missing";
+
+/// Lists the graphics cards the game can run on, for the choice in the Graphics options (empty on
+/// macOS). `async`: it runs the runtime, which takes a moment.
+#[tauri::command]
+async fn list_gpus(app: tauri::AppHandle) -> Result<gpus::GpuList, String> {
+    gpus::list(&runtime_dir(&app)?)
 }
 
 /// Returns the current state of saved games.
@@ -429,6 +452,7 @@ pub fn run() {
             save_settings,
             get_system_info,
             get_release_notes,
+            list_gpus,
             get_runtime_status,
             install_runtime,
             launch_game,

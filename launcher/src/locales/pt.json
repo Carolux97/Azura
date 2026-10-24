@@ -127,7 +127,11 @@
     "fullscreen": "Tela cheia",
     "renderResolution": "Resolução de renderização",
     "original": "original",
-    "resolutionAuto": "Automática ({size})"
+    "resolutionAuto": "Automática ({size})",
+    "gpu": "Placa de vídeo",
+    "gpuAuto": "Automática ({name})",
+    "gpuDiscrete": "dedicada",
+    "gpuIntegrated": "integrada"
   },
   "achievements": {
     "title": "Conquistas",
@@ -188,7 +192,8 @@
     "runtimeInstalled": "Runtime do jogo instalado.",
     "saveFailed": "Não foi possível salvar as configurações: {detail}",
     "compilerInstalled": "Compilador pronto: {version}",
-    "compilerInstallFailed": "Não foi possível instalar o compilador: {detail}"
+    "compilerInstallFailed": "Não foi possível instalar o compilador: {detail}",
+    "gpuMissing": "A placa de vídeo escolhida não está mais neste computador: o jogo usa a automática."
   },
   "log": {
     "title": "Registro do jogo",
