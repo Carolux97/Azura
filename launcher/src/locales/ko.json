@@ -74,7 +74,7 @@
     "userNamePlaceholder": "User (up to 15 characters)",
     "defaultUserName": "User",
     "runtimeTitle": "게임 런타임",
-    "runtimeHelp": "런처가 실행하는 재컴파일된 게임입니다. scripts/build.sh 빌드에서 설치되며 더 새로운 빌드가 있으면 업데이트됩니다.",
+    "runtimeHelp": "이 컴퓨터용으로 다시 컴파일한 게임입니다. 처음에는 런처가 사용자의 게임 사본으로 빌드하고(몇 분), 프로젝트가 업데이트되면 다시 빌드합니다.",
     "runtimeInstalled": "설치됨, 최신 상태입니다.",
     "runtimeUpdate": "설치할 수 있는 새 빌드가 있습니다.",
     "runtimeNotInstalled": "아직 설치되지 않았습니다.",
@@ -184,7 +184,26 @@
     "startFailed": "게임을 시작할 수 없습니다: {detail}",
     "installingRuntime": "게임 런타임을 설치하는 중…",
     "installFailed": "런타임 설치 실패: {detail}",
-    "savesUnavailable": "저장된 게임 폴더를 사용할 수 없습니다: {detail}"
+    "savesUnavailable": "저장된 게임 폴더를 사용할 수 없습니다: {detail}",
+    "buildPreparing": "게임 빌드 준비 중…",
+    "buildTranslating": "게임 코드 변환 중…",
+    "buildCompiling": "게임 컴파일 중: 파일 {total}개 중 {done}개",
+    "buildLinking": "게임 링크 중…",
+    "buildInstalling": "게임 설치 중…",
+    "buildNoCompiler": "게임을 빌드하려면 C++ 컴파일러가 필요합니다. 설치에서 설치하세요.",
+    "buildNoKit": "이 런처에는 이 시스템에서 게임을 빌드할 키트가 없습니다.",
+    "buildWrongKit": "런처의 키트를 여기서 사용할 수 없습니다: {detail}",
+    "buildUnsupportedGame": "먼저 설치에서 지원되는 게임 사본을 선택하세요.",
+    "buildNoSpace": "게임을 빌드할 여유 공간이 부족합니다: {needed} MB 필요, {free} MB 남음.",
+    "buildStepFailed": "게임 빌드가 '{step}' 단계에서 실패했습니다: {summary} (전체 로그: {log})",
+    "buildBusy": "게임이 이미 빌드 중이거나 실행 중입니다.",
+    "buildStep": {
+      "preparing": "준비",
+      "translating": "코드 변환",
+      "compiling": "컴파일",
+      "linking": "링크",
+      "installing": "설치"
+    }
   },
   "update": {
     "available": "{version}(으)로 업데이트",

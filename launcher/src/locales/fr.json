@@ -74,7 +74,7 @@
     "userNamePlaceholder": "User (15 caractères max.)",
     "defaultUserName": "User",
     "runtimeTitle": "Runtime du jeu",
-    "runtimeHelp": "Le jeu recompilé que lance le launcher. Il est installé depuis la compilation de scripts/build.sh et mis à jour dès qu'une plus récente existe.",
+    "runtimeHelp": "Le jeu recompilé pour cet ordinateur. La première fois, le launcher le construit à partir de votre propre copie du jeu (quelques minutes), puis à nouveau quand le projet le met à jour.",
     "runtimeInstalled": "Installé et à jour.",
     "runtimeUpdate": "Une compilation plus récente est prête à être installée.",
     "runtimeNotInstalled": "Pas encore installé.",
@@ -184,7 +184,26 @@
     "startFailed": "Impossible de lancer le jeu : {detail}",
     "installingRuntime": "Installation du runtime du jeu…",
     "installFailed": "Échec de l'installation du runtime : {detail}",
-    "savesUnavailable": "Le dossier des sauvegardes n'est pas disponible : {detail}"
+    "savesUnavailable": "Le dossier des sauvegardes n'est pas disponible : {detail}",
+    "buildPreparing": "Préparation de la construction du jeu…",
+    "buildTranslating": "Traduction du code du jeu…",
+    "buildCompiling": "Compilation du jeu : {done} fichiers sur {total}",
+    "buildLinking": "Édition des liens du jeu…",
+    "buildInstalling": "Installation du jeu…",
+    "buildNoCompiler": "Un compilateur C++ est nécessaire pour construire le jeu : installez-le dans Installation.",
+    "buildNoKit": "Ce launcher n'a pas de kit pour construire le jeu sur ce système.",
+    "buildWrongKit": "Le kit du launcher ne convient pas ici : {detail}",
+    "buildUnsupportedGame": "Choisissez d'abord une copie du jeu compatible dans Installation.",
+    "buildNoSpace": "Espace libre insuffisant pour construire le jeu : {needed} Mo nécessaires, {free} Mo libres.",
+    "buildStepFailed": "La construction du jeu a échoué pendant l'étape « {step} » : {summary} (journal complet : {log})",
+    "buildBusy": "Le jeu est déjà en cours de construction ou d'exécution.",
+    "buildStep": {
+      "preparing": "préparation",
+      "translating": "traduction du code",
+      "compiling": "compilation",
+      "linking": "édition des liens",
+      "installing": "installation"
+    }
   },
   "update": {
     "available": "Mettre à jour vers {version}",

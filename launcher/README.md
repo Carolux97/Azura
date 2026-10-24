@@ -46,6 +46,26 @@ older launcher (`draw_resolution_scale_x`, with `resolution_auto` in `launcher.t
 scaling, mouse sensitivity, bindings) is changed in the game's Options menu.
 Both sides read and write the same `azura.toml`.
 
+## Runtime
+
+The runtime is the game recompiled for this computer. Players build it with the launcher from
+their own `default.xex` (`src-tauri/src/builder.rs`, `docs/player-runtime-build.md`): the player
+kit (`scripts/build-kit.sh`, built in CI) holds everything but the game, and `kit.json` the
+commands to build it, which the launcher runs with the machine's compiler. Install in the
+Installation view, or Play when nothing is installed, does it: codegen with the kit's code
+generator in `build/<game build>/` under the app data folder, the generated files compiled one per
+core, the link, and the new runtime folder swapped in by renames, keeping the player's
+`azura.toml` and logs. Each object is reused while its key matches (its source, the command and the
+generated headers the compiler reported it used), so an interrupted build resumes and a second one
+only runs codegen and the link. Progress arrives as `runtime-build-progress` events.
+
+Where the runtime comes from, in order: `AZURA_RUNTIME_BUILD` (a build folder, copied),
+`AZURA_KIT` (a kit folder, built from), a project build when the launcher runs from a checkout
+(copied, as developers do), then the kit bundled with the launcher or the project's kit build.
+
+`cargo test builds_a_runtime -- --ignored` builds a real runtime with the launcher's code, given
+`AZURA_TEST_KIT` (a kit) and `AZURA_TEST_GAME` (a game folder).
+
 ## Compiler
 
 The runtime is built on the player's machine from their own `default.xex`

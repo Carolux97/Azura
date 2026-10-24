@@ -74,7 +74,7 @@
     "userNamePlaceholder": "User (bis zu 15 Zeichen)",
     "defaultUserName": "User",
     "runtimeTitle": "Spiel-Runtime",
-    "runtimeHelp": "Das neu kompilierte Spiel, das der Launcher startet. Es wird aus dem Build von scripts/build.sh installiert und aktualisiert, sobald es einen neueren gibt.",
+    "runtimeHelp": "Das für diesen Computer neu kompilierte Spiel. Beim ersten Mal baut der Launcher es aus deiner eigenen Spielkopie (einige Minuten) und erneut, wenn das Projekt es aktualisiert.",
     "runtimeInstalled": "Installiert und aktuell.",
     "runtimeUpdate": "Ein neuerer Build ist bereit zur Installation.",
     "runtimeNotInstalled": "Noch nicht installiert.",
@@ -184,7 +184,26 @@
     "startFailed": "Das Spiel konnte nicht gestartet werden: {detail}",
     "installingRuntime": "Spiel-Runtime wird installiert…",
     "installFailed": "Installation der Runtime fehlgeschlagen: {detail}",
-    "savesUnavailable": "Der Spielstand-Ordner ist nicht verfügbar: {detail}"
+    "savesUnavailable": "Der Spielstand-Ordner ist nicht verfügbar: {detail}",
+    "buildPreparing": "Bau des Spiels wird vorbereitet …",
+    "buildTranslating": "Code des Spiels wird übersetzt …",
+    "buildCompiling": "Spiel wird kompiliert: {done} von {total} Dateien",
+    "buildLinking": "Spiel wird gelinkt …",
+    "buildInstalling": "Spiel wird installiert …",
+    "buildNoCompiler": "Zum Bauen des Spiels wird ein C++-Compiler benötigt: Installiere ihn unter Installation.",
+    "buildNoKit": "Dieser Launcher hat kein Kit, um das Spiel auf diesem System zu bauen.",
+    "buildWrongKit": "Das Kit des Launchers ist hier nicht verwendbar: {detail}",
+    "buildUnsupportedGame": "Wähle zuerst unter Installation eine unterstützte Spielkopie.",
+    "buildNoSpace": "Nicht genug freier Speicher zum Bauen des Spiels: {needed} MB nötig, {free} MB frei.",
+    "buildStepFailed": "Der Bau des Spiels ist beim Schritt „{step}“ fehlgeschlagen: {summary} (vollständiges Protokoll: {log})",
+    "buildBusy": "Das Spiel wird bereits gebaut oder läuft.",
+    "buildStep": {
+      "preparing": "Vorbereiten",
+      "translating": "Code übersetzen",
+      "compiling": "Kompilieren",
+      "linking": "Linken",
+      "installing": "Installieren"
+    }
   },
   "update": {
     "available": "Auf {version} aktualisieren",

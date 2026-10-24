@@ -60,6 +60,9 @@ pub struct RuntimeStatus {
     pub update_available: bool,
     /// Path of the installed executable.
     pub path: String,
+    /// Where the runtime comes from: "build" (a project build, copied), "kit" (built here from the
+    /// player kit and the player's default.xex) or "none".
+    pub source: &'static str,
 }
 
 /// Finds the runtime build to install from, if any.
@@ -106,6 +109,7 @@ pub fn status(runtime_dir: &Path, build: Option<&Path>) -> RuntimeStatus {
         build_found: build.is_some(),
         update_available,
         path: installed_exe.to_string_lossy().into_owned(),
+        source: if build.is_some() { "build" } else { "none" },
     }
 }
 

@@ -74,7 +74,7 @@
     "userNamePlaceholder": "User (up to 15 characters)",
     "defaultUserName": "User",
     "runtimeTitle": "Środowisko gry",
-    "runtimeHelp": "Ponownie skompilowana gra uruchamiana przez launcher. Instalowana z kompilacji scripts/build.sh i aktualizowana, gdy pojawi się nowsza.",
+    "runtimeHelp": "Gra przekompilowana dla tego komputera. Za pierwszym razem launcher buduje ją z twojej kopii gry (kilka minut), a potem ponownie, gdy projekt ją aktualizuje.",
     "runtimeInstalled": "Zainstalowane i aktualne.",
     "runtimeUpdate": "Nowsza kompilacja jest gotowa do instalacji.",
     "runtimeNotInstalled": "Jeszcze niezainstalowane.",
@@ -184,7 +184,26 @@
     "startFailed": "Nie udało się uruchomić gry: {detail}",
     "installingRuntime": "Instalowanie środowiska gry…",
     "installFailed": "Instalacja środowiska nie powiodła się: {detail}",
-    "savesUnavailable": "Folder zapisów jest niedostępny: {detail}"
+    "savesUnavailable": "Folder zapisów jest niedostępny: {detail}",
+    "buildPreparing": "Przygotowywanie budowania gry…",
+    "buildTranslating": "Tłumaczenie kodu gry…",
+    "buildCompiling": "Kompilowanie gry: {done} z {total} plików",
+    "buildLinking": "Konsolidowanie gry…",
+    "buildInstalling": "Instalowanie gry…",
+    "buildNoCompiler": "Do zbudowania gry potrzebny jest kompilator C++: zainstaluj go w Instalacji.",
+    "buildNoKit": "Ten launcher nie ma zestawu do budowania gry w tym systemie.",
+    "buildWrongKit": "Zestawu launchera nie można tu użyć: {detail}",
+    "buildUnsupportedGame": "Najpierw wybierz obsługiwaną kopię gry w Instalacji.",
+    "buildNoSpace": "Za mało wolnego miejsca na zbudowanie gry: potrzeba {needed} MB, wolne {free} MB.",
+    "buildStepFailed": "Budowanie gry nie powiodło się na etapie „{step}”: {summary} (pełny dziennik: {log})",
+    "buildBusy": "Gra jest już budowana lub uruchomiona.",
+    "buildStep": {
+      "preparing": "przygotowanie",
+      "translating": "tłumaczenie kodu",
+      "compiling": "kompilacja",
+      "linking": "konsolidacja",
+      "installing": "instalacja"
+    }
   },
   "update": {
     "available": "Aktualizuj do {version}",
