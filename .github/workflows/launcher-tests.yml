@@ -1,14 +1,18 @@
-# Runs the launcher's tests (JavaScript and Rust) on macOS and Linux for every pull request to
-# main and every push to main. The runtime is not built here: it needs the game's default.xex,
+# Runs the launcher's tests (JavaScript and Rust) on macOS and Linux for every pull request that
+# changes the launcher, to main or stacked on another pull request's branch. Not on pushes to main
+# (what reaches main has passed them in its pull request) nor on pull requests that leave the
+# launcher alone, to spend no GitHub Actions minutes where nothing they test changed: a macOS run
+# costs about ten times its minutes on a private repository. The runtime is not built here: it needs the game's default.xex,
 # which cannot be in the repository, so it stays a manual check in each pull request.
 
 name: Launcher tests
 
 on:
   pull_request:
-    branches: [main]
-  push:
-    branches: [main]
+    paths:
+      - launcher/**
+      - versions.toml
+      - .github/workflows/launcher-tests.yml
 
 # The workflow only reads the repository.
 permissions:
@@ -46,13 +50,14 @@ jobs:
       - name: JavaScript tests
         run: npm test
 
-      # Tauri links against the system's web view and GTK on Linux.
+      # Tauri links against the system's web view and GTK on Linux; gilrs (controllers) against
+      # libudev.
       - name: Install the Linux libraries Tauri needs
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
-            librsvg2-dev libxdo-dev libssl-dev build-essential
+            librsvg2-dev libxdo-dev libssl-dev build-essential libudev-dev
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
