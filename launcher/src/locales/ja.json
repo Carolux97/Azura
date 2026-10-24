@@ -58,7 +58,8 @@
   },
   "releaseNotes": {
     "title": "バージョン {version} の新機能",
-    "dismiss": "OK"
+    "dismiss": "OK",
+    "show": "新機能"
   },
   "install": {
     "title": "インストール",

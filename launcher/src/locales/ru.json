@@ -58,7 +58,8 @@
   },
   "releaseNotes": {
     "title": "Что нового в версии {version}",
-    "dismiss": "Понятно"
+    "dismiss": "Понятно",
+    "show": "Что нового"
   },
   "install": {
     "title": "Установка",

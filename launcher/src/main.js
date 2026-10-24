@@ -129,6 +129,8 @@ const state = {
   // version whose notes the player dismissed (saved with the settings).
   releaseNotes: null,
   seenReleaseNotes: null,
+  // Whether the player opened the dismissed notes again from the rail (not saved).
+  releaseNotesReopened: false,
   // The C++ compiler the runtime is built with (see platform.getCompilerStatus), or null while it is
   // first checked; and what the launcher is doing about it: "" (nothing), "checking", "installing"
   // (the package manager runs) or "waitingForApple" (Apple's install window is open).
@@ -247,13 +249,16 @@ const refreshRuntime = async () => {
  * "Install", so it never offers to start a game that cannot run.
  */
 /**
- * The "What's new" panel: this version's notes until the player dismisses them. The notes are in
- * English (launcher/CHANGELOG.md); the title around them is translated.
+ * The "What's new" panel: this version's notes until the player dismisses them, and again when
+ * they reopen them from the rail's link (shown while the panel is closed). The notes are in English
+ * (launcher/CHANGELOG.md); the title around them is translated.
  */
 const renderReleaseNotes = () => {
   const panel = document.getElementById("release-notes");
   const notes = state.releaseNotes;
-  panel.hidden = !notes || notes.version === state.seenReleaseNotes;
+  const dismissed = Boolean(notes) && notes.version === state.seenReleaseNotes;
+  panel.hidden = !notes || (dismissed && !state.releaseNotesReopened);
+  document.getElementById("release-notes-show").hidden = !notes || !panel.hidden;
   if (panel.hidden) return;
   document.getElementById("release-notes-title").textContent = t("releaseNotes.title", { version: notes.version });
   document.getElementById("release-notes-list").replaceChildren(
@@ -268,8 +273,15 @@ const renderReleaseNotes = () => {
 const setupReleaseNotes = async () => {
   document.getElementById("release-notes-dismiss").addEventListener("click", () => {
     state.seenReleaseNotes = state.releaseNotes?.version ?? null;
+    state.releaseNotesReopened = false;
     persist();
     renderReleaseNotes();
+  });
+  document.getElementById("release-notes-show").addEventListener("click", () => {
+    state.releaseNotesReopened = true;
+    showView("play");
+    renderReleaseNotes();
+    document.getElementById("release-notes").scrollIntoView({ block: "nearest" });
   });
   try {
     state.releaseNotes = await getReleaseNotes();
