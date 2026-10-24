@@ -21,6 +21,7 @@
 #include <rex/system/gpu_plugin.h>
 #include <rex/ui/presenter.h>
 
+#include "achievement_export.h"
 #include "achievement_toast.h"
 #include "menu/menu_patches.h"
 #include "menu/pc_options.h"
@@ -68,6 +69,16 @@ class AzuraApp : public rex::ReXApp {
     }
     // Settings changed in the game's Options menu (Graphics (PC)) are saved to azura.toml.
     azura::menu::SetPcOptionsConfigPath(paths.config_path);
+  }
+
+  // Logging is ready and nothing else has started (no window, no GPU). Started by the launcher to
+  // export the achievements, the runtime does only that and exits, so the launcher can read them
+  // without starting the game. std::_Exit skips the static destructors of a runtime that never
+  // set up the rest.
+  void OnPostInitLogging() override {
+    if (azura::AchievementExportRequested()) {
+      std::_Exit(azura::ExportAchievements(game_data_root()));
+    }
   }
 
   // azura.toml is loaded and the GPU has not started: the render resolution of the Video menu
