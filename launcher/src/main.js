@@ -119,6 +119,9 @@ const state = {
   renderResolution: "auto",
   // State of the saved games (see saves.rs), or null until it is read.
   saveStatus: null,
+  // The save action waiting for the player's confirmation: { action: "reset" } or
+  // { action: "restore", backup }, or null.
+  savesPending: null,
   // What the Achievements section shows (see platform.getAchievements), { status: "loading" }
   // while it is first read, or null before that. The view and the filter the player chose; the view
   // is saved with the settings.
@@ -993,61 +996,93 @@ const setupUpdates = () => {
     .catch((error) => console.info("No update information:", error));
 };
 
+/** "24 oct 2026, 12:05": a moment in the reader's language and time zone. */
+const formatDateTime = (ms) => new Intl.DateTimeFormat(getLocale(), { dateStyle: "medium", timeStyle: "short" }).format(new Date(ms));
+
+/** "2,5 MB", "640 kB": a size in the reader's language, in the largest unit that keeps it above 1. */
+const formatSize = (bytes) => {
+  const units = ["byte", "kilobyte", "megabyte", "gigabyte"];
+  let value = bytes;
+  let index = 0;
+  while (value >= 1024 && index < units.length - 1) {
+    value /= 1024;
+    index += 1;
+  }
+  const format = new Intl.NumberFormat(getLocale(), { style: "unit", unit: units[index], unitDisplay: "short", maximumFractionDigits: 1 });
+  return format.format(value);
+};
+
+/** Translation keys for why a backup was made (BackupKind in saves.rs). */
+const BACKUP_KIND_KEYS = {
+  manual: "saves.kindManual",
+  beforeRepair: "saves.kindBeforeRepair",
+  beforeReset: "saves.kindBeforeReset",
+};
+
+/** The message for a failed save operation, from its { kind, detail } (SavesError in saves.rs). */
+const savesErrorMessage = (error) => {
+  if (error?.kind === "backupMissing") return t("saves.errorBackupMissing");
+  return t("saves.errorFailed", { detail: error?.detail ?? String(error) });
+};
+
 /**
- * Renders the save manager status, metrics, and backup list.
+ * Renders the save manager: the status, its metrics and detail, the folder, the backups and, when
+ * the player asked for an action that replaces saves, the confirmation waiting for an answer.
  */
 const renderSaves = () => {
   const s = state.saveStatus;
   if (!s) return;
 
-  const badge = document.getElementById("save-status-badge");
-  if (badge) {
-    badge.dataset.state = s.status === "ok" ? "ok" : s.status === "corrupted" ? "warn" : "";
+  const badgeState = s.status === "ok" ? "ok" : s.status === "corrupted" ? "warn" : "";
+  document.getElementById("save-status-badge").dataset.state = badgeState;
+  const statusKey = s.status === "ok" ? "Ok" : s.status === "corrupted" ? "Corrupted" : "Empty";
+  document.getElementById("save-status-text").textContent = t(`saves.state${statusKey}`);
+  document.getElementById("save-detail-msg").textContent = t(`saves.detail${statusKey}`);
+  document.getElementById("save-checkpoints-count").textContent = new Intl.NumberFormat(getLocale()).format(s.checkpointCount);
+  document.getElementById("save-last-modified").textContent = s.lastSavedMs ? formatDateTime(s.lastSavedMs) : "—";
+  document.getElementById("save-path").value = s.savePath;
+
+  const backups = document.getElementById("backups-list");
+  backups.replaceChildren();
+  if (!s.backups?.length) {
+    const empty = document.createElement("p");
+    empty.className = "help";
+    empty.textContent = t("saves.noBackups");
+    backups.append(empty);
   }
-  const statusText = document.getElementById("save-status-text");
-  if (statusText) {
-    statusText.textContent = t(
-      s.status === "ok"
-        ? "saves.stateOk"
-        : s.status === "corrupted"
-          ? "saves.stateCorrupted"
-          : "saves.stateEmpty",
-    );
+  for (const backup of s.backups ?? []) {
+    const item = document.createElement("div");
+    item.className = "backup-item";
+    const info = document.createElement("div");
+    const title = document.createElement("div");
+    title.className = "backup-item-title";
+    title.textContent = t(BACKUP_KIND_KEYS[backup.kind] ?? "saves.kindOther");
+    const meta = document.createElement("div");
+    meta.className = "backup-item-meta";
+    meta.textContent = [backup.createdMs ? formatDateTime(backup.createdMs) : backup.id, formatSize(backup.sizeBytes)].join(" · ");
+    info.append(title, meta);
+    const restore = document.createElement("button");
+    restore.className = "btn btn-sm btn-restore-backup";
+    restore.dataset.id = backup.id;
+    restore.textContent = t("saves.restore");
+    item.append(info, restore);
+    backups.append(item);
   }
 
-  const cpCount = document.getElementById("save-checkpoints-count");
-  if (cpCount) cpCount.textContent = String(s.checkpointCount);
+  renderSavesConfirm();
+};
 
-  const lastSaved = document.getElementById("save-last-modified");
-  if (lastSaved) lastSaved.textContent = s.lastSaved ?? "—";
-
-  const detailMsg = document.getElementById("save-detail-msg");
-  if (detailMsg) detailMsg.textContent = s.message;
-
-  const savePath = document.getElementById("save-path");
-  if (savePath) savePath.value = s.savePath;
-
-  const backupsContainer = document.getElementById("backups-list");
-  if (backupsContainer) {
-    if (!s.backups || s.backups.length === 0) {
-      backupsContainer.innerHTML = `<p class="help" data-i18n="saves.noBackups">${t("saves.noBackups")}</p>`;
-    } else {
-      backupsContainer.innerHTML = "";
-      for (const b of s.backups) {
-        const item = document.createElement("div");
-        item.className = "backup-item";
-        const sizeKb = (b.sizeBytes / 1024).toFixed(1);
-        item.innerHTML = `
-          <div>
-            <div class="backup-item-title">${b.id}</div>
-            <div class="backup-item-meta">${b.date} · ${sizeKb} KB</div>
-          </div>
-          <button class="btn btn-sm btn-restore-backup" data-id="${b.id}">${t("saves.restore")}</button>
-        `;
-        backupsContainer.appendChild(item);
-      }
-    }
-  }
+/** Shows the confirmation of the action in state.savesPending, or hides it when there is none. */
+const renderSavesConfirm = () => {
+  const pending = state.savesPending;
+  const box = document.getElementById("saves-confirm");
+  box.hidden = !pending;
+  if (!pending) return;
+  const backup = pending.backup;
+  const when = backup?.createdMs ? formatDateTime(backup.createdMs) : backup?.id;
+  document.getElementById("saves-confirm-text").textContent =
+    pending.action === "reset" ? t("saves.confirmReset") : t("saves.confirmRestore", { date: when });
+  document.getElementById("saves-confirm-yes").textContent = t(pending.action === "reset" ? "saves.resetConfirm" : "saves.restore");
 };
 
 const refreshAndRenderSaves = async () => {
@@ -1059,62 +1094,56 @@ const refreshAndRenderSaves = async () => {
   }
 };
 
+/**
+ * Wires the save manager. Resetting and restoring replace the player's saves, so they first ask
+ * for confirmation inside the view (state.savesPending), which the gamepad can answer too: its
+ * Back button presses the cancel button (data-pad-back).
+ */
 const setupSaves = () => {
-  document.getElementById("btn-repair-saves")?.addEventListener("click", async () => {
+  /** Runs a save operation, then shows `success` (or why it failed) and the new state. */
+  const run = async (operation, success) => {
     try {
-      await repairSaves();
-      toast(t("saves.repairedToast"));
-      await refreshAndRenderSaves();
+      const result = await operation();
+      toast(success(result));
     } catch (error) {
-      console.error("Repair failed:", error);
-      toast(String(error));
+      console.error("Save operation failed:", error);
+      toast(savesErrorMessage(error));
     }
+    await refreshAndRenderSaves();
+  };
+
+  /** Asks for confirmation of `pending` and moves the focus to its safe answer. */
+  const ask = (pending) => {
+    state.savesPending = pending;
+    renderSavesConfirm();
+    document.getElementById("saves-confirm-no").focus();
+  };
+
+  document.getElementById("btn-repair-saves").addEventListener("click", () =>
+    run(repairSaves, (removed) => (removed > 0 ? t("saves.repairedToast", { count: removed }) : t("saves.repairedNone"))),
+  );
+  document.getElementById("btn-reset-saves").addEventListener("click", () => ask({ action: "reset" }));
+  document.getElementById("btn-backup-saves").addEventListener("click", () => run(createSaveBackup, () => t("saves.backupToast")));
+  document.getElementById("open-saves-dir").addEventListener("click", () =>
+    openSavesFolder().catch((error) => console.error("Open folder failed:", error)),
+  );
+  document.getElementById("backups-list").addEventListener("click", (event) => {
+    const button = event.target.closest(".btn-restore-backup");
+    if (!button) return;
+    const backup = state.saveStatus?.backups?.find((b) => b.id === button.dataset.id);
+    ask({ action: "restore", backup: backup ?? { id: button.dataset.id } });
   });
 
-  document.getElementById("btn-reset-saves")?.addEventListener("click", async () => {
-    if (!window.confirm(t("saves.cleanHelp"))) return;
-    try {
-      await resetSaves();
-      toast(t("saves.resetToast"));
-      await refreshAndRenderSaves();
-    } catch (error) {
-      console.error("Reset failed:", error);
-      toast(String(error));
-    }
+  document.getElementById("saves-confirm-no").addEventListener("click", () => {
+    state.savesPending = null;
+    renderSavesConfirm();
   });
-
-  document.getElementById("btn-backup-saves")?.addEventListener("click", async () => {
-    try {
-      await createSaveBackup();
-      toast(t("saves.backupToast"));
-      await refreshAndRenderSaves();
-    } catch (error) {
-      console.error("Backup failed:", error);
-      toast(String(error));
-    }
-  });
-
-  document.getElementById("open-saves-dir")?.addEventListener("click", async () => {
-    try {
-      await openSavesFolder();
-    } catch (error) {
-      console.error("Open folder failed:", error);
-    }
-  });
-
-  document.getElementById("backups-list")?.addEventListener("click", async (e) => {
-    const btn = e.target.closest(".btn-restore-backup");
-    if (!btn) return;
-    const backupId = btn.dataset.id;
-    if (!window.confirm(`${t("saves.restore")}: ${backupId}?`)) return;
-    try {
-      await restoreSaveBackup(backupId);
-      toast(t("saves.restoreToast"));
-      await refreshAndRenderSaves();
-    } catch (error) {
-      console.error("Restore failed:", error);
-      toast(String(error));
-    }
+  document.getElementById("saves-confirm-yes").addEventListener("click", () => {
+    const pending = state.savesPending;
+    state.savesPending = null;
+    renderSavesConfirm();
+    if (pending?.action === "reset") run(resetSaves, () => t("saves.resetToast"));
+    else if (pending?.action === "restore") run(() => restoreSaveBackup(pending.backup.id), () => t("saves.restoreToast"));
   });
 };
 
