@@ -314,10 +314,17 @@
               <button class="btn" id="btn-backup-saves" data-i18n="saves.backup"></button>
             </div>
           </div>
+          <!-- Shown when resetting or restoring waits for the player to confirm replacing the saves. -->
+          <div class="path-row" id="saves-confirm" hidden>
+            <p class="check" data-state="error" id="saves-confirm-text"></p>
+            <button class="btn btn-danger" id="saves-confirm-yes"></button>
+            <button class="btn" id="saves-confirm-no" data-pad-back data-i18n="saves.cancel"></button>
+          </div>
         </div>
 
         <div class="panel">
           <h2 class="panel-title" data-i18n="saves.backupsTitle"></h2>
+          <p class="help" data-i18n="saves.backupsHelp"></p>
           <div id="backups-list" class="backups-list">
             <p class="help" data-i18n="saves.noBackups"></p>
           </div>

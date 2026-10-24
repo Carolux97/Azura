@@ -294,36 +294,34 @@ async fn get_save_status(app: tauri::AppHandle) -> Result<SaveStatus, String> {
     Ok(saves::inspect_saves(&app, &saves))
 }
 
-/// Removes orphaned checkpoint headers, after backing up the saves.
+/// The saves folder, with a failure to find it as a saves error for the interface.
+fn saves_folder(app: &tauri::AppHandle) -> Result<std::path::PathBuf, SavesError> {
+    settings_paths(app).and_then(|paths| paths.saves_folder()).map_err(SavesError::Io)
+}
+
+/// Removes orphaned checkpoint headers, after backing up the saves; returns how many it removed.
+/// Errors are `{"kind": "...", "detail": "..."}` (`SavesError`), worded by the interface.
 #[tauri::command]
-async fn repair_saves(app: tauri::AppHandle) -> Result<String, String> {
-    let paths = settings_paths(&app)?;
-    let saves = paths.saves_folder()?;
-    saves::repair_saves_internal(&app, &saves)
+async fn repair_saves(app: tauri::AppHandle) -> Result<usize, SavesError> {
+    saves::repair_saves_internal(&app, &saves_folder(&app)?)
 }
 
 /// Resets saved games so the player can start a clean campaign, backing up first.
 #[tauri::command]
-async fn reset_saves(app: tauri::AppHandle) -> Result<String, String> {
-    let paths = settings_paths(&app)?;
-    let saves = paths.saves_folder()?;
-    saves::reset_saves_internal(&app, &saves)
+async fn reset_saves(app: tauri::AppHandle) -> Result<(), SavesError> {
+    saves::reset_saves_internal(&app, &saves_folder(&app)?)
 }
 
-/// Creates a backup of the current saves.
+/// Creates a backup of the current saves (keeping the newest `saves::MAX_BACKUPS`).
 #[tauri::command]
-async fn create_save_backup(app: tauri::AppHandle, label: Option<String>) -> Result<BackupInfo, String> {
-    let paths = settings_paths(&app)?;
-    let saves = paths.saves_folder()?;
-    saves::create_backup_internal(&app, &saves, label)
+async fn create_save_backup(app: tauri::AppHandle) -> Result<BackupInfo, SavesError> {
+    saves::create_backup_internal(&app, &saves_folder(&app)?)
 }
 
 /// Restores a chosen backup.
 #[tauri::command]
-async fn restore_save_backup(app: tauri::AppHandle, backup_id: String) -> Result<String, String> {
-    let paths = settings_paths(&app)?;
-    let saves = paths.saves_folder()?;
-    saves::restore_backup_internal(&app, &saves, &backup_id)
+async fn restore_save_backup(app: tauri::AppHandle, backup_id: String) -> Result<(), SavesError> {
+    saves::restore_backup_internal(&app, &saves_folder(&app)?, &backup_id)
 }
 
 /// Opens the save games folder in the system file manager.
