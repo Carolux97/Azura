@@ -51,6 +51,12 @@
         <li><button class="nav-item" data-view="graphics" data-i18n="nav.graphics"></button></li>
         <li><button class="nav-item" data-view="saves" data-i18n="nav.saves"></button></li>
         <li>
+          <!-- Shows a lock mark until the achievements can be read (see renderAchievements()). -->
+          <button class="nav-item" data-view="achievements" id="nav-achievements">
+            <span data-i18n="nav.achievements"></span>
+          </button>
+        </li>
+        <li>
           <button class="nav-item" data-view="online">
             <span data-i18n="nav.online"></span>
             <span class="tag" data-i18n="nav.soon"></span>
@@ -271,6 +277,23 @@
             <p class="help" data-i18n="saves.noBackups"></p>
           </div>
         </div>
+      </section>
+
+      <!-- ACHIEVEMENTS: built by achievementsPage.js from what the runtime read from the game. -->
+      <section class="view view-achievements" data-view="achievements" aria-labelledby="achievements-title">
+        <div class="ach-head">
+          <div>
+            <p class="eyebrow" id="achievements-eyebrow"></p>
+            <h1 id="achievements-title" class="view-title" data-i18n="achievements.title"></h1>
+          </div>
+          <div class="segmented" id="achievements-views" role="group" data-i18n-attr="aria-label:achievements.viewLabel">
+            <button type="button" data-mode="list" data-i18n="achievements.viewList"></button>
+            <button type="button" data-mode="badges" data-i18n="achievements.viewBadges"></button>
+            <button type="button" data-mode="acts" data-i18n="achievements.viewActs"></button>
+          </div>
+        </div>
+        <div id="achievements-banner"></div>
+        <div id="achievements-body"></div>
       </section>
 
       <!-- ONLINE -->
