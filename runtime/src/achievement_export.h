@@ -16,7 +16,8 @@ namespace azura {
 // game.
 bool AchievementExportRequested();
 
-// Loads default.xex from `game_data_root` and writes into the export_achievements folder:
+// Loads default.xex from `game_data_root` (a folder or a disc image) and writes into the
+// export_achievements folder:
 //   achievements.json  {"titleId":"4D5308AB","languages":["en","es",...],"achievements":[
 //                        {"id":1,"gamerscore":5,"flags":14,"imageId":1,
 //                         "label":{"en":"..."},"description":{...},"unachieved":{...}}]}
