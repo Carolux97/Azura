@@ -103,6 +103,15 @@ export const saveSettings = async (settings) => {
 export const getSystemInfo = async () => (isNativeApp ? tauri.core.invoke("get_system_info") : null);
 
 /**
+ * What this launcher version brings ({ version, items }, from launcher/CHANGELOG.md), or null when
+ * the changelog has no section for it. A browser shows a sample.
+ */
+export const getReleaseNotes = async () =>
+  isNativeApp
+    ? tauri.core.invoke("get_release_notes")
+    : { version: "0.1.0", items: ["Builds the game for this computer from your own copy of Gears of War 3."] };
+
+/**
  * State of the runtime (see src-tauri/src/install.rs): { installed, buildFound, updateAvailable,
  * path, source, updateKind }. `source` is "build" (a project build, copied), "kit" (built here) or
  * "none"; `updateKind`, for the kit, "link" (seconds) or "build" (minutes). A browser has none

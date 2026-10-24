@@ -1,0 +1,185 @@
+# Builds and publishes the launcher for macOS and Linux, each with the player kit of its platform
+# inside, so installed launchers update themselves and then the game (docs/player-runtime-build.md).
+#
+# A release is published when main has a launcher version that is not released yet: bumping the
+# version in tauri.conf.json, package.json and Cargo.toml is how a release is asked for, so only a
+# push to main that changes tauri.conf.json starts it (a macOS build costs about ten times its
+# minutes on a private repository). It builds only for a version not released yet; by hand with
+# "Publish" off it checks the whole pipeline, and pull requests that change the pipeline itself
+# build without publishing.
+#
+# Releases go to the public releases repository (scripts/release-common.sh), since this one is
+# private and installed launchers download without credentials.
+#
+# Secrets:
+#   TAURI_SIGNING_PRIVATE_KEY           the update signing key (its contents)
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  its password
+#   RELEASES_TOKEN                      a fine-grained token that can only write the releases
+#                                       repository's contents (releases)
+
+name: Release
+
+on:
+  push:
+    branches: [main]
+    # A release is asked for by bumping the version, which always changes this file; other pushes
+    # to main start nothing, so they spend no GitHub Actions minutes.
+    paths:
+      - launcher/src-tauri/tauri.conf.json
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - scripts/release-launcher.sh
+      - scripts/publish-launcher.sh
+      - scripts/release-common.sh
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish (a new version only); otherwise build without publishing
+        type: boolean
+        default: false
+
+# The workflow only reads this repository; publishing uses RELEASES_TOKEN.
+permissions:
+  contents: read
+
+# Releases happen one after another, never cancelled halfway through a publish; a pull request's
+# check gives way to a newer push of the same pull request.
+concurrency:
+  group: release-${{ github.event_name == 'pull_request' && github.ref || 'main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.status.outputs.build }}
+      publish: ${{ steps.status.outputs.publish }}
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      # Fails with a clear message when the three versions disagree.
+      - name: Check the version
+        id: status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
+          PULL_REQUEST: ${{ github.event_name == 'pull_request' }}
+          MANUAL_PUBLISH: ${{ inputs.publish }}
+        run: |
+          status="$(scripts/publish-launcher.sh --status)"
+          echo "Launcher version: ${status}"
+          publish=false
+          build=false
+          if [[ "${PULL_REQUEST}" == true ]]; then
+            build=true
+          elif [[ "${status}" == new && ( "${MANUAL}" != true || "${MANUAL_PUBLISH}" == true ) ]]; then
+            publish=true
+            build=true
+          elif [[ "${MANUAL}" == true ]]; then
+            build=true
+            if [[ "${MANUAL_PUBLISH}" == true ]]; then
+              echo "::error::This version is already released. Bump it in tauri.conf.json, package.json and Cargo.toml first."
+              exit 1
+            fi
+          fi
+          echo "build=${build}" >> "${GITHUB_OUTPUT}"
+          echo "publish=${publish}" >> "${GITHUB_OUTPUT}"
+
+  kit:
+    name: Kit
+    needs: version
+    if: needs.version.outputs.build == 'true'
+    uses: ./.github/workflows/runtime-kit.yml
+
+  launcher:
+    name: Launcher ${{ matrix.platform }}
+    needs: [version, kit]
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: mac-arm64
+            runner: macos-latest
+          # Ubuntu 22.04, as the Linux kit is built: the AppImage then needs no newer glibc than 2.35.
+          - platform: linux-amd64
+            runner: ubuntu-22.04
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Install the Linux libraries Tauri needs
+        if: startsWith(matrix.platform, 'linux-')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev libssl-dev build-essential file libfuse2 libudev-dev
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: launcher/src-tauri
+
+      - name: Get the kit
+        uses: actions/download-artifact@v4
+        with:
+          name: azura-kit-${{ matrix.platform }}
+
+      - name: Unpack the kit
+        run: |
+          mkdir -p "runtime/out/kit/${{ matrix.platform }}"
+          tar -xzf "azura-kit-${{ matrix.platform }}.tar.gz" -C "runtime/out/kit/${{ matrix.platform }}"
+
+      - name: Install the launcher's packages
+        working-directory: launcher
+        run: npm ci
+
+      # The key reaches the build through the environment only; Tauri reads it and never prints it.
+      - name: Build the release
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: scripts/release-launcher.sh
+
+      - name: Keep the release
+        uses: actions/upload-artifact@v4
+        with:
+          name: launcher-${{ matrix.platform }}
+          path: launcher/dist/
+          retention-days: 7
+
+  publish:
+    name: Publish
+    needs: [version, launcher]
+    if: needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      # Both platforms' files land in launcher/dist/<version>/, as one machine would leave them.
+      - name: Get the releases
+        uses: actions/download-artifact@v4
+        with:
+          pattern: launcher-*
+          path: launcher/dist
+          merge-multiple: true
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: |
+          version="$(node -p 'require("./launcher/src-tauri/tauri.conf.json").version')"
+          scripts/publish-launcher.sh "launcher/dist/${version}"

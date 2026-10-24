@@ -133,6 +133,9 @@ pub struct Settings {
     /// `launcher/src/achievements.js`).
     #[serde(default = "default_achievements_view")]
     pub achievements_view: String,
+    /// Launcher version whose "What's new" panel the player dismissed.
+    #[serde(default)]
+    pub seen_release_notes: Option<String>,
     /// Folder that holds the saves. Read-only here: `save` keeps the stored one, and only moving
     /// the saves (`SettingsPaths::set_saves_folder`) changes it, so the interface may leave it out.
     #[serde(default)]
@@ -152,6 +155,7 @@ struct LauncherFile {
     game_language: Option<String>,
     game_language_chosen: bool,
     achievements_view: String,
+    seen_release_notes: Option<String>,
     saves_folder: Option<String>,
 }
 
@@ -163,6 +167,7 @@ impl Default for LauncherFile {
             game_language: None,
             game_language_chosen: false,
             achievements_view: default_achievements_view(),
+            seen_release_notes: None,
             saves_folder: None,
         }
     }
@@ -275,6 +280,7 @@ impl SettingsPaths {
             game_language: launcher.game_language,
             game_language_chosen: launcher.game_language_chosen,
             achievements_view: launcher.achievements_view,
+            seen_release_notes: launcher.seen_release_notes,
             saves_folder,
         })
     }
@@ -345,6 +351,7 @@ impl SettingsPaths {
             game_language: settings.game_language.clone(),
             game_language_chosen: settings.game_language_chosen,
             achievements_view: settings.achievements_view.clone(),
+            seen_release_notes: settings.seen_release_notes.clone(),
             saves_folder: self.load_launcher_file()?.saves_folder,
         };
         self.save_launcher_file(&launcher)
@@ -373,6 +380,7 @@ mod tests {
             game_language: Some("ESN".into()),
             game_language_chosen: true,
             achievements_view: "badges".into(),
+            seen_release_notes: Some("0.1.0".into()),
             saves_folder: crate::saves::default_folder().to_string_lossy().into_owned(),
         }
     }

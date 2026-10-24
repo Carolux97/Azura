@@ -21,8 +21,8 @@
     "runtimeVersion": "Runtime ReXGlue {version}"
   },
   "play": {
-    "eyebrow": "Native macOS port · Gears of War 3",
-    "lede": "Your copy of the game, recompiled for Apple Silicon.",
+    "eyebrow": "Native {platform} port · Gears of War 3",
+    "lede": "Your copy of the game, recompiled for {target}.",
     "launch": "Play",
     "launching": "Starting",
     "mode": "Campaign",
@@ -56,9 +56,9 @@
     "runtimeNotBuilt": "Not installed",
     "runtimeUpdateKit": "Update available"
   },
-  "news": {
-    "title": "News",
-    "skeleton": "First project skeleton: runtime, manifest and launcher."
+  "releaseNotes": {
+    "title": "What's new in {version}",
+    "dismiss": "Got it"
   },
   "install": {
     "title": "Installation",

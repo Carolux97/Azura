@@ -30,6 +30,7 @@ import {
   getAppVersion,
   getRuntimeStatus,
   getSystemInfo,
+  getReleaseNotes,
   installRuntime,
   installUpdate,
   isNativeApp,
@@ -124,6 +125,10 @@ const state = {
   achievements: null,
   achievementsView: "list",
   achievementsFilter: "all",
+  // What this launcher version brings ({ version, items }, see platform.getReleaseNotes), and the
+  // version whose notes the player dismissed (saved with the settings).
+  releaseNotes: null,
+  seenReleaseNotes: null,
   // The C++ compiler the runtime is built with (see platform.getCompilerStatus), or null while it is
   // first checked; and what the launcher is doing about it: "" (nothing), "checking", "installing"
   // (the package manager runs) or "waitingForApple" (Apple's install window is open).
@@ -141,6 +146,7 @@ const currentSettings = () => ({
   gameLanguage: state.gameLanguage,
   gameLanguageChosen: state.gameLanguageChosen,
   achievementsView: state.achievementsView,
+  seenReleaseNotes: state.seenReleaseNotes,
   savesFolder: state.savesFolder,
 });
 
@@ -240,6 +246,39 @@ const refreshRuntime = async () => {
  * Writes the state-dependent parts of the Play view. Without game files the main button becomes
  * "Install", so it never offers to start a game that cannot run.
  */
+/**
+ * The "What's new" panel: this version's notes until the player dismisses them. The notes are in
+ * English (launcher/CHANGELOG.md); the title around them is translated.
+ */
+const renderReleaseNotes = () => {
+  const panel = document.getElementById("release-notes");
+  const notes = state.releaseNotes;
+  panel.hidden = !notes || notes.version === state.seenReleaseNotes;
+  if (panel.hidden) return;
+  document.getElementById("release-notes-title").textContent = t("releaseNotes.title", { version: notes.version });
+  document.getElementById("release-notes-list").replaceChildren(
+    ...notes.items.map((item) => {
+      const line = document.createElement("li");
+      line.textContent = item;
+      return line;
+    }),
+  );
+};
+
+const setupReleaseNotes = async () => {
+  document.getElementById("release-notes-dismiss").addEventListener("click", () => {
+    state.seenReleaseNotes = state.releaseNotes?.version ?? null;
+    persist();
+    renderReleaseNotes();
+  });
+  try {
+    state.releaseNotes = await getReleaseNotes();
+  } catch (error) {
+    console.error("Release notes could not be read:", error);
+  }
+  renderReleaseNotes();
+};
+
 const renderPlay = () => {
   const status = document.getElementById("status-game");
   status.dataset.state = isInstalled() ? "ok" : "warn";
@@ -258,6 +297,10 @@ const renderPlay = () => {
   const building = state.installingRuntime && state.runtime.source === "kit";
   runtime.dataset.state = building ? "progress" : tone === "ok" ? "ok" : "warn";
   const system = state.system;
+  // The heading names the system the launcher runs on (macOS until it is known, as in a browser).
+  const linux = system?.os === "linux";
+  document.getElementById("play-eyebrow").textContent = t("play.eyebrow", { platform: linux ? "Linux" : "macOS" });
+  document.getElementById("play-lede").textContent = t("play.lede", { target: linux ? "Linux" : "Apple Silicon" });
   const platformName = system?.os === "linux"
     ? `Linux ${system.arch}`
     : system?.os === "macos"
@@ -308,11 +351,7 @@ const renderPlay = () => {
   const machine = [chip ?? fallbackMachine, memoryGb ? `${memoryGb} GB` : null].filter(Boolean).join(" · ");
   document.getElementById("status-gpu-detail").textContent = t("status.gpuValue", { machine });
 
-  const date = document.querySelector(".news-item time");
-  date.textContent = new Intl.DateTimeFormat(getLocale(), { dateStyle: "medium" }).format(
-    new Date(`${date.dateTime}T12:00:00`),
-  );
-
+  renderReleaseNotes();
   renderBuildCard();
 
   document.getElementById("launcher-version").textContent = t("rail.launcherVersion", { version: state.launcherVersion });
@@ -1253,6 +1292,7 @@ state.userName = TEXT_RULES.gamertag.clean(settings.userName ?? "");
 state.gameLanguage = settings.gameLanguage ?? null;
 state.gameLanguageChosen = Boolean(settings.gameLanguageChosen);
 state.achievementsView = achievementView(settings.achievementsView);
+state.seenReleaseNotes = settings.seenReleaseNotes ?? null;
 onLocaleChange(renderAll);
 await initI18n(settings.uiLanguage);
 document.getElementById("ui-language").value = getPreference();
@@ -1261,3 +1301,4 @@ await restoreGameFolder(settings.gameFolder);
 if (!state.achievements) refreshAchievements();
 await refreshAndRenderSaves();
 setupUpdates();
+setupReleaseNotes();

@@ -21,8 +21,8 @@
     "runtimeVersion": "Runtime ReXGlue {version}"
   },
   "play": {
-    "eyebrow": "macOS 原生移植版 · Gears of War 3",
-    "lede": "你的遊戲副本，為 Apple Silicon 重新編譯。",
+    "eyebrow": "{platform} 原生移植版 · Gears of War 3",
+    "lede": "你的遊戲副本，為 {target} 重新編譯。",
     "launch": "開始遊戲",
     "launching": "啟動中",
     "mode": "戰役",
@@ -56,9 +56,9 @@
     "runtimeNotBuilt": "未安裝",
     "runtimeUpdateKit": "有可用的更新"
   },
-  "news": {
-    "title": "最新消息",
-    "skeleton": "專案的第一個骨架：執行環境、清單檔與啟動器。"
+  "releaseNotes": {
+    "title": "版本 {version} 新功能",
+    "dismiss": "知道了"
   },
   "install": {
     "title": "安裝",
