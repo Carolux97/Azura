@@ -13,8 +13,7 @@
 # platforms in <dist folder> to its release (replacing their files) and merges their entries into
 # the published latest.json, keeping the platforms already there.
 #
-# Releases are titled with the version alone and carry no description of the project: the
-# releases repository is public, and is kept as hard to come across as it can be.
+# Releases are titled with the version; the notes are the version's section of the changelog.
 #
 # gh needs write access to the releases repository: a local `gh auth login`, or GH_TOKEN (the
 # Release workflow passes a token that can only write to that repository).
