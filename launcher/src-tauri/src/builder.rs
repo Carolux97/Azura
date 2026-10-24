@@ -446,7 +446,7 @@ fn build_inner(folders: &BuildFolders, manifest: &str, xex_sha256: &str, events:
     let kind = update_kind(state.as_ref(), &kit.keys, xex_sha256, &compiler.version, true, kept);
     let objects = if kind == UpdateKind::Build {
         log.write("Building the generated code\n");
-        translate_and_compile(folders, &kit, &kit_manifest, &compiler, state.as_ref(), &values, &log, &progress)?
+        translate_and_compile(folders, &kit, &kit_manifest, &compiler, &values, &log, &progress)?
     } else {
         log.write("Linking the kept objects again\n");
         state.as_ref().map(|state| state.objects.iter().map(|object| work.join(object).to_string_lossy().into_owned()).collect()).unwrap_or_default()
@@ -497,25 +497,31 @@ fn build_inner(folders: &BuildFolders, manifest: &str, xex_sha256: &str, events:
     Ok(())
 }
 
+/// File in the objects folder with the build key of the kit its objects were compiled with.
+const OBJECTS_BUILD_KEY_FILE: &str = "kit-build-key";
+
 /// Codegen and the compile: the generated code's objects, in source order. A kit whose generated
 /// code compiles differently (another build key) leaves nothing to reuse, so its objects go first.
-#[allow(clippy::too_many_arguments)]
+/// The objects folder records that key itself, written before the first compile, so a build that
+/// was interrupted (before any state.json, on a first build) resumes with the objects it had
+/// compiled.
 fn translate_and_compile(
     folders: &BuildFolders,
     kit: &Kit,
     kit_manifest: &Path,
     compiler: &toolchain::Compiler,
-    state: Option<&BuildState>,
     values: &(dyn Fn(&[(&'static str, String)]) -> Vec<(&'static str, String)> + Sync),
     log: &Log,
     progress: &(dyn Fn(Phase, usize, usize) + Sync),
 ) -> Result<Vec<String>, BuildError> {
     let work = folders.work;
     let objects_dir = work.join("obj");
-    if state.and_then(|state| state.keys.as_ref()).map(|keys| keys.build.as_str()) != Some(kit.keys.build.as_str()) {
+    let objects_key_file = objects_dir.join(OBJECTS_BUILD_KEY_FILE);
+    if fs::read_to_string(&objects_key_file).ok().as_deref() != Some(kit.keys.build.as_str()) {
         let _ = fs::remove_dir_all(&objects_dir);
     }
     fs::create_dir_all(&objects_dir)?;
+    fs::write(&objects_key_file, &kit.keys.build)?;
 
     // Codegen reads its manifest and the game from the work folder: the manifest as the kit has
     // it, and game/ as a link to the player's game folder.
@@ -801,6 +807,28 @@ mod tests {
         let started = std::time::Instant::now();
         build(&folders, &version.manifest, &version.xex_sha256, &Print, &running).unwrap();
         println!("rebuilt in {:.1} s", started.elapsed().as_secs_f64());
+        // A first build that was interrupted (no state.json yet), resumed: codegen runs again, but
+        // no object is compiled again.
+        let objects_written = |work: &Path| -> Vec<(PathBuf, std::time::SystemTime)> {
+            let mut objects: Vec<_> = fs::read_dir(work.join("obj"))
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .filter(|path| path.extension().is_some_and(|ext| ext == "o"))
+                .map(|path| {
+                    let written = fs::metadata(&path).unwrap().modified().unwrap();
+                    (path, written)
+                })
+                .collect();
+            objects.sort();
+            objects
+        };
+        let before = objects_written(&work);
+        assert!(!before.is_empty());
+        fs::remove_file(work.join(STATE_FILE)).unwrap();
+        let started = std::time::Instant::now();
+        build(&folders, &version.manifest, &version.xex_sha256, &Print, &running).unwrap();
+        println!("resumed in {:.1} s", started.elapsed().as_secs_f64());
+        assert_eq!(objects_written(&work), before);
         // A kit whose link changed (our code, the SDK libraries): the kept objects are linked
         // again, without codegen or compiling. Its other files are links to the real kit's.
         let relinked_kit = dir.join("kit-new-link");
