@@ -58,7 +58,8 @@
   },
   "releaseNotes": {
     "title": "版本 {version} 新功能",
-    "dismiss": "知道了"
+    "dismiss": "知道了",
+    "show": "新功能"
   },
   "install": {
     "title": "安裝",

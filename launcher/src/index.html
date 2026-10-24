@@ -70,7 +70,11 @@
           <span data-i18n="rail.language"></span>
           <select id="ui-language"></select>
         </label>
-        <span class="version" id="launcher-version"></span>
+        <span class="version">
+          <span id="launcher-version"></span>
+          <!-- Opens the "What's new" panel again once it was dismissed (renderReleaseNotes). -->
+          <button class="version-link" id="release-notes-show" type="button" hidden data-i18n="releaseNotes.show"></button>
+        </span>
         <span class="version" id="runtime-version"></span>
       </div>
     </nav>
