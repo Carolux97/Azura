@@ -11,6 +11,14 @@ system and GPU.
 **This repository contains no game data and no game code.** You need your own copy of the game:
 the recompiled code is generated on your machine from your own `default.xex` and is never committed.
 
+## Download
+
+The launcher for macOS (Apple Silicon) and Linux (x86-64) is published in
+[gears3-azura-releases](https://github.com/Carolux97/gears3-azura-releases/releases/latest).
+Point it at your own copy of the game (a folder or a disc image): it builds the game for your
+machine and keeps itself and the game up to date. The macOS launcher is not signed with an Apple
+Developer ID, so the first time it opens from System Settings, Privacy & Security.
+
 ## Layout
 
 | Path | What it holds |

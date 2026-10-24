@@ -1,11 +1,12 @@
 # Shared by release-launcher.sh and publish-launcher.sh (sourced, not run): where releases are
 # published and the launcher's version.
 #
-# Releases go to a public repository that only holds releases, so installed launchers can download
-# them while this repository stays private. Its name is also in the updater endpoint of
-# launcher/src-tauri/tauri.conf.json; change both together.
+# Releases go to a repository that only holds releases, where installed launchers download them
+# without credentials (it began while this repository was private). Its name is also in the updater
+# endpoint of launcher/src-tauri/tauri.conf.json; change both together. Launchers installed before
+# it was renamed from Carolux97/files reach it through GitHub's redirect of the old name.
 
-readonly RELEASES_REPO="Carolux97/files"
+readonly RELEASES_REPO="Carolux97/gears3-azura-releases"
 
 # The fixed release whose latest.json installed launchers read (the updater endpoint).
 readonly UPDATES_TAG="launcher-updates"
