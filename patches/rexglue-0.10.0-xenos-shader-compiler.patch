@@ -4977,10 +4977,10 @@ index 0000000..358a9b1
 +}  // namespace rex::graphics::xsc
 diff --git a/src/graphics/pipeline/shader/xsc/xsc_translator.h b/src/graphics/pipeline/shader/xsc/xsc_translator.h
 new file mode 100644
-index 0000000..165aad0
+index 0000000..76b8fa3
 --- /dev/null
 +++ b/src/graphics/pipeline/shader/xsc/xsc_translator.h
-@@ -0,0 +1,273 @@
+@@ -0,0 +1,279 @@
 +/**
 + * @file        graphics/pipeline/shader/xsc/xsc_translator.h
 + * @brief       Xenos shader compiler (XSC): lowers Xenos microcode into the XSC IR and emits it
@@ -5178,6 +5178,12 @@ index 0000000..165aad0
 +  size_t FindOrAddSamplerBinding(uint32_t fetch_constant, xenos::TextureFilter mag_filter,
 +                                 xenos::TextureFilter min_filter, xenos::TextureFilter mip_filter,
 +                                 xenos::AnisoFilter aniso_filter);
++  // The LOD for sampling a cube map in the direction `direction` with the cube space gradients
++  // `gradient_h` and `gradient_v`, a face being `face_size` texels wide (the SPIR-V translator's
++  // CubeLodFromGradients).
++  ValueId CubeLodFromGradients(ValueId direction, ValueId gradient_h, ValueId gradient_v,
++                               ValueId face_size);
++
 +  // Samples the unsigned and the signed bindings where needed, 0 where not, optionally lerping
 +  // from the first values (the SPIR-V translator's SampleTexture, including how it lerps).
 +  void SampleTexture(TextureSampleMode mode, TextureDimension dimension, ValueId coordinates,
@@ -6111,10 +6117,10 @@ index 0000000..bc45626
 +}  // namespace rex::graphics::xsc
 diff --git a/src/graphics/pipeline/shader/xsc/xsc_translator_fetch.cpp b/src/graphics/pipeline/shader/xsc/xsc_translator_fetch.cpp
 new file mode 100644
-index 0000000..e91f6c2
+index 0000000..ac1a1c6
 --- /dev/null
 +++ b/src/graphics/pipeline/shader/xsc/xsc_translator_fetch.cpp
-@@ -0,0 +1,1183 @@
+@@ -0,0 +1,1257 @@
 +/**
 + * @file        graphics/pipeline/shader/xsc/xsc_translator_fetch.cpp
 + * @brief       Xenos shader compiler: texture fetch instructions
@@ -6478,6 +6484,66 @@ index 0000000..e91f6c2
 +  return sampler_bindings_.size() - 1;
 +}
 +
++ValueId XscShaderTranslator::CubeLodFromGradients(ValueId direction, ValueId gradient_h,
++                                                  ValueId gradient_v, ValueId face_size) {
++  // The face is chosen by the major axis ma, and the face coordinates are sc / ma and tc / ma
++  // with sc and tc the two other components, in [-1, 1] across the face. Their gradients come
++  // from the quotient rule, d(sc / ma) = (dsc * ma - sc * dma) / ma^2; the sign of ma does not
++  // matter for the lengths below.
++  Builder& b = *builder_;
++  ValueId direction_abs = b.Unary(Op::kFAbs, direction);
++  ValueId abs_x = b.Extract(direction_abs, 0);
++  ValueId abs_y = b.Extract(direction_abs, 1);
++  ValueId abs_z = b.Extract(direction_abs, 2);
++  ValueId is_x_major = b.Emit(Op::kLogicalAnd, kBool,
++                              {b.Compare(Op::kFOrdGreaterThanEqual, abs_x, abs_y),
++                               b.Compare(Op::kFOrdGreaterThanEqual, abs_x, abs_z)});
++  ValueId is_y_major = b.Emit(Op::kLogicalAnd, kBool,
++                              {b.Emit(Op::kLogicalNot, kBool, {is_x_major}),
++                               b.Compare(Op::kFOrdGreaterThanEqual, abs_y, abs_z)});
++  ValueId is_x_or_y_major = b.Emit(Op::kLogicalOr, kBool, {is_x_major, is_y_major});
++  // Major axis, and the two other axes: (y, z) for X, (x, z) for Y, (x, y) for Z.
++  auto major = [&](ValueId vector) {
++    return b.Select(is_x_major, b.Extract(vector, 0),
++                    b.Select(is_y_major, b.Extract(vector, 1), b.Extract(vector, 2)));
++  };
++  auto first_minor = [&](ValueId vector) {
++    return b.Select(is_x_major, b.Extract(vector, 1), b.Extract(vector, 0));
++  };
++  auto second_minor = [&](ValueId vector) {
++    return b.Select(is_x_or_y_major, b.Extract(vector, 2), b.Extract(vector, 1));
++  };
++  ValueId ma = major(direction);
++  ValueId sc = first_minor(direction);
++  ValueId tc = second_minor(direction);
++  // A zero direction has no face; keep the division finite.
++  ValueId tiny = b.ConstFloat(1.0e-30f);
++  ValueId ma_squared = b.Binary(Op::kNMax, b.Binary(Op::kFMul, ma, ma), tiny);
++  // Squared length of the face coordinate gradient along one screen axis.
++  auto face_gradient_length_squared = [&](ValueId gradient) {
++    ValueId gradient_ma = major(gradient);
++    auto face_derivative = [&](ValueId coordinate, ValueId gradient_coordinate) {
++      return b.Binary(Op::kFDiv,
++                      b.Binary(Op::kFSub, b.Binary(Op::kFMul, gradient_coordinate, ma),
++                               b.Binary(Op::kFMul, coordinate, gradient_ma)),
++                      ma_squared);
++    };
++    ValueId ds = face_derivative(sc, first_minor(gradient));
++    ValueId dt = face_derivative(tc, second_minor(gradient));
++    return b.Binary(Op::kFAdd, b.Binary(Op::kFMul, ds, ds), b.Binary(Op::kFMul, dt, dt));
++  };
++  ValueId length_squared = b.Binary(Op::kNMax, face_gradient_length_squared(gradient_h),
++                                    face_gradient_length_squared(gradient_v));
++  // The face coordinates span 2 across face_size texels: texels = 0.5 * face_size * length.
++  ValueId half_size = b.Binary(Op::kFMul, face_size, b.ConstFloat(0.5f));
++  ValueId texel_length_squared =
++      b.Binary(Op::kFMul, length_squared, b.Binary(Op::kFMul, half_size, half_size));
++  // log2(sqrt(x)) = 0.5 * log2(x); a zero gradient gives the most detailed level after clamping.
++  return b.Binary(Op::kFMul,
++                  b.Unary(Op::kLog2, b.Binary(Op::kNMax, texel_length_squared, tiny)),
++                  b.ConstFloat(0.5f));
++}
++
 +void XscShaderTranslator::SampleTexture(TextureSampleMode mode, TextureDimension dimension,
 +                                        ValueId coordinates, ValueId lod_or_gradient_x,
 +                                        ValueId gradient_y, size_t texture_unsigned,
@@ -6722,6 +6788,10 @@ index 0000000..e91f6c2
 +        case xenos::FetchOpDimension::kCube:
 +          if (instr.attributes.unnormalized_coordinates) {
 +            size_needed_components |= 0b0011;
++          }
++          // The face width, for the LOD calculated from the gradients.
++          if (use_computed_lod && features_.cube_lod_from_gradients) {
++            size_needed_components |= 0b0001;
 +          }
 +          // The size is not needed for the face ID offset.
 +          size_needed_components &= 0b0011;
@@ -7230,11 +7300,21 @@ index 0000000..e91f6c2
 +        sample_result_signed =
 +            if_data_is_3d.MergePhi(sample_result_signed_3d, sample_result_signed_stacked);
 +      } else {
++        ValueId coordinates_vector =
++            b.Construct(kFloat3, {coordinates[0], coordinates[1], coordinates[2]});
++        if (use_computed_lod && instr.dimension == xenos::FetchOpDimension::kCube &&
++            features_.cube_lod_from_gradients) {
++          assert_true(size[0] != kNoValue);
++          mode = TextureSampleMode::kLod;
++          lod_or_gradient_x =
++              CubeLodFromGradients(coordinates_vector, gradients_h, gradients_v, size[0]);
++          gradient_y = kNoValue;
++        }
 +        SampleTexture(mode,
 +                      instr.dimension == xenos::FetchOpDimension::kCube ? TextureDimension::kCube
 +                                                                         : TextureDimension::k2DArray,
-+                      b.Construct(kFloat3, {coordinates[0], coordinates[1], coordinates[2]}),
-+                      lod_or_gradient_x, gradient_y, texture_2d_array_or_cube_unsigned,
++                      coordinates_vector, lod_or_gradient_x, gradient_y,
++                      texture_2d_array_or_cube_unsigned,
 +                      texture_2d_array_or_cube_signed, sampler_index, is_any_unsigned,
 +                      is_any_signed, sample_result_unsigned, sample_result_signed);
 +      }
