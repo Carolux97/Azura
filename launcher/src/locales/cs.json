@@ -21,8 +21,8 @@
     "runtimeVersion": "Runtime ReXGlue {version}"
   },
   "play": {
-    "eyebrow": "Nativní port pro macOS · Gears of War 3",
-    "lede": "Vaše kopie hry, překompilovaná pro Apple Silicon.",
+    "eyebrow": "Nativní port pro {platform} · Gears of War 3",
+    "lede": "Vaše kopie hry, překompilovaná pro {target}.",
     "launch": "Hrát",
     "launching": "Spouštění",
     "mode": "Kampaň",
@@ -56,9 +56,9 @@
     "runtimeNotBuilt": "Nenainstalováno",
     "runtimeUpdateKit": "Je k dispozici aktualizace"
   },
-  "news": {
-    "title": "Novinky",
-    "skeleton": "První kostra projektu: runtime, manifest a launcher."
+  "releaseNotes": {
+    "title": "Novinky ve verzi {version}",
+    "dismiss": "Rozumím"
   },
   "install": {
     "title": "Instalace",

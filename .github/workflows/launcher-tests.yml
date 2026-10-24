@@ -25,13 +25,19 @@ concurrency:
 
 jobs:
   test:
-    name: ${{ matrix.os }}
+    name: ${{ matrix.name }}
     strategy:
       # Both platforms report their result even when the other one fails.
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+        include:
+          # macOS on the project's own Mac (a self-hosted runner, see CONTRIBUTING.md): GitHub's
+          # macOS runners count ten times their minutes on a private repository.
+          - name: macos
+            runner: [self-hosted, macOS, ARM64]
+          - name: ubuntu
+            runner: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     defaults:
       run:
         working-directory: launcher

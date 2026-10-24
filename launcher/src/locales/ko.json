@@ -21,8 +21,8 @@
     "runtimeVersion": "Runtime ReXGlue {version}"
   },
   "play": {
-    "eyebrow": "macOS 네이티브 포트 · Gears of War 3",
-    "lede": "내 게임을 Apple Silicon용으로 다시 컴파일했습니다.",
+    "eyebrow": "{platform} 네이티브 포트 · Gears of War 3",
+    "lede": "내 게임을 {target}용으로 다시 컴파일했습니다.",
     "launch": "플레이",
     "launching": "시작 중",
     "mode": "캠페인",
@@ -56,9 +56,9 @@
     "runtimeNotBuilt": "설치되지 않음",
     "runtimeUpdateKit": "업데이트 있음"
   },
-  "news": {
-    "title": "새 소식",
-    "skeleton": "첫 프로젝트 골격: 런타임, 매니페스트, 런처."
+  "releaseNotes": {
+    "title": "버전 {version}의 새로운 기능",
+    "dismiss": "확인"
   },
   "install": {
     "title": "설치",

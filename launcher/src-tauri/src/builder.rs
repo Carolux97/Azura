@@ -341,6 +341,14 @@ fn key(input: &Path, extra: &[&str]) -> std::io::Result<String> {
     Ok(digest.finalize().iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
+/// A filled command as it goes into a key: with the kit's folder written as `{kit}` again. The
+/// kit's content is in its build key, which clears the objects when it changes, so where the kit
+/// is does not change what it compiles. It moves with the launcher: a macOS app moved or opened
+/// from a translocated copy, and an AppImage, mounted in a new folder at every start.
+fn key_command(command: &[String], kit_dir: &str) -> String {
+    command.iter().map(|arg| arg.replace(kit_dir, "{kit}")).collect::<Vec<_>>().join(" ")
+}
+
 /// The file beside `output` that holds the key it was built for.
 fn key_file(output: &Path) -> PathBuf {
     let mut name = output.as_os_str().to_owned();
@@ -561,14 +569,19 @@ fn translate_and_compile(
     ]));
     // The header includes only the SDK's headers, which come with the kit (whose build key clears
     // the objects when they change), so its content, the command and the compiler decide its key:
-    // a compiler rejects a precompiled header another version wrote. Every object's key includes
-    // this one, so a new compiler compiles everything again.
+    // a compiler rejects a precompiled header another version wrote. The precompiled header keeps
+    // the absolute paths of the headers it read, so its own key has the kit's folder in it and it
+    // is built again when the kit moves. The objects' keys take the precompiled header's key
+    // without that folder (`pch_identity`): a new compiler compiles everything again, a moved kit
+    // does not.
+    let kit_dir = folders.kit.to_string_lossy().into_owned();
     let pch_key = key(&header, &[&pch_command.join(" "), &compiler.version])?;
+    let pch_identity = key(&header, &[&key_command(&pch_command, &kit_dir), &compiler.version])?;
     if !up_to_date(&pch, &pch_key) {
         log.run(&pch_command, work).map_err(|summary| step_failed(Phase::Compiling, summary, log))?;
         fs::write(key_file(&pch), &pch_key)?;
     }
-    compile_all(&sources, &generated, &objects_dir, &pch_key, |source, object| {
+    compile_all(&sources, &generated, &objects_dir, &pch_identity, &kit_dir, |source, object| {
         fill(&kit.compile.command, &compiler.command, &[], &values(&[
             ("{pch}", pch.to_string_lossy().into_owned()),
             ("{source}", source.to_string_lossy().into_owned()),
@@ -631,16 +644,16 @@ fn depfile_paths(text: &str) -> Vec<String> {
     paths
 }
 
-/// The key of a generated file's object: its source, command and precompiled header, and the
-/// generated headers its last compile included. `None` while there is no dependency file (the
-/// file has not been compiled yet), so it is compiled.
-fn object_key(source: &Path, depfile: &Path, generated: &Path, command: &[String], pch_key: &str) -> Option<String> {
+/// The key of a generated file's object: its source, command (`key_command`) and precompiled
+/// header, and the generated headers its last compile included. `None` while there is no
+/// dependency file (the file has not been compiled yet), so it is compiled.
+fn object_key(source: &Path, depfile: &Path, generated: &Path, command: &str, pch_key: &str) -> Option<String> {
     if !depfile.is_file() {
         return None;
     }
     let mut digest = Sha256::new();
     digest.update(fs::read(source).ok()?);
-    digest.update(command.join(" ").as_bytes());
+    digest.update(command.as_bytes());
     digest.update(pch_key.as_bytes());
     for header in generated_dependencies(depfile, generated, source) {
         digest.update(header.to_string_lossy().as_bytes());
@@ -658,6 +671,7 @@ fn compile_all(
     generated: &Path,
     objects_dir: &Path,
     pch_key: &str,
+    kit_dir: &str,
     command: impl Fn(&Path, &Path) -> Vec<String> + Sync,
     log: &Log,
     work: &Path,
@@ -682,12 +696,13 @@ fn compile_all(
                 let depfile = PathBuf::from(depfile);
                 let mut command = command(source, object);
                 command.extend(["-MD".to_string(), "-MF".to_string(), depfile.to_string_lossy().into_owned()]);
-                let key_now = object_key(source, &depfile, generated, &command, pch_key);
+                let command_key = key_command(&command, kit_dir);
+                let key_now = object_key(source, &depfile, generated, &command_key, pch_key);
                 let result = if key_now.as_deref().is_some_and(|key| up_to_date(object, key)) {
                     Ok(())
                 } else {
                     log.run(&command, work).and_then(|()| {
-                        let key = object_key(source, &depfile, generated, &command, pch_key)
+                        let key = object_key(source, &depfile, generated, &command_key, pch_key)
                             .ok_or_else(|| format!("the compiler wrote no dependency file for {}", source.display()))?;
                         fs::write(key_file(object), key).map_err(|e| e.to_string())
                     })
@@ -818,8 +833,9 @@ mod tests {
         let started = std::time::Instant::now();
         build(&folders, &version.manifest, &version.xex_sha256, &Print, &running).unwrap();
         println!("rebuilt in {:.1} s", started.elapsed().as_secs_f64());
-        // A first build that was interrupted (no state.json yet), resumed: codegen runs again, but
-        // no object is compiled again.
+        // A first build that was interrupted (no state.json yet), resumed with the kit somewhere
+        // else (a moved app, an AppImage mounted again): codegen runs and the precompiled header
+        // is built again, but no object is compiled again.
         let objects_written = |work: &Path| -> Vec<(PathBuf, std::time::SystemTime)> {
             let mut objects: Vec<_> = fs::read_dir(work.join("obj"))
                 .unwrap()
@@ -836,9 +852,16 @@ mod tests {
         let before = objects_written(&work);
         assert!(!before.is_empty());
         fs::remove_file(work.join(STATE_FILE)).unwrap();
+        let moved_kit = dir.join("kit-moved");
+        fs::create_dir_all(&moved_kit).unwrap();
+        for entry in fs::read_dir(&kit).unwrap() {
+            let entry = entry.unwrap();
+            std::os::unix::fs::symlink(entry.path(), moved_kit.join(entry.file_name())).unwrap();
+        }
         let started = std::time::Instant::now();
-        build(&folders, &version.manifest, &version.xex_sha256, &Print, &running).unwrap();
-        println!("resumed in {:.1} s", started.elapsed().as_secs_f64());
+        let moved = BuildFolders { kit: &moved_kit, game: &game, work: &work, runtime: &runtime };
+        build(&moved, &version.manifest, &version.xex_sha256, &Print, &running).unwrap();
+        println!("resumed with the kit moved in {:.1} s", started.elapsed().as_secs_f64());
         assert_eq!(objects_written(&work), before);
         // A kit whose link changed (our code, the SDK libraries): the kept objects are linked
         // again, without codegen or compiling. Its other files are links to the real kit's.
@@ -926,6 +949,25 @@ mod tests {
             ("{output}", "/r/azura".into()),
         ]);
         assert_eq!(filled, strings(&["xcrun", "clang++", "-I/w/gen", "/k/sdk/lib/x.a", "a.o", "b.o", "-o", "/r/azura"]));
+    }
+
+    #[test]
+    fn the_kits_folder_does_not_change_a_commands_key() {
+        let template = strings(&["{cxx}", "-I{kit}/sdk/include", "-include-pch", "{pch}"]);
+        let filled_in = |kit: &str| {
+            fill(&template, &strings(&["clang++"]), &[], &[("{kit}", kit.into()), ("{pch}", "/w/obj/azura_pch.pch".into())])
+        };
+        let mounted = filled_in("/tmp/.mount_AzuraA1/usr/lib/kit");
+        let mounted_again = filled_in("/tmp/.mount_AzuraB2/usr/lib/kit");
+        assert_ne!(mounted, mounted_again);
+        assert_eq!(
+            key_command(&mounted, "/tmp/.mount_AzuraA1/usr/lib/kit"),
+            key_command(&mounted_again, "/tmp/.mount_AzuraB2/usr/lib/kit")
+        );
+        assert_eq!(
+            key_command(&mounted, "/tmp/.mount_AzuraA1/usr/lib/kit"),
+            "clang++ -I{kit}/sdk/include -include-pch /w/obj/azura_pch.pch"
+        );
     }
 
     #[test]
