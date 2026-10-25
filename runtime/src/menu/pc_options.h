@@ -5,8 +5,8 @@
 //   - Video, which only opened the brightness calibration screen, becomes a list: a "Calibrate
 //     brightness" row that opens that screen with Accept, then full screen, frame rate limit, anti-aliasing
 //     and motion blur;
-//   - "Storage location", which has no use on a PC, becomes "Keyboard and mouse", with the mouse
-//     sensitivity (and the place for key bindings later).
+//   - "Storage location", which has no use on a PC, becomes "Keyboard and mouse", and it and
+//     "Controller" open the controls menus (controls_menu.h) instead of a list.
 // How:
 //   - the rows are defined in the game's localization files, which the engine imports in full
 //     (PatchOptionsMenu);
@@ -23,6 +23,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -33,7 +34,12 @@ struct CoalescedSection;
 // Positions in UIScene_Options.OptionCategories (the game's EOptionsMenuMode).
 constexpr int kGameCategory = 0;
 constexpr int kVideoCategory = 1;
-// Keyboard and mouse, at the game's storage location position.
+// Controller: choosing it opens the controller's controls menu (controls_menu.h) through
+// Callback_ViewController, the function of the list's "View controller" button, which has no list
+// to be in any more.
+constexpr int kControllerCategory = 4;
+// Keyboard and mouse, at the game's storage location position: choosing it opens the keyboard and
+// mouse's controls menu through Callback_ResetTutorials, which only Game's list runs otherwise.
 constexpr int kKeyboardMouseCategory = 5;
 // Local co-op, at the game's mature content position (that category's two rows move to the end of
 // Game): choosing it opens the Local co-op menu (local_coop_menu.h) instead of a list.
@@ -50,6 +56,31 @@ bool PcOptionValueNames(int psid, std::vector<std::u16string>& names);
 
 // Where chosen values are saved (azura.toml).
 void SetPcOptionsConfigPath(std::filesystem::path config_path);
+
+// The game's own texts the controls menus show, in the language of the game's menus.
+struct GameControlsTexts {
+  // The controller view's descriptions of the buttons (UIScene_Options: "AButtonString",
+  // "AButtonAltString", ... "LeftStickClickString"), by key.
+  std::map<std::string, std::string> buttons;
+  // The Controller category's title and its rows' labels, by profile setting ID.
+  std::string controller_title;
+  std::map<int, std::string> setting_labels;
+  // The value names of the profile settings that are lists, by ID, in the order of their values
+  // (GearProfileSettings' ProfileMappings).
+  std::map<int, std::vector<std::string>> value_names;
+  // The menus' Back and Defaults buttons.
+  std::string back;
+  std::string defaults;
+};
+GameControlsTexts ControlsTextsFromGame();
+
+// A setting of the controls menus: sets cvar `name` to `value` and writes it to azura.toml, quoted
+// when `quoted` (a string setting).
+void StoreControlsSetting(const std::string& name, const std::string& value, bool quoted);
+
+// The project's default of cvar `name` (azura.default.toml), or "" when it sets none (the SDK's
+// default applies).
+std::string ControlsSettingDefault(const std::string& name);
 
 // Identifier of the PC option at row `row` of category `category`, or -1 when the row is one of the
 // game's own. Rows count only the options shown now: without an image scaling effect that sharpens,

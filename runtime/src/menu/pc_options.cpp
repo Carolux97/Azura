@@ -131,10 +131,6 @@ const std::vector<Option>& Options() {
       // Our own list too (ID 9111): the corner the overlay is shown in.
       {kVideoCategory, 10, Label::kPerformanceOverlayPosition, "performance_overlay_position", Kind::kChoice, 9111, -1,
        {"top_left", "top_right", "bottom_left", "bottom_right"}},
-      // A slider needs no definition, and its ID is one the profile does not have: the menu's reads
-      // and writes of it fail and change nothing.
-      {kKeyboardMouseCategory, 0, Label::kMouseSensitivity, "mnk_sensitivity", Kind::kSlider, 9105, -1, {}, 0.1f, 3.0f,
-       0.1f},
   };
   return options;
 }
@@ -418,6 +414,8 @@ std::string PlayerLanguage() {
 
 std::mutex g_mutex;
 std::filesystem::path g_config_path;
+// The game's texts of the controls menus, read as the menu's localization file is patched.
+GameControlsTexts g_controls_texts;
 // Value shown for each option once read: settings that apply at the next start keep their old
 // cvar value until then, so the menu shows what was chosen rather than what is in effect.
 std::map<int, float> g_values;
@@ -759,6 +757,34 @@ void SetPcOptionsConfigPath(std::filesystem::path config_path) {
   g_config_path = std::move(config_path);
 }
 
+GameControlsTexts ControlsTextsFromGame() {
+  std::lock_guard lock(g_mutex);
+  return g_controls_texts;
+}
+
+void StoreControlsSetting(const std::string& name, const std::string& value, bool quoted) {
+  rex::cvar::SetFlagByName(name, value);
+  REXLOG_INFO("[Azura controls] {} = {}", name, value);
+  std::filesystem::path config_path;
+  {
+    std::lock_guard lock(g_mutex);
+    config_path = g_config_path;
+  }
+  if (!config_path.empty()) UpsertTomlKey(config_path, name, quoted ? "\"" + value + "\"" : value);
+}
+
+std::string ControlsSettingDefault(const std::string& name) {
+  std::filesystem::path config_path;
+  {
+    std::lock_guard lock(g_mutex);
+    config_path = g_config_path;
+  }
+  std::string value = ReadTomlValue(config_path.parent_path() / "azura.default.toml", name);
+  // A string as the file has it, between quotes.
+  if (value.size() >= 2 && value.front() == '"' && value.back() == '"') value = value.substr(1, value.size() - 2);
+  return value;
+}
+
 namespace {
 
 // Whether the image scaling effect chosen in the menu (shown, maybe not in effect until a restart)
@@ -1014,23 +1040,66 @@ void PatchOptionsMenu(CoalescedSection& section, const std::string& language) {
              "\",OnSelectedCallback=\"Callback_SelectStorageLocation\",bIsGlobalValue=false,CategoryOptions=(),"
              "MenuButtons=((ButtonDescription=\"" + back + "\",ButtonType=1,ButtonHandler=OBH_MAX)))");
 
-  // Keyboard and mouse, in place of the storage location (a device picker without rows): every
-  // field is written, since the position held a different category.
-  std::string keyboard_mouse_rows;
-  for (const Option& option : Options()) {
-    if (option.category == kKeyboardMouseCategory) {
-      keyboard_mouse_rows += (keyboard_mouse_rows.empty() ? "" : ",") + RowText(option, texts);
-    }
-  }
+  // Keyboard and mouse, in place of the storage location (a device picker without rows): choosing
+  // it runs Callback_ResetTutorials, where script_hooks.cpp opens the keyboard and mouse's controls
+  // menu. Every field is written, since the position held a different category.
   SetKey(section, "OptionCategories[" + std::to_string(kKeyboardMouseCategory) + "]",
          std::string("(CategoryDescription=\"") + texts.keyboard_mouse.first + "\",CategoryTooltip=\"" +
-             texts.keyboard_mouse.second + "\",OnSelectedCallback=\"\",bIsGlobalValue=false,CategoryOptions=(" +
-             keyboard_mouse_rows + "),MenuButtons=((ButtonDescription=\"" + back +
-             "\",ButtonType=1,ButtonHandler=OBH_MAX),(ButtonDescription=\"" + defaults +
-             "\",ButtonType=2,ButtonHandler=OBH_Defaults)))");
+             texts.keyboard_mouse.second +
+             "\",OnSelectedCallback=\"Callback_ResetTutorials\",bIsGlobalValue=false,CategoryOptions=(),"
+             "MenuButtons=((ButtonDescription=\"" + back + "\",ButtonType=1,ButtonHandler=OBH_MAX)))");
+
+  // Controller: the game's category as it is (its texts in this language), choosing it running
+  // Callback_ViewController, where script_hooks.cpp opens the controller's controls menu. Its rows
+  // are kept for their texts, which the menu shows; no list of them is opened any more.
+  const std::string controller = Utf8(CategoryText(section, kControllerCategory));
+  const size_t rows_at = controller.find("CategoryOptions=(");
+  if (rows_at != std::string::npos && controller.find("OnSelectedCallback=") == std::string::npos) {
+    SetKey(section, "OptionCategories[" + std::to_string(kControllerCategory) + "]",
+           controller.substr(0, rows_at) + "OnSelectedCallback=\"Callback_ViewController\"," + controller.substr(rows_at));
+  } else {
+    REXLOG_WARN("[Azura options] The Controller category is not as expected in {}: it keeps its list", language);
+  }
+
+  // What the controls menus show from the game, in this language.
+  GameControlsTexts controls;
+  for (const auto& key : section.keys) {
+    const std::string name = key.name.Ascii();
+    if (name.size() > 6 && name.compare(name.size() - 6, 6, "String") == 0) {
+      controls.buttons[name] = Utf8(key.value.text);
+    }
+  }
+  const std::u16string controller_text = CategoryText(section, kControllerCategory);
+  const auto controller_title = Quoted(controller_text, u"CategoryDescription");
+  controls.controller_title = controller_title.empty() ? std::string("CONTROLLER") : controller_title[0];
+  // The Controller category's rows, in the game's order (docs/reverse-engineering.md).
+  constexpr int kControllerRows[] = {2, 58, 375, 368, 59, 60, 1, 38, 39, 51};
+  const auto row_labels = Quoted(controller_text, u"SettingDescription");
+  for (size_t i = 0; i < std::size(kControllerRows) && i < row_labels.size(); ++i) {
+    controls.setting_labels[kControllerRows[i]] = row_labels[i];
+  }
+  controls.back = back;
+  controls.defaults = defaults;
+  std::lock_guard lock(g_mutex);
+  controls.value_names = std::move(g_controls_texts.value_names);
+  g_controls_texts = std::move(controls);
 }
 
 void PatchValueNames(CoalescedSection& section, const std::string& language) {
+  // The value names of the controller's list settings, for the controls menus: their definitions'
+  // positions in ProfileMappings, by profile setting ID (from the class defaults).
+  {
+    constexpr std::pair<int, int> kControllerMappings[] = {
+        {1, 0}, {2, 1}, {38, 30}, {39, 31}, {51, 38}, {58, 59}, {375, 159},
+    };
+    std::map<int, std::vector<std::string>> value_names;
+    for (const auto& [psid, mapping] : kControllerMappings) {
+      const CoalescedKey* key = FindKey(section, "ProfileMappings[" + std::to_string(mapping) + "]");
+      if (key) value_names[psid] = Quoted(key->value.text, u"Name");
+    }
+    std::lock_guard lock(g_mutex);
+    g_controls_texts.value_names = std::move(value_names);
+  }
   const Texts& texts = TextsFor(language);
   for (const Option& option : Options()) {
     if (option.mapping < 0) continue;

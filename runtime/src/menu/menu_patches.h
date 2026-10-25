@@ -7,7 +7,8 @@
 //   - options that will never work (Xbox LIVE event calendar, Marketplace) are removed;
 //   - online options that may work once peer-to-peer play exists are greyed out
 //     (bIsDisabled=true) and marked "(coming soon)" in the player's language;
-//   - a "Quit Game" option is added at the end of the main menu.
+//   - "Options" and "Quit Game" options are added at the end of the main menu (Options was only a
+//     button of its button bar, which no longer shows it).
 // Only options at the end of a list are removed, so no other option changes position: the game's
 // script identifies a choice by its index (UIScene_FrontEnd.HandleMenuSelection).
 //
@@ -43,5 +44,8 @@ void InstallMenuPatches(rex::Runtime* runtime);
 
 // Index of the Quit Game option in the main menu, or -1 if the menus were not patched.
 int MainMenuQuitOption();
+
+// Index of the Options option in the main menu, or -1 if the menus were not patched.
+int MainMenuOptionsOption();
 
 }  // namespace azura::menu

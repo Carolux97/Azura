@@ -5,6 +5,11 @@
 #include <cfloat>
 #include <cmath>
 
+#include <imgui_internal.h>
+
+#include <rex/input/input.h>
+#include <rex/input/input_system.h>
+
 namespace azura::coop_ui {
 
 namespace {
@@ -40,6 +45,17 @@ void Dpad(ImDrawList* draw_list, ImVec2 at, float h, ImU32 color) {
   draw_list->AddRectFilled(ImVec2(at.x - half, at.y - arm), ImVec2(at.x + half, at.y + arm), color);
 }
 
+// The two small menu buttons (Back and Start), `dx` either side of the middle at height `y`: upright
+// pills on a PlayStation controller, rounded rectangles on the others.
+void MenuButtons(ImDrawList* draw_list, ImVec2 c, float h, float dx, float y, ImU32 color, bool upright) {
+  const ImVec2 half = upright ? ImVec2(h * 0.018f, h * 0.035f) : ImVec2(h * 0.035f, h * 0.022f);
+  for (float side : {-1.0f, 1.0f}) {
+    const ImVec2 at(c.x + side * dx, y);
+    draw_list->AddRectFilled(ImVec2(at.x - half.x, at.y - half.y), ImVec2(at.x + half.x, at.y + half.y), color,
+                             std::min(half.x, half.y));
+  }
+}
+
 // Four face buttons in a diamond: top, right, bottom, left.
 void FaceButtons(ImDrawList* draw_list, ImVec2 at, float h, const ImU32 (&colors)[4]) {
   const float d = h * 0.08f, r = h * 0.04f;
@@ -48,6 +64,34 @@ void FaceButtons(ImDrawList* draw_list, ImVec2 at, float h, const ImU32 (&colors
 }
 
 }  // namespace
+
+void AddTextCentered(ImDrawList* draw_list, ImFont* font, float size, ImVec2 center, ImU32 color, const char* text) {
+  // The ink's bounds from the point AddText draws at, glyph by glyph, at the size it is drawn at.
+  ImFontBaked* baked = font->GetFontBaked(size);
+  const float scale = baked && baked->Size > 0.0f ? size / baked->Size : 1.0f;
+  float pen = 0.0f;
+  ImVec2 ink_min(FLT_MAX, FLT_MAX), ink_max(-FLT_MAX, -FLT_MAX);
+  for (const char* s = text; baked && *s;) {
+    unsigned int c = 0;
+    s += ImTextCharFromUtf8(&c, s, nullptr);
+    const ImFontGlyph* glyph = baked->FindGlyph(static_cast<ImWchar>(c));
+    if (!glyph) continue;
+    if (glyph->Visible) {
+      ink_min = ImVec2(std::min(ink_min.x, pen + glyph->X0 * scale), std::min(ink_min.y, glyph->Y0 * scale));
+      ink_max = ImVec2(std::max(ink_max.x, pen + glyph->X1 * scale), std::max(ink_max.y, glyph->Y1 * scale));
+    }
+    pen += glyph->AdvanceX * scale;
+  }
+  if (ink_min.x > ink_max.x) {
+    // Nothing visible (or no font data): the line box instead.
+    const ImVec2 box = font->CalcTextSizeA(size, FLT_MAX, 0.0f, text);
+    ink_min = ImVec2(0.0f, 0.0f);
+    ink_max = box;
+  }
+  const ImVec2 at(center.x - (ink_min.x + ink_max.x) * 0.5f, center.y - (ink_min.y + ink_max.y) * 0.5f);
+  // Whole pixels, so thin strokes stay sharp.
+  draw_list->AddText(font, size, ImVec2(std::round(at.x), std::round(at.y)), color, text);
+}
 
 // `text` cut with an ellipsis to fit `max_width`.
 std::string Fit(ImFont* font, float size, const std::string& text, float max_width) {
@@ -160,6 +204,9 @@ void DrawControllerIcon(ImDrawList* draw_list, ImVec2 center, float size, PadLoo
       Stick(draw_list, ImVec2(center.x + w * 0.11f, center.y + h * 0.06f), h, col(90, 92, 98), col(20, 20, 24));
       const ImU32 marks = dualsense ? col(60, 62, 68) : col(150, 152, 158);
       Dpad(draw_list, ImVec2(center.x - w * 0.28f, center.y - h * 0.12f), h, marks);
+      // Create (Share) and Options, beside the touchpad.
+      MenuButtons(draw_list, center, h, PadPointPosition(center, size, look, PadPoint::kStart).x - center.x,
+                  PadPointPosition(center, size, look, PadPoint::kStart).y, marks, true);
       const ImU32 face[4] = {marks, marks, marks, marks};
       FaceButtons(draw_list, ImVec2(center.x + w * 0.28f, center.y - h * 0.12f), h, face);
       break;
@@ -175,6 +222,12 @@ void DrawControllerIcon(ImDrawList* draw_list, ImVec2 center, float size, PadLoo
       Stick(draw_list, ImVec2(center.x - w * 0.26f, center.y - h * 0.12f), h, ring, col(18, 18, 22));
       Stick(draw_list, ImVec2(center.x + w * 0.12f, center.y + h * 0.06f), h, ring, col(18, 18, 22));
       Dpad(draw_list, ImVec2(center.x - w * 0.12f, center.y + h * 0.06f), h, generic ? col(90, 92, 98) : col(120, 122, 128));
+      if (look != PadLook::kSwitchPro) {
+        // View and Menu (Back and Start), below the guide button's place.
+        const ImVec2 start = PadPointPosition(center, size, look, PadPoint::kStart);
+        MenuButtons(draw_list, center, h, start.x - center.x, start.y, generic ? col(90, 92, 98) : col(120, 122, 128),
+                    false);
+      }
       if (look == PadLook::kXbox) {
         // Y yellow, B red, A green, X blue; the guide button with its green glow.
         const ImU32 face[4] = {col(240, 196, 24), col(222, 48, 44), col(30, 170, 60), col(40, 116, 230)};
@@ -199,6 +252,43 @@ void DrawControllerIcon(ImDrawList* draw_list, ImVec2 center, float size, PadLoo
   }
 }
 
+ImVec2 PadPointPosition(ImVec2 center, float size, PadLook look, PadPoint point) {
+  // The same proportions as DrawControllerIcon and its helpers (Stick, Dpad, FaceButtons, PadShape).
+  const float w = size * 1.7f, h = size;
+  const bool playstation = look == PadLook::kDualSense || look == PadLook::kDualShock4;
+  const ImVec2 left_stick = playstation ? ImVec2(center.x - w * 0.11f, center.y + h * 0.06f)
+                                        : ImVec2(center.x - w * 0.26f, center.y - h * 0.12f);
+  const ImVec2 right_stick = playstation ? ImVec2(center.x + w * 0.11f, center.y + h * 0.06f)
+                                         : ImVec2(center.x + w * 0.12f, center.y + h * 0.06f);
+  const ImVec2 dpad = playstation ? ImVec2(center.x - w * 0.28f, center.y - h * 0.12f)
+                                  : ImVec2(center.x - w * 0.12f, center.y + h * 0.06f);
+  const ImVec2 face = playstation ? ImVec2(center.x + w * 0.28f, center.y - h * 0.12f)
+                                  : ImVec2(center.x + w * 0.26f, center.y - h * 0.12f);
+  const float d = h * 0.08f;  // FaceButtons' distance from the diamond's middle
+  const float top = center.y - h * 0.36f;
+  // Share and Options beside the touchpad; View and Menu (and their likes) beside the guide button.
+  const float menu_x = playstation ? w * 0.21f : w * 0.08f;
+  const float menu_y = playstation                    ? center.y - h * 0.30f
+                       : look == PadLook::kSwitchPro ? center.y - h * 0.28f
+                                                     : center.y - h * 0.14f;
+  switch (point) {
+    case PadPoint::kA: return ImVec2(face.x, face.y + d);
+    case PadPoint::kB: return ImVec2(face.x + d, face.y);
+    case PadPoint::kX: return ImVec2(face.x - d, face.y);
+    case PadPoint::kY: return ImVec2(face.x, face.y - d);
+    case PadPoint::kLeftShoulder: return ImVec2(center.x - w * 0.32f, top + h * 0.02f);
+    case PadPoint::kRightShoulder: return ImVec2(center.x + w * 0.32f, top + h * 0.02f);
+    case PadPoint::kLeftTrigger: return ImVec2(center.x - w * 0.24f, top);
+    case PadPoint::kRightTrigger: return ImVec2(center.x + w * 0.24f, top);
+    case PadPoint::kLeftStick: return left_stick;
+    case PadPoint::kRightStick: return right_stick;
+    case PadPoint::kDpad: return dpad;
+    case PadPoint::kBack: return ImVec2(center.x - menu_x, menu_y);
+    case PadPoint::kStart: return ImVec2(center.x + menu_x, menu_y);
+  }
+  return center;
+}
+
 // A small left or right arrow, for the button hints.
 void DrawArrow(ImDrawList* draw_list, ImVec2 center, float size, bool left, ImU32 color) {
   const float s = left ? -1.0f : 1.0f;
@@ -215,8 +305,8 @@ float DrawConfirmGlyph(ImDrawList* draw_list, ImFont* font, ImVec2 top_left, flo
     const ImVec2 label = font->CalcTextSizeA(key_size, FLT_MAX, 0.0f, enter);
     const ImVec2 key_max(top_left.x + label.x + 10.0f * unit, top_left.y + 16.0f * unit);
     draw_list->AddRectFilled(top_left, key_max, Imulsion(alpha), 3.0f * unit);
-    draw_list->AddText(font, key_size, ImVec2(top_left.x + 5.0f * unit, (top_left.y + key_max.y - label.y) * 0.5f),
-                       Panel(alpha), enter);
+    AddTextCentered(draw_list, font, key_size, ImVec2((top_left.x + key_max.x) * 0.5f, (top_left.y + key_max.y) * 0.5f),
+                    Panel(alpha), enter);
     return key_max.x - top_left.x;
   }
   const ImVec2 center(top_left.x + 8.0f * unit, top_left.y + 8.0f * unit);
@@ -230,12 +320,41 @@ float DrawConfirmGlyph(ImDrawList* draw_list, ImFont* font, ImVec2 top_left, flo
     draw_list->AddLine(ImVec2(c.x - arm, c.y - arm), ImVec2(c.x + arm, c.y + arm), Panel(alpha), 1.8f * unit);
     draw_list->AddLine(ImVec2(c.x - arm, c.y + arm), ImVec2(c.x + arm, c.y - arm), Panel(alpha), 1.8f * unit);
   } else {
-    const float letter_size = 11.0f * unit;
-    const ImVec2 letter = font->CalcTextSizeA(letter_size, FLT_MAX, 0.0f, "A");
-    draw_list->AddText(font, letter_size, ImVec2(center.x - letter.x * 0.5f, center.y - letter.y * 0.5f), Panel(alpha),
-                       "A");
+    AddTextCentered(draw_list, font, 11.0f * unit, center, Panel(alpha), "A");
   }
   return 16.0f * unit;
+}
+
+bool CloseInputHeld(rex::input::InputSystem* input, const std::vector<rex::input::DeviceId>& pads) {
+  if (ImGui::IsKeyDown(ImGuiKey_Enter) || ImGui::IsKeyDown(ImGuiKey_KeypadEnter) || ImGui::IsKeyDown(ImGuiKey_Escape) ||
+      ImGui::IsKeyDown(ImGuiKey_Backspace)) {
+    return true;
+  }
+  if (!input) return false;
+  constexpr int kTriggerHeld = 30;
+  for (const auto id : pads) {
+    rex::input::X_INPUT_STATE state = {};
+    // 0 is X_ERROR_SUCCESS.
+    if (input->GetDeviceState(id, &state) != 0) continue;
+    if (state.gamepad.buttons || state.gamepad.left_trigger > kTriggerHeld || state.gamepad.right_trigger > kTriggerHeld) {
+      return true;
+    }
+  }
+  return false;
+}
+
+LastUsedInput::LastUsedInput(rex::input::InputSystem* input)
+    : keyboard_(input && input->ActiveKind(0) == rex::input::ActiveDeviceKind::kKeyboardMouse) {}
+
+void LastUsedInput::NoteKeyboard() {
+  for (int key = ImGuiKey_NamedKey_BEGIN; key < ImGuiKey_NamedKey_END; ++key) {
+    // ImGui's own controller keys are the controllers' presses, which NotePad takes.
+    if (key >= ImGuiKey_GamepadStart && key <= ImGuiKey_GamepadRStickDown) continue;
+    if (ImGui::IsKeyPressed(static_cast<ImGuiKey>(key), false)) {
+      keyboard_ = true;
+      return;
+    }
+  }
 }
 
 }  // namespace azura::coop_ui
