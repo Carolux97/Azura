@@ -83,11 +83,17 @@ void StoreControlsSetting(const std::string& name, const std::string& value, boo
 std::string ControlsSettingDefault(const std::string& name);
 
 // Identifier of the PC option at row `row` of category `category`, or -1 when the row is one of the
-// game's own or is not shown now (the sharpness row without an image scaling effect that sharpens).
+// game's own. Rows count only the options shown now: without an image scaling effect that sharpens,
+// the sharpness row is hidden and the rows below it move up.
 int FindPcOption(int category, int row);
 
 // Number of rows category `category` shows now (some depend on other rows' values).
 int PcOptionsShownRows(int category);
+
+// Profile setting IDs of category `category`'s options in the order its CategoryOptions array must
+// hold them: the rows shown now, in menu order, then the hidden ones, which the menu leaves out by
+// counting fewer rows.
+std::vector<int> PcOptionsArrangedPsids(int category);
 
 // For a row of ours whose changes the script must hear of while the menu is open, the profile
 // setting ID of the game row whose change callback it borrows (UIScene_Options.

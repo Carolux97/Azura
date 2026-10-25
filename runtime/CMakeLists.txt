@@ -52,6 +52,8 @@ set(AZURA_SOURCES
     src/gpu_list.cpp
     src/relaunch.cpp
     src/perf_marker.cpp
+    src/perf_overlay.cpp
+    src/perf_stats.cpp
     src/shader_compile_overlay.cpp
     src/shader_precompile.cpp
     src/local_coop_menu.cpp

@@ -8,6 +8,8 @@
 
 #include <rex/system/interfaces/graphics.h>
 
+#include "perf_overlay.h"
+
 namespace azura {
 
 namespace {
@@ -144,12 +146,15 @@ void ShaderCompileOverlay::OnDraw(ImGuiIO& io) {
   }
 
   // Small, in the top left corner of the 16:9 area the game image takes in the window, away from
-  // the game's own indicators at the bottom; sizes in pixels at 720p.
+  // the game's own indicators at the bottom; sizes in pixels at 720p. Below the performance overlay
+  // when that one shows in the same corner.
   float game_height = std::min(io.DisplaySize.y, io.DisplaySize.x * 9.0f / 16.0f);
   float game_width = game_height * 16.0f / 9.0f;
   float game_left = (io.DisplaySize.x - game_width) * 0.5f;
-  float game_top = (io.DisplaySize.y - game_height) * 0.5f;
   float unit = game_height / 720.0f;
+  float perf_overlay_height = PerfOverlayTopLeftHeight();
+  float game_top = (io.DisplaySize.y - game_height) * 0.5f +
+                   (perf_overlay_height > 0.0f ? (perf_overlay_height - 8.0f) * unit : 0.0f);
   alpha *= 0.85f;
   ImVec2 cog_center(game_left + 34.0f * unit, game_top + 34.0f * unit);
   float seconds = std::chrono::duration<float>(now - created_).count();
