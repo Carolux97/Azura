@@ -1,6 +1,7 @@
-// The look of Azura's own screens over the game (the Local co-op menu and its notices): the
-// launcher's colours (launcher/src/styles.css), its panels with cut corners, and icons of the input
-// devices drawn after the real ones. Everything draws on an ImGui draw list; sizes are in pixels.
+// The look of Azura's own screens over the game (the Local co-op menu and its notices, the
+// performance overlay): the launcher's colours (launcher/src/styles.css), its panels with cut
+// corners, and icons of the input devices drawn after the real ones. Everything draws on an ImGui
+// draw list; sizes are in pixels.
 
 #pragma once
 
@@ -22,6 +23,9 @@ constexpr ImU32 Imulsion(int alpha) { return IM_COL32(255, 184, 28, alpha); }
 constexpr ImU32 Text(int alpha) { return IM_COL32(236, 230, 218, alpha); }
 constexpr ImU32 TextDim(int alpha) { return IM_COL32(162, 156, 144, alpha); }
 constexpr ImU32 TextFaint(int alpha) { return IM_COL32(109, 105, 96, alpha); }
+// The launcher's state colours: --ok, and the text of its error badges (on --crimson).
+constexpr ImU32 Ok(int alpha) { return IM_COL32(143, 191, 106, alpha); }
+constexpr ImU32 ErrorText(int alpha) { return IM_COL32(255, 136, 136, alpha); }
 
 // `text` cut with an ellipsis to fit `max_width`.
 std::string Fit(ImFont* font, float size, const std::string& text, float max_width);
