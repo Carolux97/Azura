@@ -47,6 +47,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <vector>
 
 #include "script_hooks.h"
 
@@ -944,9 +945,12 @@ bool PatchTravelURL(uint8_t* base, uint32_t fstring_addr) {
 //
 // Some rows of ours are only shown with certain values of others (the sharpness row only with an
 // image scaling effect that sharpens). The list is built from OptionCategories[CurrentMode].
-// CategoryOptions, filled with every row of ours from the localization file; those rows come last,
-// so the number of rows of that array (its TArray count) is lowered to hide them and raised again,
-// over the same elements, to show them. Only while the allocation still holds them.
+// CategoryOptions, filled with every row of ours from the localization file. Before the list is
+// built, the array's elements are put in the order PcOptionsArrangedPsids gives (the shown rows,
+// then the hidden ones), and its number of rows (its TArray count) is lowered to leave the hidden
+// ones out, or raised again over the same elements to show them, while its allocation holds them.
+constexpr uint32_t kOptionInfoSize = 48;  // sizeof(OptionInfo), ProfileSettingId at +0
+
 void SetShownRows(uint8_t* base, uint32_t scene, int category) {
   const uint32_t categories = LoadU32(base, scene + kOptionsCategories);
   if (!categories || category < 0 || static_cast<uint32_t>(category) >= LoadU32(base, scene + kOptionsCategories + 4)) {
@@ -954,11 +958,30 @@ void SetShownRows(uint8_t* base, uint32_t scene, int category) {
   }
   const uint32_t options = categories + static_cast<uint32_t>(category) * kCategorySize + kCategoryOptions;
   const uint32_t shown = static_cast<uint32_t>(azura::menu::PcOptionsShownRows(category));
-  if (shown == 0 || LoadU32(base, options + 4) == shown) return;
-  if (shown > LoadU32(base, options + 8)) {
-    REXLOG_WARN("[Azura options] Category {} holds fewer rows than it should show ({})", category, shown);
+  if (shown == 0) return;
+  const std::vector<int> psids = azura::menu::PcOptionsArrangedPsids(category);
+  if (psids.size() > LoadU32(base, options + 8)) {
+    REXLOG_WARN("[Azura options] Category {} holds fewer rows than it has ({})", category, psids.size());
     return;
   }
+  // Each element moves whole (its strings' pointers go with it). A category whose elements are not
+  // exactly our options keeps its order.
+  const uint32_t data = LoadU32(base, options);
+  const auto psid_at = [&](size_t i) { return static_cast<int32_t>(LoadU32(base, data + i * kOptionInfoSize)); };
+  std::vector<int> held(psids.size());
+  for (size_t i = 0; i < psids.size(); ++i) held[i] = psid_at(i);
+  if (data && std::is_permutation(held.begin(), held.end(), psids.begin())) {
+    for (size_t i = 0; i < psids.size(); ++i) {
+      if (psid_at(i) == psids[i]) continue;
+      size_t from = i + 1;
+      while (psid_at(from) != psids[i]) ++from;
+      uint8_t element[kOptionInfoSize];
+      std::memcpy(element, base + data + i * kOptionInfoSize, kOptionInfoSize);
+      std::memcpy(base + data + i * kOptionInfoSize, base + data + from * kOptionInfoSize, kOptionInfoSize);
+      std::memcpy(base + data + from * kOptionInfoSize, element, kOptionInfoSize);
+    }
+  }
+  if (LoadU32(base, options + 4) == shown) return;
   StoreU32(base, options + 4, shown);
   REXLOG_DEBUG("[Azura options] Category {} shows {} rows", category, shown);
 }
