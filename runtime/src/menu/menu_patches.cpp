@@ -34,6 +34,7 @@ namespace azura::menu {
 namespace {
 
 std::atomic<int> g_quit_option{-1};
+std::atomic<int> g_options_option{-1};
 
 // Label of the added option. Its text is the [MainMenu] key of the same name.
 constexpr const char* kQuitLabel = "AzuraQuit";
@@ -192,6 +193,14 @@ int PatchMenuStructure(CoalescedSection& section) {
       if (label != u"Calendar" && label != u"DLC") break;
       entries.pop_back();
     }
+    // Options, as the party client's menu has it (its Label "Options" and TOOLTIP_Options are in
+    // every language's [MainMenu]): the main menu only opened them with Start, from its button bar.
+    // Without bHaltProgression, as there: a halted menu waits for the script's
+    // ContinueFromHaltedState, which never comes for an option the script does not know, and takes
+    // no more input once the Options close.
+    entries.push_back(u"(Label=\"Options\",ImagePath=\"UI_Portraits_G3.Menu.T_Portraits_MenuSections_MainMenu\","
+                      u"Next=MAINMENUOP_None)");
+    g_options_option.store(static_cast<int>(entries.size()) - 1, std::memory_order_release);
     entries.push_back(u"(Label=\"" + U16(kQuitLabel) +
                       u"\",ImagePath=\"UI_Portraits_G3.Menu.T_Portraits_MenuSections_MainMenu\","
                       u"Next=MAINMENUOP_None,bHaltProgression=true)");
@@ -262,6 +271,12 @@ int PatchMenus(Coalesced& coalesced) {
       const std::string section_name = section.name.Ascii();
       if (ui_config && section_name == "GearGame.UIWidget_MainMenu") {
         quit_option = PatchMenuStructure(section);
+      } else if (game_texts && section_name == "UIWidget_MainMenu") {
+        // The button bar's Start "Options": the main menu has an Options option instead. A space,
+        // as the engine keeps the cooked text for a localized property whose text is empty.
+        for (auto& key : section.keys) {
+          if (key.name.Ascii() == "OptionsButtonStr") key.value = CoalescedString::FromAscii(" ");
+        }
       } else if (game_texts && section_name == "UIScene_Options") {
         PatchOptionsMenu(section, language);
       } else if (game_texts && section_name == "GearProfileSettings") {
@@ -346,6 +361,10 @@ void InstallMenuPatches(rex::Runtime* runtime) {
 
 int MainMenuQuitOption() {
   return g_quit_option.load(std::memory_order_acquire);
+}
+
+int MainMenuOptionsOption() {
+  return g_options_option.load(std::memory_order_acquire);
 }
 
 }  // namespace azura::menu
