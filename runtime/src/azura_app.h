@@ -57,6 +57,7 @@ class AzuraApp : public rex::ReXApp {
   // Factory used by REX_DEFINE_APP. "azura" is the application name: it names the user data
   // folder, the log files and the config file (azura.toml).
   static std::unique_ptr<rex::ui::WindowedApp> Create(rex::ui::WindowedAppContext& ctx) {
+    azura::WaitForRelaunchingProcess();
 #if defined(__APPLE__)
     AutoConfigureMacAppIcon();
     // MoltenVK warns "Metal does not support disabling primitive restart" for nearly every

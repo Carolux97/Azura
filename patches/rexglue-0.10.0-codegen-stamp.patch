@@ -1,5 +1,5 @@
 diff --git a/resources/templates/init/rexglue_cmake.inja b/resources/templates/init/rexglue_cmake.inja
-index f39557b..550302e 100644
+index f39557b..1478432 100644
 --- a/resources/templates/init/rexglue_cmake.inja
 +++ b/resources/templates/init/rexglue_cmake.inja
 @@ -32,62 +32,25 @@ if(NOT DEFINED REXGLUE_HOST_TARGET)
@@ -72,7 +72,7 @@ index f39557b..550302e 100644
          add_dependencies({{ cmake_var("target_name") }}_recomp {{ names.snake_case }}_codegen)
          target_link_libraries({{ cmake_var("target_name") }} PRIVATE
              {{ cmake_var("target_name") }}_recomp)
-@@ -109,7 +72,9 @@ macro(rexglue_setup_target target_name)
+@@ -109,15 +72,27 @@ macro(rexglue_setup_target target_name)
  endmacro()
  
  # Codegen runs as part of the build, re-running only when an input in codegen.d
@@ -83,11 +83,22 @@ index f39557b..550302e 100644
  # Listing the sources as outputs orders any target that compiles them after
  # codegen, including one a project assembles itself rather than taking the
  # library rexglue_setup_target() builds. The stamp comes first: the DEPFILE
-@@ -118,6 +83,7 @@ add_custom_command(
+ # names it.
++# A cross build cannot run the rexglue it builds for the target, so it runs the
++# one REXGLUE_HOST_EXECUTABLE names, built for the build machine from the same
++# sources.
++set(REXGLUE_HOST_EXECUTABLE "" CACHE FILEPATH "rexglue built for the build machine, which runs codegen in a cross build")
++if(CMAKE_CROSSCOMPILING AND REXGLUE_HOST_EXECUTABLE)
++    set(REXGLUE_CODEGEN_EXECUTABLE "{{ cmake_var("REXGLUE_HOST_EXECUTABLE") }}")
++else()
++    set(REXGLUE_CODEGEN_EXECUTABLE "$<TARGET_FILE:rex::rexglue>")
++endif()
+ add_custom_command(
      OUTPUT "{{ cmake_var("CMAKE_CURRENT_SOURCE_DIR") }}/{{ entrypoint_out_dir }}/codegen.build.stamp"
             {{ cmake_var("REXGLUE_ENTRYPOINT_GENERATED_SOURCES") }}
-     COMMAND $<TARGET_FILE:rex::rexglue> codegen {{ cmake_var("CMAKE_CURRENT_SOURCE_DIR") }}/{{ names.snake_case }}_manifest.toml
-+    DEPENDS $<TARGET_FILE:rex::rexglue>
+-    COMMAND $<TARGET_FILE:rex::rexglue> codegen {{ cmake_var("CMAKE_CURRENT_SOURCE_DIR") }}/{{ names.snake_case }}_manifest.toml
++    COMMAND {{ cmake_var("REXGLUE_CODEGEN_EXECUTABLE") }} codegen {{ cmake_var("CMAKE_CURRENT_SOURCE_DIR") }}/{{ names.snake_case }}_manifest.toml
++    DEPENDS {{ cmake_var("REXGLUE_CODEGEN_EXECUTABLE") }}
      DEPFILE "{{ cmake_var("CMAKE_CURRENT_SOURCE_DIR") }}/{{ entrypoint_out_dir }}/codegen.d"
      WORKING_DIRECTORY {{ cmake_var("CMAKE_CURRENT_SOURCE_DIR") }}
      COMMENT "Generating recompiled code for {{ names.snake_case }}"
