@@ -1034,7 +1034,8 @@ mod tests {
         assert!(read_kit(&dir).is_ok());
         fs::write(dir.join("kit.json"), kit(KIT_FORMAT + 1, platform())).unwrap();
         assert!(matches!(read_kit(&dir), Err(BuildError::WrongKit { .. })));
-        fs::write(dir.join("kit.json"), kit(KIT_FORMAT, "win-amd64")).unwrap();
+        // A platform no launcher runs on, so the test means the same on every one.
+        fs::write(dir.join("kit.json"), kit(KIT_FORMAT, "plan9-mips")).unwrap();
         assert!(matches!(read_kit(&dir), Err(BuildError::WrongKit { .. })));
     }
 
@@ -1045,12 +1046,12 @@ mod tests {
         let next = dir.join("runtime.next");
         fs::create_dir_all(runtime.join("logs")).unwrap();
         fs::write(runtime.join("azura.toml"), "fullscreen = false").unwrap();
-        fs::write(runtime.join("azura"), "old").unwrap();
+        fs::write(executable_path(&runtime), "old").unwrap();
         fs::write(runtime.join("logs/azura_001.log"), "log").unwrap();
         fs::create_dir_all(&next).unwrap();
-        fs::write(next.join("azura"), "new").unwrap();
+        fs::write(executable_path(&next), "new").unwrap();
         install(&next, &runtime).unwrap();
-        assert_eq!(fs::read_to_string(runtime.join("azura")).unwrap(), "new");
+        assert_eq!(fs::read_to_string(executable_path(&runtime)).unwrap(), "new");
         assert_eq!(fs::read_to_string(runtime.join("azura.toml")).unwrap(), "fullscreen = false");
         assert!(runtime.join("logs/azura_001.log").is_file());
         assert!(!next.exists() && !dir.join("runtime.old").exists());
@@ -1066,9 +1067,9 @@ mod tests {
         fs::create_dir_all(old.join("logs")).unwrap();
         fs::write(old.join("azura.toml"), "fullscreen = false").unwrap();
         fs::create_dir_all(&next).unwrap();
-        fs::write(next.join("azura"), "new").unwrap();
+        fs::write(executable_path(&next), "new").unwrap();
         recover(&runtime);
-        assert_eq!(fs::read_to_string(runtime.join("azura")).unwrap(), "new");
+        assert_eq!(fs::read_to_string(executable_path(&runtime)).unwrap(), "new");
         assert_eq!(fs::read_to_string(runtime.join("azura.toml")).unwrap(), "fullscreen = false");
         assert!(runtime.join("logs").is_dir());
         assert!(!old.exists());
