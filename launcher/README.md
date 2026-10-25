@@ -171,8 +171,10 @@ and releases).
 ### Windows
 
 The launcher builds for Windows (x86-64) from Linux with `../scripts/build-launcher-windows.sh`, into
-`dist/windows/`. Only the launcher: the game has no Windows kit or runtime yet, so there the
-launcher says it has no kit for this platform when asked to build the game. The script
+`dist/windows/`. On Windows it names the Windows PC it runs on (processor, memory and graphics
+cards) and says the game is recompiled for Windows. The game itself builds from source for Windows
+(see the main README), but there is no Windows player kit yet, so the launcher says it has no kit
+for this platform when asked to build the game. The script
 cross-builds with [cargo-xwin](https://github.com/rust-cross/cargo-xwin), which it installs when
 missing and which downloads Microsoft's CRT and Windows SDK once (about 1.1 GB, in
 `~/.cache/cargo-xwin`), LLVM's `clang-cl`, `llvm-lib` and `llvm-rc`, and rustup's `rust-lld` as

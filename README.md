@@ -1,13 +1,14 @@
 # Gears3-Azura
 
 Unofficial native port of Gears of War 3 (Xbox 360) to macOS on Apple Silicon and to Linux
-(x86-64). Its launcher also runs on Windows (x86-64), where the game does not run yet.
+(x86-64), with a Windows (x86-64) version on the way: there the game builds from source and plays
+the campaign, and the launcher runs, but it cannot build or start the game yet.
 
 It does not emulate the console at run time. The game's PowerPC code is translated ahead of time
 into C++ by the [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk) and compiled into a normal
 native executable. ReXGlue also provides the runtime that stands in for the console's operating
-system and GPU; on macOS the GPU work goes through our own Metal backend, on Linux through
-Vulkan.
+system and GPU; on macOS the GPU work goes through our own Metal backend, on Linux and Windows
+through Vulkan.
 
 **This repository contains no game data and no game code.** You need your own copy of the game:
 the recompiled code is generated on your machine from your own `default.xex` and is never committed.
@@ -20,9 +21,11 @@ Point it at your own copy of the game (a folder or a disc image): it builds the 
 machine and keeps itself and the game up to date. The macOS launcher is not signed with an Apple
 Developer ID, so the first time it opens from System Settings, Privacy & Security.
 
-On Windows 10 and 11 (x86-64) only the launcher runs for now: the game has no Windows build yet, so
-the launcher can choose the game files and edit the settings, but not build or start the game. It
-is not in the releases: build it from a checkout on Linux with `scripts/build-launcher-windows.sh`,
+The Windows version (Windows 10 and 11, x86-64) is not in the releases yet. The game, compiled for
+Windows with Vulkan, builds from source (cross-built from Linux, see Build) and plays the campaign.
+Its launcher, the Windows build of the same launcher, names the Windows PC it runs on and can
+choose the game files and edit the settings, but cannot build or start the game yet: there is no
+Windows player kit. Build it from a checkout on Linux with `scripts/build-launcher-windows.sh`,
 which makes an installer (the launcher then appears in Windows' installed apps, where its
 uninstaller removes it) and the launcher alone, to run without installing. Neither is signed, so
 SmartScreen warns the first time.
@@ -55,9 +58,12 @@ To build from source:
 - On Linux: clang, CMake 3.25+, Ninja, the Vulkan SDK and the development libraries the SDK builds
   against (the "Install the toolchain (Linux)" step of `.github/workflows/runtime-kit.yml` lists
   them for Ubuntu 22.04); `iniciar-linux.sh` sets up the launcher.
-- For the Windows launcher, on Linux: Rust, Node.js, LLVM (`clang-cl`, `llvm-lib`, `llvm-rc`) and
-  NSIS (`sudo apt install nsis`); `scripts/build-launcher-windows.sh` sets up the rest (see the
-  launcher's README).
+- For Windows, on Linux: a Linux build first (its `rexglue` runs codegen for the cross build), and
+  for the game the CMake preset `win-amd64-cross-sdk-source` with clang, LLVM and
+  Microsoft's CRT and SDK as cargo-xwin downloads them (`~/.cache/cargo-xwin/xwin`, or `XWIN_DIR`;
+  see `runtime/cmake/toolchain-win-amd64-cross.cmake`); for the launcher Rust, Node.js, LLVM
+  (`clang-cl`, `llvm-lib`, `llvm-rc`) and NSIS (`sudo apt install nsis`), with
+  `scripts/build-launcher-windows.sh` setting up the rest (see the launcher's README).
 - ReXGlue SDK **0.10.0**: its prebuilt release for your platform, unpacked so that
   `sdk/rexglue-0.10.0-<platform>/<platform>/bin/rexglue` exists (from the
   [v0.10.0 release](https://github.com/rexglue/rexglue-sdk/releases/tag/v0.10.0)), and its source
@@ -85,15 +91,26 @@ edition, see the comment at the end of `versions.toml`.
 scripts/build.sh
 ```
 
+The game for Windows, cross-built on Linux after that build, in `runtime/`:
+
+```bash
+cmake --preset win-amd64-cross-sdk-source
+cmake --build --preset win-amd64-cross-sdk-source-relwithdebinfo
+```
+
+Then, on Windows, with the Visual C++ 2015-2022 redistributable installed:
+`azura.exe --game_data_root=<game folder or .iso> --user_data_root=<saves> --cache_root=<cache>`.
+
 ## Status
 
-The campaign runs on macOS (Metal) and Linux (Vulkan), alone or with two players in split screen
+The campaign runs on macOS (Metal), Linux and Windows (Vulkan), alone or with two players in split screen
 on one computer, and we keep playing it through to fix what turns up. Working today: controllers
 (Xbox, PlayStation and others, with their button prompts in the game), keyboard and mouse, local
 co-op (Options, Local co-op), achievements with their artwork, a save manager with backups, and
 video options (render resolution, upscaling, antialiasing, frame rate limit). The launcher builds
 the game from your own copy and keeps itself and the game up to date. Not yet: online co-op and
-multiplayer, and the game on Windows, where only the launcher runs so far.
+multiplayer, and on Windows a player kit, so that the launcher builds and starts the game there
+too.
 
 ## Credits
 
