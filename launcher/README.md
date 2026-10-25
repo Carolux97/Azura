@@ -152,6 +152,8 @@ On Linux, building needs libudev (`libudev-dev`), and `cargo test prints_control
 - On Linux, the libraries Tauri and the controller support build against: on Ubuntu,
   `libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev
   build-essential libudev-dev` (as `.github/workflows/launcher-tests.yml` installs them).
+- For the Windows launcher, built on Linux: LLVM with `clang-cl`, `llvm-lib` and `llvm-rc` (the
+  `clang` and `llvm` packages), and NSIS (`sudo apt install nsis`).
 
 ## Run and build
 
@@ -165,6 +167,32 @@ npx tauri dev
 `npx tauri build` produces `Azura Launcher.app` and a `.dmg` under `src-tauri/target/release/bundle/`
 on macOS, and the packages of `tauri.conf.json` on Linux (releases use the AppImage, see Updates
 and releases).
+
+### Windows
+
+The launcher builds for Windows (x86-64) from Linux with `../scripts/build-launcher-windows.sh`, into
+`dist/windows/`. On Windows it names the Windows PC it runs on (processor, memory and graphics
+cards) and says the game is recompiled for Windows. The game itself builds from source for Windows
+(see the main README), but there is no Windows player kit yet, so the launcher says it has no kit
+for this platform when asked to build the game. The script
+cross-builds with [cargo-xwin](https://github.com/rust-cross/cargo-xwin), which it installs when
+missing and which downloads Microsoft's CRT and Windows SDK once (about 1.1 GB, in
+`~/.cache/cargo-xwin`), LLVM's `clang-cl`, `llvm-lib` and `llvm-rc`, and rustup's `rust-lld` as
+the linker, and makes two files:
+
+- `Azura Launcher_<version>_x64-setup.exe`, the installer (NSIS, set up in `bundle.windows.nsis` of
+  `src-tauri/tauri.conf.json`). It installs for the current user, without administrator rights,
+  with a Start menu entry, and registers the launcher in Windows' installed apps, from where its
+  uninstaller removes it. The uninstaller offers to delete the launcher's data as well
+  (`%APPDATA%\com.gears3azura.launcher`: settings, runtime, builds; and the interface's cache in
+  `%LOCALAPPDATA%\com.gears3azura.launcher`); the saves, in
+  `Documents\Games Saves\Gears3-Azura`, are never touched. It is offered in the interface's
+  languages that Tauri's installer is translated to, and in English otherwise;
+- `azura-launcher.exe`, the launcher alone, to run without installing.
+
+Both need only what Windows 10 and 11 bring (WebView2 included; the installer gets it when
+missing). They are not signed, so SmartScreen warns the first time, and the Windows launcher is not
+part of the releases yet, so it does not update itself.
 
 The interface also opens in any browser, which is handy for quick design changes:
 

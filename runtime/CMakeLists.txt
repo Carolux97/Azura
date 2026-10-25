@@ -58,6 +58,7 @@ set(AZURA_SOURCES
     src/local_coop_notices.cpp
     src/menu/coalesced.cpp
     src/input/install_player_assignment.cpp
+    src/input/mouse_look.cpp
     src/input/player_assignment.cpp
     src/menu/menu_patches.cpp
     src/menu/pc_options.cpp
@@ -72,6 +73,11 @@ if(APPLE)
     # change how the SDK's bundled SDL builds its Objective-C files.
     list(APPEND AZURA_SOURCES src/platform_mac.mm)
     set_source_files_properties(src/platform_mac.mm PROPERTIES LANGUAGE CXX COMPILE_OPTIONS "-xobjective-c++")
+endif()
+if(WIN32)
+    # Keeps overlay programs' Vulkan layers that close the game out of it, and tells which guest
+    # memory is committed (the button prompts scan it).
+    list(APPEND AZURA_SOURCES src/platform_win.cpp)
 endif()
 
 # Keep the build machine's folder names out of the binary (they would otherwise end up in the
@@ -152,6 +158,11 @@ endif()
 function(azura_configure_runtime target)
     if(APPLE)
         target_link_libraries(${target} PRIVATE "-framework Cocoa")
+    endif()
+    # A windowed app on Windows: no console window, and the SDK's entry point is wWinMain
+    # (ui/windowed_app_main_sdl.cpp), which the linker only looks for in the windows subsystem.
+    if(WIN32)
+        set_target_properties(${target} PROPERTIES WIN32_EXECUTABLE ON)
     endif()
 
     # The SDK copies MoltenVK into vulkan/lib in the target's POST_BUILD step, which only runs
