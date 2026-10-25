@@ -15,6 +15,7 @@ Nothing here is game data: only names, offsets and identifiers needed to hook th
 - [Configuration files (coalesced)](#configuration-files-coalesced)
 - [Main menu](#main-menu)
 - [Options menu](#options-menu)
+- [Local co-op](#local-co-op)
 - [Profile settings](#profile-settings)
 - [Render command queue](#render-command-queue)
 - [Pitfalls](#pitfalls)
@@ -393,13 +394,17 @@ Implemented in `runtime/src/menu/pc_options.{h,cpp}` (data and texts) and `scrip
 | Position | Category | Change |
 | --- | --- | --- |
 | 1 | Video | A list: Calibrate brightness (opens the game's calibration screen), Full screen, Frame rate limit (a list of our own), Anti-aliasing, Motion blur, Anisotropic filtering, Render resolution (a list of our own), Image scaling, Sharpness (a slider, only with an image scaling effect that sharpens). Back and Defaults |
+| 0 | Game | The game's own rows, then the two of the mature content category (violence 46, mature language 37 with `bRequiresMatureLanguageSupport`) |
 | 5 | Keyboard and mouse | Replaces the storage location: Mouse sensitivity. Back and Defaults |
+| 6 | Local co-op | Replaces the mature content: no list; choosing it opens the Local co-op menu (`runtime/src/local_coop_menu.h`). Greyed out with no controller connected |
 
 How:
 
-- **Rows and categories** are written into `[UIScene_Options] OptionCategories[1]` and `[5]` of
-  every `geargame.<lang>`, with every member, our texts in that language and the game's own texts
-  (category titles, button names) kept from the file.
+- **Rows and categories** are written into `[UIScene_Options] OptionCategories[1]`, `[5]` and `[6]`
+  of every `geargame.<lang>`, with every member, our texts in that language and the game's own
+  texts (category titles, button names) kept from the file. `OptionCategories[0]` keeps its text
+  from the file and gets the two mature content rows (with every member, as new elements of the
+  array) added at the end of its `CategoryOptions`.
 - **List rows borrow profile settings the game never uses**, the engine's racing game preferences:
   Movement Control 18 (calibration), Race Camera 20 (anti-aliasing), Brake
   21 (motion blur), Accelerator 22 (full screen); and two generic Xbox profile settings with three
@@ -432,9 +437,16 @@ How:
   borrowed profile settings, which is harmless.
 - **Defaults** resets our rows to the values in `azura.default.toml` (the SDK's default when a key
   is not there).
-- **Positions 1 and 5 show their lists:** the bytecode of `Callback_MenuOptionSelected` is patched
-  so that `SelectedOption == 5` compares with 255 and `SelectedOption == 1` with `self`. The `1` in
-  `Callback_ReturnToMain` becomes 255 too, so leaving Video plays the usual sound.
+- **Positions 1 and 5 show their lists, position 6 does not:** the bytecode of
+  `Callback_MenuOptionSelected` is patched so that `SelectedOption == 5` compares with 6 and
+  `SelectedOption == 1` with `self`. The `1` in `Callback_ReturnToMain` becomes 255 too, so leaving
+  Video plays the usual sound.
+- **Local co-op** has `OnSelectedCallback="Callback_SelectStorageLocation"`, the storage location's
+  function, which no category uses any more: Flash runs it instead of opening a list, and the hook
+  opens the Local co-op menu in its place without running it. `ShouldOptionBeDisabled(Option)` is
+  answered for it (disabled with no controller connected) and for Keyboard and mouse (never
+  disabled, whatever the mature content's answer was). Its `Option` parameter is read with its
+  property's `ElementSize` (+68 of a `UProperty`, inferred from UE3's layout).
 - **Calibrate brightness:** `FilterButtonInput` is watched while Video is open to follow the
   selected row (Up/Down, wrapping, reset to 0 when a list is built). Accept, Left or Right on the
   calibration row runs `Callback_VideoOptions` in place of that `FilterButtonInput`. Closing the
@@ -461,6 +473,35 @@ How:
   the normal way. `PopulateOptionsList` ends with `OptionsList.selectedIndex = 0.0`: for that
   call its float constant (after the `"selectedIndex"` string) is the changed row's index, so the
   selection stays there.
+
+## Local co-op
+
+What the game does with a second local player (**verified** with the XAM user calls logged and
+`script_trace`, 25 October 2026):
+
+- It asks players 2 to 4 for their sign-in state, sign-in info, name and device context
+  (`XamUserGetDeviceContext`, constantly), and never calls `XamShowSigninUI`. An unsigned player 2
+  can join ("Sesión no iniciada", with the warning that their data will not be saved).
+- When the game sees user 1 connected it adds player 2 by itself; in the campaign player 2 waits
+  ("Espere para unirse a una partida") and gets a character at the next area. The travel URL keeps
+  its `listen` stripped: split screen does not need it.
+- A third player is refused: "en una consola Xbox 360 solo pueden jugar dos personas".
+- When a player signs in, `GearPC.OnLoginChange` calls `GearMenuPC.OnNewLogin`, which, away from the
+  title screen (`IsOnTitleScreen`), shows the login change message (`ShowLoginChangeError`) and calls
+  `RestartFrontEnd`: back to the title screen.
+- The title screen is the main menu's scene, `UIScene_FrontEnd`, with `bOnTitleScreen` set: the
+  first bool of the word at +1000 of the scene, which the Xbox 360 build stores in the highest bit
+  (the word reads `88000000` on the title screen and `08000000` in the main menu). There,
+  `FilterButtonInput(ControllerId, 'XboxTypeS_Start')` makes that controller's player the primary
+  one (`BecomePrimaryPlayer`, `OnPrimaryPlayerSwitch`); `ControllerId` is the guest user index.
+- `XN_SYS_INPUTDEVICESCHANGED` (0x12) after a player's controller goes makes the game pause for
+  that player and ask for it, and again when it comes back resumes, as on the console.
+
+What Azura does (`runtime/src/input/player_assignment.h`, the SDK's `KernelState::SignInLocalUser`):
+players 2 to 4 have profiles of their own in the SDK, signed in when they get a device, with
+`XN_SYS_SIGNINCHANGED`; the runtime gives player 2 a device from the Local co-op menu, ignores
+player 2's Start and Accept on the title screen, and sends `XN_SYS_INPUTDEVICESCHANGED` when a
+player is left with no device or gets one back.
 
 ## Profile settings
 
