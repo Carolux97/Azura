@@ -56,6 +56,8 @@ performance_overlay = "off"
 performance_overlay_position = "top_right"
 # Present the game in step with the display refresh (FIFO). The immediate and mailbox modes let
 # the presenter repaint the same frame hundreds of times per second, taking GPU time from the game.
+# On Windows the runtime allows mailbox unless this file's player copy (azura.toml) sets it: FIFO
+# holds the game at 20 FPS there.
 vulkan_allow_present_mode_immediate = false
 vulkan_allow_present_mode_mailbox = false
 
