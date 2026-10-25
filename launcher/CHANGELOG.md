@@ -17,8 +17,9 @@ indented lines.
   per pixel; if you raised it before, lower it again.
 - On Linux, the game and the programs the launcher starts use your system's libraries instead of
   the launcher's own copies (it fixes keyboard errors in the game log on newer systems).
-- A Windows version is on the way: the game builds from source for Windows and plays the
-  campaign, and the launcher runs there, but it is not in the releases yet.
+- Windows (10 and 11, x86-64): the launcher comes as an installer, builds the game from your copy
+  and keeps itself and the game up to date, as on macOS and Linux. To build the game it installs
+  LLVM and Visual Studio's Build Tools with winget when they are missing.
 
 ## 0.3.0
 

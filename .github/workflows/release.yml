@@ -1,4 +1,4 @@
-# Builds and publishes the launcher for macOS and Linux, each with the player kit of its platform
+# Builds and publishes the launcher for macOS, Linux and Windows, each with the player kit of its platform
 # inside, so installed launchers update themselves and then the game (docs/player-runtime-build.md).
 #
 # A release is published when main has a launcher version that is not released yet: bumping the
@@ -100,7 +100,7 @@ jobs:
   launcher:
     name: Launcher ${{ matrix.platform }}
     needs: [version, kit]
-    # Each platform builds when its own kit did: a failed kit of the other platform does not stop it.
+    # Each platform builds when its own kit did: a failed kit of another platform does not stop it.
     if: ${{ !cancelled() && needs.version.outputs.build == 'true' }}
     strategy:
       fail-fast: false
@@ -111,7 +111,14 @@ jobs:
           # Ubuntu 22.04, as the Linux kit is built: the AppImage then needs no newer glibc than 2.35.
           - platform: linux-amd64
             runner: ubuntu-22.04
+          # The NSIS installer, built and signed for the updater on Windows itself.
+          - platform: win-amd64
+            runner: windows-latest
     runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        # Git Bash on Windows, so the release script runs there as elsewhere.
+        shell: bash
 
     steps:
       - name: Check out the repository

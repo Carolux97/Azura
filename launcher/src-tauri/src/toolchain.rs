@@ -13,6 +13,9 @@
 //! - Linux: clang from the distribution's package manager, through `pkexec`, so the system asks
 //!   for the password in its own dialog. Systems whose base image cannot take packages that way
 //!   (Fedora Atomic spins such as Bazzite, SteamOS) get the manual instructions instead.
+//! - Windows: LLVM's clang, with Microsoft's C++ headers and libraries from Visual Studio's Build
+//!   Tools (clang finds them by itself), both through `winget` in a console window of its own,
+//!   where the player accepts the packages' agreements and Windows asks for permission to install.
 //!
 //! The manual command for the player's system is always offered as well.
 
@@ -42,6 +45,9 @@ pub enum InstallMethod {
     /// The distribution's package manager, through `pkexec`: `command` is what runs as root.
     #[serde(rename_all = "camelCase")]
     PackageManager { manager: String, command: Vec<String> },
+    /// Windows' package manager: `commands` run one after another (LLVM, then the Build Tools).
+    #[serde(rename_all = "camelCase")]
+    Winget { commands: Vec<Vec<String>> },
     /// None the launcher can run; the player follows `manual`.
     Manual,
 }
@@ -140,14 +146,56 @@ pub fn manual_command(install: &InstallMethod, release: Option<&OsRelease>) -> S
     match install {
         InstallMethod::AppleCommandLineTools => "xcode-select --install".into(),
         InstallMethod::PackageManager { command, .. } => format!("sudo {}", command.join(" ")),
+        // PowerShell, Windows' terminal, separates commands with ";".
+        InstallMethod::Winget { commands } => {
+            commands.iter().map(|command| quoted_command(command)).collect::<Vec<_>>().join("; ")
+        }
         InstallMethod::Manual => match release {
             Some(release) if release.id == "steamos" => {
                 "distrobox create --name azura --image fedora:latest && distrobox enter azura -- sudo dnf install -y clang gcc-c++".into()
             }
             Some(_) => "rpm-ostree install clang gcc-c++  (then restart), or use a distrobox container".into(),
+            None if cfg!(windows) => "Install LLVM (clang 18 or newer) and Visual Studio 2022 Build Tools with the C++ workload".into(),
             None => "Install clang 18 or newer with your distribution's package manager".into(),
         },
     }
+}
+
+/// The packages that give a working clang on Windows: LLVM, and the Build Tools with their C++
+/// workload, the headers and libraries clang compiles and links with there.
+pub fn winget_commands() -> Vec<Vec<String>> {
+    let install = |id: &str, extra: &[&str]| {
+        let mut command: Vec<String> = ["winget", "install", "--id", id, "--exact"].iter().map(|part| part.to_string()).collect();
+        command.extend(extra.iter().map(|part| part.to_string()));
+        command
+    };
+    vec![
+        install("LLVM.LLVM", &[]),
+        install(
+            "Microsoft.VisualStudio.2022.BuildTools",
+            &["--override", "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"],
+        ),
+    ]
+}
+
+/// A command as the player types it: arguments with spaces in double quotes.
+fn quoted_command(command: &[String]) -> String {
+    command
+        .iter()
+        .map(|part| if part.contains(' ') { format!("\"{part}\"") } else { part.clone() })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Where LLVM's installer puts clang: a launcher started before it was installed does not see the
+/// new PATH.
+#[cfg(windows)]
+fn llvm_install_dirs() -> Vec<std::path::PathBuf> {
+    ["ProgramFiles", "ProgramW6432"]
+        .iter()
+        .filter_map(std::env::var_os)
+        .map(|dir| std::path::PathBuf::from(dir).join("LLVM").join("bin"))
+        .collect()
 }
 
 /// Apple's Command Line Tools installer, the app `xcode-select --install` opens. Matched on its full
@@ -183,7 +231,7 @@ fn run(command: &[String], args: &[&str]) -> Option<String> {
 fn probe(compiler: &[String]) -> Result<(), String> {
     let dir = std::env::temp_dir().join(format!("azura-compiler-probe-{}", std::process::id()));
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let output = dir.join("probe");
+    let output = dir.join(if cfg!(windows) { "probe.exe" } else { "probe" });
     let mut child = crate::host_env::use_host_env(&mut Command::new(&compiler[0]))
         .args(&compiler[1..])
         .args(["-std=gnu++23", "-x", "c++", "-", "-o"])
@@ -217,15 +265,20 @@ fn find_compiler() -> Option<Compiler> {
     Some(Compiler { command, version, major })
 }
 
-/// The newest clang++ on the PATH (clang++, or a versioned clang++-N as Debian names them).
+/// The newest clang++ on the PATH (clang++, or a versioned clang++-N as Debian names them; on
+/// Windows clang++.exe, also where LLVM installs it).
 #[cfg(not(target_os = "macos"))]
 fn find_compiler() -> Option<Compiler> {
-    let path = std::env::var_os("PATH")?;
-    let mut names = vec!["clang++".to_string()];
-    names.extend((MIN_CLANG_MAJOR..=30).rev().map(|major| format!("clang++-{major}")));
+    #[allow(unused_mut)]
+    let mut dirs: Vec<std::path::PathBuf> = std::env::split_paths(&std::env::var_os("PATH")?).collect();
+    #[cfg(windows)]
+    dirs.extend(llvm_install_dirs());
+    let suffix = std::env::consts::EXE_SUFFIX;
+    let mut names = vec![format!("clang++{suffix}")];
+    names.extend((MIN_CLANG_MAJOR..=30).rev().map(|major| format!("clang++-{major}{suffix}")));
     let mut found: Vec<Compiler> = Vec::new();
     for name in names {
-        let Some(program) = std::env::split_paths(&path).map(|dir| dir.join(&name)).find(|file| file.is_file()) else {
+        let Some(program) = dirs.iter().map(|dir| dir.join(&name)).find(|file| file.is_file()) else {
             continue;
         };
         let command = vec![program.to_string_lossy().into_owned()];
@@ -240,6 +293,13 @@ fn find_compiler() -> Option<Compiler> {
 fn install_method() -> (InstallMethod, Option<OsRelease>) {
     if cfg!(target_os = "macos") {
         return (InstallMethod::AppleCommandLineTools, None);
+    }
+    if cfg!(windows) {
+        let has_winget = std::env::var_os("PATH")
+            .map(|path| std::env::split_paths(&path).any(|dir| dir.join("winget.exe").is_file()))
+            .unwrap_or(false);
+        let method = if has_winget { InstallMethod::Winget { commands: winget_commands() } } else { InstallMethod::Manual };
+        return (method, None);
     }
     let release = std::fs::read_to_string("/etc/os-release").ok().map(|text| parse_os_release(&text));
     let image_based = Path::new("/run/ostree-booted").exists();
@@ -331,6 +391,16 @@ pub fn install() -> Result<(), String> {
                 Err(format!("{} exited with {:?}", command[0], status.code()))
             }
         }
+        InstallMethod::Winget { commands } => {
+            // Each in its own console window (not use_host_env, which hides it), where winget asks
+            // the player to accept the package's agreements. A package already installed makes
+            // winget exit with an error, so the exit codes say nothing: the status check that
+            // follows tells whether the compiler works now.
+            for command in &commands {
+                Command::new(&command[0]).args(&command[1..]).status().map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        }
         InstallMethod::Manual => Err("the compiler cannot be installed from the launcher on this system".into()),
     }
 }
@@ -408,6 +478,16 @@ mod tests {
         let result = judge(&clang(20), MIN_CLANG_MAJOR, |_| Err("fatal error: 'atomic' file not found".into()));
         assert_eq!(result, Err("fatal error: 'atomic' file not found".into()));
         assert_eq!(judge(&clang(20), MIN_CLANG_MAJOR, |_| Ok(())), Ok("clang 20.1.0".into()));
+    }
+
+    #[test]
+    fn the_windows_commands_install_llvm_and_the_build_tools() {
+        let manual = manual_command(&InstallMethod::Winget { commands: winget_commands() }, None);
+        assert_eq!(
+            manual,
+            "winget install --id LLVM.LLVM --exact; winget install --id Microsoft.VisualStudio.2022.BuildTools --exact \
+             --override \"--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended\""
+        );
     }
 
     #[test]

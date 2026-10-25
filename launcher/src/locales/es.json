@@ -112,6 +112,7 @@
     "compilerMissing": "No se ha encontrado ningún compilador.",
     "compilerInstallApple": "Instalar las Command Line Tools de Apple",
     "compilerInstallPackage": "Instalar clang",
+    "compilerInstallWindows": "Instalar LLVM y Visual Studio Build Tools",
     "compilerInstalling": "Instalando el compilador…",
     "compilerWaitingApple": "Sigue la ventana de Apple para instalar las Command Line Tools. El launcher continúa solo cuando estén instaladas.",
     "compilerCheckAgain": "Comprobar de nuevo",

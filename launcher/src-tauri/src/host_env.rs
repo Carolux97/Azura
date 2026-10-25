@@ -17,6 +17,10 @@
 //! from every variable the paths inside `$APPDIR` (removing the variable when nothing is left),
 //! and the variables the AppImage sets that are not paths. Paths the player set themselves, outside
 //! `$APPDIR`, are kept. Outside an AppImage (`APPDIR` unset) nothing changes.
+//!
+//! On Windows it also keeps console programs (the compiler, the code generator) from opening a
+//! console window each: the launcher is a windowed app, and every command it runs would otherwise
+//! flash one.
 
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
@@ -31,6 +35,14 @@ const APPIMAGE_ONLY_VARIABLES: [&str; 4] = ["GTK_THEME", "APPIMAGE", "ARGV0", "O
 
 /// Changes `command`'s environment to the one outside the AppImage, when the launcher runs in one.
 pub fn use_host_env(command: &mut Command) -> &mut Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW: no console for a console program; a windowed one (the game) is not
+        // affected.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
     apply(command, host_changes(std::env::vars_os()))
 }
 

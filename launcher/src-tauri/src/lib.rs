@@ -264,7 +264,10 @@ async fn show_build_log(app: tauri::AppHandle, path: String) -> Result<(), Strin
     }
     #[cfg(target_os = "macos")]
     let status = std::process::Command::new("open").arg("-R").arg(&log).status();
-    #[cfg(not(target_os = "macos"))]
+    // Explorer opens the folder with the log selected; it exits with 1 even when it does.
+    #[cfg(windows)]
+    let status = std::process::Command::new("explorer").arg(format!("/select,{}", log.display())).status();
+    #[cfg(not(any(target_os = "macos", windows)))]
     let status = host_env::use_host_env(&mut std::process::Command::new("xdg-open"))
         .arg(log.parent().unwrap_or(&log))
         .status();

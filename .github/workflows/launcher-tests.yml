@@ -1,4 +1,4 @@
-# Runs the launcher's tests (JavaScript and Rust) on macOS and Linux for every pull request that
+# Runs the launcher's tests (JavaScript and Rust) on macOS, Linux and Windows for every pull request that
 # changes the launcher, to main or stacked on another pull request's branch. Not on pushes to main
 # (what reaches main has passed them in its pull request) nor on pull requests that leave the
 # launcher alone, since nothing they test changed. The runtime is not built here: it needs the game's default.xex,
@@ -26,7 +26,7 @@ jobs:
   test:
     name: ${{ matrix.name }}
     strategy:
-      # Both platforms report their result even when the other one fails.
+      # Every platform reports its result even when another one fails.
       fail-fast: false
       matrix:
         include:
@@ -34,6 +34,9 @@ jobs:
             runner: macos-latest
           - name: ubuntu
             runner: ubuntu-latest
+          # Its image has LLVM's clang and Visual Studio, the compiler the launcher builds with there.
+          - name: windows
+            runner: windows-latest
     runs-on: ${{ matrix.runner }}
     defaults:
       run:

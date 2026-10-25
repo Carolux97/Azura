@@ -28,11 +28,21 @@ Usage: make_kit.py --probe-build DIR --config NAME --sdk DIR --runtime DIR --roo
 import argparse
 import hashlib
 import json
+import platform
+import re
 import shlex
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+# On Windows Ninja runs its commands without a shell, chains them through cmd.exe, and CMake writes
+# paths with either slash; the kit's commands and paths are kept with forward slashes there.
+WINDOWS = platform.system() == "Windows"
+
+# File names of objects and executables on this platform.
+OBJECT_SUFFIX = ".obj" if WINDOWS else ".o"
+EXECUTABLE_SUFFIX = ".exe" if WINDOWS else ""
 
 # Version of the layout of kit.json; the launcher refuses a kit with a format it does not know.
 KIT_FORMAT = 1
@@ -53,10 +63,70 @@ def ninja_command(build: Path, config: str, target: str) -> str:
     return lines[-1]
 
 
+def split_windows(command: str) -> list[str]:
+    """A Windows command line as its arguments, the way the C runtime splits it (CommandLineToArgvW):
+    spaces separate them, double quotes group, and backslashes are literal unless they precede a
+    double quote."""
+    tokens, current, quoted, any_text = [], [], False, False
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if char == "\\":
+            run = len(command) - index - len(command[index:].lstrip("\\"))
+            if index + run < len(command) and command[index + run] == '"':
+                current.append("\\" * (run // 2))
+                index += run
+                if run % 2:
+                    current.append('"')
+                    index += 1
+                any_text = True
+                continue
+            current.append("\\" * run)
+            index += run
+            any_text = True
+            continue
+        if char == '"':
+            quoted = not quoted
+            any_text = True
+        elif char in " \t" and not quoted:
+            if any_text:
+                tokens.append("".join(current))
+                current, any_text = [], False
+        else:
+            current.append(char)
+            any_text = True
+        index += 1
+    if any_text:
+        tokens.append("".join(current))
+    return tokens
+
+
+def command_tokens(command: str) -> list[str]:
+    """The arguments of a command Ninja would run. On Windows a chain comes wrapped in
+    `cmd.exe /C "..."`, whose inner command is split again, and every backslash becomes a slash
+    (clang, lld-link and CMake take either)."""
+    if not WINDOWS:
+        return shlex.split(command)
+    # As cmd.exe reads /C "...": the rest of the line, without its first and last double quote.
+    wrapped = re.match(r'^\s*"?[^"\s]*cmd\.exe"?\s+/[cC]\s+(.*)$', command, re.DOTALL | re.IGNORECASE)
+    if wrapped:
+        inner = wrapped.group(1).strip()
+        if len(inner) >= 2 and inner[0] == '"' and inner[-1] == '"':
+            inner = inner[1:-1]
+        command = inner
+    return [token.replace("\\", "/") for token in split_windows(command)]
+
+
+def program_name(path: str) -> str:
+    """The name of the program `path` runs, without .exe."""
+    name = Path(path).name
+    return name[:-4] if name.lower().endswith(".exe") else name
+
+
 def segments(command: str) -> list[list[str]]:
     """A shell command chained with && as its parts, each as a list of arguments."""
     parts, current = [], []
-    for token in shlex.split(command):
+    for token in command_tokens(command):
         # CMake writes "\$ORIGIN" (the rpath) for the shell, which drops the backslash inside
         # double quotes; shlex keeps it. The kit's commands run without a shell, so drop it here.
         token = token.replace("\\$", "$")
@@ -73,22 +143,41 @@ class Paths:
     """Turns the paths of this machine into kit placeholders."""
 
     def __init__(self, sdk: Path, runtime: Path, probe_dir: Path, forbidden: list[Path]):
-        self.sdk = str(sdk.resolve())
-        self.runtime = str(runtime.resolve())
-        self.probe_dir = str(probe_dir.resolve())
-        self.forbidden = [str(path.resolve()) for path in forbidden]
+        self.sdk = sdk.resolve().as_posix()
+        self.runtime = runtime.resolve().as_posix()
+        self.probe_dir = probe_dir.resolve().as_posix()
+        self.forbidden = [path.resolve().as_posix() for path in forbidden]
+
+    @staticmethod
+    def same(a: str, b: str) -> bool:
+        """Whether two paths are the same; on Windows whatever their case (the drive letter, above
+        all, which CMake and Python may write differently)."""
+        return a.lower() == b.lower() if WINDOWS else a == b
+
+    @staticmethod
+    def replace(token: str, path: str, placeholder: str) -> str:
+        """`token` with every `path` in it replaced, ignoring case on Windows."""
+        return re.sub(re.escape(path), lambda _: placeholder, token, flags=re.IGNORECASE if WINDOWS else 0)
+
+    def inside(self, path: str, folder: str) -> "str | None":
+        """`path` relative to `folder` when it is inside it, else None."""
+        prefix = folder + "/"
+        if (path.lower().startswith(prefix.lower()) if WINDOWS else path.startswith(prefix)):
+            return path[len(prefix):]
+        return None
 
     def token(self, token: str) -> str:
-        if token.endswith(f"-prefix-map={self.runtime}=."):
-            return token.replace(self.runtime, "{workdir}")
-        if token == f"-I{self.probe_dir}":
+        suffix = f"-prefix-map={self.runtime}=."
+        if self.same(token[-len(suffix):], suffix):
+            return self.replace(token, self.runtime, "{workdir}")
+        if self.same(token, f"-I{self.probe_dir}"):
             return "-I{generated}"
-        return token.replace(self.sdk, "{kit}/sdk")
+        return self.replace(token, self.sdk, "{kit}/sdk")
 
     def check(self, tokens: list[str], what: str) -> None:
         for token in tokens:
             for path in self.forbidden:
-                if path in token:
+                if (path.lower() in token.lower()) if WINDOWS else (path in token):
                     raise KitError(f"{what} still refers to {path}: {token}")
 
 
@@ -131,7 +220,7 @@ def compile_template(command: str, paths: Paths, source: Path) -> list[str]:
             skip = 1
             continue
         out.append(paths.token(token))
-    if str(source.resolve()) in " ".join(out):
+    if source.resolve().as_posix() in " ".join(out):
         raise KitError("the probe source is still in the compile command")
     paths.check(out, "The compile command")
     return out
@@ -140,11 +229,14 @@ def compile_template(command: str, paths: Paths, source: Path) -> list[str]:
 def link_template(command: str, paths: Paths, output: Path) -> tuple[list[str], list[list[str]]]:
     """The link command of the probe executable as a template, and the commands chained after it."""
     parts = segments(command)
+    # On Windows the chain starts in the build folder ("cd ."), before the link itself.
+    while parts and program_name(parts[0][0]) == "cd":
+        parts = parts[1:]
     link, after = without_missing_search_paths(parts[0]), parts[1:]
     out = ["{cxx}"]
     objects_at = None
     skip = 0
-    for token in link[1:]:
+    for index, token in enumerate(link[1:], start=1):
         if skip:
             skip -= 1
             continue
@@ -152,7 +244,19 @@ def link_template(command: str, paths: Paths, output: Path) -> tuple[list[str], 
             out += ["-o", "{output}"]
             skip = 1
             continue
-        if token.endswith(".o"):
+        # lld-link options for the probe's own files: its import library is not needed (nothing
+        # links against the runtime), and its debug information goes beside the player's
+        # executable.
+        if token == "-Xlinker" and index + 1 < len(link):
+            option = link[index + 1]
+            if option.lower().startswith("/implib:"):
+                skip = 1
+                continue
+            if option.lower().startswith("/pdb:"):
+                out += ["-Xlinker", "/pdb:{output}.pdb"]
+                skip = 1
+                continue
+        if token.endswith(OBJECT_SUFFIX):
             if objects_at is None:
                 objects_at = len(out)
                 out.append("{objects}")
@@ -168,15 +272,14 @@ def stage_entries(after: list[list[str]], kit: Path, paths: Paths, output_dir: P
     """The files the commands after the link copy beside the executable, as (kind, from, to):
     `from` relative to the kit, `to` relative to the runtime folder. Our own files (settings and
     assets) are copied into the kit's files/ folder."""
-    output_dir = str(output_dir.resolve())
+    output_dir = output_dir.resolve().as_posix()
     entries = []
 
     def source(path: str) -> str:
-        resolved = str(Path(path).resolve())
-        if resolved.startswith(paths.sdk + "/"):
-            return "sdk/" + resolved[len(paths.sdk) + 1:]
-        if resolved.startswith(paths.runtime + "/"):
-            relative = resolved[len(paths.runtime) + 1:]
+        resolved = Path(path).resolve().as_posix()
+        if (relative := paths.inside(resolved, paths.sdk)) is not None:
+            return "sdk/" + relative
+        if (relative := paths.inside(resolved, paths.runtime)) is not None:
             target = kit / "files" / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             if Path(resolved).is_dir():
@@ -187,15 +290,16 @@ def stage_entries(after: list[list[str]], kit: Path, paths: Paths, output_dir: P
         raise KitError(f"a staged file comes from outside the SDK and the runtime: {path}")
 
     def destination(path: str) -> str:
-        resolved = str(Path(path).resolve()) if path.startswith("/") else path
-        if resolved == output_dir:
+        resolved = Path(path).resolve().as_posix() if Path(path).is_absolute() else path
+        if paths.same(resolved, output_dir):
             return "."
-        if not resolved.startswith(output_dir + "/"):
+        relative = paths.inside(resolved, output_dir)
+        if relative is None:
             raise KitError(f"a file is staged outside the runtime folder: {path}")
-        return resolved[len(output_dir) + 1:]
+        return relative
 
     for part in after:
-        program = Path(part[0]).name
+        program = program_name(part[0])
         if program == "cd" or program == "osascript":
             # cd only sets the folder of the next commands; osascript sets the Finder icon of the
             # executable file, which the runtime does not need.
@@ -258,14 +362,14 @@ def main() -> int:
                   forbidden=[args.root, build, args.runtime])
 
     # Compile and link commands, and what is staged beside the executable.
-    recomp_object = f"CMakeFiles/azura_kit_recomp.dir/{args.config}/tools/kit/recomp_probe.cpp.o"
+    recomp_object = f"CMakeFiles/azura_kit_recomp.dir/{args.config}/tools/kit/recomp_probe.cpp{OBJECT_SUFFIX}"
     compile_options = compile_template(ninja_command(build, args.config, recomp_object), paths, probe_source)
     # Generated code is compiled with its precompiled header, as CMake builds it; the header is
     # precompiled with the same options.
     precompile_command = compile_options + ["-x", "c++-header", "{header}", "-o", "{pch}"]
     compile_command = compile_options + ["-include-pch", "{pch}", "-c", "{source}", "-o", "{object}"]
-    output = build / args.config / "azura_kit_probe"
-    link_command, after = link_template(ninja_command(build, args.config, f"{args.config}/azura_kit_probe"),
+    output = build / args.config / f"azura_kit_probe{EXECUTABLE_SUFFIX}"
+    link_command, after = link_template(ninja_command(build, args.config, f"{args.config}/azura_kit_probe{EXECUTABLE_SUFFIX}"),
                                         paths, output)
     stage = stage_entries(after, kit, paths, output.parent)
     # The MoltenVK staging (macOS) is a custom target; its command is the output of that name.
@@ -278,19 +382,21 @@ def main() -> int:
 
     # Our code, compiled.
     host_dir = build / "CMakeFiles/azura_host.dir" / args.config
-    host_objects = sorted(host_dir.rglob("*.o"))
+    host_objects = sorted(host_dir.rglob(f"*{OBJECT_SUFFIX}"))
     if not host_objects:
         raise KitError(f"no objects of azura_host in {host_dir}: build the azura_host target first")
     for obj in host_objects:
         target = kit / "host" / obj.relative_to(host_dir)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(obj, target)
-    host_paths = ["host/" + str(obj.relative_to(host_dir)) for obj in host_objects]
+    host_paths = ["host/" + obj.relative_to(host_dir).as_posix() for obj in host_objects]
 
     # The SDK: headers, the code generator, and what the commands use.
     sdk = kit / "sdk"
     shutil.copytree(args.sdk / "include", sdk / "include")
-    generator = next((p for p in (args.sdk / "bin").iterdir() if p.name.startswith("rexglue")), None)
+    # The executable itself: on Windows its debug information (rexglue.pdb) is beside it.
+    generator = next((p for p in sorted((args.sdk / "bin").iterdir())
+                      if p.name.startswith("rexglue") and p.suffix.lower() in ("", ".exe")), None)
     if generator is None:
         raise KitError(f"no code generator in {args.sdk / 'bin'}")
     (sdk / "bin").mkdir()

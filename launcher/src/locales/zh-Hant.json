@@ -112,6 +112,7 @@
     "compilerMissing": "找不到編譯器。",
     "compilerInstallApple": "安裝 Apple 的 Command Line Tools",
     "compilerInstallPackage": "安裝 clang",
+    "compilerInstallWindows": "安裝 LLVM 與 Visual Studio Build Tools",
     "compilerInstalling": "正在安裝編譯器…",
     "compilerWaitingApple": "請依照 Apple 的視窗安裝 Command Line Tools。安裝完成後，啟動器會自動繼續。",
     "compilerCheckAgain": "重新檢查",
