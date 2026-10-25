@@ -38,6 +38,7 @@
 #include "prompts/button_prompts.h"
 #include "relaunch.h"
 #include "script_hooks.h"
+#include "perf_overlay.h"
 #include "shader_compile_overlay.h"
 #include "shader_precompile.h"
 
@@ -265,10 +266,14 @@ class AzuraApp : public rex::ReXApp {
   }
 
   // The ImGui drawer the game's own dialogs are added to.
-  void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override { dialog_drawer_ = drawer; }
+  void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {
+    dialog_drawer_ = drawer;
+    // Draws nothing until the Video options turn the performance overlay on.
+    perf_overlay_ = std::make_unique<azura::PerfOverlay>(drawer, &title_font_, &body_font_);
+  }
 
-  // Barlow (installed in assets/fonts) for the shader compilation notice, rasterized large and drawn
-  // smaller so it stays sharp on high-DPI displays. ImGui's default font stays the first one, so
+  // Barlow (installed in assets/fonts) for the shader compilation notice and the performance
+  // overlay, rasterized large and drawn smaller so it stays sharp on high-DPI displays. ImGui's default font stays the first one, so
   // the SDK's own overlays are unchanged.
   void OnConfigureFonts(ImFontAtlas* atlas) override {
     auto load = [&](const char* name) -> ImFont* {
@@ -296,6 +301,7 @@ class AzuraApp : public rex::ReXApp {
   // Stop the prompt thread before the runtime and its memory go away, and remove the shader
   // compilation notice before the ImGui drawer does.
   void OnShutdown() override {
+    perf_overlay_.reset();
     button_prompts_.reset();
     perf_marker_.reset();
     shutting_down_ = true;
@@ -354,6 +360,7 @@ class AzuraApp : public rex::ReXApp {
   std::unique_ptr<azura::prompts::ButtonPrompts> button_prompts_;
   std::filesystem::path exe_dir_;
   rex::ui::ImGuiDrawer* dialog_drawer_ = nullptr;
+  std::unique_ptr<azura::PerfOverlay> perf_overlay_;
   ImFont* title_font_ = nullptr;
   ImFont* body_font_ = nullptr;
   // Deletes itself when it closes, clearing this pointer. Accessed on the UI thread only.

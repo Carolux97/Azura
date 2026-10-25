@@ -48,6 +48,12 @@ render_resolution = "auto"
 # Extra sharpening of AMD CAS and AMD FSR 1, from 0.0 (the effect's own) to 1.0 (the most): the
 # Video menu's Sharpness. It applies while the game runs.
 upscaling_sharpness = 0.0
+# The Video menu's Performance overlay: off, fps for the game's frame rate in a corner of the game,
+# detailed to add the game's CPU and GPU use, or advanced to add its memory use, a graph of frame
+# times, the average frame rate and the 1% low.
+performance_overlay = "off"
+# Its corner (the Video menu's Overlay position): top_left, top_right, bottom_left or bottom_right.
+performance_overlay_position = "top_right"
 # Present the game in step with the display refresh (FIFO). The immediate and mailbox modes let
 # the presenter repaint the same frame hundreds of times per second, taking GPU time from the game.
 vulkan_allow_present_mode_immediate = false

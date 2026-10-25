@@ -31,6 +31,9 @@ indented lines.
   screen Enter starts. The main menu has an Options entry instead of Start's button.
 - The button prompts in Azura's menus follow the device in your hands, keyboard and mouse or
   controller, and change as soon as you use another.
+- Video options have a Performance overlay in the corner you choose: FPS shows the game's frame
+  rate and the time per frame, Detailed adds the game's CPU and GPU use, and Advanced adds its
+  memory use, a graph of the last seconds of frame times, the average frame rate and the 1% low.
 - On Linux, the game and the programs the launcher starts use your system's libraries instead of
   the launcher's own copies (it fixes keyboard errors in the game log on newer systems).
 - Windows (10 and 11, x86-64): the launcher comes as an installer, builds the game from your copy
