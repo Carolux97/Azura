@@ -1,6 +1,7 @@
 # Contributing to Gears3-Azura
 
-Gears3-Azura runs on macOS and Linux from one codebase. Every change goes through a Trello card, a
+Gears3-Azura runs on macOS and Linux from one codebase; its launcher also builds for Windows, where
+the game does not run yet (see the launcher's README). Every change goes through a Trello card, a
 short-lived branch and a pull request to `main`, reviewed and tested on both platforms before it is
 merged. Everything written into the repository (code, comments, commit messages, docs) and on the
 Trello board is in English.

@@ -1,7 +1,7 @@
 # Gears3-Azura
 
 Unofficial native port of Gears of War 3 (Xbox 360) to macOS on Apple Silicon and to Linux
-(x86-64).
+(x86-64). Its launcher also runs on Windows (x86-64), where the game does not run yet.
 
 It does not emulate the console at run time. The game's PowerPC code is translated ahead of time
 into C++ by the [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk) and compiled into a normal
@@ -20,6 +20,13 @@ Point it at your own copy of the game (a folder or a disc image): it builds the 
 machine and keeps itself and the game up to date. The macOS launcher is not signed with an Apple
 Developer ID, so the first time it opens from System Settings, Privacy & Security.
 
+On Windows 10 and 11 (x86-64) only the launcher runs for now: the game has no Windows build yet, so
+the launcher can choose the game files and edit the settings, but not build or start the game. It
+is not in the releases: build it from a checkout on Linux with `scripts/build-launcher-windows.sh`,
+which makes an installer (the launcher then appears in Windows' installed apps, where its
+uninstaller removes it) and the launcher alone, to run without installing. Neither is signed, so
+SmartScreen warns the first time.
+
 ## Layout
 
 | Path | What it holds |
@@ -30,7 +37,7 @@ Developer ID, so the first time it opens from System Settings, Privacy & Securit
 | `runtime/generated/` | C++ produced by `rexglue codegen` from your `default.xex`. Ignored by git. |
 | `launcher/` | The desktop launcher (Tauri): interface in `launcher/src/`, native side in `launcher/src-tauri/`. See its README. |
 | `patches/` | Our changes to the ReXGlue SDK (the Metal backend, the Xenos shader compiler, the PowerPC interpreter and fixes) and to MoltenVK, applied by the build scripts. |
-| `scripts/` | Build, player kit and release scripts. |
+| `scripts/` | Build, player kit and release scripts; `build-launcher-windows.sh` builds the Windows launcher from Linux. |
 | `tools/` | [extract-xiso](https://github.com/XboxDev/extract-xiso), to extract disc images. |
 | `docs/` | Design notes: the [Metal backend](docs/metal-backend-design.md), the [Xenos shader compiler](docs/shader-compiler-design.md), the [PowerPC interpreter](docs/ppc-interpreter-design.md), [building the runtime on the player's machine](docs/player-runtime-build.md), [Linux GPU measurements](docs/linux-gpu-measurement.md) and the game's internals for modding menus and settings ([reverse-engineering.md](docs/reverse-engineering.md)). |
 | `sdk/` | The ReXGlue SDK: its prebuilt release for your platform and its source tree, which the build patches. Ignored by git. |
@@ -48,6 +55,9 @@ To build from source:
 - On Linux: clang, CMake 3.25+, Ninja, the Vulkan SDK and the development libraries the SDK builds
   against (the "Install the toolchain (Linux)" step of `.github/workflows/runtime-kit.yml` lists
   them for Ubuntu 22.04); `iniciar-linux.sh` sets up the launcher.
+- For the Windows launcher, on Linux: Rust, Node.js, LLVM (`clang-cl`, `llvm-lib`, `llvm-rc`) and
+  NSIS (`sudo apt install nsis`); `scripts/build-launcher-windows.sh` sets up the rest (see the
+  launcher's README).
 - ReXGlue SDK **0.10.0**: its prebuilt release for your platform, unpacked so that
   `sdk/rexglue-0.10.0-<platform>/<platform>/bin/rexglue` exists (from the
   [v0.10.0 release](https://github.com/rexglue/rexglue-sdk/releases/tag/v0.10.0)), and its source
@@ -83,7 +93,7 @@ on one computer, and we keep playing it through to fix what turns up. Working to
 co-op (Options, Local co-op), achievements with their artwork, a save manager with backups, and
 video options (render resolution, upscaling, antialiasing, frame rate limit). The launcher builds
 the game from your own copy and keeps itself and the game up to date. Not yet: online co-op and
-multiplayer.
+multiplayer, and the game on Windows, where only the launcher runs so far.
 
 ## Credits
 
