@@ -126,7 +126,8 @@ const std::vector<Option>& Options() {
        0.1f},
       // A list of our own (ID 9110): its values grow as the overlay gets more modes. Last in the
       // list, with its position below it.
-      {kVideoCategory, 9, Label::kPerformanceOverlay, "performance_overlay", Kind::kChoice, 9110, -1, {"off", "fps"}},
+      {kVideoCategory, 9, Label::kPerformanceOverlay, "performance_overlay", Kind::kChoice, 9110, -1,
+       {"off", "fps", "detailed", "advanced"}},
       // Our own list too (ID 9111): the corner the overlay is shown in.
       {kVideoCategory, 10, Label::kPerformanceOverlayPosition, "performance_overlay_position", Kind::kChoice, 9111, -1,
        {"top_left", "top_right", "bottom_left", "bottom_right"}},
@@ -151,6 +152,8 @@ struct Texts {
   const char* fsr;
   const char* automatic;  // the render resolution chosen for this computer
   const char* corners[4];  // the performance overlay's positions: top left, top right, bottom left, bottom right
+  const char* detailed;    // the performance overlay's mode with the CPU and GPU use
+  const char* advanced;    // the performance overlay's mode with memory use, frame time graph and 1% low
 };
 
 // Keyed by the extension of the localization files. Labels are upper case like the game's own.
@@ -173,7 +176,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"LOCAL CO-OP", "Choose which controller or keyboard each player uses, to play the campaign together on this computer."},
          {"PERFORMANCE OVERLAY", "Show the game's frame rate in a corner of the screen."},
          {"OVERLAY POSITION", "Corner of the screen the performance overlay is shown in."}},
-        "Off", "On", "FXAA", "FXAA extreme", "Open", "Bilinear (original)", "AMD CAS (sharpening)", "AMD FSR 1", "Automatic", {"Top left", "Top right", "Bottom left", "Bottom right"}}},
+        "Off", "On", "FXAA", "FXAA extreme", "Open", "Bilinear (original)", "AMD CAS (sharpening)", "AMD FSR 1", "Automatic", {"Top left", "Top right", "Bottom left", "Bottom right"}, "Detailed", "Advanced"}},
       {"esn",
        {{"TECLADO Y RATÓN", "Ajuste las opciones del teclado y el ratón."},
         {{"CALIBRAR BRILLO", "Abra la pantalla de calibración del brillo."},
@@ -192,7 +195,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"COOPERATIVO LOCAL", "Elija qué mando o teclado usa cada jugador para jugar la campaña juntos en este equipo."},
          {"INDICADOR DE RENDIMIENTO", "Muestre los fotogramas por segundo del juego en una esquina de la pantalla."},
          {"POSICIÓN DEL INDICADOR", "Esquina de la pantalla en la que se muestra el indicador de rendimiento."}},
-        "Desactivado", "Activado", "FXAA", "FXAA extremo", "Abrir", "Bilineal (original)", "AMD CAS (nitidez)", "AMD FSR 1", "Automática", {"Arriba a la izquierda", "Arriba a la derecha", "Abajo a la izquierda", "Abajo a la derecha"}}},
+        "Desactivado", "Activado", "FXAA", "FXAA extremo", "Abrir", "Bilineal (original)", "AMD CAS (nitidez)", "AMD FSR 1", "Automática", {"Arriba a la izquierda", "Arriba a la derecha", "Abajo a la izquierda", "Abajo a la derecha"}, "Detallado", "Avanzado"}},
       {"deu",
        {{"TASTATUR UND MAUS", "Passen Sie die Einstellungen für Tastatur und Maus an."},
         {{"HELLIGKEIT KALIBRIEREN", "Öffnet den Bildschirm zur Kalibrierung der Helligkeit."},
@@ -210,7 +213,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"LOKALER KOOP", "Wählen Sie, welchen Controller oder welche Tastatur jeder Spieler verwendet, um die Kampagne gemeinsam an diesem Computer zu spielen."},
          {"LEISTUNGSANZEIGE", "Zeigt die Bildrate des Spiels in einer Ecke des Bildschirms an."},
          {"POSITION DER ANZEIGE", "Bildschirmecke, in der die Leistungsanzeige erscheint."}},
-        "Aus", "Ein", "FXAA", "FXAA extrem", "Öffnen", "Bilinear (Original)", "AMD CAS (Schärfung)", "AMD FSR 1", "Automatisch", {"Oben links", "Oben rechts", "Unten links", "Unten rechts"}}},
+        "Aus", "Ein", "FXAA", "FXAA extrem", "Öffnen", "Bilinear (Original)", "AMD CAS (Schärfung)", "AMD FSR 1", "Automatisch", {"Oben links", "Oben rechts", "Unten links", "Unten rechts"}, "Detailliert", "Erweitert"}},
       {"ita",
        {{"TASTIERA E MOUSE", "Regola le impostazioni di tastiera e mouse."},
         {{"CALIBRA LUMINOSITÀ", "Apri la schermata di calibrazione della luminosità."},
@@ -228,7 +231,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"COOPERATIVA LOCALE", "Scegli il controller o la tastiera di ogni giocatore per giocare insieme la campagna su questo computer."},
          {"INDICATORE PRESTAZIONI", "Mostra la frequenza dei fotogrammi del gioco in un angolo dello schermo."},
          {"POSIZIONE INDICATORE", "Angolo dello schermo in cui compare l'indicatore delle prestazioni."}},
-        "Disattivato", "Attivato", "FXAA", "FXAA estremo", "Apri", "Bilineare (originale)", "AMD CAS (nitidezza)", "AMD FSR 1", "Automatica", {"In alto a sinistra", "In alto a destra", "In basso a sinistra", "In basso a destra"}}},
+        "Disattivato", "Attivato", "FXAA", "FXAA estremo", "Apri", "Bilineare (originale)", "AMD CAS (nitidezza)", "AMD FSR 1", "Automatica", {"In alto a sinistra", "In alto a destra", "In basso a sinistra", "In basso a destra"}, "Dettagliato", "Avanzato"}},
       {"jpn",
        {{"キーボードとマウス", "キーボードとマウスの設定を調整します。"},
         {{"明るさの調整", "明るさの調整画面を開きます。"},
@@ -246,7 +249,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"ローカル協力プレイ", "このコンピューターでキャンペーンを一緒にプレイするため、各プレイヤーが使うコントローラーまたはキーボードを選びます。"},
          {"パフォーマンス表示", "ゲームのフレームレートを画面の隅に表示します。"},
          {"表示位置", "パフォーマンス表示を出す画面の隅。"}},
-        "オフ", "オン", "FXAA", "FXAA (最大)", "開く", "バイリニア（オリジナル）", "AMD CAS（シャープ化）", "AMD FSR 1", "自動", {"左上", "右上", "左下", "右下"}}},
+        "オフ", "オン", "FXAA", "FXAA (最大)", "開く", "バイリニア（オリジナル）", "AMD CAS（シャープ化）", "AMD FSR 1", "自動", {"左上", "右上", "左下", "右下"}, "詳細", "高度"}},
       {"fra",
        {{"CLAVIER ET SOURIS", "Réglez les options du clavier et de la souris."},
         {{"CALIBRER LA LUMINOSITÉ", "Ouvrez l'écran de calibrage de la luminosité."},
@@ -264,7 +267,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"COOPÉRATION LOCALE", "Choisissez la manette ou le clavier de chaque joueur pour jouer la campagne ensemble sur cet ordinateur."},
          {"INDICATEUR DE PERFORMANCES", "Affiche la fréquence d'images du jeu dans un coin de l'écran."},
          {"POSITION DE L'INDICATEUR", "Coin de l'écran où s'affiche l'indicateur de performances."}},
-        "Désactivé", "Activé", "FXAA", "FXAA extrême", "Ouvrir", "Bilinéaire (d'origine)", "AMD CAS (netteté)", "AMD FSR 1", "Automatique", {"En haut à gauche", "En haut à droite", "En bas à gauche", "En bas à droite"}}},
+        "Désactivé", "Activé", "FXAA", "FXAA extrême", "Ouvrir", "Bilinéaire (d'origine)", "AMD CAS (netteté)", "AMD FSR 1", "Automatique", {"En haut à gauche", "En haut à droite", "En bas à gauche", "En bas à droite"}, "Détaillé", "Avancé"}},
       {"ptb",
        {{"TECLADO E MOUSE", "Ajuste as opções do teclado e do mouse."},
         {{"CALIBRAR BRILHO", "Abra a tela de calibração do brilho."},
@@ -283,7 +286,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"COOPERATIVO LOCAL", "Escolha o controle ou o teclado de cada jogador para jogar a campanha juntos neste computador."},
          {"INDICADOR DE DESEMPENHO", "Mostra a taxa de quadros do jogo em um canto da tela."},
          {"POSIÇÃO DO INDICADOR", "Canto da tela em que o indicador de desempenho aparece."}},
-        "Desativado", "Ativado", "FXAA", "FXAA extremo", "Abrir", "Bilinear (original)", "AMD CAS (nitidez)", "AMD FSR 1", "Automática", {"Superior esquerdo", "Superior direito", "Inferior esquerdo", "Inferior direito"}}},
+        "Desativado", "Ativado", "FXAA", "FXAA extremo", "Abrir", "Bilinear (original)", "AMD CAS (nitidez)", "AMD FSR 1", "Automática", {"Superior esquerdo", "Superior direito", "Inferior esquerdo", "Inferior direito"}, "Detalhado", "Avançado"}},
       {"pol",
        {{"KLAWIATURA I MYSZ", "Dostosuj ustawienia klawiatury i myszy."},
         {{"KALIBRACJA JASNOŚCI", "Otwórz ekran kalibracji jasności."},
@@ -301,7 +304,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"LOKALNA KOOPERACJA", "Wybierz kontroler lub klawiaturę każdego gracza, aby grać razem w kampanię na tym komputerze."},
          {"WSKAŹNIK WYDAJNOŚCI", "Wyświetla liczbę klatek na sekundę gry w rogu ekranu."},
          {"POŁOŻENIE WSKAŹNIKA", "Róg ekranu, w którym wyświetla się wskaźnik wydajności."}},
-        "Wyłączone", "Włączone", "FXAA", "FXAA ekstremalne", "Otwórz", "Dwuliniowe (oryginalne)", "AMD CAS (wyostrzanie)", "AMD FSR 1", "Automatyczna", {"Lewy górny róg", "Prawy górny róg", "Lewy dolny róg", "Prawy dolny róg"}}},
+        "Wyłączone", "Włączone", "FXAA", "FXAA ekstremalne", "Otwórz", "Dwuliniowe (oryginalne)", "AMD CAS (wyostrzanie)", "AMD FSR 1", "Automatyczna", {"Lewy górny róg", "Prawy górny róg", "Lewy dolny róg", "Prawy dolny róg"}, "Szczegółowy", "Zaawansowany"}},
       {"rus",
        {{"КЛАВИАТУРА И МЫШЬ", "Настройте параметры клавиатуры и мыши."},
         {{"КАЛИБРОВКА ЯРКОСТИ", "Откройте экран калибровки яркости."},
@@ -319,7 +322,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"ЛОКАЛЬНЫЙ КООПЕРАТИВ", "Выберите контроллер или клавиатуру для каждого игрока, чтобы пройти кампанию вместе на этом компьютере."},
          {"ПОКАЗАТЕЛЬ ПРОИЗВОДИТЕЛЬНОСТИ", "Показывает частоту кадров игры в углу экрана."},
          {"ПОЛОЖЕНИЕ ПОКАЗАТЕЛЯ", "Угол экрана, в котором показывается показатель производительности."}},
-        "Выкл.", "Вкл.", "FXAA", "FXAA (макс.)", "Открыть", "Билинейное (оригинал)", "AMD CAS (резкость)", "AMD FSR 1", "Автоматически", {"Сверху слева", "Сверху справа", "Снизу слева", "Снизу справа"}}},
+        "Выкл.", "Вкл.", "FXAA", "FXAA (макс.)", "Открыть", "Билинейное (оригинал)", "AMD CAS (резкость)", "AMD FSR 1", "Автоматически", {"Сверху слева", "Сверху справа", "Снизу слева", "Снизу справа"}, "Подробно", "Расширенный"}},
       {"cze",
        {{"KLÁVESNICE A MYŠ", "Upravte nastavení klávesnice a myši."},
         {{"KALIBRACE JASU", "Otevřete obrazovku kalibrace jasu."},
@@ -337,7 +340,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"MÍSTNÍ KOOPERACE", "Vyberte ovladač nebo klávesnici každého hráče a hrajte kampaň společně na tomto počítači."},
          {"UKAZATEL VÝKONU", "Zobrazí snímkovou frekvenci hry v rohu obrazovky."},
          {"UMÍSTĚNÍ UKAZATELE", "Roh obrazovky, ve kterém se zobrazuje ukazatel výkonu."}},
-        "Vypnuto", "Zapnuto", "FXAA", "FXAA extrémní", "Otevřít", "Bilineární (původní)", "AMD CAS (zostření)", "AMD FSR 1", "Automaticky", {"Vlevo nahoře", "Vpravo nahoře", "Vlevo dole", "Vpravo dole"}}},
+        "Vypnuto", "Zapnuto", "FXAA", "FXAA extrémní", "Otevřít", "Bilineární (původní)", "AMD CAS (zostření)", "AMD FSR 1", "Automaticky", {"Vlevo nahoře", "Vpravo nahoře", "Vlevo dole", "Vpravo dole"}, "Podrobný", "Pokročilý"}},
       {"hun",
        {{"BILLENTYŰZET ÉS EGÉR", "A billentyűzet és az egér beállításai."},
         {{"FÉNYERŐ KALIBRÁLÁSA", "Megnyitja a fényerő kalibrálási képernyőjét."},
@@ -355,7 +358,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"HELYI KOOPERATÍV", "Válaszd ki, melyik kontrollert vagy billentyűzetet használják az egyes játékosok, hogy együtt játsszatok a kampányban ezen a számítógépen."},
          {"TELJESÍTMÉNYJELZŐ", "Megjeleníti a játék képkockasebességét a képernyő sarkában."},
          {"JELZŐ HELYE", "A képernyő sarka, ahol a teljesítményjelző megjelenik."}},
-        "Ki", "Be", "FXAA", "FXAA (extrém)", "Megnyitás", "Bilineáris (eredeti)", "AMD CAS (élesítés)", "AMD FSR 1", "Automatikus", {"Bal felső sarok", "Jobb felső sarok", "Bal alsó sarok", "Jobb alsó sarok"}}},
+        "Ki", "Be", "FXAA", "FXAA (extrém)", "Megnyitás", "Bilineáris (eredeti)", "AMD CAS (élesítés)", "AMD FSR 1", "Automatikus", {"Bal felső sarok", "Jobb felső sarok", "Bal alsó sarok", "Jobb alsó sarok"}, "Részletes", "Haladó"}},
       {"chn",
        {{"鍵盤與滑鼠", "調整鍵盤與滑鼠設定。"},
         {{"校正亮度", "開啟亮度校正畫面。"},
@@ -373,7 +376,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"本機合作", "選擇每位玩家使用的控制器或鍵盤，在這台電腦上一起遊玩戰役。"},
          {"效能顯示", "在畫面角落顯示遊戲的每秒影格數。"},
          {"顯示位置", "效能顯示出現在畫面的哪個角落。"}},
-        "關閉", "開啟", "FXAA", "FXAA 極致", "開啟", "雙線性（原始）", "AMD CAS（銳利化）", "AMD FSR 1", "自動", {"左上角", "右上角", "左下角", "右下角"}}},
+        "關閉", "開啟", "FXAA", "FXAA 極致", "開啟", "雙線性（原始）", "AMD CAS（銳利化）", "AMD FSR 1", "自動", {"左上角", "右上角", "左下角", "右下角"}, "詳細", "進階"}},
       {"kor",
        {{"키보드 및 마우스", "키보드 및 마우스 설정을 조정합니다."},
         {{"밝기 보정", "밝기 보정 화면을 엽니다."},
@@ -391,7 +394,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"로컬 협동", "이 컴퓨터에서 함께 캠페인을 플레이하도록 각 플레이어가 사용할 컨트롤러나 키보드를 선택합니다."},
          {"성능 표시", "화면 모서리에 게임의 프레임 속도를 표시합니다."},
          {"표시 위치", "성능 표시가 나타나는 화면 모서리입니다."}},
-        "끔", "켬", "FXAA", "FXAA 최대", "열기", "바이리니어 (원본)", "AMD CAS (선명화)", "AMD FSR 1", "자동", {"왼쪽 위", "오른쪽 위", "왼쪽 아래", "오른쪽 아래"}}},
+        "끔", "켬", "FXAA", "FXAA 최대", "열기", "바이리니어 (원본)", "AMD CAS (선명화)", "AMD FSR 1", "자동", {"왼쪽 위", "오른쪽 위", "왼쪽 아래", "오른쪽 아래"}, "상세", "고급"}},
   };
   return texts;
 }
@@ -721,7 +724,9 @@ bool PcOptionValueNames(int psid, std::vector<std::u16string>& names) {
     }
     if (option.label == Label::kPerformanceOverlay) {
       const std::string language = PlayerLanguage();
-      names = {CoalescedString::FromUtf8(TextsFor(language).off).text, u"FPS"};
+      const Texts& texts = TextsFor(language);
+      names = {CoalescedString::FromUtf8(texts.off).text, u"FPS", CoalescedString::FromUtf8(texts.detailed).text,
+               CoalescedString::FromUtf8(texts.advanced).text};
     }
     if (option.label == Label::kPerformanceOverlayPosition) {
       const std::string language = PlayerLanguage();
