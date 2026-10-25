@@ -487,6 +487,46 @@ index d26cd4f..1658019 100644
    // Ensures the memory backing the range in the scaled resolve address space is
    // allocated and returns whether it is.
    virtual bool EnsureScaledResolveMemoryCommitted(uint32_t /*start_unscaled*/,
+diff --git a/include/rex/graphics/pipeline/texture/events.h b/include/rex/graphics/pipeline/texture/events.h
+new file mode 100644
+index 0000000..0868eed
+--- /dev/null
++++ b/include/rex/graphics/pipeline/texture/events.h
+@@ -0,0 +1,34 @@
++/**
++ * @file        rex/graphics/pipeline/texture/events.h
++ * @brief       A notice for each texture the GPU texture cache creates
++ *
++ * Host code that looks for a guest texture by its contents (to replace it) can wait for the
++ * texture cache to create it instead of scanning guest memory: the cache calls the handler with
++ * where the texture's top level lies and its size, once per texture it creates.
++ *
++ * @license     BSD 3-Clause License
++ *              See LICENSE file in the project root for full license text.
++ */
++
++#pragma once
++
++#include <cstdint>
++
++namespace rex::graphics {
++
++struct CreatedTexture {
++  uint32_t base_address;  // physical address of the top level (mip 0)
++  uint32_t width;
++  uint32_t height;
++  bool tiled;
++};
++
++/// Called on the GPU thread for each texture the texture cache creates: it must be quick (take the
++/// notice and return). Null (the default) turns the notices off.
++using TextureCreatedHandler = void (*)(const CreatedTexture& texture);
++void SetTextureCreatedHandler(TextureCreatedHandler handler);
++
++/// For the texture cache: passes `texture` to the handler, if there is one.
++void NotifyTextureCreated(const CreatedTexture& texture);
++
++}  // namespace rex::graphics
 diff --git a/include/rex/graphics/pipeline_util.h b/include/rex/graphics/pipeline_util.h
 index 65a24ed..3d76067 100644
 --- a/include/rex/graphics/pipeline_util.h
@@ -1812,6 +1852,18 @@ index 107a495..f792c18 100644
  
  set(GENERATED_SOURCES
      {{ cmake_var("CMAKE_CURRENT_LIST_DIR") }}/{{ project }}_init.cpp
+diff --git a/src/core/CMakeLists.txt b/src/core/CMakeLists.txt
+index 1ddafd0..af07433 100644
+--- a/src/core/CMakeLists.txt
++++ b/src/core/CMakeLists.txt
+@@ -85,6 +85,7 @@ target_sources(rexcore PRIVATE
+     ${PROJECT_SOURCE_DIR}/src/graphics/pipeline/texture/extent.cpp
+     ${PROJECT_SOURCE_DIR}/src/graphics/pipeline/texture/util.cpp
+     ${PROJECT_SOURCE_DIR}/src/graphics/pipeline/texture/conversion.cpp
++    ${PROJECT_SOURCE_DIR}/src/graphics/pipeline/texture/events.cpp
+ )
+ 
+ target_include_directories(rexcore PUBLIC
 diff --git a/src/core/filesystem_win.cpp b/src/core/filesystem_win.cpp
 index c5a2c5d..723b88e 100644
 --- a/src/core/filesystem_win.cpp
@@ -15524,10 +15576,18 @@ index e472251..21f81dc 100644
  
  void ShaderTranslator::TranslateControlFlowInstruction(const ControlFlowInstruction& cf) {
 diff --git a/src/graphics/pipeline/texture/cache.cpp b/src/graphics/pipeline/texture/cache.cpp
-index 76f5600..7d7c128 100644
+index 76f5600..0e1e850 100644
 --- a/src/graphics/pipeline/texture/cache.cpp
 +++ b/src/graphics/pipeline/texture/cache.cpp
-@@ -349,6 +349,39 @@ void TextureCache::MarkRangeAsResolved(uint32_t start_unscaled, uint32_t length_
+@@ -19,6 +19,7 @@
+ #include <rex/dbg.h>
+ #include <rex/graphics/flags.h>
+ #include <rex/graphics/pipeline/texture/cache.h>
++#include <rex/graphics/pipeline/texture/events.h>
+ #include <rex/graphics/pipeline/texture/info.h>
+ #include <rex/graphics/pipeline/texture/util.h>
+ #include <rex/graphics/register_file.h>
+@@ -349,6 +350,39 @@ void TextureCache::MarkRangeAsResolved(uint32_t start_unscaled, uint32_t length_
    shared_memory().RangeWrittenByGpu(start_unscaled, length_unscaled);
  }
  
@@ -15567,6 +15627,52 @@ index 76f5600..7d7c128 100644
  uint32_t TextureCache::GuestToHostSwizzle(uint32_t guest_swizzle, uint32_t host_format_swizzle) {
    uint32_t host_swizzle = 0;
    for (uint32_t i = 0; i < 4; ++i) {
+@@ -877,6 +911,10 @@ TextureCache::Texture* TextureCache::FindOrCreateTexture(TextureKey key) {
+   }
+   COUNT_profile_set("gpu/texture_cache/textures", textures_.size());
+   texture->LogAction("Created");
++  // For host code waiting for a texture by its contents (texture/events.h).
++  if (key.base_page) {
++    NotifyTextureCreated({uint32_t(key.base_page) << 12, key.GetWidth(), key.GetHeight(), key.tiled != 0});
++  }
+   return texture;
+ }
+ 
+diff --git a/src/graphics/pipeline/texture/events.cpp b/src/graphics/pipeline/texture/events.cpp
+new file mode 100644
+index 0000000..efa37e8
+--- /dev/null
++++ b/src/graphics/pipeline/texture/events.cpp
+@@ -0,0 +1,29 @@
++/**
++ * @file        graphics/pipeline/texture/events.cpp
++ * @brief       A notice for each texture the GPU texture cache creates (texture/events.h)
++ *
++ * @license     BSD 3-Clause License
++ *              See LICENSE file in the project root for full license text.
++ */
++
++#include <rex/graphics/pipeline/texture/events.h>
++
++#include <atomic>
++
++namespace rex::graphics {
++
++namespace {
++std::atomic<TextureCreatedHandler> handler{nullptr};
++}  // namespace
++
++void SetTextureCreatedHandler(TextureCreatedHandler new_handler) {
++  handler.store(new_handler, std::memory_order_release);
++}
++
++void NotifyTextureCreated(const CreatedTexture& texture) {
++  if (const TextureCreatedHandler current = handler.load(std::memory_order_acquire)) {
++    current(texture);
++  }
++}
++
++}  // namespace rex::graphics
 diff --git a/src/graphics/plugin_main.cpp b/src/graphics/plugin_main.cpp
 index ec756d3..6e16b00 100644
 --- a/src/graphics/plugin_main.cpp
