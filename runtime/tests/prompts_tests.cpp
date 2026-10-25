@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "../src/prompts/glyph_art.h"
+#include "../src/prompts/glyph_raster.h"
 #include "../src/prompts/xenos_dxt5.h"
 
 using namespace azura::prompts;
@@ -50,7 +51,7 @@ int MaxChannelError(const std::array<Rgba, 16>& a, const std::array<Rgba, 16>& b
 
 // Draws a single-key PC prompt.
 std::vector<uint8_t> Key(const std::string& name, int w = 26, int h = 26) {
-  return DrawPcGlyph({PcPrompt::Layout::kSingle, {name}}, w, h, 42);
+  return DrawPcGlyph({PcPrompt::Layout::kSingle, {name}}, w, h);
 }
 
 }  // namespace
@@ -192,15 +193,30 @@ TEST_CASE("Glyphs fill their slot at every in-game size", "[prompts][glyphs]") {
       {PcPrompt::Layout::kPair, {"Up", "Down"}},
   };
   for (auto [w, h] : sizes) {
-    for (int b = 0; b <= static_cast<int>(PadButton::kDpadLeftRight); ++b) {
-      const auto glyph = DrawPlayStationGlyph(static_cast<PadButton>(b), w, h);
-      CHECK(glyph.size() == static_cast<size_t>(w * h * 4));
-      CHECK(visible(glyph));
+    for (PsModel model : {PsModel::kDualSense, PsModel::kDualShock4}) {
+      for (int b = 0; b <= static_cast<int>(PadButton::kDpadLeftRight); ++b) {
+        const auto glyph = DrawPlayStationGlyph(static_cast<PadButton>(b), w, h, model);
+        CHECK(glyph.size() == static_cast<size_t>(w * h * 4));
+        CHECK(visible(glyph));
+      }
     }
     for (const auto& prompt : pc) {
-      const auto glyph = DrawPcGlyph(prompt, w, h, 7);
+      const auto glyph = DrawPcGlyph(prompt, w, h);
       CHECK(glyph.size() == static_cast<size_t>(w * h * 4));
       CHECK(visible(glyph));
     }
   }
+}
+
+TEST_CASE("Letters and digits are drawn smooth with the legend font", "[prompts][glyphs]") {
+  // Loaded last: the cases above check the pixel fonts used without it.
+  REQUIRE(LoadLegendFont(AZURA_LEGEND_FONT));
+  const Coverage w = TextCoverage("W", 9.0f);
+  REQUIRE_FALSE(w.empty());
+  CHECK(w.height == 9);
+  // Antialiased: edge pixels are partly covered, not only on or off.
+  CHECK(std::any_of(w.alpha.begin(), w.alpha.end(), [](float a) { return a > 0.1f && a < 0.9f; }));
+  // The narrowest WASD slot still gets the four keys, and the glyph fills its slot.
+  const auto cross = DrawPcGlyph({PcPrompt::Layout::kCross, {"W", "A", "S", "D"}}, 18, 26);
+  CHECK(cross.size() == static_cast<size_t>(18 * 26 * 4));
 }

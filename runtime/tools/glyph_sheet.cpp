@@ -1,11 +1,13 @@
 // Renders every button prompt glyph into one PNG, to review the designs without running the game.
 //
-// Rows: the PlayStation glyphs, the PC glyphs for the default bindings, then one PC glyph for every
+// Rows: the DualSense and DualShock 4 glyphs, the PC glyphs for the default bindings, then one PC
+// glyph for every
 // key name a binding can use. Each glyph is drawn at an in-game slot size and then magnified with
 // nearest-neighbour so single pixels stay visible.
 //
 // Build: cmake --build --preset mac-arm64-sdk-source-relwithdebinfo --target azura_glyph_sheet
-// Usage: azura_glyph_sheet <output.png> [scale]   (scale defaults to 4)
+// Usage: azura_glyph_sheet <output.png> [scale] [legend font]
+//   scale defaults to 4; the legend font (Barlow-SemiBold.ttf) defaults to runtime/assets/fonts.
 
 #include <algorithm>
 #include <array>
@@ -16,6 +18,7 @@
 #include <vector>
 
 #include "../src/prompts/glyph_art.h"
+#include "../src/prompts/glyph_raster.h"
 
 using namespace azura::prompts;
 
@@ -95,10 +98,12 @@ constexpr uint8_t kBackground[3] = {14, 15, 19};
 
 int main(int argc, char** argv) {
   if (argc < 2) {
-    std::fprintf(stderr, "Usage: %s <output.png> [scale]\n", argv[0]);
+    std::fprintf(stderr, "Usage: %s <output.png> [scale] [legend font]\n", argv[0]);
     return 1;
   }
   const int scale = argc > 2 ? std::max(1, std::atoi(argv[2])) : 4;
+  const std::string font = argc > 3 ? argv[3] : AZURA_LEGEND_FONT;
+  if (!LoadLegendFont(font)) std::fprintf(stderr, "Could not load %s; using the pixel fonts\n", font.c_str());
 
   std::vector<std::vector<Item>> rows;
   using B = PadButton;
@@ -106,9 +111,13 @@ int main(int argc, char** argv) {
                    B::kRightShoulder, B::kStart, B::kBack, B::kLeftStick, B::kRightStick,
                    B::kLeftStickPress, B::kRightStickPress, B::kDpadAll, B::kDpadUp, B::kDpadUpDown};
   const int pad_w[] = {24, 26, 24, 24, 22, 22, 27, 27, 28, 28, 18, 18, 29, 29, 24, 20, 24};
-  std::vector<Item> ps;
-  for (size_t i = 0; i < std::size(buttons); ++i) ps.push_back({pad_w[i], 26, DrawPlayStationGlyph(buttons[i], pad_w[i], 26)});
-  rows.push_back(std::move(ps));
+  for (PsModel model : {PsModel::kDualSense, PsModel::kDualShock4}) {
+    std::vector<Item> ps;
+    for (size_t i = 0; i < std::size(buttons); ++i) {
+      ps.push_back({pad_w[i], 26, DrawPlayStationGlyph(buttons[i], pad_w[i], 26, model)});
+    }
+    rows.push_back(std::move(ps));
+  }
 
   // PC prompts for the default bindings, in the same order and sizes.
   const std::vector<PcPrompt> defaults = {
@@ -124,7 +133,7 @@ int main(int argc, char** argv) {
   };
   std::vector<Item> pc;
   for (size_t i = 0; i < defaults.size(); ++i) {
-    pc.push_back({pad_w[i], 26, DrawPcGlyph(defaults[i], pad_w[i], 26, static_cast<uint32_t>(i * 7 + 11))});
+    pc.push_back({pad_w[i], 26, DrawPcGlyph(defaults[i], pad_w[i], 26)});
   }
   rows.push_back(std::move(pc));
 
@@ -141,7 +150,7 @@ int main(int argc, char** argv) {
   std::vector<Item> all;
   for (size_t i = 0; i < std::size(keys); ++i) {
     const std::string name = PrimaryKeyName(keys[i]);
-    all.push_back({26, 26, DrawPcGlyph({PcPrompt::Layout::kSingle, {name}}, 26, 26, static_cast<uint32_t>(i * 13 + 5))});
+    all.push_back({26, 26, DrawPcGlyph({PcPrompt::Layout::kSingle, {name}}, 26, 26)});
     if (all.size() == 20) {
       rows.push_back(std::move(all));
       all.clear();

@@ -15,6 +15,7 @@
 
 #pragma once
 
+#include <filesystem>
 #include <memory>
 
 namespace rex {
@@ -25,8 +26,10 @@ namespace azura::prompts {
 
 class ButtonPrompts {
  public:
-  // Starts the background thread. `runtime` must outlive this object.
-  explicit ButtonPrompts(rex::Runtime* runtime);
+  // Starts the background thread. `runtime` must outlive this object. `legend_font` is the
+  // TrueType font the keyboard glyphs' letters and digits are drawn with (Barlow); without it they
+  // use pixel fonts.
+  ButtonPrompts(rex::Runtime* runtime, const std::filesystem::path& legend_font);
   // Stops and joins the thread. Textures keep the last prompts written.
   ~ButtonPrompts();
 
