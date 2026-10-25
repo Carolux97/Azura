@@ -16,6 +16,7 @@
 #include <rex/cvar.h>
 #include <rex/image_info.h>
 #include <rex/input/input_system.h>
+#include <rex/input/mnk/mnk_input_driver.h>
 #include <rex/perf/counter.h>
 #include <rex/rex_app.h>
 #include <rex/runtime.h>
@@ -27,6 +28,7 @@
 #include "achievement_toast.h"
 #include "input/mouse_look.h"
 #include "input/player_assignment.h"
+#include "controls_menu.h"
 #include "local_coop_menu.h"
 #include "local_coop_notices.h"
 #include "gpu_list.h"
@@ -203,6 +205,23 @@ class AzuraApp : public rex::ReXApp {
         }
       });
     });
+    // In the game's menus (not the title screen) the keyboard's Return and Escape accept and go back,
+    // in every scene: the Options, their message boxes, the multiplayer preferences, the pause menu.
+    rex::input::mnk::SetMenuKeysQuery(
+        [] { return azura::script::WhereInMenus() == azura::script::Menus::kMenu; });
+    // Keyboard and mouse, and Controller, in the Options: their controls menus.
+    azura::script::SetControlsMenuHandler([this](azura::script::ControlsMenu menu) {
+      app_context().CallInUIThread([this, menu] {
+        auto* input = runtime() ? static_cast<rex::input::InputSystem*>(runtime()->input_system()) : nullptr;
+        if (!shutting_down_ && dialog_drawer_ && input && !controls_menu_) {
+          controls_menu_ = new azura::ControlsMenu(
+              dialog_drawer_, input, azura::input::InstalledPlayerAssignment(),
+              menu == azura::script::ControlsMenu::kController ? azura::ControlsMenu::Kind::kController
+                                                               : azura::ControlsMenu::Kind::kKeyboardMouse,
+              REXCVAR_GET(user_language), title_font_, body_font_, &controls_menu_);
+        }
+      });
+    });
     azura::script::SetQuitHandler([this] {
       app_context().CallInUIThread([this] {
         if (window()) {
@@ -283,6 +302,8 @@ class AzuraApp : public rex::ReXApp {
     azura::menu::SetSharpnessChangedHandler(nullptr);
     azura::menu::SetUpscalingSupport(nullptr);
     azura::script::SetLocalCoopHandler(nullptr);
+    azura::script::SetControlsMenuHandler(nullptr);
+    rex::input::mnk::SetMenuKeysQuery(nullptr);
     azura::input::InstallMouseLook(nullptr);
     if (auto* graphics_system = runtime()->graphics_system()) {
       graphics_system->SetShaderCompilationStartedCallback(nullptr);
@@ -291,6 +312,8 @@ class AzuraApp : public rex::ReXApp {
     shader_compile_overlay_ = nullptr;
     delete local_coop_menu_;
     local_coop_menu_ = nullptr;
+    delete controls_menu_;
+    controls_menu_ = nullptr;
     delete coop_notices_;
     coop_notices_ = nullptr;
     shader_precompile_.reset();
@@ -338,6 +361,7 @@ class AzuraApp : public rex::ReXApp {
   // The Local co-op menu while it is open; deletes itself when it closes, clearing this pointer.
   // Accessed on the UI thread only.
   azura::LocalCoopMenu* local_coop_menu_ = nullptr;
+  azura::ControlsMenu* controls_menu_ = nullptr;
   // The local co-op notices, from the game's start to its end. Accessed on the UI thread only.
   azura::LocalCoopNotices* coop_notices_ = nullptr;
   // Only with shader_precompile_only: follows the stored shaders being made, then closes the runtime.

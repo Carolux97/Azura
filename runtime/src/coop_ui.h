@@ -6,10 +6,15 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include <imgui.h>
 
 #include <rex/input/device.h>
+
+namespace rex::input {
+class InputSystem;
+}
 
 namespace azura::coop_ui {
 
@@ -26,6 +31,10 @@ constexpr ImU32 TextFaint(int alpha) { return IM_COL32(109, 105, 96, alpha); }
 // `text` cut with an ellipsis to fit `max_width`.
 std::string Fit(ImFont* font, float size, const std::string& text, float max_width);
 
+// Draws `text` with the middle of its ink (the glyphs' drawn pixels, not the font's line box) at
+// `center`, so a short label sits in the middle of a key cap or a button.
+void AddTextCentered(ImDrawList* draw_list, ImFont* font, float size, ImVec2 center, ImU32 color, const char* text);
+
 // A panel with the launcher's cut corners (top left and bottom right).
 void DrawCutPanel(ImDrawList* draw_list, ImVec2 min, ImVec2 max, float cut, ImU32 fill, ImU32 line,
                   float thickness);
@@ -40,6 +49,16 @@ PadLook LookOf(const rex::input::DeviceInfo& device);
 // A controller, `size` tall, drawn after the real one of its family.
 void DrawControllerIcon(ImDrawList* draw_list, ImVec2 center, float size, PadLook look, int alpha);
 
+// The controls of a controller drawn by DrawControllerIcon, for pointing at them.
+enum class PadPoint {
+  kA, kB, kX, kY, kLeftShoulder, kRightShoulder, kLeftTrigger, kRightTrigger,
+  kLeftStick, kRightStick, kDpad, kBack, kStart,
+};
+// Where `point` is on the controller DrawControllerIcon draws at `center`, `size` tall. The
+// shoulders and the triggers, not drawn, are on its top edge; Back and Start where they sit on the
+// real controller.
+ImVec2 PadPointPosition(ImVec2 center, float size, PadLook look, PadPoint point);
+
 // A small left or right arrow, for the button hints.
 void DrawArrow(ImDrawList* draw_list, ImVec2 center, float size, bool left, ImU32 color);
 
@@ -48,5 +67,33 @@ void DrawArrow(ImDrawList* draw_list, ImVec2 center, float size, bool left, ImU3
 // its width.
 float DrawConfirmGlyph(ImDrawList* draw_list, ImFont* font, ImVec2 top_left, float unit,
                        const rex::input::DeviceInfo* pad, const char* enter, int alpha);
+
+// Whether a key or button that could have closed a menu is still held: Enter, Escape or Backspace
+// on the keyboard, or any button or trigger of the controllers `pads`. A menu that blocks the
+// game's input waits for them to be released before it closes, so the game does not take the
+// same press as its own (Escape would go back in the Options too).
+bool CloseInputHeld(rex::input::InputSystem* input, const std::vector<rex::input::DeviceId>& pads);
+
+// The input device the player last used in one of our menus: the keyboard and mouse, or a
+// controller. It starts as player 1's active device and follows every key, mouse button and
+// controller press, so a menu's glyphs follow the device in the player's hands as it changes.
+class LastUsedInput {
+ public:
+  explicit LastUsedInput(rex::input::InputSystem* input);
+  // Notes a key or mouse button pressed this frame (ImGui's), if any.
+  void NoteKeyboard();
+  // Notes a press on controller `id`.
+  void NotePad(rex::input::DeviceId id) {
+    keyboard_ = false;
+    pad_ = id;
+  }
+  bool keyboard() const { return keyboard_; }
+  // The controller last pressed, kInvalid until one is (or when the menu opened from the keyboard).
+  rex::input::DeviceId pad() const { return pad_; }
+
+ private:
+  bool keyboard_ = false;
+  rex::input::DeviceId pad_ = rex::input::DeviceId::kInvalid;
+};
 
 }  // namespace azura::coop_ui

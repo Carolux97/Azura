@@ -76,25 +76,41 @@ mnk_sensitivity = 1.0
 # matching keybind below, so put the key you want shown first.
 controller_icons = "auto"
 
+# Mouse look while aiming and while zoomed in, as mnk_sensitivity is the rest of the time; moving
+# the mouse forward looks down with mnk_invert_y; mnk_mouse_acceleration from 0 (none) to 1.
+mnk_aim_sensitivity = 1.0
+mnk_zoom_sensitivity = 1.0
+mnk_invert_y = false
+mnk_mouse_acceleration = 0.0
+# Aim with a press to start and another to stop; zoom while the bind is held (the game's own zoom
+# is a click in and a click out); roadie run with a press of keybind_run to start and another to
+# stop.
+mnk_aim_toggle = false
+mnk_zoom_hold = false
+mnk_run_toggle = false
+
 # ---------- Keybinds (Xbox 360 -> PC Gears of War 3) ----------
-keybind_a = "Space"                    # A: cover / roll / sprint / confirm in menus
-keybind_b = "F,Backspace"              # B: melee (F) / back in menus (Backspace)
-keybind_x = "E"                        # X: interact / pick up ammo or weapons / revive
-keybind_y = "V,C"                      # Y: point of interest / execution
-keybind_right_trigger = "LMB"          # RT: fire (left click)
-keybind_left_trigger = "RMB,Q"         # LT: aim (right click)
+# Options, Keyboard and mouse changes them in the game. The defaults follow Gears 5 on PC. Fixed,
+# whatever is bound: Escape and Return (Start), Backspace (B, back in menus) and the arrow keys
+# (D-pad). Mouse buttons: LMB, RMB, MMB, Mouse4, Mouse5, WheelUp, WheelDown.
+keybind_a = "Space"                    # A: cover / evade / mantle (hold: roadie run)
+keybind_b = "F"                        # B: melee / grenade tag (hold: chainsaw / bayonet)
+keybind_x = "E"                        # X: use / revive / meat shield (hold: pick up)
+keybind_y = "C,V"                      # Y: point of interest / curb stomp (hold: execute)
+keybind_right_trigger = "LMB"          # RT: shoot / throw grenade
+keybind_left_trigger = "RMB"           # LT: aim
 keybind_right_shoulder = "R"           # RB: reload / active reload
-keybind_left_shoulder = "Q"            # LB: Tac-Com (view objectives and squad)
-keybind_lstick_up = "W"                # Left stick up
-keybind_lstick_down = "S"              # Left stick down
+keybind_left_shoulder = "Shift"        # LB: Tac/Com / objectives
+keybind_lstick_up = "W"                # Left stick up: forward
+keybind_lstick_down = "S"              # Left stick down: back
 keybind_lstick_left = "A"              # Left stick left
 keybind_lstick_right = "D"             # Left stick right
-keybind_lstick_press = "Shift,Control" # L3: press the left stick
-keybind_rstick_press = "MMB,Z"         # R3: zoom while aiming (middle click or Z)
-keybind_dpad_up = "Up,4"               # D-pad up: grenades (4) / menu up
-keybind_dpad_down = "Down,3"           # D-pad down: pistol (3) / menu down
-keybind_dpad_left = "Left,1"           # D-pad left: weapon 1 (1) / menu left
-keybind_dpad_right = "Right,2"         # D-pad right: weapon 2 (2) / menu right
-keybind_start = "Return,Escape"        # Start: Enter (shown on prompts) / Escape (pause)
-keybind_back = "Tab"                   # Back: scoreboard
+keybind_lstick_press = "Ctrl,Q"        # L3: crouch in cover / mark a target while aiming
+keybind_rstick_press = "MMB,Z"         # R3: zoom while aiming
+keybind_dpad_left = "1,WheelUp"        # D-pad left: weapon 1
+keybind_dpad_right = "2,WheelDown"     # D-pad right: weapon 2
+keybind_dpad_down = "3"                # D-pad down: pistol
+keybind_dpad_up = "4"                  # D-pad up: grenades
+keybind_back = "Tab"                   # Back: skip cinematics / scoreboard
+keybind_run = ""                       # Roadie run on a key of its own (holds A)
 

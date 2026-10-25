@@ -18,6 +18,19 @@ indented lines.
 - The mouse turns the camera directly, as in a PC game: no dead zone for slow aiming, no limit on
   fast turns, and the camera stops as soon as the mouse does. Mouse sensitivity now sets the turn
   per pixel; if you raised it before, lower it again.
+- Controls: in the game's Options, Controller and Keyboard and mouse open menus of their own.
+  Controller offers the game's schemes (Default, Alternate) and a Custom one where any button can
+  take another's action, shows what each does around a drawing of your controller, and has the
+  game's controller settings (inverted axes, sensitivities, vibration and the rest). Keyboard and
+  mouse gives every action two keys or mouse buttons (side buttons and the wheel included), and
+  has the mouse settings: sensitivity for looking, aiming and zooming, inverted Y, acceleration,
+  and pressing instead of holding to aim, zoom and roadie run.
+- New keyboard and mouse defaults closer to Gears of War on PC, with no key doing two things.
+  Keys you changed before are kept; Defaults in the Keyboard and mouse menu brings the new ones.
+- In the menus Enter accepts and Esc goes back, as on a PC; in play Esc pauses, and on the title
+  screen Enter starts. The main menu has an Options entry instead of Start's button.
+- The button prompts in Azura's menus follow the device in your hands, keyboard and mouse or
+  controller, and change as soon as you use another.
 - On Linux, the game and the programs the launcher starts use your system's libraries instead of
   the launcher's own copies (it fixes keyboard errors in the game log on newer systems).
 - Windows (10 and 11, x86-64): the launcher comes as an installer, builds the game from your copy
