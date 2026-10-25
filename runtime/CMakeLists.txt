@@ -126,6 +126,12 @@ add_executable(azura_glyph_sheet EXCLUDE_FROM_ALL
     src/prompts/glyph_art.cpp
     src/prompts/glyph_raster.cpp
 )
+target_compile_definitions(azura_glyph_sheet PRIVATE
+    AZURA_LEGEND_FONT="${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/Barlow-SemiBold.ttf")
+# The glyphs' smooth letters use ImGui's stb_truetype (imstb_truetype.h).
+if(TARGET imgui)
+    target_include_directories(azura_glyph_sheet PRIVATE $<TARGET_PROPERTY:imgui,INTERFACE_INCLUDE_DIRECTORIES>)
+endif()
 
 # Unit tests for the button prompt engine and the controller assignment (synthetic data only). Catch2 comes with the SDK source
 # tree; it is added here on its own so the SDK's much larger test suite is not built.
@@ -141,6 +147,9 @@ if(REXSDK_DIR)
         src/prompts/glyph_raster.cpp
         src/prompts/xenos_dxt5.cpp
     )
+    target_include_directories(azura_prompts_tests PRIVATE ${REXSDK_DIR}/thirdparty/imgui)
+    target_compile_definitions(azura_prompts_tests PRIVATE
+        AZURA_LEGEND_FONT="${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/Barlow-SemiBold.ttf")
     target_link_libraries(azura_prompts_tests PRIVATE Catch2::Catch2WithMain)
     add_test(NAME azura_prompts_tests COMMAND azura_prompts_tests)
     # Which controller plays which player: the policy alone, with the SDK's input headers.

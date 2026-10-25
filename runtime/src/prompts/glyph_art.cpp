@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <functional>
 #include <numbers>
 #include <unordered_map>
 
@@ -32,6 +33,7 @@ constexpr Rgb kPsCross{92, 170, 255};
 constexpr Rgb kPsCircle{255, 82, 82};
 constexpr Rgb kPsSquare{255, 120, 205};
 constexpr Rgb kPsTriangle{40, 220, 140};
+constexpr Rgb kPsSymbolGrey{200, 206, 218};
 
 ColorFn Solid(Rgb c) {
   return [c](float, float) { return c; };
@@ -92,6 +94,11 @@ const Bitmap& SymbolArrowRight() {
 }
 const Bitmap& SymbolOptions() {
   static const Bitmap b = BitmapFromRows({"#######", ".......", "#######", ".......", "#######"});
+  return b;
+}
+// The DualSense's Create (and the DualShock 4's Share): three short rays bursting upwards.
+const Bitmap& SymbolCreate() {
+  static const Bitmap b = BitmapFromRows({"#..#..#", "#..#..#", ".#.#.#.", ".#.#.#.", "..###.."});
   return b;
 }
 const Bitmap& SymbolMove() {
@@ -234,70 +241,9 @@ KeyFace DescribeKey(std::string_view name) {
   return TextKey("?", '?');
 }
 
-// --- Omen style helpers -------------------------------------------------------------------------
+// --- PC style helpers ---------------------------------------------------------------------------
 
-// Roughens a shape's edge like an ink stain: two octaves of noise added to its distance.
-Sdf Ragged(Sdf shape, uint32_t seed, float amplitude) {
-  return [shape = std::move(shape), seed, amplitude](float x, float y) {
-    return shape(x, y) + amplitude * (ValueNoise(x, y, seed, 2.6f) * 0.7f +
-                                      ValueNoise(x, y, seed + 7, 1.2f) * 0.3f);
-  };
-}
-
-// Adds thin tapered spikes sticking out of the silhouette, like the thorny branches of the art.
-Sdf Thorns(Sdf shape, float cx, float cy, uint32_t seed, int count) {
-  struct Spike {
-    float x1, y1, x2, y2;
-  };
-  std::vector<Spike> spikes;
-  for (int i = 0; i < count; ++i) {
-    const float angle = Hash01(i, 3, seed) * 2.0f * std::numbers::pi_v<float>;
-    const float dx = std::cos(angle);
-    const float dy = std::sin(angle);
-    float ex = cx;
-    float ey = cy;
-    for (int step = 0; step < 80; ++step) {  // walk out to the edge
-      ex = cx + dx * step * 0.5f;
-      ey = cy + dy * step * 0.5f;
-      if (shape(ex, ey) > 0) {
-        break;
-      }
-    }
-    const float length = 1.6f + Hash01(i, 9, seed) * 1.8f;
-    spikes.push_back({ex - dx * 1.5f, ey - dy * 1.5f, ex + dx * length, ey + dy * length});
-  }
-  return [shape = std::move(shape), spikes](float x, float y) {
-    float d = shape(x, y);
-    for (const auto& s : spikes) {
-      const float sx = s.x2 - s.x1;
-      const float sy = s.y2 - s.y1;
-      const float t = std::clamp(((x - s.x1) * sx + (y - s.y1) * sy) / (sx * sx + sy * sy), 0.0f, 1.0f);
-      const float half = 0.75f * (1.0f - t) + 0.05f;
-      d = std::min(d, std::hypot(x - (s.x1 + t * sx), y - (s.y1 + t * sy)) - half);
-    }
-    return d;
-  };
-}
-
-// Amber light spilling around a silhouette: alpha falls off with distance from its edge.
-void Backlight(Canvas& canvas, const Sdf& shape, float reach, float strength) {
-  for (int y = 0; y < canvas.height(); ++y) {
-    for (int x = 0; x < canvas.width(); ++x) {
-      const float d = shape(x + 0.5f, y + 0.5f);
-      if (d <= 0) {
-        continue;
-      }
-      const float a = strength * std::exp(-d / (reach * 0.45f));
-      if (a > 0.02f) {
-        const float t = std::min(1.0f, d / reach);
-        canvas.Blend(x, y,
-                     Rgb{kAmber.r + (kAmberDeep.r - kAmber.r) * t, kAmber.g + (kAmberDeep.g - kAmber.g) * t,
-                         kAmber.b + (kAmberDeep.b - kAmber.b) * t},
-                     a);
-      }
-    }
-  }
-}
+constexpr uint32_t kRaggedSeed = 11;
 
 // Picks the legend bitmap for a key face that has to fit in max_w x max_h.
 Bitmap LegendFor(const KeyFace& face, int max_w, int max_h, bool* is_symbol) {
@@ -312,20 +258,38 @@ Bitmap LegendFor(const KeyFace& face, int max_w, int max_h, bool* is_symbol) {
   // 3x5, dropping trailing characters until it fits.
   std::string text = face.text;
   while (!text.empty()) {
-    Bitmap small = TextBitmap(text, true);
-    if (!small.empty() && small.width <= max_w) {
-      return small;
+    Bitmap small_text = TextBitmap(text, true);
+    if (!small_text.empty() && small_text.width <= max_w) {
+      return small_text;
     }
     text.pop_back();
   }
   return TextBitmap("?", true);
 }
 
-// Draws a lit legend (or legend plus caption) centred on (cx, cy).
-void DrawLitLegend(Canvas& canvas, const KeyFace& face, float cx, float cy, int max_w, int max_h) {
+// Draws a key's lit legend (or legend plus caption) centred on (cx, cy).
+void DrawLegend(Canvas& canvas, const KeyFace& face, float cx, float cy, int max_w, int max_h) {
   const bool has_caption = !face.caption.empty();
   const Bitmap caption = has_caption ? TextBitmap(face.caption, true) : Bitmap{};
   const int legend_h = has_caption ? max_h - caption.height - 1 : max_h;
+  // Letters and digits in the smooth legend font, as large as the key allows.
+  if (!face.symbol && HasLegendFont()) {
+    for (float cap = std::min(legend_h * 0.78f, 12.0f); cap >= 5.0f; cap -= 0.5f) {
+      const Coverage text = TextCoverage(face.text, cap);
+      if (text.empty() || text.width > max_w) continue;
+      const float total_h = text.cap_rows + (has_caption ? caption.height + 2 : 0);
+      const float top = cy - total_h / 2.0f;
+      if (has_caption) {
+        DrawBitmap(canvas, caption, cx, top + caption.height / 2.0f, 1, Solid(kAmberDeep));
+      }
+      // Centred by the capitals; the gradient runs over them too.
+      const int x = static_cast<int>(std::lround(cx - text.width / 2.0f));
+      const int cap_y = static_cast<int>(std::lround(top + (has_caption ? caption.height + 2 : 0)));
+      DrawCoverage(canvas, text, x, cap_y - text.cap_top,
+                   VerticalGradient(kAmberHot, kAmber, static_cast<float>(cap_y), static_cast<float>(cap_y + text.cap_rows)));
+      return;
+    }
+  }
   bool is_symbol = false;
   const Bitmap legend = LegendFor(face, max_w, legend_h, &is_symbol);
   const int scale = FitScale(legend, max_w, legend_h);
@@ -337,135 +301,321 @@ void DrawLitLegend(Canvas& canvas, const KeyFace& face, float cx, float cy, int 
     DrawBitmap(canvas, caption, cx, top + caption.height / 2.0f, 1, Solid(kAmberDeep));
   }
   const float legend_cy = top + (has_caption ? caption.height + 1 : 0) + legend.height * scale / 2.0f;
-  const float y0 = legend_cy - legend.height * scale / 2.0f;
-  DrawBitmap(canvas, legend, cx, legend_cy, scale,
-             VerticalGradient(kAmberHot, kAmber, y0, y0 + legend.height * scale), bold);
+  DrawBitmap(canvas, legend, cx, legend_cy, scale, VerticalGradient(kAmberHot, kAmber, legend_cy - legend.height * scale / 2.0f, legend_cy + legend.height * scale / 2.0f), bold);
+}
+
+// Roughens a shape's edge like an ink stain: two octaves of noise added to its distance.
+Sdf Ragged(Sdf shape, uint32_t seed, float amplitude) {
+  return [shape = std::move(shape), seed, amplitude](float x, float y) {
+    return shape(x, y) + amplitude * (ValueNoise(x, y, seed, 2.6f) * 0.7f +
+                                      ValueNoise(x, y, seed + 7, 1.2f) * 0.3f);
+  };
+}
+
+// A key of the Gears art: a black silhouette with a slightly ragged edge, rimmed by amber light,
+// with a barely visible top. The rim is opaque and crisp rather than a soft glow: the game draws
+// its text with a shadow from the glyph's alpha, which turns a glow into a smudge behind the key.
+void FillKeyCap(Canvas& canvas, const Sdf& cap, float top, float bottom) {
+  const Sdf stain = Ragged(cap, kRaggedSeed, 0.35f);
+  canvas.Fill(Inset(stain, -1.1f), VerticalGradient(kAmber, kAmberDeep, top, bottom));
+  canvas.Fill(stain, kOmenBlack);
+  canvas.Fill(Inset(stain, 1.6f), kOmenFace);
 }
 
 // --- PC glyphs ----------------------------------------------------------------------------------
 
-void DrawOmenKey(Canvas& canvas, const KeyFace& face, uint32_t seed) {
+void DrawKey(Canvas& canvas, const KeyFace& face) {
   const float w = static_cast<float>(canvas.width());
   const float h = static_cast<float>(canvas.height());
-  const float half_w = w / 2.0f - 2.2f;
-  const float key_h = h * (face.wide ? 0.74f : 0.84f);
+  const float half_w = w / 2.0f - 1.6f;
+  const float key_h = h * (face.wide ? 0.70f : 0.80f);
   const float top = (h - key_h) / 2.0f;
   const float cy = top + key_h / 2.0f;
-  Sdf blot = Thorns(Ragged(RoundedRect(w / 2, cy, half_w, key_h / 2, 3.5f), seed, 0.9f), w / 2, cy, seed, 3);
-  Backlight(canvas, blot, 4.0f, 1.0f);
-  canvas.Fill(blot, kOmenBlack);
-  // A barely visible key top, so the stain still reads as a key.
-  canvas.Fill(Ragged(RoundedRect(w / 2, cy - 1, half_w - 2.2f, key_h / 2 - 2.6f, 2.0f), seed + 3, 0.4f),
-              kOmenFace);
-  const int max_w = static_cast<int>(2 * (half_w - 1.1f));
-  const int max_h = static_cast<int>(key_h - 5);
-  DrawLitLegend(canvas, face, w / 2, cy - 1, max_w, max_h);
+  FillKeyCap(canvas, RoundedRect(w / 2, cy, half_w, key_h / 2, 3.0f), top, top + key_h);
+  const int max_w = static_cast<int>(2 * half_w - 3);
+  const int max_h = static_cast<int>(key_h - 4);
+  DrawLegend(canvas, face, w / 2, cy, max_w, max_h);
 }
 
-// The mouse: an egg-shaped silhouette with seams of light. `lit` is the button the prompt is for;
-// kNone with `look` set draws the movement arrows instead.
-void DrawOmenMouse(Canvas& canvas, MouseButton lit, bool look, uint32_t seed) {
+// The mouse: a black egg rimmed in amber, with seams of light. `lit` is the button the prompt is
+// for; kNone with `look` set draws the movement arrows instead.
+void DrawMouse(Canvas& canvas, MouseButton lit, bool look) {
   const float w = static_cast<float>(canvas.width());
   const float h = static_cast<float>(canvas.height());
   const bool side = lit == MouseButton::kBack || lit == MouseButton::kForward;
   // Leave room on the left for the side buttons when they are the prompt.
   const float cx = w / 2.0f + (side ? 1.2f : 0.0f);
   const float cy = h / 2.0f;
-  const float half_w = std::min(w / 2.0f - 1.9f - (side ? 1.2f : 0.0f), h * 0.40f);
-  const float half_h = h / 2.0f - 1.8f;
+  const float half_w = std::min(w / 2.0f - 1.6f - (side ? 1.2f : 0.0f), h * 0.40f);
+  const float half_h = h / 2.0f - 1.6f;
   Sdf egg = [=](float x, float y) {
     const float k = half_w * (0.86f + 0.14f * std::clamp((y - (cy - half_h)) / (2 * half_h), 0.0f, 1.0f));
     const float m = std::min(k, half_h);
     return std::hypot((x - cx) / k, (y - cy) / half_h) * m - m;
   };
-  Sdf blot = Thorns(Ragged(egg, seed, 0.9f), cx, cy, seed, 2);
-  Backlight(canvas, blot, 4.0f, 1.0f);
-  canvas.Fill(blot, kOmenBlack);
+  FillKeyCap(canvas, egg, cy - half_h, cy + half_h);
 
   const float split_y = cy - half_h * 0.02f;
-  const ColorFn lit_grad = VerticalGradient(kAmberHot, kAmber, cy - half_h, split_y);
   if (lit == MouseButton::kLeft || lit == MouseButton::kRight) {
     const bool left = lit == MouseButton::kLeft;
     canvas.Fill(
         [=](float x, float y) {
           const float side_d = left ? x - (cx - 0.7f) : (cx + 0.7f) - x;
-          return std::max({egg(x, y) + 1.6f, y - split_y + 0.6f, side_d});
+          return std::max({egg(x, y) + 0.4f, y - split_y + 0.6f, side_d});
         },
-        lit_grad);
+        VerticalGradient(kAmberHot, kAmber, cy - half_h, split_y));
   }
-  // Light leaking through the seams.
-  canvas.Fill([=](float x, float y) { return std::max(egg(x, y) + 1.4f, std::abs(y - split_y) - 0.45f); },
+  // The seams between the buttons and down the middle.
+  canvas.Fill([=](float x, float y) { return std::max(egg(x, y) + 0.4f, std::abs(y - split_y) - 0.5f); },
               kAmberDeep);
   canvas.Fill(
       [=](float x, float y) {
-        return std::max({egg(x, y) + 1.4f, y - split_y, std::abs(x - cx) - 0.45f});
+        return std::max({egg(x, y) + 0.4f, y - split_y, std::abs(x - cx) - 0.5f});
       },
       kAmberDeep);
   // Wheel.
   Sdf wheel = RoundedRect(cx, cy - half_h * 0.50f, 1.3f, half_h * 0.20f, 1.2f);
-  canvas.Fill(Inset(wheel, -0.7f), kOmenBlack);
+  canvas.Fill(Inset(wheel, -0.8f), kOmenBlack);
   const bool wheel_lit = lit == MouseButton::kMiddle || lit == MouseButton::kWheelUp || lit == MouseButton::kWheelDown;
   canvas.Fill(wheel, wheel_lit ? kAmberHot : kAmberDeep);
   // Turning the wheel: an arrow below it, up or down.
   if (lit == MouseButton::kWheelUp || lit == MouseButton::kWheelDown) {
     const Bitmap& arrow = lit == MouseButton::kWheelUp ? SymbolArrowUp() : SymbolArrowDown();
-    const float ay = cy + half_h * 0.40f;
-    DrawBitmap(canvas, arrow, cx, ay, 1, VerticalGradient(kAmberHot, kAmber, ay - 3, ay + 3));
+    DrawBitmap(canvas, arrow, cx, cy + half_h * 0.40f, 1, VerticalGradient(kAmberHot, kAmber, 0, static_cast<float>(canvas.height())));
   }
   // Side buttons, on the thumb side: forward above, back below.
   if (side) {
     const float sx = cx - half_w * 0.93f;
     const float fy = cy - half_h * 0.02f + 2.0f;
     const float by = fy + 4.2f;
-    canvas.Fill(Inset(RoundedRect(sx, fy, 1.5f, 1.7f, 0.8f), -0.7f), kOmenBlack);
-    canvas.Fill(Inset(RoundedRect(sx, by, 1.5f, 1.7f, 0.8f), -0.7f), kOmenBlack);
+    canvas.Fill(Inset(RoundedRect(sx, fy, 1.5f, 1.7f, 0.8f), -0.8f), kOmenBlack);
+    canvas.Fill(Inset(RoundedRect(sx, by, 1.5f, 1.7f, 0.8f), -0.8f), kOmenBlack);
     canvas.Fill(RoundedRect(sx, fy, 1.5f, 1.7f, 0.8f), lit == MouseButton::kForward ? kAmberHot : kAmberDeep);
     canvas.Fill(RoundedRect(sx, by, 1.5f, 1.7f, 0.8f), lit == MouseButton::kBack ? kAmberHot : kAmberDeep);
   }
   if (look) {
-    const Bitmap& move = SymbolMove();
-    const float my = cy + half_h * 0.45f;
-    DrawBitmap(canvas, move, cx, my, 1, VerticalGradient(kAmberHot, kAmber, my - 3, my + 3));
+    DrawBitmap(canvas, SymbolMove(), cx, cy + half_h * 0.45f, 1, VerticalGradient(kAmberHot, kAmber, 0, static_cast<float>(canvas.height())));
   }
 }
 
-// A small key for the WASD-style groups: a ragged black block with one 3x5 character.
-void DrawMiniKey(Canvas& canvas, float x0, float y0, float w, float h, const KeyFace& face, uint32_t seed) {
-  const float cx = x0 + w / 2;
-  const float cy = y0 + h / 2;
-  canvas.Fill(Ragged(RoundedRect(cx, cy, w / 2 - 0.3f, h / 2 - 0.3f, 1.4f), seed, 0.45f), kOmenBlack);
-  const Bitmap legend = TextBitmap(std::string(1, face.mini), true);
-  DrawBitmap(canvas, legend, cx, cy, 1, VerticalGradient(kAmberHot, kAmber, cy - 2.5f, cy + 2.5f));
+// The direction an arrow key points in (0 up, 1 down, 2 left, 3 right), or -1 for any other key.
+int ArrowDirection(const KeyFace& face) {
+  if (face.symbol == &SymbolArrowUp()) return 0;
+  if (face.symbol == &SymbolArrowDown()) return 1;
+  if (face.symbol == &SymbolArrowLeft()) return 2;
+  if (face.symbol == &SymbolArrowRight()) return 3;
+  return -1;
 }
 
-void DrawCross(Canvas& canvas, const std::vector<std::string>& keys, uint32_t seed) {
+// A filled triangle pointing in `direction` (as ArrowDirection), `half` pixels from its centre to
+// its tip: negative inside, the largest of its edges' signed distances.
+Sdf Arrowhead(float cx, float cy, float half, int direction) {
+  const float dx[4] = {0, 0, -1, 1};
+  const float dy[4] = {-1, 1, 0, 0};
+  const float fx = dx[direction], fy = dy[direction];  // towards the tip
+  const float px = -fy, py = fx;                       // across
+  const float tip_x = cx + fx * half, tip_y = cy + fy * half;
+  const float back = half * 0.8f;
+  const float b1x = cx - fx * back + px * half, b1y = cy - fy * back + py * half;
+  const float b2x = cx - fx * back - px * half, b2y = cy - fy * back - py * half;
+  // Signed distance to each edge, negative on the triangle's side: the vertices' turn says which
+  // side of the edges (taken in order) that is.
+  const float turn = (b1x - tip_x) * (b2y - tip_y) - (b1y - tip_y) * (b2x - tip_x);
+  const float inward = turn > 0 ? -1.0f : 1.0f;
+  auto edge = [inward](float ax, float ay, float bx, float by, float x, float y) {
+    const float ex = bx - ax, ey = by - ay;
+    return inward * (ex * (y - ay) - ey * (x - ax)) / std::hypot(ex, ey);
+  };
+  return [=](float x, float y) {
+    return std::max({edge(tip_x, tip_y, b1x, b1y, x, y), edge(b1x, b1y, b2x, b2y, x, y),
+                     edge(b2x, b2y, tip_x, tip_y, x, y)});
+  };
+}
+
+// A small key for the WASD-style groups: a key with one 3x5 character, or for an arrow key an
+// arrowhead, the same size whichever way it points.
+void DrawMiniKey(Canvas& canvas, float x0, float y0, float w, float h, const KeyFace& face) {
+  const float cx = x0 + w / 2;
+  const float cy = y0 + h / 2;
+  FillKeyCap(canvas, RoundedRect(cx, cy, w / 2 - 1.0f, h / 2 - 1.0f, 1.2f), y0, y0 + h);
+  if (const int direction = ArrowDirection(face); direction >= 0) {
+    const float half = std::max(1.5f, std::min(w, h) / 2 - 1.4f);
+    canvas.Fill(Arrowhead(cx, cy, half, direction), VerticalGradient(kAmberHot, kAmber, cy - half, cy + half));
+    return;
+  }
+  DrawBitmap(canvas, TextBitmap(std::string(1, face.mini), true), cx, cy, 1, VerticalGradient(kAmberHot, kAmber, 0, static_cast<float>(canvas.height())));
+}
+
+// One legend of a group drawn without a key of its own (CompactCross, CompactPair): the key's
+// character in the smooth legend font, or in the 5x7 pixel font without it.
+struct Legend {
+  Bitmap bitmap;
+  Coverage coverage;
+
+  bool empty() const { return bitmap.empty() && coverage.empty(); }
+  int width() const { return coverage.empty() ? bitmap.width : coverage.width; }
+  // The capitals' height: what the group lines up and centres.
+  int height() const { return coverage.empty() ? bitmap.height : coverage.cap_rows; }
+  // Draws it with the top left of its capitals at whole pixel (x, y).
+  void Draw(Canvas& canvas, int x, int y, const ColorFn& color) const {
+    if (!coverage.empty()) {
+      DrawCoverage(canvas, coverage, x, y - coverage.cap_top, color);
+    } else {
+      DrawBitmap(canvas, bitmap, x + bitmap.width / 2.0f, y + bitmap.height / 2.0f, 1, color);
+    }
+  }
+};
+
+// The legend of a group's key with capitals `cap_height` tall. Empty when the key has no single
+// character to show (a mouse button, a symbol).
+Legend GroupLegend(const KeyFace& face, float cap_height) {
+  Legend legend;
+  if (face.mouse != MouseButton::kNone || face.symbol) return legend;
+  const std::string text = face.text.size() == 1 ? face.text : std::string(1, face.mini);
+  if (HasLegendFont()) {
+    legend.coverage = TextCoverage(text, cap_height);
+  } else {
+    legend.bitmap = TextBitmap(text, false);
+  }
+  return legend;
+}
+
+// The legends of `keys` with the largest capitals, from `max_cap` down, that pass `fits`; empty
+// when a key has no single character or none fits.
+std::vector<Legend> FitGroup(const std::vector<std::string>& keys, size_t count, float max_cap,
+                             const std::function<bool(const std::vector<Legend>&)>& fits) {
+  for (float cap = max_cap; cap >= 5.0f; cap -= 0.5f) {
+    std::vector<Legend> legends;
+    for (size_t i = 0; i < count; ++i) {
+      Legend l = GroupLegend(DescribeKey(i < keys.size() ? keys[i] : "?"), cap);
+      if (l.empty()) return {};
+      legends.push_back(std::move(l));
+    }
+    if (fits(legends)) return legends;
+    if (!HasLegendFont()) break;  // the pixel font has one size
+  }
+  return {};
+}
+
+// Draws `legends` left to right with `gap` pixels between them, on whole pixels, centred on
+// (cx, cy). Returns the left edge of each.
+std::vector<int> DrawLegendRow(Canvas& canvas, const std::vector<Legend>& legends, int gap, float cx, float cy) {
+  int total = gap * (static_cast<int>(legends.size()) - 1);
+  int height = 0;
+  for (const Legend& l : legends) {
+    total += l.width();
+    height = std::max(height, l.height());
+  }
+  int x = static_cast<int>(std::lround(cx - total / 2.0f));
+  const int top = static_cast<int>(std::lround(cy - height / 2.0f));
+  const ColorFn lit = VerticalGradient(kAmberHot, kAmber, static_cast<float>(top), static_cast<float>(top + height));
+  std::vector<int> lefts;
+  for (const Legend& l : legends) {
+    l.Draw(canvas, x, top + height - l.height(), lit);
+    lefts.push_back(x);
+    x += l.width() + gap;
+  }
+  return lefts;
+}
+
+// A WASD-style group in a narrow slot, where a key each would leave a legend of three pixels: two
+// keys as on a keyboard, up alone on top and a wide one below with the other three characters,
+// each with its own rim. False when they do not fit (the caller draws a key each).
+bool CompactCross(Canvas& canvas, const std::vector<std::string>& keys) {
+  const int w = canvas.width();
+  const int h = canvas.height();
+  constexpr float kPad = 2.0f;  // from a key's characters to its rim, vertically
+  constexpr float kKeysGap = 2.0f;
+  const float bottom_half_w = w / 2.0f - 1.2f;
+  // keys = {up, left, down, right}: each one character to show.
+  std::string chars;
+  for (int i = 0; i < 4; ++i) {
+    const KeyFace face = DescribeKey(i < static_cast<int>(keys.size()) ? keys[i] : "?");
+    if (face.mouse != MouseButton::kNone || face.symbol) return false;
+    chars += face.text.size() == 1 ? face.text : std::string(1, face.mini);
+  }
+  // The bottom row decides the size, set as one word so the font spaces it: it has to fit the
+  // slot's width. Up is a size larger, alone on its key. Without the font, the 5x7 pixel font.
+  Legend up, bottom;
+  for (float cap = 7.0f; cap >= 4.5f; cap -= 0.5f) {
+    if (HasLegendFont()) {
+      bottom.coverage = TextCoverage(chars.substr(1), cap);
+      up.coverage = TextCoverage(chars.substr(0, 1), cap + 1.0f);
+    } else {
+      bottom.bitmap = TextBitmap(chars.substr(1), false);
+      up.bitmap = TextBitmap(chars.substr(0, 1), false);
+    }
+    // The antialiased fringe of the outer letters may touch the key's black edge, not its rim.
+    const bool fits = !bottom.empty() && !up.empty() && bottom.width() <= w - 1 &&
+                      up.height() + bottom.height() + 4 * kPad + kKeysGap + 2 <= h;
+    if (fits) break;
+    if (!HasLegendFont()) return false;  // the pixel font has one size
+    bottom = {};
+  }
+  if (bottom.empty()) return false;
+  const float top_key_h = up.height() + 2 * kPad;
+  const float bottom_key_h = bottom.height() + 2 * kPad;
+  const float top = (h - (top_key_h + kKeysGap + bottom_key_h)) / 2.0f;
+  const float cx = w / 2.0f;
+  const float top_cy = top + top_key_h / 2.0f;
+  const float bottom_cy = top + top_key_h + kKeysGap + bottom_key_h / 2.0f;
+  FillKeyCap(canvas, RoundedRect(cx, top_cy, up.width() / 2.0f + 1.8f, top_key_h / 2.0f, 2.0f), top, top + top_key_h);
+  FillKeyCap(canvas, RoundedRect(cx, bottom_cy, bottom_half_w, bottom_key_h / 2.0f, 2.0f), bottom_cy - bottom_key_h / 2.0f,
+             bottom_cy + bottom_key_h / 2.0f);
+  DrawLegendRow(canvas, {up}, 0, cx, top_cy);
+  DrawLegendRow(canvas, {bottom}, 0, cx, bottom_cy);
+  return true;
+}
+
+void DrawCross(Canvas& canvas, const std::vector<std::string>& keys) {
+  if (CompactCross(canvas, keys)) return;
   const float w = static_cast<float>(canvas.width());
   const float h = static_cast<float>(canvas.height());
   const float cell_w = std::floor(w / 3.0f);
   const float cell_h = std::min(cell_w + 2.0f, std::floor((h - 2.0f) / 2.0f));
   const float x0 = (w - 3 * cell_w) / 2.0f;
   const float y0 = std::floor((h - (2 * cell_h + 1)) / 2.0f);
-  struct Cell {
-    float x, y;
-  };
   // keys = {up, left, down, right}
-  const Cell cells[4] = {{x0 + cell_w, y0}, {x0, y0 + cell_h + 1}, {x0 + cell_w, y0 + cell_h + 1},
-                         {x0 + 2 * cell_w, y0 + cell_h + 1}};
-  Sdf all = [=](float x, float y) {
-    float d = 1e9f;
-    for (const auto& c : cells) {
-      d = std::min(d, RoundedRect(c.x + cell_w / 2, c.y + cell_h / 2, cell_w / 2, cell_h / 2, 1.4f)(x, y));
-    }
-    return d;
-  };
-  Backlight(canvas, all, 2.0f, 0.9f);
+  const float cells[4][2] = {{x0 + cell_w, y0}, {x0, y0 + cell_h + 1}, {x0 + cell_w, y0 + cell_h + 1},
+                             {x0 + 2 * cell_w, y0 + cell_h + 1}};
   for (int i = 0; i < 4; ++i) {
     const KeyFace face = DescribeKey(i < static_cast<int>(keys.size()) ? keys[i] : "?");
-    DrawMiniKey(canvas, cells[i].x, cells[i].y, cell_w, cell_h, face, seed + i * 11);
+    DrawMiniKey(canvas, cells[i][0], cells[i][1], cell_w, cell_h, face);
   }
 }
 
-void DrawPair(Canvas& canvas, const std::vector<std::string>& keys, uint32_t seed) {
+// Two keys in a narrow slot: one key with both characters and a dim slash between them, as two
+// keys of one prompt. False when they do not fit (the caller draws a key each).
+bool CompactPair(Canvas& canvas, const std::vector<std::string>& keys) {
+  const int w = canvas.width();
+  const int h = canvas.height();
+  constexpr int kGap = 1;
+  const std::vector<Legend> legends = FitGroup(keys, 2, 10.0f, [&](const std::vector<Legend>& l) {
+    const int slash_w = std::max(3, l[0].height() / 3);
+    return l[0].width() + slash_w + l[1].width() + 2 * kGap + 6 <= w && std::max(l[0].height(), l[1].height()) + 6 <= h;
+  });
+  if (legends.empty()) return false;
+  const int row_h = std::max(legends[0].height(), legends[1].height());
+  const int slash_w = std::max(3, row_h / 3);
+  const int total = legends[0].width() + slash_w + legends[1].width() + 2 * kGap;
+  const float cx = w / 2.0f;
+  const float cy = h / 2.0f;
+  const float half_h = row_h / 2.0f + 2.0f;
+  FillKeyCap(canvas, RoundedRect(cx, cy, total / 2.0f + 2.0f, half_h, 2.5f), cy - half_h, cy + half_h);
+  const int left = static_cast<int>(std::lround(cx - total / 2.0f));
+  const int top = static_cast<int>(std::lround(cy - row_h / 2.0f));
+  const ColorFn lit = VerticalGradient(kAmberHot, kAmber, static_cast<float>(top), static_cast<float>(top + row_h));
+  legends[0].Draw(canvas, left, top + row_h - legends[0].height(), lit);
+  legends[1].Draw(canvas, left + legends[0].width() + slash_w + 2 * kGap, top + row_h - legends[1].height(), lit);
+  // The slash dimmer than the legends, so it reads as a separator and not as a key.
+  const float sx = left + legends[0].width() + kGap + slash_w / 2.0f;
+  canvas.Fill(Segment(sx + slash_w / 2.0f - 0.5f, top + 0.5f, sx - slash_w / 2.0f + 0.5f, top + row_h - 0.5f, 0.55f),
+              kAmberDeep);
+  return true;
+}
+
+void DrawPair(Canvas& canvas, const std::vector<std::string>& keys) {
+  if (CompactPair(canvas, keys)) return;
   const int w = canvas.width();
   const int h = canvas.height();
   const int half = w / 2;
@@ -473,9 +623,9 @@ void DrawPair(Canvas& canvas, const std::vector<std::string>& keys, uint32_t see
     Canvas part(half, h);
     const KeyFace face = DescribeKey(i < static_cast<int>(keys.size()) ? keys[i] : "?");
     if (face.mouse != MouseButton::kNone) {
-      DrawOmenMouse(part, face.mouse, false, seed + i * 5);
+      DrawMouse(part, face.mouse, false);
     } else {
-      DrawOmenKey(part, face, seed + i * 5);
+      DrawKey(part, face);
     }
     const auto rgba = part.ToRgba8();
     const int ox = i == 0 ? 0 : w - half;
@@ -490,7 +640,24 @@ void DrawPair(Canvas& canvas, const std::vector<std::string>& keys, uint32_t see
 
 // --- PlayStation glyphs -------------------------------------------------------------------------
 
+// A PlayStation label in the smooth legend font: white with a dark shadow, its capitals centred on
+// (cx, cy), as large as fits. False without the font.
+bool PsSmoothLabel(Canvas& canvas, std::string_view label, float cx, float cy, int max_w, int max_h) {
+  if (!HasLegendFont()) return false;
+  for (float cap = std::min(max_h * 0.9f, 12.0f); cap >= 5.0f; cap -= 0.5f) {
+    const Coverage text = TextCoverage(label, cap);
+    if (text.empty() || text.width > max_w) continue;
+    const int x = static_cast<int>(std::lround(cx - text.width / 2.0f));
+    const int y = static_cast<int>(std::lround(cy - text.cap_rows / 2.0f)) - text.cap_top;
+    DrawCoverage(canvas, text, x + 1, y + 1, Solid(kInk));
+    DrawCoverage(canvas, text, x, y, Solid(kWhite));
+    return true;
+  }
+  return false;
+}
+
 void PsLabel(Canvas& canvas, std::string_view label, float cx, float cy, int max_w, int max_h) {
+  if (PsSmoothLabel(canvas, label, cx, cy, max_w, max_h)) return;
   Bitmap rows = TextBitmap(label, false);
   if (rows.empty() || rows.width > max_w) {
     rows = TextBitmap(label, true);
@@ -499,7 +666,7 @@ void PsLabel(Canvas& canvas, std::string_view label, float cx, float cy, int max
   DrawBitmap(canvas, rows, cx, cy, scale, Solid(kWhite), scale == 1 && rows.width + 1 <= max_w, &kInk);
 }
 
-void DrawPsFace(Canvas& canvas, PadButton button) {
+void DrawPsFace(Canvas& canvas, PadButton button, PsModel model) {
   const float w = static_cast<float>(canvas.width());
   const float h = static_cast<float>(canvas.height());
   const float cx = w / 2;
@@ -509,24 +676,25 @@ void DrawPsFace(Canvas& canvas, PadButton button) {
   canvas.Fill(Ring(cx, cy, r - 0.6f, 0.6f), kPsHole);
   const float s = r * 0.50f;                    // symbol half-size
   const float t = std::max(1.05f, r * 0.13f);  // stroke half-width
+  const bool grey = model == PsModel::kDualSense;
   switch (button) {
     case PadButton::kA:
       canvas.Fill(Union({Segment(cx - s, cy - s, cx + s, cy + s, t), Segment(cx + s, cy - s, cx - s, cy + s, t)}),
-                  kPsCross);
+                  grey ? kPsSymbolGrey : kPsCross);
       break;
     case PadButton::kB:
-      canvas.Fill(Ring(cx, cy, s * 0.98f, t), kPsCircle);
+      canvas.Fill(Ring(cx, cy, s * 0.98f, t), grey ? kPsSymbolGrey : kPsCircle);
       break;
     case PadButton::kX: {
       const float q = s * 0.86f;
-      canvas.Fill(Shell(RoundedRect(cx, cy, q, q, 0.8f), t), kPsSquare);
+      canvas.Fill(Shell(RoundedRect(cx, cy, q, q, 0.8f), t), grey ? kPsSymbolGrey : kPsSquare);
       break;
     }
     default: {
       const float a = s * 1.1f;
       const float x1 = cx, y1 = cy - a * 0.95f, x2 = cx + a, y2 = cy + a * 0.72f, x3 = cx - a, y3 = y2;
       canvas.Fill(Union({Segment(x1, y1, x2, y2, t), Segment(x2, y2, x3, y3, t), Segment(x3, y3, x1, y1, t)}),
-                  kPsTriangle);
+                  grey ? kPsSymbolGrey : kPsTriangle);
       break;
     }
   }
@@ -579,10 +747,13 @@ void DrawPsStick(Canvas& canvas, char side, bool pressed) {
       canvas.Fill(Circle(cx + std::cos(a) * (r - 0.9f), cy + std::sin(a) * (r - 0.9f), 0.9f), kWhite);
     }
   }
-  DrawBitmap(canvas, TextBitmap(std::string(1, side), false), cx, cy, 1, Solid(kWhite), true, &kInk);
+  if (!PsSmoothLabel(canvas, std::string(1, side), cx, cy, static_cast<int>(cap * 1.4f), static_cast<int>(cap * 1.1f))) {
+    DrawBitmap(canvas, TextBitmap(std::string(1, side), false), cx, cy, 1, Solid(kWhite), true, &kInk);
+  }
 }
 
-void DrawPsOptions(Canvas& canvas) {
+// Options (Start) and Create or Share (Back): small pills with their symbols, as on the controller.
+void DrawPsMenuButton(Canvas& canvas, const Bitmap& symbol) {
   const float w = static_cast<float>(canvas.width());
   const float h = static_cast<float>(canvas.height());
   const float half_h = h * 0.30f;
@@ -590,20 +761,7 @@ void DrawPsOptions(Canvas& canvas) {
   Sdf pill = RoundedRect(w / 2, cy, w / 2 - 0.6f, half_h, half_h * 0.6f);
   canvas.Fill(pill, VerticalGradient(kPsBodyTop, kPsBodyBottom, cy - half_h, cy + half_h));
   canvas.Fill(Shell(Inset(pill, 0.6f), 0.6f), kPsRim);
-  DrawBitmap(canvas, SymbolOptions(), w / 2, cy, 1, Solid(kWhite), false, &kInk);
-}
-
-void DrawPsTouchpad(Canvas& canvas) {
-  const float w = static_cast<float>(canvas.width());
-  const float h = static_cast<float>(canvas.height());
-  const float half_h = h * 0.32f;
-  const float cy = h / 2;
-  Sdf pad = RoundedRect(w / 2, cy, w / 2 - 0.6f, half_h, 3.5f);
-  canvas.Fill(pad, VerticalGradient(kPsBodyTop, kPsBodyBottom, cy - half_h, cy + half_h));
-  canvas.Fill(Shell(Inset(pad, 0.6f), 0.6f), kPsRim);
-  // A fingertip pressing the pad.
-  canvas.Fill(Circle(w / 2, cy, 2.2f), kWhite);
-  canvas.Fill(Ring(w / 2, cy, 3.8f, 0.5f), kPsRim);
+  DrawBitmap(canvas, symbol, w / 2, cy, 1, Solid(kWhite), false, &kInk);
 }
 
 void DrawPsDpad(Canvas& canvas, bool up, bool down, bool left, bool right) {
@@ -624,14 +782,14 @@ void DrawPsDpad(Canvas& canvas, bool up, bool down, bool left, bool right) {
 
 }  // namespace
 
-std::vector<uint8_t> DrawPlayStationGlyph(PadButton button, int width, int height) {
+std::vector<uint8_t> DrawPlayStationGlyph(PadButton button, int width, int height, PsModel model) {
   Canvas canvas(width, height);
   switch (button) {
     case PadButton::kA:
     case PadButton::kB:
     case PadButton::kX:
     case PadButton::kY:
-      DrawPsFace(canvas, button);
+      DrawPsFace(canvas, button, model);
       break;
     case PadButton::kLeftTrigger:
       DrawPsTrigger(canvas, "L2");
@@ -646,10 +804,10 @@ std::vector<uint8_t> DrawPlayStationGlyph(PadButton button, int width, int heigh
       DrawPsBumper(canvas, "R1");
       break;
     case PadButton::kStart:
-      DrawPsOptions(canvas);
+      DrawPsMenuButton(canvas, SymbolOptions());
       break;
     case PadButton::kBack:
-      DrawPsTouchpad(canvas);
+      DrawPsMenuButton(canvas, SymbolCreate());
       break;
     case PadButton::kLeftStick:
       DrawPsStick(canvas, 'L', false);
@@ -688,26 +846,26 @@ std::vector<uint8_t> DrawPlayStationGlyph(PadButton button, int width, int heigh
   return canvas.ToRgba8();
 }
 
-std::vector<uint8_t> DrawPcGlyph(const PcPrompt& prompt, int width, int height, uint32_t seed) {
+std::vector<uint8_t> DrawPcGlyph(const PcPrompt& prompt, int width, int height) {
   Canvas canvas(width, height);
   switch (prompt.layout) {
     case PcPrompt::Layout::kSingle: {
       const KeyFace face = DescribeKey(prompt.keys.empty() ? "?" : prompt.keys[0]);
       if (face.mouse != MouseButton::kNone) {
-        DrawOmenMouse(canvas, face.mouse, false, seed);
+        DrawMouse(canvas, face.mouse, false);
       } else {
-        DrawOmenKey(canvas, face, seed);
+        DrawKey(canvas, face);
       }
       break;
     }
     case PcPrompt::Layout::kMouseLook:
-      DrawOmenMouse(canvas, MouseButton::kNone, true, seed);
+      DrawMouse(canvas, MouseButton::kNone, true);
       break;
     case PcPrompt::Layout::kCross:
-      DrawCross(canvas, prompt.keys, seed);
+      DrawCross(canvas, prompt.keys);
       break;
     case PcPrompt::Layout::kPair:
-      DrawPair(canvas, prompt.keys, seed);
+      DrawPair(canvas, prompt.keys);
       break;
   }
   return canvas.ToRgba8();
