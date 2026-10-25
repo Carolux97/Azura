@@ -258,9 +258,9 @@ Bitmap LegendFor(const KeyFace& face, int max_w, int max_h, bool* is_symbol) {
   // 3x5, dropping trailing characters until it fits.
   std::string text = face.text;
   while (!text.empty()) {
-    Bitmap small = TextBitmap(text, true);
-    if (!small.empty() && small.width <= max_w) {
-      return small;
+    Bitmap small_text = TextBitmap(text, true);
+    if (!small_text.empty() && small_text.width <= max_w) {
+      return small_text;
     }
     text.pop_back();
   }
