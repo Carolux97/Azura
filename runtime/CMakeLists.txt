@@ -53,6 +53,7 @@ set(AZURA_SOURCES
     src/relaunch.cpp
     src/perf_marker.cpp
     src/shader_compile_overlay.cpp
+    src/shader_precompile.cpp
     src/local_coop_menu.cpp
     src/coop_ui.cpp
     src/local_coop_notices.cpp

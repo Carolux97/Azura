@@ -294,5 +294,18 @@
     "done": "Hotovo",
     "cancel": "Zrušit",
     "page": "Stránka"
+  },
+  "shaders": {
+    "title": "Připravit shadery",
+    "help": "Zkompiluje shadery z vašich dřívějších her ještě před hraním, aby to hra nemusela dělat během hraní. Chvíli to trvá a hra musí být zavřená.",
+    "prepare": "Připravit nyní",
+    "starting": "Spouštím…",
+    "progress": "Připraveno {done} z {total} pipeline",
+    "done": "Připraveno {total} pipeline. Hra se spustí s nimi už hotovými.",
+    "empty": "Zatím nejsou uložené žádné shadery: ukládají se během hraní, tak si chvíli zahrajte a vraťte se.",
+    "failed": "Shadery se nepodařilo připravit. Podrobnosti najdete v záznamu hry.",
+    "prepareAgain": "Připravit znovu",
+    "prepared": "{total} pipeline připraveno {date}.",
+    "newSince": "Hra od minula ({date}) uložila nové shadery: připravte je znovu."
   }
 }

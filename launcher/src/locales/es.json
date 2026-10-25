@@ -294,5 +294,18 @@
     "done": "Aceptar",
     "cancel": "Cancelar",
     "page": "Página"
+  },
+  "shaders": {
+    "title": "Preparar shaders",
+    "help": "Compila los shaders de tus sesiones anteriores antes de jugar, para que el juego no tenga que hacerlo mientras juegas. Tarda un momento y el juego tiene que estar cerrado.",
+    "prepare": "Preparar ahora",
+    "starting": "Iniciando…",
+    "progress": "{done} de {total} pipelines listos",
+    "done": "{total} pipelines listos. El juego arranca con ellos ya hechos.",
+    "empty": "Aún no hay shaders guardados: se guardan mientras juegas, así que juega un rato y vuelve.",
+    "failed": "No se pudieron preparar los shaders. Abre el registro del juego para ver los detalles.",
+    "prepareAgain": "Preparar de nuevo",
+    "prepared": "{total} pipelines preparados el {date}.",
+    "newSince": "El juego ha guardado shaders nuevos desde la última vez ({date}): prepáralos de nuevo."
   }
 }

@@ -6,6 +6,13 @@ it as the update's notes (`scripts/release-common.sh`). Bumping the version adds
 release without one fails. One list item (`- `) per change, in English; an item may continue on
 indented lines.
 
+## 0.4.0
+
+- Play has a Prepare shaders card: it compiles the shaders the game stored in your earlier
+  sessions before you play, so they are ready instead of being made while you play. It shows its
+  progress, remembers when it last ran, and offers to prepare again once the game has stored new
+  shaders since.
+
 ## 0.3.0
 
 - Local co-op: two players can play the campaign in split screen on one computer. In the game's

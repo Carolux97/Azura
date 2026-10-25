@@ -36,6 +36,7 @@
 #include "relaunch.h"
 #include "script_hooks.h"
 #include "shader_compile_overlay.h"
+#include "shader_precompile.h"
 
 // Defined by the SDK (core/perf/counter.cpp), which never opens the file itself.
 REXCVAR_DECLARE(std::string, perf_log_csv);
@@ -214,7 +215,18 @@ class AzuraApp : public rex::ReXApp {
   // The game module is running and guest memory holds its textures: start keeping the button
   // prompts in step with the player's device and bindings.
   void OnPostLaunchModule(rex::system::XThread* thread) override {
-    (void)thread;
+    // The launcher's Prepare shaders: the stored shaders are made with the game suspended, and the
+    // runtime closes when they are done (shader_precompile.h).
+    if (azura::ShaderPrecompile::Requested()) {
+      shader_precompile_ = std::make_unique<azura::ShaderPrecompile>(runtime(), thread, [this] {
+        app_context().CallInUIThread([this] {
+          if (window()) {
+            window()->RequestClose();
+          }
+        });
+      });
+      return;
+    }
     button_prompts_ = std::make_unique<azura::prompts::ButtonPrompts>(runtime());
   }
 
@@ -265,6 +277,7 @@ class AzuraApp : public rex::ReXApp {
     local_coop_menu_ = nullptr;
     delete coop_notices_;
     coop_notices_ = nullptr;
+    shader_precompile_.reset();
   }
 
 
@@ -311,6 +324,8 @@ class AzuraApp : public rex::ReXApp {
   azura::LocalCoopMenu* local_coop_menu_ = nullptr;
   // The local co-op notices, from the game's start to its end. Accessed on the UI thread only.
   azura::LocalCoopNotices* coop_notices_ = nullptr;
+  // Only with shader_precompile_only: follows the stored shaders being made, then closes the runtime.
+  std::unique_ptr<azura::ShaderPrecompile> shader_precompile_;
   bool shutting_down_ = false;
   // Marks frames in the perf_log_csv CSV; only while it records.
   std::unique_ptr<azura::PerfMarker> perf_marker_;

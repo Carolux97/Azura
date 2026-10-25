@@ -39,6 +39,8 @@ import {
   installUpdate,
   isNativeApp,
   launchGame,
+  prepareShaders,
+  shaderStorageBytes,
   listGpus,
   loadSettings,
   onGameExit,
@@ -109,6 +111,12 @@ const state = {
   savesConflict: null,
   // "idle", "starting" (asked to start) or "running" (the process is up).
   game: "idle",
+  // Prepare shaders: "idle", "running", "done" or "failed", with the pipelines made and queued.
+  shaders: { status: "idle", done: 0, total: 0 },
+  // The last Prepare shaders that finished ({ total, bytes, at }) and the stored pipelines' size
+  // now, to offer preparing again when the game has stored new ones since.
+  shadersPrepared: null,
+  shaderStorageBytes: 0,
   // Message shown in the log header: a translation key, its values and "ok" / "error" / "".
   logState: null,
   // Newer launcher version ({ version, ... }) when one is published, and the install progress:
@@ -364,7 +372,7 @@ const renderPlay = () => {
     label = "play.update";
     sub = state.runtime.updateKind === "link" ? "play.updateLinkSub" : "play.updateBuildSub";
   } else if (isInstalled()) {
-    label = { idle: "play.launch", starting: "play.launching", running: "play.running" }[state.game];
+    label = { idle: "play.launch", starting: "play.launching", running: "play.running", preparing: "play.launch" }[state.game];
     sub = state.game === "idle" && runtimeNeedsInstall() ? "play.runtimeWillInstall" : "play.mode";
   }
   button.querySelector(".btn-launch-label").textContent = t(label);
@@ -392,6 +400,7 @@ const renderPlay = () => {
 
   document.getElementById("launcher-version").textContent = t("rail.launcherVersion", { version: state.launcherVersion });
   document.getElementById("runtime-version").textContent = t("rail.runtimeVersion", { version: RUNTIME_VERSION });
+  renderShaderCard();
 };
 
 /** Writes the log header message (kept as a key, so it follows language changes). */
@@ -420,6 +429,96 @@ const appendLogLine = ({ stream, line }) => {
   body.appendChild(row);
   while (body.childElementCount > MAX_LOG_LINES) body.firstElementChild.remove();
   if (atEnd) body.scrollTop = body.scrollHeight;
+};
+
+/**
+ * The Prepare shaders card: offered once the game is installed, with a bar while the runtime makes
+ * the shaders and the count when it is done.
+ */
+const renderShaderCard = () => {
+  const card = document.getElementById("shader-card");
+  const shaders = state.shaders;
+  card.hidden = !isInstalled() || (!state.runtime.installed && shaders.status === "idle");
+  if (card.hidden) return;
+  const running = shaders.status === "running";
+  const percent = shaders.total ? Math.min(100, (100 * shaders.done) / shaders.total) : 0;
+  card.classList.toggle("is-failed", shaders.status === "failed");
+  document.getElementById("shader-card-bar-track").hidden = !running;
+  document.getElementById("shader-card-bar").style.width = `${percent}%`;
+  document.getElementById("shader-card-percent").textContent = running && shaders.total
+    ? new Intl.NumberFormat(getLocale(), { style: "percent" }).format(percent / 100)
+    : "";
+  const prepared = state.shadersPrepared;
+  const newSince = Boolean(prepared) && state.shaderStorageBytes > prepared.bytes;
+  const idleDetail = !prepared
+    ? ["shaders.help", {}]
+    : newSince
+      ? ["shaders.newSince", { date: formatDateTime(prepared.at) }]
+      : ["shaders.prepared", { total: prepared.total, date: formatDateTime(prepared.at) }];
+  const detail = {
+    idle: idleDetail,
+    running: shaders.total ? ["shaders.progress", { done: shaders.done, total: shaders.total }] : ["shaders.starting", {}],
+    done: shaders.total ? ["shaders.done", { total: shaders.total }] : ["shaders.empty", {}],
+    failed: [shaders.error?.[0] ?? "shaders.failed", shaders.error?.[1] ?? {}],
+  }[shaders.status];
+  document.getElementById("shader-card-detail").textContent = t(detail[0], detail[1]);
+  const prepare = document.getElementById("shader-card-prepare");
+  prepare.disabled = state.game !== "idle" || state.installingRuntime || runtimeNeedsInstall();
+  prepare.hidden = running;
+  // Once prepared, the button prepares again, highlighted only when there is something new.
+  prepare.textContent = t(prepared ? "shaders.prepareAgain" : "shaders.prepare");
+  prepare.classList.toggle("btn-primary", !prepared || newSince);
+};
+
+/** localStorage key of the last Prepare shaders that finished. */
+const SHADERS_PREPARED_KEY = "azura.shadersPrepared";
+
+/** Reads the last Prepare shaders and the stored pipelines' size now, then redraws the card. */
+const refreshShaderState = async () => {
+  try {
+    state.shadersPrepared = JSON.parse(localStorage.getItem(SHADERS_PREPARED_KEY) ?? "null");
+  } catch {
+    state.shadersPrepared = null;
+  }
+  try {
+    state.shaderStorageBytes = await shaderStorageBytes();
+  } catch {
+    state.shaderStorageBytes = 0;
+  }
+  renderShaderCard();
+};
+
+/** Records a Prepare shaders that finished with `total` pipelines. */
+const rememberShadersPrepared = async (total) => {
+  let bytes = 0;
+  try {
+    bytes = await shaderStorageBytes();
+  } catch {
+    bytes = 0;
+  }
+  state.shadersPrepared = { total, bytes, at: Date.now() };
+  state.shaderStorageBytes = bytes;
+  try {
+    localStorage.setItem(SHADERS_PREPARED_KEY, JSON.stringify(state.shadersPrepared));
+  } catch {
+    // Without storage it is only remembered until the launcher closes.
+  }
+  renderShaderCard();
+};
+
+/** A progress line of Prepare shaders ("AZURA_SHADERS 12 300" or "AZURA_SHADERS_DONE 300"). */
+const readShaderProgress = (line) => {
+  const match = /^AZURA_SHADERS(_DONE)? (\d+)(?: (\d+))?/.exec(line.trim());
+  if (!match) return false;
+  if (match[1]) {
+    state.shaders.done = Number(match[2]);
+    state.shaders.total = Number(match[2]);
+  } else {
+    state.shaders.done = Number(match[2]);
+    state.shaders.total = Number(match[3] ?? match[2]);
+  }
+  renderShaderCard();
+  return true;
 };
 
 /** Translation key and values for a launch error from platform.launchGame. */
@@ -476,14 +575,42 @@ const setupLaunch = () => {
     renderPlay();
   });
 
-  onGameOutput(appendLogLine);
+  onGameOutput((output) => {
+    // Prepare shaders reports its progress on the card, not in the game log.
+    if (state.game === "preparing" && readShaderProgress(output.line)) return;
+    appendLogLine(output);
+  });
+  refreshShaderState();
+  document.getElementById("shader-card-prepare").addEventListener("click", async () => {
+    if (state.game !== "idle") return;
+    state.game = "preparing";
+    state.shaders = { status: "running", done: 0, total: 0 };
+    renderPlay();
+    try {
+      await prepareShaders();
+    } catch (error) {
+      state.game = "idle";
+      state.shaders = { status: "failed", done: 0, total: 0, error: launchErrorMessage(error) };
+      renderPlay();
+    }
+  });
   onGameRestart(() => {
     state.game = "running";
     setLogState("log.restarting");
     renderPlay();
   });
   onGameExit(({ code, success }) => {
+    if (state.game === "preparing") {
+      state.game = "idle";
+      state.shaders.status = success ? "done" : "failed";
+      if (!success) state.shaders.error = ["shaders.failed", {}];
+      if (success && state.shaders.total) rememberShadersPrepared(state.shaders.total);
+      renderPlay();
+      return;
+    }
     state.game = "idle";
+    // Playing stores the new pipelines the game met: the card may offer preparing again.
+    refreshShaderState();
     if (success) setLogState("log.exitOk", "ok");
     else if (code == null) setLogState("log.exitSignal", "error");
     else setLogState("log.exitError", "error", { code });
