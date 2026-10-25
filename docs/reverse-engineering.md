@@ -394,7 +394,7 @@ Implemented in `runtime/src/menu/pc_options.{h,cpp}` (data and texts) and `scrip
 
 | Position | Category | Change |
 | --- | --- | --- |
-| 1 | Video | A list: Calibrate brightness (opens the game's calibration screen), Full screen, Frame rate limit (a list of our own), Anti-aliasing, Motion blur, Anisotropic filtering, Render resolution (a list of our own), Image scaling, Sharpness (a slider, only with an image scaling effect that sharpens). Back and Defaults |
+| 1 | Video | A list: Calibrate brightness (opens the game's calibration screen), Full screen, Frame rate limit (a list of our own), Anti-aliasing, Motion blur, Anisotropic filtering, Render resolution (a list of our own), Image scaling, Sharpness (a slider, only with an image scaling effect that sharpens), Performance overlay and Overlay position (lists of our own). Back and Defaults |
 | 0 | Game | The game's own rows, then the two of the mature content category (violence 46, mature language 37 with `bRequiresMatureLanguageSupport`) |
 | 5 | Keyboard and mouse | Replaces the storage location: Mouse sensitivity. Back and Defaults |
 | 6 | Local co-op | Replaces the mature content: no list; choosing it opens the Local co-op menu (`runtime/src/local_coop_menu.h`). Greyed out with no controller connected |
@@ -416,7 +416,7 @@ How:
 - **Lists of our own** (**verified**): a raw-value list row (`bUsesRawValue=true`) with an ID the
   profile does not have (9106 frame rate limit, 9107 image scaling, whose values are the upscaling
   effects of each platform's build, 9108 render resolution, whose first value is "Automatic" in
-  the player's language) needs no definition, so it can have any number of
+  the player's language, 9110 performance overlay, 9111 overlay position) needs no definition, so it can have any number of
   values with any names. `PopulateOptionsList` empties its local `OptionValues`
   (`TArray<string>`), fills it with `GetProfileSettingValue_SpecialCase(psid, OptionValues)` (which
   only knows the multiplayer characters 44/45 and weapons 50/130 and leaves it empty otherwise),
@@ -464,11 +464,14 @@ How:
   (`Callback_TVTypeWasChanged`, `Callback_GammaWasChanged` of `UIScene_Options`) no row of the
   Video list uses any more. When those run from one of our rows, our code runs instead: Sharpness
   applies at once, Image scaling saves its value and shows or hides the Sharpness row.
-- **Rows shown or hidden with the menu open** (**verified** on screen): rows of ours that depend on
-  another row's value come last in the localization file, so they are hidden by lowering the count
-  of `OptionCategories[1].CategoryOptions` (the `TArray` at +40 of the category) and shown again
-  by raising it over the same elements, while its allocation holds them. Before every
-  `PopulateOptionsList` the count is set; after a change the list is rebuilt from the borrowed
+- **Rows shown or hidden with the menu open** (**verified** on screen with the hidden row last;
+  the reordering is **not yet verified** on screen): a row of ours that depends on another row's
+  value (Sharpness) is hidden by lowering the count of `OptionCategories[1].CategoryOptions` (the
+  `TArray` at +40 of the category) and shown again by raising it over the same elements, while its
+  allocation holds them. Since only the last elements can be left out that way, the array's
+  48-byte `OptionInfo` elements are first put in order by their `ProfileSettingId` (+0): the shown
+  rows, then the hidden ones; so rows below a hidden one move up. Before every
+  `PopulateOptionsList` the order and the count are set; after a change the list is rebuilt from the borrowed
   callback by running bytecode of ours in its frame, `PopulateOptionsList(); return;` (final
   function token `1C` with the function's address, `16`, `04 0B`, `53`), so the engine calls it
   the normal way. `PopulateOptionsList` ends with `OptionsList.selectedIndex = 0.0`: for that
