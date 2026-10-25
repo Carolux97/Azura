@@ -313,7 +313,29 @@ const setupReleaseNotes = async () => {
   renderReleaseNotes();
 };
 
+/**
+ * The decorative animations run only while someone can see them: any of them makes WebKit redraw
+ * the window every frame, about a whole CPU core, which the game needs (on a Steam Deck above all).
+ * They pause while the game starts or runs and while the window is in the background or hidden,
+ * and carry on from where they were when it comes back.
+ */
+let windowFocused = document.hasFocus();
+const syncMotion = () => {
+  const paused = state.game !== "idle" || !windowFocused || document.hidden;
+  document.documentElement.classList.toggle("motion-paused", paused);
+};
+window.addEventListener("focus", () => {
+  windowFocused = true;
+  syncMotion();
+});
+window.addEventListener("blur", () => {
+  windowFocused = false;
+  syncMotion();
+});
+document.addEventListener("visibilitychange", syncMotion);
+
 const renderPlay = () => {
+  syncMotion();
   const status = document.getElementById("status-game");
   status.dataset.state = isInstalled() ? "ok" : "warn";
   let detail = "status.noFolder";
