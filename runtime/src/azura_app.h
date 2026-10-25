@@ -43,6 +43,9 @@ REXCVAR_DECLARE(std::string, perf_log_csv);
 #if defined(__APPLE__)
 #include "platform_mac.h"
 #endif
+#if defined(_WIN32)
+#include "platform_win.h"
+#endif
 
 // The recompiled game image, defined in the code `rexglue codegen` writes from the player's
 // default.xex (azura_init.cpp). Declared here rather than taken from the generated headers, so
@@ -58,6 +61,10 @@ class AzuraApp : public rex::ReXApp {
   // folder, the log files and the config file (azura.toml).
   static std::unique_ptr<rex::ui::WindowedApp> Create(rex::ui::WindowedAppContext& ctx) {
     azura::WaitForRelaunchingProcess();
+#if defined(_WIN32)
+    // Before any Vulkan instance, including the one --list_gpus creates.
+    azura::DisableCrashingVulkanLayers();
+#endif
 #if defined(__APPLE__)
     AutoConfigureMacAppIcon();
     // MoltenVK warns "Metal does not support disabling primitive restart" for nearly every
@@ -91,6 +98,9 @@ class AzuraApp : public rex::ReXApp {
   // (--list_gpus). std::_Exit skips the static destructors of a runtime that never set up the
   // rest.
   void OnPostInitLogging() override {
+#if defined(_WIN32)
+    azura::LogDisabledVulkanLayers();
+#endif
     if (azura::AchievementExportRequested()) {
       std::_Exit(azura::ExportAchievements(game_data_root()));
     }
