@@ -93,6 +93,28 @@
             }
         },
         {
+            "name": "win-amd64-cross-sdk-source",
+            "displayName": "Windows x86_64 from Linux, ReXGlue SDK built from source",
+            "description": "Cross-builds the runtime for Windows with clang, Microsoft's CRT and SDK from xwin and rust-lld (cmake/toolchain-win-amd64-cross.cmake). Uses its own build folder.",
+            "generator": "Ninja Multi-Config",
+            "binaryDir": "${sourceDir}/out/build/win-amd64-cross-sdk-source",
+            "toolchainFile": "${sourceDir}/cmake/toolchain-win-amd64-cross.cmake",
+            "cacheVariables": {
+                "CMAKE_CONFIGURATION_TYPES": "Debug;Release;RelWithDebInfo",
+                "CMAKE_DEFAULT_BUILD_TYPE": "RelWithDebInfo",
+                "CMAKE_PREFIX_PATH": "${sourceDir}/../sdk/rexglue-0.10.0-linux-amd64/linux-amd64",
+                "REXSDK_DIR": "${sourceDir}/../sdk/rexglue-0.10.0-src",
+                "REXGLUE_USE_VULKAN": "ON",
+                "REXGLUE_USE_D3D12": "OFF",
+                "REXGLUE_HOST_EXECUTABLE": "${sourceDir}/../sdk/rexglue-0.10.0-src/out/linux-amd64/RelWithDebInfo/rexgluerd"
+            },
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Linux"
+            }
+        },
+        {
             "name": "linux-arm64-sdk-source",
             "inherits": "linux-arm64",
             "displayName": "Linux ARM64, ReXGlue SDK built from source",
@@ -177,6 +199,21 @@
         {
             "name": "linux-amd64-sdk-source-release",
             "configurePreset": "linux-amd64-sdk-source",
+            "configuration": "Release"
+        },
+        {
+            "name": "win-amd64-cross-sdk-source-debug",
+            "configurePreset": "win-amd64-cross-sdk-source",
+            "configuration": "Debug"
+        },
+        {
+            "name": "win-amd64-cross-sdk-source-relwithdebinfo",
+            "configurePreset": "win-amd64-cross-sdk-source",
+            "configuration": "RelWithDebInfo"
+        },
+        {
+            "name": "win-amd64-cross-sdk-source-release",
+            "configurePreset": "win-amd64-cross-sdk-source",
             "configuration": "Release"
         },
         {

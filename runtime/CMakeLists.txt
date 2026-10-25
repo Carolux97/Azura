@@ -153,6 +153,11 @@ function(azura_configure_runtime target)
     if(APPLE)
         target_link_libraries(${target} PRIVATE "-framework Cocoa")
     endif()
+    # A windowed app on Windows: no console window, and the SDK's entry point is wWinMain
+    # (ui/windowed_app_main_sdl.cpp), which the linker only looks for in the windows subsystem.
+    if(WIN32)
+        set_target_properties(${target} PROPERTIES WIN32_EXECUTABLE ON)
+    endif()
 
     # The SDK copies MoltenVK into vulkan/lib in the target's POST_BUILD step, which only runs
     # when the target relinks. We patch MoltenVK (see scripts/build_moltenvk.sh and patches/), so
