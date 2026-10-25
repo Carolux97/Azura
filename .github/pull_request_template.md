@@ -14,6 +14,7 @@
 
 - [ ] Tested on macOS
 - [ ] Tested on Linux
+- [ ] Tested on Windows
 - [ ] Only affects one platform (say which and why)
 
 ## How to test
