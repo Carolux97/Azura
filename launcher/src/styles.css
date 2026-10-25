@@ -1094,6 +1094,9 @@ input[type="range"] { width: 100%; accent-color: var(--imulsion); }
 
 /* ---------- Reduced motion ---------- */
 
+/* See syncMotion in main.js: no animation runs while nobody sees it. */
+.motion-paused *, .motion-paused *::before, .motion-paused *::after { animation-play-state: paused !important; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
   .spores { display: none; }
