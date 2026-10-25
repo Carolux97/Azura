@@ -112,6 +112,7 @@
     "compilerMissing": "Nem található fordító.",
     "compilerInstallApple": "Az Apple Command Line Tools telepítése",
     "compilerInstallPackage": "clang telepítése",
+    "compilerInstallWindows": "LLVM és Visual Studio Build Tools telepítése",
     "compilerInstalling": "A fordító telepítése…",
     "compilerWaitingApple": "Kövesd az Apple ablakát a Command Line Tools telepítéséhez. A launcher a telepítés után magától folytatja.",
     "compilerCheckAgain": "Ellenőrzés újra",

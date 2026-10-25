@@ -198,6 +198,13 @@ the player only what the operating system requires:
   and get manual instructions instead (`rpm-ostree`, or a distrobox container). A compiler
   downloaded by the launcher (option 4) waits until it is known what those systems have
   (section 10).
+- **Windows.** Present when `clang++.exe` (on the PATH, or in `Program Files\LLVM\bin`, where
+  LLVM's installer puts it) is version 18 or newer and compiles and links the same program, which
+  needs Microsoft's C++ headers and libraries: clang finds those of Visual Studio or its Build
+  Tools by itself. Otherwise the launcher runs `winget install --id LLVM.LLVM --exact` and
+  `winget install --id Microsoft.VisualStudio.2022.BuildTools --exact` with the C++ workload, each
+  in its own console window, where the player accepts the packages' agreements and Windows asks
+  for permission to install.
 
 The player can also install the compiler by hand; the launcher shows the exact command for their
 system and a "Check again" button.

@@ -112,6 +112,7 @@
     "compilerMissing": "コンパイラが見つかりません。",
     "compilerInstallApple": "Apple の Command Line Tools をインストール",
     "compilerInstallPackage": "clang をインストール",
+    "compilerInstallWindows": "LLVM と Visual Studio Build Tools をインストール",
     "compilerInstalling": "コンパイラをインストールしています…",
     "compilerWaitingApple": "Apple のウインドウに従って Command Line Tools をインストールしてください。インストール後、ランチャーは自動で続行します。",
     "compilerCheckAgain": "再確認",

@@ -71,6 +71,7 @@ pub fn platform() -> &'static str {
         ("macos", "aarch64") => "mac-arm64",
         ("linux", "x86_64") => "linux-amd64",
         ("linux", "aarch64") => "linux-arm64",
+        ("windows", "x86_64") => "win-amd64",
         _ => "unsupported",
     }
 }
@@ -474,7 +475,8 @@ fn build_inner(folders: &BuildFolders, manifest: &str, xex_sha256: &str, events:
     let mut all_objects = objects.clone();
     all_objects.extend(kit.link.host_objects.iter().map(|path| folders.kit.join(path).to_string_lossy().into_owned()));
     let output = executable_path(&next);
-    let command = fill(&kit.link.command, &compiler.command, &all_objects, &values(&[(
+    let link_objects = link_inputs(work, &all_objects)?;
+    let command = fill(&kit.link.command, &compiler.command, &link_objects, &values(&[(
         "{output}",
         output.to_string_lossy().into_owned(),
     )]));
@@ -512,6 +514,20 @@ fn build_inner(folders: &BuildFolders, manifest: &str, xex_sha256: &str, events:
     Ok(())
 }
 
+/// The objects as the link command takes them. On Windows a command line holds at most 32767
+/// characters, which the generated code's objects alone come close to, so they go in a response
+/// file the compiler reads (`@file`), one quoted path per line; elsewhere they are passed as they
+/// are.
+fn link_inputs(work: &Path, objects: &[String]) -> std::io::Result<Vec<String>> {
+    if !cfg!(windows) {
+        return Ok(objects.to_vec());
+    }
+    let file = work.join("link-objects.rsp");
+    let text: String = objects.iter().map(|object| format!("\"{}\"\n", object.replace('\\', "/"))).collect();
+    fs::write(&file, text)?;
+    Ok(vec![format!("@{}", file.to_string_lossy())])
+}
+
 /// File in the objects folder with the build key of the kit its objects were compiled with.
 const OBJECTS_BUILD_KEY_FILE: &str = "kit-build-key";
 
@@ -541,6 +557,8 @@ fn translate_and_compile(
     // Codegen reads its manifest and the game's executable from the work folder: the manifest as
     // the kit has it, and game/default.xex, the only file of the game it reads. game/ is a link to
     // the player's game folder, or, for a disc image, a folder with the executable copied out of it.
+    // On Windows a link to a folder needs Developer Mode or administrator rights, so the
+    // executable is copied there too.
     fs::copy(kit_manifest, work.join("azura_manifest.toml"))?;
     let game_dir = work.join("game");
     match fs::symlink_metadata(&game_dir) {
@@ -555,9 +573,14 @@ fn translate_and_compile(
     } else {
         #[cfg(unix)]
         std::os::unix::fs::symlink(folders.game, &game_dir)?;
-        // Needs Developer Mode or administrator rights on Windows.
         #[cfg(windows)]
-        std::os::windows::fs::symlink_dir(folders.game, &game_dir)?;
+        {
+            fs::create_dir_all(&game_dir)?;
+            fs::copy(
+                folders.game.join(crate::game_folder::XEX_FILE_NAME),
+                game_dir.join(crate::game_folder::XEX_FILE_NAME),
+            )?;
+        }
     }
 
     progress(Phase::Translating, 0, 0);

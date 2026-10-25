@@ -25,7 +25,9 @@
 set -euo pipefail
 
 readonly CONFIG="${1:-relwithdebinfo}"
-readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# On Windows (Git Bash) as a Windows path with forward slashes (pwd -W), which the native
+# programs it is passed to (CMake, Python, Node) read; elsewhere pwd -W fails and pwd answers.
+readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 readonly RUNTIME_DIR="${ROOT}/runtime"
 readonly XEX="${RUNTIME_DIR}/game/default.xex"
 readonly REGISTRY="${ROOT}/versions.toml"

@@ -34,7 +34,11 @@ use tauri::{AppHandle, Emitter};
 use crate::gpus::LaunchChoice;
 
 /// Name of the runtime executable inside the runtime folder.
+#[cfg(not(windows))]
 pub const RUNTIME_EXECUTABLE: &str = "azura";
+/// Name of the runtime executable inside the runtime folder.
+#[cfg(windows)]
+pub const RUNTIME_EXECUTABLE: &str = "azura.exe";
 
 /// Event carrying one line of the game's output.
 pub const OUTPUT_EVENT: &str = "game-output";

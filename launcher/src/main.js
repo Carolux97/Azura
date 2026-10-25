@@ -803,7 +803,11 @@ const renderCompiler = () => {
   const kind = status?.install?.kind;
   install.hidden = ready || !status || kind === "manual";
   install.disabled = action !== "";
-  install.textContent = t(kind === "appleCommandLineTools" ? "install.compilerInstallApple" : "install.compilerInstallPackage");
+  const installLabel = {
+    appleCommandLineTools: "install.compilerInstallApple",
+    winget: "install.compilerInstallWindows",
+  }[kind] ?? "install.compilerInstallPackage";
+  install.textContent = t(installLabel);
   document.getElementById("recheck-compiler").disabled = action !== "";
   manual.hidden = ready || !status?.manual;
   document.getElementById("compiler-manual-command").textContent = status?.manual ?? "";

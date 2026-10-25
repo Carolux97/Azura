@@ -528,6 +528,14 @@ pub fn open_saves_folder_internal(saves_dir: &Path) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
 
+    #[cfg(windows)]
+    {
+        std::process::Command::new("explorer")
+            .arg(&dir)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+
     Ok(())
 }
 

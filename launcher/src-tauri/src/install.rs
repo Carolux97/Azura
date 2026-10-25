@@ -27,13 +27,15 @@ const BUILD_ENV: &str = "AZURA_RUNTIME_BUILD";
 
 /// Build folders of the project, relative to its root, in order of preference.
 /// scripts/build.sh builds from the SDK source on every platform (presets `<platform>-sdk-source`).
-const PROJECT_BUILDS: [&str; 6] = [
+const PROJECT_BUILDS: [&str; 8] = [
     "runtime/out/build/mac-arm64-sdk-source/RelWithDebInfo",
     "runtime/out/build/mac-arm64-sdk-source/Release",
     "runtime/out/build/linux-amd64-sdk-source/RelWithDebInfo",
     "runtime/out/build/linux-amd64-sdk-source/Release",
     "runtime/out/build/linux-arm64-sdk-source/RelWithDebInfo",
     "runtime/out/build/linux-arm64-sdk-source/Release",
+    "runtime/out/build/win-amd64-sdk-source/RelWithDebInfo",
+    "runtime/out/build/win-amd64-sdk-source/Release",
 ];
 
 /// Entries of a build folder that make up the runtime. Everything else there (logs, the
@@ -149,7 +151,7 @@ fn runtime_entries(build: &Path) -> io::Result<Vec<String>> {
         if name == "libraries" {
             for entry in fs::read_dir(build)? {
                 let file = entry?.file_name().to_string_lossy().into_owned();
-                if file.ends_with(".dylib") || file.ends_with(".so") || file.contains(".so.") {
+                if file.ends_with(".dylib") || file.ends_with(".so") || file.contains(".so.") || file.ends_with(".dll") {
                     names.push(file);
                 }
             }
