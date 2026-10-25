@@ -464,8 +464,7 @@ How:
   (`Callback_TVTypeWasChanged`, `Callback_GammaWasChanged` of `UIScene_Options`) no row of the
   Video list uses any more. When those run from one of our rows, our code runs instead: Sharpness
   applies at once, Image scaling saves its value and shows or hides the Sharpness row.
-- **Rows shown or hidden with the menu open** (**verified** on screen with the hidden row last;
-  the reordering is **not yet verified** on screen): a row of ours that depends on another row's
+- **Rows shown or hidden with the menu open** (**verified** on screen): a row of ours that depends on another row's
   value (Sharpness) is hidden by lowering the count of `OptionCategories[1].CategoryOptions` (the
   `TArray` at +40 of the category) and shown again by raising it over the same elements, while its
   allocation holds them. Since only the last elements can be left out that way, the array's
