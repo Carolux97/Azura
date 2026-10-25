@@ -141,6 +141,12 @@ Changes to the ReXGlue SDK and MoltenVK (`patches/`) stay under those projects' 
 - Launcher tests pass: `cargo test` in `launcher/src-tauri` and `npm test` in `launcher`.
 - The runtime builds with `scripts/build.sh`.
 - The diff has no game data, no generated code (`runtime/generated/`) and no signing keys.
+- A change to `patches/`, the code generator or `runtime/` also builds for Windows: on Linux,
+  `cmake --preset win-amd64-cross-sdk-source` and `cmake --build --preset
+  win-amd64-cross-sdk-source-relwithdebinfo` in `runtime/` (after a Linux build, whose `rexglue`
+  runs codegen). Windows code in the SDK must not depend on the program's entry point: the game
+  enters through `wWinMain`, the `rexglue` tool through `main`, and CRT values such as `_wpgmptr`
+  are only set for the wide entry points (reading it from `rexglue` ends the process).
 
 ## Continuous integration
 
@@ -150,3 +156,14 @@ tests on pull requests that change the launcher, Runtime kit on pull requests th
 defines the kit, and the Release workflow on main when the launcher's version changes, or by hand.
 A release whose Linux or macOS build failed publishes the other platform; run the Release
 workflow by hand with "Publish" on to add the missing one to that version's release.
+
+**What CI cannot check.** No game data reaches the runners, so CI builds the player kits but never
+runs their code generator on a game, builds a runtime from it or starts the game. A kit that breaks
+on one platform still passes CI and only fails on players' machines: the Windows kit of 0.4.0
+passed CI and its code generator ended the first time a player built the game (it read its own
+path through a CRT value that only wide entry points set). So, before publishing a release that
+changes `patches/`, the code generator, `runtime/` or the kit scripts, build the game from the
+launcher with that release's kit on every platform it ships for (Linux, macOS and Windows),
+starting from an empty app data folder, and play up to the main menu. The release's kits are the
+Runtime kit workflow's artifacts of the pull request; the launcher built with each one is in the
+Release workflow's artifacts.

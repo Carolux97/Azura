@@ -1617,6 +1617,39 @@ index 107a495..f792c18 100644
  
  set(GENERATED_SOURCES
      {{ cmake_var("CMAKE_CURRENT_LIST_DIR") }}/{{ project }}_init.cpp
+diff --git a/src/core/filesystem_win.cpp b/src/core/filesystem_win.cpp
+index c5a2c5d..d732eb3 100644
+--- a/src/core/filesystem_win.cpp
++++ b/src/core/filesystem_win.cpp
+@@ -42,10 +42,25 @@ std::filesystem::path to_path(const std::u16string_view source) {
+ 
+ namespace filesystem {
+ 
++// GetModuleFileNameW gives the executable's path whatever the program's entry point. The CRT's
++// _wpgmptr is only set for programs entered through wmain or wWinMain; for the others, such as the
++// rexglue tool's main, _get_wpgmptr reports an invalid argument and the CRT ends the process.
+ std::filesystem::path GetExecutablePath() {
+-  wchar_t* path;
+-  auto error = _get_wpgmptr(&path);
+-  return !error ? std::filesystem::path(path) : std::filesystem::path();
++  std::wstring path(MAX_PATH, L'\0');
++  // A path longer than the buffer comes back truncated, with the buffer's full length: retry with
++  // a larger one, up to the longest path Windows allows.
++  while (path.size() <= 32768) {
++    const DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
++    if (length == 0) {
++      return {};
++    }
++    if (length < path.size()) {
++      path.resize(length);
++      return std::filesystem::path(path);
++    }
++    path.resize(path.size() * 2);
++  }
++  return {};
+ }
+ 
+ std::filesystem::path GetExecutableFolder() {
 diff --git a/src/core/memory_posix.cpp b/src/core/memory_posix.cpp
 index b52bf39..13f51dc 100644
 --- a/src/core/memory_posix.cpp
