@@ -245,6 +245,8 @@ mod tests {
         assert!(!after.update_available);
     }
 
+    // A link to a file needs Developer Mode on Windows.
+    #[cfg(unix)]
     #[test]
     fn a_link_to_the_build_is_not_an_installed_runtime() {
         let build = TempFolder::new("build-link");
