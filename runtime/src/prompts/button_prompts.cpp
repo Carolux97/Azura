@@ -22,6 +22,7 @@
 
 #include <rex/cvar.h>
 #include <rex/input/input_system.h>
+#include <rex/graphics/pipeline/texture/events.h>
 #include <rex/input/pad_remap.h>
 #include <rex/logging.h>
 #include <rex/runtime.h>
@@ -61,6 +62,9 @@ struct AtlasDef {
   // HUD icons: the game packs other pieces (the dots of a "hold" prompt, tick marks) right against
   // its round buttons, inside the corners of their slots, so only the button's disc is ours there.
   bool round_buttons = false;
+  // FNV-1a 64 of the first fingerprint block alone: a texture whose first block does not match
+  // is not hashed further, which makes the full memory scan about four times cheaper.
+  uint64_t first_block_hash = 0;
 };
 
 using B = PadButton;
@@ -106,20 +110,22 @@ constexpr Slot kDirXSlots[] = {{0, 0, 32, 32, B::kX}};
 constexpr Slot kDirYSlots[] = {{0, 0, 32, 32, B::kY}};
 
 const AtlasDef kAtlases[] = {
-    {"Xbox360_18pt", 65536, 256, 256, 64, {0x800, 0x5D00, 0x9540, 0xF7A0}, 0x4F275066BCC4C36Cull, kFontSlots},
+    {"Xbox360_18pt", 65536, 256, 256, 64, {0x800, 0x5D00, 0x9540, 0xF7A0}, 0x4F275066BCC4C36Cull, kFontSlots, false,
+     0xDBC0C4D02EFA6980ull},
     {"HUD_ActionIcons2", 65536, 256, 256, 64, {0xC0, 0x4CA0, 0xAE30, 0xFFF0}, 0xA7A6CDBA24A68498ull,
-     kActionIcons2Slots, true},
+     kActionIcons2Slots, true, 0xF16D627469FBB1BCull},
     {"WarfareHUD_ActionIcons", 262144, 512, 512, 128, {0x8A0, 0x18AA0, 0x2B7F0, 0x3F7F0},
-     0x104FCC5D6BCC684Eull, kWarfareSlots, true},
-    {"HUD_Dir_ButtonA", 16384, 32, 32, 32, {0x110, 0x500, 0x1030, 0x1620}, 0xD1391F5D1B926434ull, kDirASlots},
-    {"HUD_Dir_ButtonB", 16384, 32, 32, 32, {0x110, 0x430, 0x1020, 0x1620}, 0x3A3B7F982BE5036Full, kDirBSlots},
-    {"HUD_Dir_ButtonX", 16384, 32, 32, 32, {0x110, 0x500, 0x1030, 0x1620}, 0x918B0905E5B3D6C7ull, kDirXSlots},
-    {"HUD_Dir_ButtonY", 16384, 32, 32, 32, {0x110, 0x430, 0x1030, 0x1620}, 0xEF796ADEBC67F707ull, kDirYSlots},
+     0x104FCC5D6BCC684Eull, kWarfareSlots, true, 0x9696583721C51808ull},
+    {"HUD_Dir_ButtonA", 16384, 32, 32, 32, {0x110, 0x500, 0x1030, 0x1620}, 0xD1391F5D1B926434ull, kDirASlots, false, 0x9A7CA26F2086FB57ull},
+    {"HUD_Dir_ButtonB", 16384, 32, 32, 32, {0x110, 0x430, 0x1020, 0x1620}, 0x3A3B7F982BE5036Full, kDirBSlots, false, 0x5D10A835F49D28E8ull},
+    {"HUD_Dir_ButtonX", 16384, 32, 32, 32, {0x110, 0x500, 0x1030, 0x1620}, 0x918B0905E5B3D6C7ull, kDirXSlots, false, 0x375D96590D049BEAull},
+    {"HUD_Dir_ButtonY", 16384, 32, 32, 32, {0x110, 0x430, 0x1030, 0x1620}, 0xEF796ADEBC67F707ull, kDirYSlots, false, 0x86AC5DB348648655ull},
 };
 
 constexpr uint32_t kPhysicalSize = 0x20000000;   // 512 MB of guest physical memory
 constexpr uint32_t kPhysicalView = 0xA0000000;   // guest virtual view of all of it
 constexpr uint32_t kTextureAlignment = 0x1000;   // textures start on 4 KB boundaries
+constexpr uint32_t kPhysicalMask = kPhysicalSize - 1;  // a GPU address's physical part
 
 uint64_t Fnv1a(const uint8_t* data, size_t size, uint64_t hash = 0xCBF29CE484222325ull) {
   for (size_t i = 0; i < size; ++i) {
@@ -142,15 +148,39 @@ bool CopyGuestMemory(void* destination, const void* source, size_t size) {
 }
 
 bool FingerprintMatches(const uint8_t* texture, const AtlasDef& atlas) {
+  // The first block alone first: most addresses are rejected there.
   uint64_t hash = 0xCBF29CE484222325ull;
-  for (uint32_t offset : atlas.fingerprint_offsets) {
+  for (size_t i = 0; i < atlas.fingerprint_offsets.size(); ++i) {
     uint8_t sample[16];
-    if (!CopyGuestMemory(sample, texture + offset, sizeof(sample))) {
+    if (!CopyGuestMemory(sample, texture + atlas.fingerprint_offsets[i], sizeof(sample))) {
       return false;
     }
     hash = Fnv1a(sample, sizeof(sample), hash);
+    if (i == 0 && atlas.first_block_hash && hash != atlas.first_block_hash) return false;
   }
   return hash == atlas.fingerprint_hash;
+}
+
+// --- Textures the GPU creates -------------------------------------------------------------------
+
+// Where the GPU texture cache created textures of an atlas's size, since the prompts thread last
+// looked (rex/graphics/pipeline/texture/events.h): the candidates to check, instead of scanning
+// all of guest memory.
+std::mutex g_created_mutex;
+std::vector<uint32_t> g_created;
+// More than this many between two looks (a level loading) and the oldest are dropped: the
+// fallback scan finds what they missed.
+constexpr size_t kMaxCreated = 1024;
+
+void OnTextureCreated(const rex::graphics::CreatedTexture& texture) {
+  if (!texture.tiled) return;
+  const bool atlas_size = std::any_of(std::begin(kAtlases), std::end(kAtlases), [&](const AtlasDef& def) {
+    return def.width == texture.width && def.height == texture.height;
+  });
+  if (!atlas_size) return;
+  std::lock_guard lock(g_created_mutex);
+  if (g_created.size() >= kMaxCreated) g_created.erase(g_created.begin());
+  g_created.push_back(texture.base_address);
 }
 
 // --- Prompt style and bindings ------------------------------------------------------------------
@@ -325,10 +355,12 @@ class ButtonPrompts::Impl {
       }
       atlases_.push_back(std::move(state));
     }
+    rex::graphics::SetTextureCreatedHandler(&OnTextureCreated);
     thread_ = std::thread([this] { Run(); });
   }
 
   ~Impl() {
+    rex::graphics::SetTextureCreatedHandler(nullptr);
     {
       std::lock_guard lock(mutex_);
       stopping_ = true;
@@ -453,6 +485,7 @@ class ButtonPrompts::Impl {
     }
 
     Validate(membase);
+    CheckCreated(membase);
     MaybeScan(membase);
 
     for (auto& atlas : atlases_) {
@@ -514,13 +547,54 @@ class ButtonPrompts::Impl {
 
   // Scans guest physical memory for the textures: often while some are missing, rarely otherwise
   // (the game may load another copy when a level changes).
+  // Looks at the textures the GPU created since the last tick (OnTextureCreated): an atlas's copy
+  // is found as soon as the game draws with it.
+  void CheckCreated(const uint8_t* membase) {
+    std::vector<uint32_t> created;
+    {
+      std::lock_guard lock(g_created_mutex);
+      created.swap(g_created);
+    }
+    for (const uint32_t address : created) {
+      const uint32_t page = address & kPhysicalMask;
+      for (auto& atlas : atlases_) {
+        if (page % kTextureAlignment != 0 || page + atlas.def->byte_size > kPhysicalSize) continue;
+#if defined(__linux__)
+        std::vector<unsigned char> vec((atlas.def->byte_size + 4095) / 4096, 0);
+        if (mincore(const_cast<void*>(static_cast<const void*>(membase + page)), atlas.def->byte_size, vec.data()) != 0 ||
+            std::any_of(vec.begin(), vec.end(), [](unsigned char v) { return !(v & 1); })) {
+          continue;
+        }
+#elif defined(_WIN32)
+        if (!azura::IsReadable(membase + page, atlas.def->byte_size)) continue;
+#endif
+        Consider(membase, page, atlas);
+      }
+    }
+  }
+
+  // Takes the texture at `page` as a copy of `atlas` when it is one not known yet.
+  void Consider(const uint8_t* membase, uint32_t page, AtlasState& atlas) {
+    const uint8_t* tex = membase + page;
+    if (!FingerprintMatches(tex, *atlas.def)) return;
+    auto& list = atlas.instances;
+    if (std::any_of(list.begin(), list.end(), [&](const Instance& i) { return i.physical == page; })) return;
+    Instance inst;
+    inst.physical = page;
+    if (!Read(tex, atlas, inst.original)) return;
+    list.push_back(std::move(inst));
+    REXLOG_INFO("[Azura prompts] Found {} at physical 0x{:08X}", atlas.def->name, page);
+  }
+
+  // The fallback: a scan of all of guest memory, rare, for copies the GPU's notices missed (a
+  // texture the cache already had, or notices dropped while a level loaded).
   void MaybeScan(const uint8_t* membase) {
     using namespace std::chrono;
     const auto now = steady_clock::now();
     const bool missing = std::any_of(atlases_.begin(), atlases_.end(),
                                      [](const AtlasState& a) { return a.instances.empty(); });
     const auto since = now - last_scan_;
-    if (!(missing && since >= 2s) && since < 20s) {
+    if (!(missing && since >= 30s) && since < 120s) {
       return;
     }
     last_scan_ = now;
@@ -549,15 +623,7 @@ class ButtonPrompts::Impl {
 #if defined(_WIN32)
         if (page + atlas.def->byte_size > readable[range].end) continue;
 #endif
-        const uint8_t* tex = membase + page;
-        if (!FingerprintMatches(tex, *atlas.def)) continue;
-        auto& list = atlas.instances;
-        if (std::any_of(list.begin(), list.end(), [&](const Instance& i) { return i.physical == page; })) continue;
-        Instance inst;
-        inst.physical = page;
-        if (!Read(tex, atlas, inst.original)) continue;
-        list.push_back(std::move(inst));
-        REXLOG_INFO("[Azura prompts] Found {} at physical 0x{:08X}", atlas.def->name, page);
+        Consider(membase, page, atlas);
       }
     }
   }

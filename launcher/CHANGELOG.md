@@ -19,6 +19,8 @@ indented lines.
   Create (Share) button where the game shows Back.
 - Prompts in the HUD no longer cut the game's own marks around a button, such as the dots of a
   "hold" prompt.
+- The button prompts take far less processor time: they no longer search the game's memory every
+  two seconds, but look at each texture as the game loads it.
 
 ## 0.4.0
 
