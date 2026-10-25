@@ -139,7 +139,30 @@ def segments(command: str) -> list[list[str]]:
         else:
             current.append(token)
     parts.append(current)
-    return [part for part in parts if part and part != [":"]]
+    parts = [part for part in parts if part and part != [":"]]
+    if WINDOWS:
+        parts = [sub for part in parts for sub in nested_cmd(part)]
+    return parts
+
+
+def nested_cmd(part: list[str]) -> list[list[str]]:
+    """On Windows the commands after a link come as one more `cmd.exe /C "..."` inside the link's
+    chain, whose inner double quotes (around "C:/Program Files/CMake/bin/cmake.exe") the outer
+    split has already taken apart. Its words, joined again, are split at each `&&`, and each command
+    into its program (a path that may hold spaces, up to cmake.exe) and its arguments."""
+    if len(part) < 3 or program_name(part[0]).lower() != "cmd" or part[1].lower() != "/c":
+        return [part]
+    commands = []
+    for command in " ".join(part[2:]).split(" && "):
+        command = command.strip().strip('"').strip()
+        if not command:
+            continue
+        program = re.match(r"^(.*?cmake(?:\.exe)?)\s+(-E\s.*)$", command, re.IGNORECASE)
+        if program:
+            commands.append([program.group(1).strip('"')] + program.group(2).split())
+        else:
+            commands.append(command.split())
+    return [command for command in commands if command != [":"]]
 
 
 class Paths:
