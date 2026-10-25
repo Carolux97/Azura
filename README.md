@@ -57,7 +57,9 @@ To build from source:
   them for Ubuntu 22.04); `iniciar-linux.sh` sets up the launcher.
 - On Windows: LLVM's clang (`winget install LLVM.LLVM`), Visual Studio 2022 or its Build Tools
   with the C++ workload, CMake 3.25+, Ninja, Python 3 and Git for Windows, whose Git Bash runs the
-  scripts (`scripts/build.sh` uses the preset `win-amd64-sdk-source`).
+  scripts (`scripts/build.sh` uses the preset `win-amd64-sdk-source`). Clone this repository and the
+  SDK with `git config --global core.autocrlf false` first: the SDK patches apply to files with
+  their original line endings.
 - To cross-build for Windows on Linux instead: a Linux build first (its `rexglue` runs codegen for the cross build), and
   for the game the CMake preset `win-amd64-cross-sdk-source` with clang, LLVM and
   Microsoft's CRT and SDK as cargo-xwin downloads them (`~/.cache/cargo-xwin/xwin`, or `XWIN_DIR`;

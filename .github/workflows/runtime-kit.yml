@@ -94,13 +94,15 @@ jobs:
         run: brew install cmake ninja
 
       # The image has CMake and LLVM; Ninja comes from Chocolatey. The SDK's third-party trees have
-      # paths longer than Windows' default limit.
+      # paths longer than Windows' default limit, and the patches only apply to files checked out
+      # with the line endings they were made from (Git for Windows turns them into CRLF).
       - name: Install the toolchain (Windows)
         if: startsWith(matrix.platform, 'win-')
         shell: bash
         run: |
           choco install ninja -y --no-progress
           git config --global core.longpaths true
+          git config --global core.autocrlf false
           clang++ --version
 
       - name: Check out the repository
@@ -114,7 +116,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: sdk/rexglue-${{ env.SDK_VERSION }}-src
-          key: rexglue-src-${{ env.SDK_VERSION }}-${{ runner.os }}-v1
+          key: rexglue-src-${{ env.SDK_VERSION }}-${{ runner.os }}-v2
 
       - name: Get the SDK source
         if: steps.sdk-source.outputs.cache-hit != 'true'
@@ -128,7 +130,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: sdk/rexglue-${{ env.SDK_VERSION }}-src
-          key: rexglue-src-${{ env.SDK_VERSION }}-${{ runner.os }}-v1
+          key: rexglue-src-${{ env.SDK_VERSION }}-${{ runner.os }}-v2
 
       # The patches apply to a clean tree, as the cache and the clone hold it.
       - name: Clean the SDK source
