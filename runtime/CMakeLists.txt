@@ -73,6 +73,11 @@ if(APPLE)
     list(APPEND AZURA_SOURCES src/platform_mac.mm)
     set_source_files_properties(src/platform_mac.mm PROPERTIES LANGUAGE CXX COMPILE_OPTIONS "-xobjective-c++")
 endif()
+if(WIN32)
+    # Keeps overlay programs' Vulkan layers that close the game out of it, and tells which guest
+    # memory is committed (the button prompts scan it).
+    list(APPEND AZURA_SOURCES src/platform_win.cpp)
+endif()
 
 # Keep the build machine's folder names out of the binary (they would otherwise end up in the
 # __FILE__ strings of log messages).
