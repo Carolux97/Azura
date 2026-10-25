@@ -60,6 +60,7 @@
 #include "class_dump.h"
 #include "menu/menu_patches.h"
 #include "menu/pc_options.h"
+#include "input/player_assignment.h"
 
 REXCVAR_DEFINE_BOOL(script_trace, false, "Azura/Debug",
                     "Log the first call of every UnrealScript function (slow, for reverse engineering)");
@@ -84,6 +85,9 @@ constexpr uint32_t kFieldNext = 60;
 constexpr uint32_t kStructChildren = 68;
 constexpr uint32_t kPropertyFlags = 72;
 constexpr uint32_t kPropertyOffset = 84;
+// UProperty::ElementSize, between ArrayDim (64) and PropertyFlags in UE3's layout (inferred from
+// the offsets above; it reads UIScene_FrontEnd.FilterButtonInput's int ControllerId right).
+constexpr uint32_t kPropertyElementSize = 68;
 constexpr uint32_t kFrameNode = 16;
 constexpr uint32_t kFrameCode = 24;
 constexpr uint32_t kFrameLocals = 28;
@@ -196,11 +200,25 @@ int32_t ParamOffset(const uint8_t* base, uint32_t function, const char* name) {
   return -1;
 }
 
+// The value of the int or byte parameter `name` of the frame about to run `function`, or -1.
+int32_t SmallParam(const uint8_t* base, uint32_t function, uint32_t frame, const char* name) {
+  for (uint32_t prop = LoadU32(base, function + kStructChildren); prop; prop = LoadU32(base, prop + kFieldNext)) {
+    const uint64_t flags = (uint64_t(LoadU32(base, prop + kPropertyFlags)) << 32) | LoadU32(base, prop + kPropertyFlags + 4);
+    if (!(flags & kPropertyParm)) break;
+    if (ObjectName(base, prop) != name) continue;
+    const uint32_t at = LoadU32(base, frame + kFrameLocals) + LoadU32(base, prop + kPropertyOffset);
+    return LoadU32(base, prop + kPropertyElementSize) == 1 ? base[at] : static_cast<int32_t>(LoadU32(base, at));
+  }
+  return -1;
+}
+
 // --- Quit Game ---
 
 std::mutex g_quit_mutex;
 std::function<void()> g_quit_handler;
 std::function<void()> g_restart_handler;
+// Opens the Local co-op menu (SetLocalCoopHandler).
+std::function<void()> g_local_coop_handler;
 std::atomic<bool> g_quit_requested{false};
 
 // Script functions the hooks react to, matched by FName index to keep the hooks cheap. The indices
@@ -232,6 +250,8 @@ enum WatchedName {
   kGetCallbackForOptionPsid,  // UIScene_Options: the live change callback of a row
   kTVTypeWasChanged,         // UIScene_Options callback of TV type, borrowed by a row of ours
   kGammaWasChanged,          // UIScene_Options callback of gamma, borrowed by a row of ours
+  kSelectStorageLocation,    // UIScene_Options: the Local co-op category, at the storage location's place
+  kShouldOptionBeDisabled,   // UIScene_Options: whether a category is greyed out in the list
   kWatchedNameCount,
 };
 constexpr const char* kWatchedNames[kWatchedNameCount] = {
@@ -244,7 +264,7 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "PawnDied",              "ShouldDeathCauseFailure", "GetDeathGameOverReason",
     "GameOverPlayer",        "ClientGameOver",         "ClientSetCinematicMode",
     "MatineeCancelled",      "GetCallbackForOptionPSID", "Callback_TVTypeWasChanged",
-    "Callback_GammaWasChanged"};
+    "Callback_GammaWasChanged", "Callback_SelectStorageLocation", "ShouldOptionBeDisabled"};
 
 // FName index of each watched name, -1 until found (0 is a valid index: None).
 std::atomic<int32_t> g_names[kWatchedNameCount];
@@ -361,13 +381,13 @@ constexpr uint8_t kNativeEqualIntInt = 0x9A;
 // Callback_MenuOptionSelected(SelectedOption) starts with
 //   if (SelectedOption == 5 || SelectedOption == 1 || SelectedOption == 7) return;
 // because those positions (storage location, Video, Credits) opened another screen instead of a
-// list. Video and Keyboard and mouse (at the storage location's position) are lists now, so:
-//   - in `SelectedOption == 5` the 5 (a one-byte int constant) becomes 255, not a position;
+// list. Now Keyboard and mouse (at 5) and Video are lists, and Local co-op (at 6) opens its menu:
+//   - in `SelectedOption == 5` the 5 (a one-byte int constant) becomes 6;
 //   - in `SelectedOption == 1` the one (EX_IntOne, one byte) becomes EX_Self, also one byte: it
 //     evaluates to the scene's own address, which is never a position.
-// Both comparisons are then always false, and the bytecode keeps its size and its jump offsets.
-// The ones patched are those of this condition (from `SelectedOption == 5` on), so an earlier one
-// that only picks a sound is left alone. Done once.
+// The bytecode keeps its size and its jump offsets. The ones patched are those of this condition
+// (from `SelectedOption == 5` on), so an earlier one that only picks a sound is left alone. Done
+// once.
 void LetListsShow(uint8_t* base, uint32_t function) {
   static std::atomic<bool> done{false};
   if (done.exchange(true)) return;
@@ -380,7 +400,7 @@ void LetListsShow(uint8_t* base, uint32_t function) {
     if (base[code + i] != kNativeEqualIntInt || !IsLocalVariable(base, code + i + 1, selected_option)) continue;
     if (!after_five && base[code + i + kOperand] == kTokenIntConstByte &&
         base[code + i + kOperand + 1] == azura::menu::kKeyboardMouseCategory) {
-      base[code + i + kOperand + 1] = 0xFF;
+      base[code + i + kOperand + 1] = azura::menu::kLocalCoopCategory;
       after_five = true;
       continue;
     }
@@ -701,6 +721,38 @@ void RequestRestart() {
   if (handler) handler();
 }
 
+// --- The title screen in local co-op ---
+//
+// When player 2 signs in, the game goes back to the title screen ("press Start"), which is the
+// main menu's own scene, UIScene_FrontEnd, with bOnTitleScreen set. There, whoever presses Start
+// becomes the primary player (FilterButtonInput calls BecomePrimaryPlayer for its ControllerId),
+// so player 2 pressing it would start the game on their own, empty profile instead of player 1's.
+// On the title screen only player 1 (ControllerId 0, the PlayerAssignment's user 0) may start.
+constexpr uint32_t kFrontEndFlags = 1000;  // UIScene_FrontEnd: the word of its bools (verified, dump)
+// bOnTitleScreen, the first bool declared in that word: the Xbox 360 build gives it the highest bit
+// (verified: the word reads 88000000 on the title screen and 08000000 in the main menu).
+constexpr uint32_t kOnTitleScreenBit = 0x80000000;
+
+// Whether the press about to reach UIScene_FrontEnd.FilterButtonInput is another player's Start or
+// Accept on the title screen; then it is used up so that only player 1 starts the game.
+bool IgnoreOtherPlayersStart(PPCContext& ctx, uint8_t* base, uint32_t function) {
+  if (ObjectName(base, LoadU32(base, function + kObjectOuter)) != "UIScene_FrontEnd") return false;
+  const uint32_t scene = ctx.r3.u32;
+  const uint32_t flags = LoadU32(base, scene + kFrontEndFlags);
+  if (!(flags & kOnTitleScreenBit)) return false;
+  const int32_t controller = SmallParam(base, function, ctx.r4.u32, "ControllerId");
+  if (controller <= 0) return false;
+  const uint32_t locals = LoadU32(base, ctx.r4.u32 + kFrameLocals);
+  const std::string button = NameText(base, LoadU32(base, locals + kFilterButtonName));
+  if (button != "XboxTypeS_Start" && button != "XboxTypeS_A") return false;
+  if (base[locals + kFilterInputEvent] == kInputPressed) {
+    REXLOG_INFO("[Azura co-op] Title screen: player {} pressed {}; only player 1 starts", controller + 1,
+                button);
+  }
+  if (const uint32_t result = ctx.r5.u32) StoreU32(base, result, 1);  // the press was handled
+  return true;
+}
+
 // Handles a button the options scene got. Returns true when it opened the calibration screen, in
 // which case FilterButtonInput must not run (the press is used up).
 bool HandleOptionsButton(PPCContext& ctx, uint8_t* base, uint32_t function) {
@@ -943,6 +995,11 @@ void SetRestartHandler(std::function<void()> handler) {
   g_restart_handler = std::move(handler);
 }
 
+void SetLocalCoopHandler(std::function<void()> handler) {
+  std::lock_guard lock(g_quit_mutex);
+  g_local_coop_handler = std::move(handler);
+}
+
 }  // namespace azura::script
 
 extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
@@ -1017,6 +1074,38 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     return;
   }
   if (Is(base, function, kFilterButtonInput) && HandleOptionsButton(ctx, base, function)) return;
+  if (Is(base, function, kFilterButtonInput) && IgnoreOtherPlayersStart(ctx, base, function)) return;
+  // The Local co-op category runs the storage location's callback: it opens the Local co-op menu.
+  if (Is(base, function, kSelectStorageLocation) &&
+      ObjectName(base, LoadU32(base, function + kObjectOuter)) == "UIScene_Options") {
+    std::function<void()> handler;
+    {
+      std::lock_guard lock(g_quit_mutex);
+      handler = g_local_coop_handler;
+    }
+    REXLOG_INFO("[Azura options] Opening the Local co-op menu");
+    if (handler) handler();
+    return;
+  }
+  // Local co-op is greyed out with no controller connected (the keyboard and mouse alone play one
+  // player); Keyboard and mouse, at the storage location's place, never is.
+  if (Is(base, function, kShouldOptionBeDisabled) &&
+      ObjectName(base, LoadU32(base, function + kObjectOuter)) == "UIScene_Options") {
+    const int32_t option = SmallParam(base, function, ctx.r4.u32, "Option");
+    const uint32_t result = ctx.r5.u32;
+    __imp__sub_822DF9E0(ctx, base);
+    if (result && option == azura::menu::kLocalCoopCategory) {
+      const auto* assignment = azura::input::InstalledPlayerAssignment();
+      bool controller = false;
+      if (assignment) {
+        for (const auto& slot : assignment->Slots()) controller = controller || !slot.keyboard;
+      }
+      StoreU32(base, result, controller ? 0 : 1);
+    } else if (result && option == azura::menu::kKeyboardMouseCategory) {
+      StoreU32(base, result, 0);
+    }
+    return;
+  }
   if (Is(base, function, kGetCallbackForOptionPsid) &&
       ObjectName(base, LoadU32(base, function + kObjectOuter)) == "UIScene_Options") {
     BorrowLiveCallback(base, ctx.r4.u32);

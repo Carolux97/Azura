@@ -77,12 +77,13 @@ scripts/build.sh
 
 ## Status
 
-The single-player campaign runs on macOS (Metal) and Linux (Vulkan), and we keep playing it through
-to fix what turns up. Working today: controllers (Xbox, PlayStation and others, with their button
-prompts in the game), keyboard and mouse, achievements with their artwork, a save manager with
-backups, and video options (render resolution, upscaling, antialiasing, frame rate limit). The
-launcher builds the game from your own copy and keeps itself and the game up to date. Not yet:
-co-op and multiplayer.
+The campaign runs on macOS (Metal) and Linux (Vulkan), alone or with two players in split screen
+on one computer, and we keep playing it through to fix what turns up. Working today: controllers
+(Xbox, PlayStation and others, with their button prompts in the game), keyboard and mouse, local
+co-op (Options, Local co-op), achievements with their artwork, a save manager with backups, and
+video options (render resolution, upscaling, antialiasing, frame rate limit). The launcher builds
+the game from your own copy and keeps itself and the game up to date. Not yet: online co-op and
+multiplayer.
 
 ## Credits
 

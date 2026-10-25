@@ -56,6 +56,7 @@ enum class Label {
   kUpscaling,
   kRenderResolution,
   kSharpness,
+  kLocalCoop,
   kCount
 };
 
@@ -157,7 +158,8 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"RENDER RESOLUTION",
           "Resolution the game is drawn at, before image scaling. Automatic chooses one for this computer. Takes effect the next time the game starts."},
          {"SHARPNESS",
-          "How much extra sharpening the image scaling adds. 0 keeps its own."}},
+          "How much extra sharpening the image scaling adds. 0 keeps its own."},
+         {"LOCAL CO-OP", "Choose which controller or keyboard each player uses, to play the campaign together on this computer."}},
         "Off", "On", "FXAA", "FXAA extreme", "Open", "Bilinear (original)", "AMD CAS (sharpening)", "AMD FSR 1", "Automatic"}},
       {"esn",
        {{"TECLADO Y RATÓN", "Ajuste las opciones del teclado y el ratón."},
@@ -173,7 +175,8 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"RESOLUCIÓN DE RENDERIZADO",
           "Resolución a la que se dibuja el juego, antes del escalado de imagen. Automática elige una para este equipo. Se aplica la próxima vez que inicie el juego."},
          {"NITIDEZ",
-          "Cuánto enfoque añade el escalado de imagen. 0 deja el suyo propio."}},
+          "Cuánto enfoque añade el escalado de imagen. 0 deja el suyo propio."},
+         {"COOPERATIVO LOCAL", "Elija qué mando o teclado usa cada jugador para jugar la campaña juntos en este equipo."}},
         "Desactivado", "Activado", "FXAA", "FXAA extremo", "Abrir", "Bilineal (original)", "AMD CAS (nitidez)", "AMD FSR 1", "Automática"}},
       {"deu",
        {{"TASTATUR UND MAUS", "Passen Sie die Einstellungen für Tastatur und Maus an."},
@@ -188,7 +191,8 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"RENDERAUFLÖSUNG",
           "Auflösung, in der das Spiel vor der Bildskalierung gezeichnet wird. Automatisch wählt eine für diesen Computer. Wird beim nächsten Spielstart wirksam."},
          {"SCHÄRFE",
-          "Wie viel zusätzliche Schärfe die Bildskalierung hinzufügt. 0 behält ihre eigene."}},
+          "Wie viel zusätzliche Schärfe die Bildskalierung hinzufügt. 0 behält ihre eigene."},
+         {"LOKALER KOOP", "Wählen Sie, welchen Controller oder welche Tastatur jeder Spieler verwendet, um die Kampagne gemeinsam an diesem Computer zu spielen."}},
         "Aus", "Ein", "FXAA", "FXAA extrem", "Öffnen", "Bilinear (Original)", "AMD CAS (Schärfung)", "AMD FSR 1", "Automatisch"}},
       {"ita",
        {{"TASTIERA E MOUSE", "Regola le impostazioni di tastiera e mouse."},
@@ -203,7 +207,8 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"RISOLUZIONE DI RENDERING",
           "Risoluzione a cui viene disegnato il gioco, prima del ridimensionamento. Automatica ne sceglie una per questo computer. Ha effetto al prossimo avvio del gioco."},
          {"NITIDEZZA",
-          "Quanta nitidezza aggiuntiva applica il ridimensionamento dell'immagine. 0 mantiene la sua."}},
+          "Quanta nitidezza aggiuntiva applica il ridimensionamento dell'immagine. 0 mantiene la sua."},
+         {"COOPERATIVA LOCALE", "Scegli il controller o la tastiera di ogni giocatore per giocare insieme la campagna su questo computer."}},
         "Disattivato", "Attivato", "FXAA", "FXAA estremo", "Apri", "Bilineare (originale)", "AMD CAS (nitidezza)", "AMD FSR 1", "Automatica"}},
       {"jpn",
        {{"キーボードとマウス", "キーボードとマウスの設定を調整します。"},
@@ -218,7 +223,8 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"レンダリング解像度",
           "画像スケーリングの前にゲームを描画する解像度です。自動ではこのコンピューターに合わせて選びます。次回ゲーム起動時に適用されます。"},
          {"シャープネス",
-          "画像スケーリングに加えるシャープ化の強さです。0 は標準のままです。"}},
+          "画像スケーリングに加えるシャープ化の強さです。0 は標準のままです。"},
+         {"ローカル協力プレイ", "このコンピューターでキャンペーンを一緒にプレイするため、各プレイヤーが使うコントローラーまたはキーボードを選びます。"}},
         "オフ", "オン", "FXAA", "FXAA (最大)", "開く", "バイリニア（オリジナル）", "AMD CAS（シャープ化）", "AMD FSR 1", "自動"}},
       {"fra",
        {{"CLAVIER ET SOURIS", "Réglez les options du clavier et de la souris."},
@@ -233,7 +239,8 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"RÉSOLUTION DE RENDU",
           "Résolution à laquelle le jeu est dessiné, avant la mise à l'échelle. Automatique en choisit une pour cet ordinateur. Prend effet au prochain lancement du jeu."},
          {"NETTETÉ",
-          "Netteté supplémentaire ajoutée par la mise à l'échelle de l'image. 0 conserve la sienne."}},
+          "Netteté supplémentaire ajoutée par la mise à l'échelle de l'image. 0 conserve la sienne."},
+         {"COOPÉRATION LOCALE", "Choisissez la manette ou le clavier de chaque joueur pour jouer la campagne ensemble sur cet ordinateur."}},
         "Désactivé", "Activé", "FXAA", "FXAA extrême", "Ouvrir", "Bilinéaire (d'origine)", "AMD CAS (netteté)", "AMD FSR 1", "Automatique"}},
       {"ptb",
        {{"TECLADO E MOUSE", "Ajuste as opções do teclado e do mouse."},
@@ -249,7 +256,8 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"RESOLUÇÃO DE RENDERIZAÇÃO",
           "Resolução em que o jogo é desenhado, antes da escala da imagem. Automática escolhe uma para este computador. Aplica-se na próxima vez que o jogo for iniciado."},
          {"NITIDEZ",
-          "Quanta nitidez extra a escala da imagem adiciona. 0 mantém a dela."}},
+          "Quanta nitidez extra a escala da imagem adiciona. 0 mantém a dela."},
+         {"COOPERATIVO LOCAL", "Escolha o controle ou o teclado de cada jogador para jogar a campanha juntos neste computador."}},
         "Desativado", "Ativado", "FXAA", "FXAA extremo", "Abrir", "Bilinear (original)", "AMD CAS (nitidez)", "AMD FSR 1", "Automática"}},
       {"pol",
        {{"KLAWIATURA I MYSZ", "Dostosuj ustawienia klawiatury i myszy."},
@@ -264,7 +272,8 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"ROZDZIELCZOŚĆ RENDEROWANIA",
           "Rozdzielczość, w jakiej rysowana jest gra, przed skalowaniem obrazu. Automatyczna dobiera ją do tego komputera. Zadziała po ponownym uruchomieniu gry."},
          {"OSTROŚĆ",
-          "Ile dodatkowej ostrości dodaje skalowanie obrazu. 0 zachowuje domyślną."}},
+          "Ile dodatkowej ostrości dodaje skalowanie obrazu. 0 zachowuje domyślną."},
+         {"LOKALNA KOOPERACJA", "Wybierz kontroler lub klawiaturę każdego gracza, aby grać razem w kampanię na tym komputerze."}},
         "Wyłączone", "Włączone", "FXAA", "FXAA ekstremalne", "Otwórz", "Dwuliniowe (oryginalne)", "AMD CAS (wyostrzanie)", "AMD FSR 1", "Automatyczna"}},
       {"rus",
        {{"КЛАВИАТУРА И МЫШЬ", "Настройте параметры клавиатуры и мыши."},
@@ -279,7 +288,8 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"РАЗРЕШЕНИЕ РЕНДЕРИНГА",
           "Разрешение, в котором отрисовывается игра, до масштабирования изображения. «Автоматически» подбирает его для этого компьютера. Вступит в силу при следующем запуске игры."},
          {"РЕЗКОСТЬ",
-          "Сколько дополнительной резкости добавляет масштабирование изображения. 0 — без изменений."}},
+          "Сколько дополнительной резкости добавляет масштабирование изображения. 0 — без изменений."},
+         {"ЛОКАЛЬНЫЙ КООПЕРАТИВ", "Выберите контроллер или клавиатуру для каждого игрока, чтобы пройти кампанию вместе на этом компьютере."}},
         "Выкл.", "Вкл.", "FXAA", "FXAA (макс.)", "Открыть", "Билинейное (оригинал)", "AMD CAS (резкость)", "AMD FSR 1", "Автоматически"}},
       {"cze",
        {{"KLÁVESNICE A MYŠ", "Upravte nastavení klávesnice a myši."},
@@ -294,7 +304,8 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"ROZLIŠENÍ VYKRESLOVÁNÍ",
           "Rozlišení, ve kterém se hra vykresluje, před škálováním obrazu. Automaticky zvolí rozlišení pro tento počítač. Projeví se při příštím spuštění hry."},
          {"OSTROST",
-          "Kolik dalšího zostření přidá škálování obrazu. 0 ponechá výchozí."}},
+          "Kolik dalšího zostření přidá škálování obrazu. 0 ponechá výchozí."},
+         {"MÍSTNÍ KOOPERACE", "Vyberte ovladač nebo klávesnici každého hráče a hrajte kampaň společně na tomto počítači."}},
         "Vypnuto", "Zapnuto", "FXAA", "FXAA extrémní", "Otevřít", "Bilineární (původní)", "AMD CAS (zostření)", "AMD FSR 1", "Automaticky"}},
       {"hun",
        {{"BILLENTYŰZET ÉS EGÉR", "A billentyűzet és az egér beállításai."},
@@ -309,7 +320,8 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"RENDERELÉSI FELBONTÁS",
           "A játék rajzolási felbontása a képskálázás előtt. Az Automatikus ehhez a számítógéphez választ. A játék következő indításakor lép életbe."},
          {"ÉLESSÉG",
-          "Mennyi további élesítést ad a képskálázás. A 0 a sajátját hagyja meg."}},
+          "Mennyi további élesítést ad a képskálázás. A 0 a sajátját hagyja meg."},
+         {"HELYI KOOPERATÍV", "Válaszd ki, melyik kontrollert vagy billentyűzetet használják az egyes játékosok, hogy együtt játsszatok a kampányban ezen a számítógépen."}},
         "Ki", "Be", "FXAA", "FXAA (extrém)", "Megnyitás", "Bilineáris (eredeti)", "AMD CAS (élesítés)", "AMD FSR 1", "Automatikus"}},
       {"chn",
        {{"鍵盤與滑鼠", "調整鍵盤與滑鼠設定。"},
@@ -324,7 +336,8 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"渲染解析度",
           "遊戲在影像縮放前的繪製解析度。自動會為這台電腦選擇。下次啟動遊戲時生效。"},
          {"銳利度",
-          "影像縮放額外增加的銳利度。0 為保持原樣。"}},
+          "影像縮放額外增加的銳利度。0 為保持原樣。"},
+         {"本機合作", "選擇每位玩家使用的控制器或鍵盤，在這台電腦上一起遊玩戰役。"}},
         "關閉", "開啟", "FXAA", "FXAA 極致", "開啟", "雙線性（原始）", "AMD CAS（銳利化）", "AMD FSR 1", "自動"}},
       {"kor",
        {{"키보드 및 마우스", "키보드 및 마우스 설정을 조정합니다."},
@@ -339,7 +352,8 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"렌더링 해상도",
           "이미지 스케일링 전에 게임을 그리는 해상도입니다. 자동은 이 컴퓨터에 맞게 선택합니다. 다음에 게임을 시작할 때 적용됩니다."},
          {"선명도",
-          "이미지 스케일링에 더할 선명도입니다. 0은 기본값을 유지합니다."}},
+          "이미지 스케일링에 더할 선명도입니다. 0은 기본값을 유지합니다."},
+         {"로컬 협동", "이 컴퓨터에서 함께 캠페인을 플레이하도록 각 플레이어가 사용할 컨트롤러나 키보드를 선택합니다."}},
         "끔", "켬", "FXAA", "FXAA 최대", "열기", "바이리니어 (원본)", "AMD CAS (선명화)", "AMD FSR 1", "자동"}},
   };
   return texts;
@@ -578,6 +592,23 @@ std::string Utf8(const std::u16string& text) {
 
 // Every value of `key="..."` in a struct value, in order, as UTF-8. The key must start the field
 // (after '(' or ','), so a key does not match inside a longer name.
+// The position of the parenthesis that closes the array that `opening` (such as
+// "CategoryOptions=(") opens in `text`, outside quoted strings; npos when there is none.
+size_t ArrayEnd(const std::string& text, const std::string& opening) {
+  const size_t start = text.find(opening);
+  if (start == std::string::npos) return std::string::npos;
+  int depth = 1;
+  bool quoted = false;
+  for (size_t i = start + opening.size(); i < text.size(); ++i) {
+    const char c = text[i];
+    if (c == '"') quoted = !quoted;
+    if (quoted) continue;
+    if (c == '(') ++depth;
+    if (c == ')' && --depth == 0) return i;
+  }
+  return std::string::npos;
+}
+
 std::vector<std::string> Quoted(const std::u16string& text, const std::u16string& key) {
   std::vector<std::string> values;
   const std::u16string marker = key + u"=\"";
@@ -871,6 +902,48 @@ void PatchOptionsMenu(CoalescedSection& section, const std::string& language) {
              "),MenuButtons=((ButtonDescription=\"" + back +
              "\",ButtonType=1,ButtonHandler=OBH_MAX),(ButtonDescription=\"" + defaults +
              "\",ButtonType=2,ButtonHandler=OBH_Defaults)))");
+
+  // Game: its own rows, then the two of the mature content category (violence and mature language),
+  // whose position Local co-op takes. The category's text in the file is kept as it is (its
+  // titles, rows and buttons in this language) and the two rows are added at the end of its list;
+  // they are new elements of the array, so every field is written.
+  {
+    // Read before Local co-op is written over it, below.
+    constexpr int kMatureContentCategory = kLocalCoopCategory;
+    const std::string game = Utf8(CategoryText(section, kGameCategory));
+    const std::u16string mature = CategoryText(section, kMatureContentCategory);
+    const auto mature_labels = Quoted(mature, u"SettingDescription");
+    const auto mature_tooltips = Quoted(mature, u"SettingTooltip");
+    constexpr int kMatureRows[] = {46, 37};  // violence, mature language
+    std::string rows;
+    for (size_t i = 0; i < 2 && i < mature_labels.size() && i < mature_tooltips.size(); ++i) {
+      rows += std::string(",(ProfileSettingId=") + std::to_string(kMatureRows[i]) + ",SettingDescription=\"" +
+              mature_labels[i] + "\",SettingTooltip=\"" + mature_tooltips[i] +
+              "\",bUsesRawValue=false,bIsGlobalValue=false,bHasOnChangeCallback=false,"
+              "bRequiresMatureLanguageSupport=" + (kMatureRows[i] == 37 ? "true" : "false") +
+              ",Type=OST_OptionList,Slider_Minimum=0.00,Slider_Maximum=0.00,Slider_Increment=0.00)";
+    }
+    const size_t list_end = ArrayEnd(game, "CategoryOptions=(");
+    if (mature_labels.size() >= 2 && mature_tooltips.size() >= 2 && list_end != std::string::npos) {
+      SetKey(section, "OptionCategories[" + std::to_string(kGameCategory) + "]",
+             game.substr(0, list_end) + rows + game.substr(list_end));
+    } else {
+      REXLOG_WARN("[Azura options] The Game and mature content categories are not as expected in {}: mature "
+                  "content stays out of the menu",
+                  language);
+    }
+  }
+
+  // Local co-op, in place of the mature content: choosing it runs Callback_SelectStorageLocation (the
+  // storage location's, which no category uses any more) instead of opening a list, and
+  // script_hooks.cpp opens the Local co-op menu there. Every field is written, since the position
+  // held a different category; its two rows stay in the array, which never shrinks, but no list is
+  // shown.
+  const auto& [local_coop_title, local_coop_tooltip] = texts.labels[static_cast<int>(Label::kLocalCoop)];
+  SetKey(section, "OptionCategories[" + std::to_string(kLocalCoopCategory) + "]",
+         std::string("(CategoryDescription=\"") + local_coop_title + "\",CategoryTooltip=\"" + local_coop_tooltip +
+             "\",OnSelectedCallback=\"Callback_SelectStorageLocation\",bIsGlobalValue=false,CategoryOptions=(),"
+             "MenuButtons=((ButtonDescription=\"" + back + "\",ButtonType=1,ButtonHandler=OBH_MAX)))");
 
   // Keyboard and mouse, in place of the storage location (a device picker without rows): every
   // field is written, since the position held a different category.
