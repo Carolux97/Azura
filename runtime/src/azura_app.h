@@ -25,6 +25,7 @@
 
 #include "achievement_export.h"
 #include "achievement_toast.h"
+#include "input/mouse_look.h"
 #include "input/player_assignment.h"
 #include "local_coop_menu.h"
 #include "local_coop_notices.h"
@@ -44,6 +45,9 @@ REXCVAR_DECLARE(std::string, perf_log_csv);
 #if defined(__APPLE__)
 #include "platform_mac.h"
 #endif
+#if defined(_WIN32)
+#include "platform_win.h"
+#endif
 
 // The recompiled game image, defined in the code `rexglue codegen` writes from the player's
 // default.xex (azura_init.cpp). Declared here rather than taken from the generated headers, so
@@ -58,6 +62,11 @@ class AzuraApp : public rex::ReXApp {
   // Factory used by REX_DEFINE_APP. "azura" is the application name: it names the user data
   // folder, the log files and the config file (azura.toml).
   static std::unique_ptr<rex::ui::WindowedApp> Create(rex::ui::WindowedAppContext& ctx) {
+    azura::WaitForRelaunchingProcess();
+#if defined(_WIN32)
+    // Before any Vulkan instance, including the one --list_gpus creates.
+    azura::DisableCrashingVulkanLayers();
+#endif
 #if defined(__APPLE__)
     AutoConfigureMacAppIcon();
     // MoltenVK warns "Metal does not support disabling primitive restart" for nearly every
@@ -91,6 +100,9 @@ class AzuraApp : public rex::ReXApp {
   // (--list_gpus). std::_Exit skips the static destructors of a runtime that never set up the
   // rest.
   void OnPostInitLogging() override {
+#if defined(_WIN32)
+    azura::LogDisabledVulkanLayers();
+#endif
     if (azura::AchievementExportRequested()) {
       std::_Exit(azura::ExportAchievements(game_data_root()));
     }
@@ -120,6 +132,9 @@ class AzuraApp : public rex::ReXApp {
     azura::input::InstallPlayerAssignment(runtime(), [this](std::function<void()> work) {
       app_context().CallInUIThread(std::move(work));
     });
+    // The mouse turns the camera directly while the game reads its input (input/mouse_look.h).
+    azura::input::InstallMouseLook(runtime() ? static_cast<rex::input::InputSystem*>(runtime()->input_system())
+                                             : nullptr);
     // The local co-op notices (a lost controller, a new one to assign) for as long as the game runs.
     app_context().CallInUIThread([this] {
       auto* input = runtime() ? static_cast<rex::input::InputSystem*>(runtime()->input_system()) : nullptr;
@@ -268,6 +283,7 @@ class AzuraApp : public rex::ReXApp {
     azura::menu::SetSharpnessChangedHandler(nullptr);
     azura::menu::SetUpscalingSupport(nullptr);
     azura::script::SetLocalCoopHandler(nullptr);
+    azura::input::InstallMouseLook(nullptr);
     if (auto* graphics_system = runtime()->graphics_system()) {
       graphics_system->SetShaderCompilationStartedCallback(nullptr);
     }

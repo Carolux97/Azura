@@ -332,11 +332,13 @@ const renderPlay = () => {
   runtime.dataset.state = building ? "progress" : tone === "ok" ? "ok" : "warn";
   const system = state.system;
   // The heading names the system the launcher runs on (macOS until it is known, as in a browser).
-  const linux = system?.os === "linux";
-  document.getElementById("play-eyebrow").textContent = t("play.eyebrow", { platform: linux ? "Linux" : "macOS" });
-  document.getElementById("play-lede").textContent = t("play.lede", { target: linux ? "Linux" : "Apple Silicon" });
-  const platformName = system?.os === "linux"
-    ? `Linux ${system.arch}`
+  // Linux and Windows are both a PC: the same layout, each with its own name.
+  const pc = system?.os === "linux" || system?.os === "windows";
+  const pcName = system?.os === "windows" ? "Windows" : "Linux";
+  document.getElementById("play-eyebrow").textContent = t("play.eyebrow", { platform: pc ? pcName : "macOS" });
+  document.getElementById("play-lede").textContent = t("play.lede", { target: pc ? pcName : "Apple Silicon" });
+  const platformName = pc
+    ? `${pcName} ${system.arch}`
     : system?.os === "macos"
       ? `macOS ${system.arch}`
       : system?.arch ? `mac-${system.arch}` : "mac-arm64";
@@ -379,14 +381,14 @@ const renderPlay = () => {
   button.querySelector(".btn-launch-sub").textContent = t(sub);
   renderLogState();
 
-  // macOS: the chip is the GPU too, "Apple M4 · 24 GB · Metal". Linux: the processor
+  // macOS: the chip is the GPU too, "Apple M4 · 24 GB · Metal". Linux and Windows: the processor
   // and memory ("AMD Ryzen 7 · 32 GB") and the graphics cards apart. A browser cannot tell, so it
   // names the platform only.
   const { chip, memoryGb, gpus = [] } = state.system ?? {};
   const memory = memoryGb ? `${memoryGb} GB` : null;
-  document.getElementById("status-cpu").hidden = !linux;
-  if (linux) {
-    document.getElementById("status-cpu-detail").textContent = [chip ?? "Linux PC", memory].filter(Boolean).join(" · ");
+  document.getElementById("status-cpu").hidden = !pc;
+  if (pc) {
+    document.getElementById("status-cpu-detail").textContent = [chip ?? `${pcName} PC`, memory].filter(Boolean).join(" · ");
     document.getElementById("status-gpu-detail").textContent = gpus.length
       ? t("status.gpuValueLinux", { gpu: gpus.join(" + ") })
       : t("status.gpuUnknown");

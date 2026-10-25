@@ -17,6 +17,7 @@ Nothing here is game data: only names, offsets and identifiers needed to hook th
 - [Options menu](#options-menu)
 - [Local co-op](#local-co-op)
 - [Profile settings](#profile-settings)
+- [Mouse look](#mouse-look)
 - [Render command queue](#render-command-queue)
 - [Pitfalls](#pitfalls)
 
@@ -608,3 +609,53 @@ So the game data must keep only the `_LOC` names the disc has. An alias such as 
 `<name>_ESN.bik` pointing to `<name>_LOC.bik` makes the game open the multilingual movie under a
 name without `_LOC`, and the scenes play in English whatever the language (seen with symbolic links
 added by hand to a game folder on Linux).
+
+## Mouse look
+
+The game keeps Unreal Engine 3's PC mouse axes, and the runtime turns the camera with them
+(`runtime/src/input/mouse_look.h`). How a player's look input becomes a view rotation every frame
+(**verified** with `script_trace` and the bytecode listings of `script_dump_code`):
+
+```
+GearPC.PlayerTick
+  GearPlayerInput.PlayerInput                 (saves strafe/forward, then calls the engine's)
+    PlayerInput.PlayerInput                   (Engine)
+      RawJoy* = the stick axes
+      GearPlayerInput.PreProcessInput         the right stick only:
+        ViewFriction                          aim friction while targeting
+        ApplyTestTurningFunction              response curve
+        ViewAcceleration, ViewPitchAcceleration   turn speeds up while the stick is held past a threshold
+        TargetingModeViewScalePct             slower while targeting
+        ApplyTurnDeceleration                 FInterpTo of aTurn/aLookUp: the turn slows down gradually
+      aTurn, aLookUp *= 100 * DeltaTime * LookRightScale / LookUpScale, then * FOVScale
+      AdjustMouseSensitivity(FOVScale)        aMouseX, aMouseY *= MouseSensitivity * FOVScale
+      SmoothMouse                             when bEnableMouseSmoothing
+      aTurn += aBaseX + aMouseX ; aLookUp += aMouseY ; bInvertMouse, bInvertTurn
+      IsLookInputIgnored                      zeroes aTurn and aLookUp (cinematics)
+    ... AutoPitchCentering, cover control remapping
+    GearPC.ApplySensitivityScaling            aTurn, aLookUp *= GetSensitivityMultiplier()
+                                              (profile look, aim or zoom sensitivity)
+GearPC.UpdateRotation                         DeltaRot = (aLookUp, aTurn) / TimeDilation,
+                                              ApplyAdhesion, ProcessViewRotation, FaceRotation
+```
+
+`FOVScale` is `GetFOVAngle() * 0.01111` when `bEnableFOVScaling`, else 1. The mouse axes are
+added after the stick's curve, acceleration and deceleration, so a value written into `aMouseX`
+and `aMouseY` before `PlayerInput.PlayerInput` runs turns the view directly: what a mouse posing as
+the right stick could not do, as it went through the dead zone, the full-deflection cap and the
+deceleration (felt as the camera carrying on after the mouse stops). On the console the mouse axes
+are always zero.
+
+`PlayerInput` properties (**verified**, `script_dump_classes`; the runtime finds them by name):
+
+| Property | Offset |
+| --- | --- |
+| `MouseSensitivity` (60 in the shipped game) | +248 |
+| `aMouseX`, `aMouseY` | +264, +268 |
+| `aTurn`, `aLookUp` | +276, +288 |
+| `RawJoyLookRight`, `RawJoyLookUp` | +324, +328 |
+| `LookRightScale`, `LookUpScale` | +340, +344 |
+
+The player a `PlayerInput` belongs to is its outer `PlayerController`'s `Player` (a `LocalPlayer`),
+whose `ControllerId` is the guest user index.
+

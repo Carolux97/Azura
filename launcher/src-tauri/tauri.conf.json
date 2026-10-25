@@ -45,6 +45,23 @@
     "macOS": {
       "signingIdentity": "-"
     },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "English",
+          "Spanish",
+          "French",
+          "German",
+          "Italian",
+          "Portuguese",
+          "Russian",
+          "Japanese",
+          "Korean",
+          "TradChinese"
+        ]
+      }
+    },
     "resources": {
       "../../LICENSE": "licenses/LICENSE",
       "../../THIRD_PARTY_NOTICES.md": "licenses/THIRD_PARTY_NOTICES.md",
