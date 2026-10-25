@@ -88,9 +88,10 @@ struct Bitmap {
 // Builds a bitmap from rows of '#' (lit) and '.' (unlit).
 Bitmap BitmapFromRows(std::initializer_list<std::string_view> rows);
 
-// Renders `text` with the 5x7 font (`small` = false) or the 3x5 font, one pixel between letters.
-// Returns an empty bitmap when a character has no glyph in that font.
-Bitmap TextBitmap(std::string_view text, bool small);
+// Renders `text` with the 5x7 font (`small_font` = false) or the 3x5 font, one pixel between
+// letters. Returns an empty bitmap when a character has no glyph in that font. (Not `small`: the
+// Windows headers define it as a macro.)
+Bitmap TextBitmap(std::string_view text, bool small_font);
 
 // Largest whole scale at which `bitmap` fits in max_w x max_h (at least 1).
 int FitScale(const Bitmap& bitmap, int max_w, int max_h);

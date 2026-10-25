@@ -296,8 +296,8 @@ const std::unordered_map<char, Bitmap>& SmallFont() {
 
 }  // namespace
 
-Bitmap TextBitmap(std::string_view text, bool small) {
-  const auto& font = small ? SmallFont() : LargeFont();
+Bitmap TextBitmap(std::string_view text, bool small_font) {
+  const auto& font = small_font ? SmallFont() : LargeFont();
   std::vector<const Bitmap*> glyphs;
   int width = 0;
   int height = 0;
