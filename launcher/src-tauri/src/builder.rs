@@ -384,7 +384,7 @@ impl Log {
     /// it fails.
     fn run(&self, command: &[String], dir: &Path) -> Result<(), String> {
         self.write(&format!("$ {}\n", command.join(" ")));
-        let output = Command::new(&command[0])
+        let output = crate::host_env::use_host_env(&mut Command::new(&command[0]))
             .args(&command[1..])
             .current_dir(dir)
             .stdin(Stdio::null())

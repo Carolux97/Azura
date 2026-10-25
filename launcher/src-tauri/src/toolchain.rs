@@ -166,7 +166,12 @@ fn apple_installer_running() -> bool {
 
 /// Runs `command` with `args`, returning its output when it succeeds.
 fn run(command: &[String], args: &[&str]) -> Option<String> {
-    let output = Command::new(&command[0]).args(&command[1..]).args(args).stdin(Stdio::null()).output().ok()?;
+    let output = crate::host_env::use_host_env(&mut Command::new(&command[0]))
+        .args(&command[1..])
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
     output
         .status
         .success()
@@ -179,7 +184,7 @@ fn probe(compiler: &[String]) -> Result<(), String> {
     let dir = std::env::temp_dir().join(format!("azura-compiler-probe-{}", std::process::id()));
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let output = dir.join("probe");
-    let mut child = Command::new(&compiler[0])
+    let mut child = crate::host_env::use_host_env(&mut Command::new(&compiler[0]))
         .args(&compiler[1..])
         .args(["-std=gnu++23", "-x", "c++", "-", "-o"])
         .arg(&output)
@@ -315,7 +320,11 @@ pub fn install() -> Result<(), String> {
             Ok(())
         }
         InstallMethod::PackageManager { command, .. } => {
-            let status = Command::new("pkexec").args(&command).stdin(Stdio::null()).status().map_err(|e| e.to_string())?;
+            let status = crate::host_env::use_host_env(&mut Command::new("pkexec"))
+                .args(&command)
+                .stdin(Stdio::null())
+                .status()
+                .map_err(|e| e.to_string())?;
             if status.success() {
                 Ok(())
             } else {

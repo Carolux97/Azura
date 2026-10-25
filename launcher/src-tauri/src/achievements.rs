@@ -252,7 +252,7 @@ pub fn export(runtime_dir: &Path, game_folder: &Path, export_dir: &Path) -> Resu
     }
     let staging = export_dir.with_extension("tmp");
     let _ = fs::remove_dir_all(&staging);
-    let mut child = Command::new(&executable)
+    let mut child = crate::host_env::use_host_env(&mut Command::new(&executable))
         .arg(format!("--game_data_root={}", game_folder.display()))
         .arg(format!("--export_achievements={}", staging.display()))
         .current_dir(runtime_dir)

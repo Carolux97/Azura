@@ -9,6 +9,7 @@ mod disc_image;
 mod game_folder;
 mod gamepad;
 mod gpus;
+mod host_env;
 mod install;
 mod release_notes;
 #[cfg(test)]
@@ -264,7 +265,9 @@ async fn show_build_log(app: tauri::AppHandle, path: String) -> Result<(), Strin
     #[cfg(target_os = "macos")]
     let status = std::process::Command::new("open").arg("-R").arg(&log).status();
     #[cfg(not(target_os = "macos"))]
-    let status = std::process::Command::new("xdg-open").arg(log.parent().unwrap_or(&log)).status();
+    let status = host_env::use_host_env(&mut std::process::Command::new("xdg-open"))
+        .arg(log.parent().unwrap_or(&log))
+        .status();
     status.map(|_| ()).map_err(|e| e.to_string())
 }
 
