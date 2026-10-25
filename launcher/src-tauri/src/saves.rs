@@ -45,8 +45,12 @@ impl From<io::Error> for SavesError {
     }
 }
 
+/// The user's home folder: `HOME`, or `USERPROFILE` on Windows, which has no `HOME`.
 fn home() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"))
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/"))
 }
 
 /// Folder saves go to when the player has not chosen one.
