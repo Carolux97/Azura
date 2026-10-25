@@ -1000,7 +1000,7 @@ index 83f0dff..1e1dea1 100644
  
  // Perf counter macros -- compile to no-ops when counters are disabled.
 diff --git a/include/rex/system/interfaces/graphics.h b/include/rex/system/interfaces/graphics.h
-index d54df86..74913c7 100644
+index d54df86..52b27e7 100644
 --- a/include/rex/system/interfaces/graphics.h
 +++ b/include/rex/system/interfaces/graphics.h
 @@ -13,6 +13,7 @@
@@ -1011,16 +1011,19 @@ index d54df86..74913c7 100644
  
  #include <rex/system/xtypes.h>
  
-@@ -79,6 +80,19 @@ class IGraphicsSystem {
+@@ -79,6 +80,22 @@ class IGraphicsSystem {
      (void)blocking;
    }
  
 +  // Guest shaders and pipelines the backend is making in the background (precompiled from the
 +  // shader storage, or needed by draws that are skipped until they are ready), for a progress
-+  // display. Both counts go back to zero once everything queued is done. Default: none.
++  // display. Both counts go back to zero once everything queued is done; the totals count from the
++  // start and never do (for a caller that may look only after the work ended). Default: none.
 +  struct ShaderCompilation {
 +    uint32_t queued = 0;
 +    uint32_t done = 0;
++    uint64_t total_queued = 0;
++    uint64_t total_done = 0;
 +  };
 +  virtual ShaderCompilation GetShaderCompilation() const { return {}; }
 +  // Called, from the thread that queues the work, when work is queued while nothing was pending.
@@ -1994,7 +1997,7 @@ index e2983a4..ccc11f7 100644
                      "Use approximate compare for alpha test values to prevent "
                      "flickering on NVIDIA graphics cards");
 diff --git a/src/graphics/graphics_system.cpp b/src/graphics/graphics_system.cpp
-index 8f2fcb0..358c85b 100644
+index 8f2fcb0..b0f3cb4 100644
 --- a/src/graphics/graphics_system.cpp
 +++ b/src/graphics/graphics_system.cpp
 @@ -35,6 +35,10 @@ REXCVAR_DEFINE_STRING(swap_post_effect, "none", "GPU", "Swap post effect: none,
@@ -2008,7 +2011,7 @@ index 8f2fcb0..358c85b 100644
  REXCVAR_DEFINE_BOOL(store_shaders, true, "GPU",
                      "Store shaders persistently and load them when loading games to avoid "
                      "runtime spikes and freezes when playing the game not for the first time.");
-@@ -76,6 +80,41 @@ GraphicsSystem::GraphicsSystem() : vsync_worker_running_(false) {}
+@@ -76,6 +80,45 @@ GraphicsSystem::GraphicsSystem() : vsync_worker_running_(false) {}
  
  GraphicsSystem::~GraphicsSystem() = default;
  
@@ -2028,6 +2031,7 @@ index 8f2fcb0..358c85b 100644
 +      started_callback = shader_compilation_started_callback_;
 +    }
 +    shader_compilation_.queued += count;
++    shader_compilation_.total_queued += count;
 +  }
 +  if (started_callback) {
 +    started_callback();
@@ -2036,9 +2040,12 @@ index 8f2fcb0..358c85b 100644
 +
 +void GraphicsSystem::AddShaderCompilationDone(uint32_t count) {
 +  std::lock_guard<std::mutex> lock(shader_compilation_mutex_);
-+  shader_compilation_.done = std::min(shader_compilation_.done + count, shader_compilation_.queued);
++  const uint32_t done = std::min(shader_compilation_.done + count, shader_compilation_.queued);
++  shader_compilation_.total_done += done - shader_compilation_.done;
++  shader_compilation_.done = done;
 +  if (shader_compilation_.done == shader_compilation_.queued) {
-+    shader_compilation_ = ShaderCompilation();
++    shader_compilation_.queued = 0;
++    shader_compilation_.done = 0;
 +  }
 +}
 +
@@ -2050,7 +2057,7 @@ index 8f2fcb0..358c85b 100644
  X_STATUS GraphicsSystem::SetupPresentation(ui::WindowedAppContext* app_context) {
    if (presenter_) {
      return X_STATUS_SUCCESS;
-@@ -154,12 +193,15 @@ X_STATUS GraphicsSystem::SetupGuestGpu(runtime::FunctionDispatcher* function_dis
+@@ -154,12 +197,15 @@ X_STATUS GraphicsSystem::SetupGuestGpu(runtime::FunctionDispatcher* function_dis
          kernel::xboxkrnl::VdQueryVideoMode(&video_mode);
          double refresh_rate_hz = std::max(1.0, double(float(video_mode.refresh_rate)));
          uint64_t guest_tick_frequency = chrono::Clock::guest_tick_frequency();
@@ -2068,7 +2075,7 @@ index 8f2fcb0..358c85b 100644
            uint64_t interval_ticks =
                REXCVAR_GET(vsync) ? vsync_interval_ticks : no_vsync_interval_ticks;
            while (current_time - last_frame_time >= interval_ticks) {
-@@ -217,6 +259,9 @@ void GraphicsSystem::OnHostGpuLossFromAnyThread([[maybe_unused]] bool is_respons
+@@ -217,6 +263,9 @@ void GraphicsSystem::OnHostGpuLossFromAnyThread([[maybe_unused]] bool is_respons
    if (host_gpu_loss_reported_.test_and_set(std::memory_order_relaxed)) {
      return;
    }

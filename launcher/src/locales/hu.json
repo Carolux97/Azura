@@ -294,5 +294,18 @@
     "done": "Kész",
     "cancel": "Mégse",
     "page": "Oldal"
+  },
+  "shaders": {
+    "title": "Shaderek előkészítése",
+    "help": "Játék előtt lefordítja a korábbi játékaid shadereit, hogy a játéknak ne játék közben kelljen. Egy kis ideig tart, és a játéknak bezárva kell lennie.",
+    "prepare": "Előkészítés most",
+    "starting": "Indítás…",
+    "progress": "{done} / {total} pipeline kész",
+    "done": "{total} pipeline kész. A játék ezekkel már elkészítve indul.",
+    "empty": "Még nincsenek mentett shaderek: játék közben mentődnek, ezért játssz egy kicsit, és gyere vissza.",
+    "failed": "A shadereket nem sikerült előkészíteni. A részletekért nyisd meg a játék naplóját.",
+    "prepareAgain": "Előkészítés újra",
+    "prepared": "{total} pipeline előkészítve: {date}.",
+    "newSince": "A játék új shadereket mentett a legutóbbi óta ({date}): készítsd elő őket újra."
   }
 }
