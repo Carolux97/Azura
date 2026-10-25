@@ -25,6 +25,7 @@
 
 #include "achievement_export.h"
 #include "achievement_toast.h"
+#include "input/mouse_look.h"
 #include "input/player_assignment.h"
 #include "local_coop_menu.h"
 #include "local_coop_notices.h"
@@ -130,6 +131,9 @@ class AzuraApp : public rex::ReXApp {
     azura::input::InstallPlayerAssignment(runtime(), [this](std::function<void()> work) {
       app_context().CallInUIThread(std::move(work));
     });
+    // The mouse turns the camera directly while the game reads its input (input/mouse_look.h).
+    azura::input::InstallMouseLook(runtime() ? static_cast<rex::input::InputSystem*>(runtime()->input_system())
+                                             : nullptr);
     // The local co-op notices (a lost controller, a new one to assign) for as long as the game runs.
     app_context().CallInUIThread([this] {
       auto* input = runtime() ? static_cast<rex::input::InputSystem*>(runtime()->input_system()) : nullptr;
@@ -267,6 +271,7 @@ class AzuraApp : public rex::ReXApp {
     azura::menu::SetSharpnessChangedHandler(nullptr);
     azura::menu::SetUpscalingSupport(nullptr);
     azura::script::SetLocalCoopHandler(nullptr);
+    azura::input::InstallMouseLook(nullptr);
     if (auto* graphics_system = runtime()->graphics_system()) {
       graphics_system->SetShaderCompilationStartedCallback(nullptr);
     }
