@@ -150,3 +150,13 @@ tests on pull requests that change the launcher, Runtime kit on pull requests th
 defines the kit, and the Release workflow on main when the launcher's version changes, or by hand.
 A release whose Linux or macOS build failed publishes the other platform; run the Release
 workflow by hand with "Publish" on to add the missing one to that version's release.
+
+**The Windows kit's Visual Studio is pinned.** The kit carries objects compiled on the runner (our
+code and the SDK's libraries), and the launcher links them on the player's machine with the
+player's Visual Studio libraries. Microsoft only supports that when the player's libraries are at
+least as new as the compiler that built the objects, so the kit is built on `windows-2022` (Visual
+Studio 2022 17.14, MSVC 14.44), the oldest Visual Studio players are asked for, and links with it
+and anything newer. Do not move it to `windows-latest` or a newer image without raising what
+players need at the same time: when `windows-latest` moved to Visual Studio 2026, the kit's
+objects asked for Microsoft library functions that Visual Studio 2022 does not have, and the
+game no longer linked on players' machines.
