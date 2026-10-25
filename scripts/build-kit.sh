@@ -49,7 +49,6 @@ readonly KIT="${OUT}/kit"
 # compiles the player's code for it too (the kit's commands carry it), so every object agrees.
 readonly MACOS_DEPLOYMENT_TARGET="13.3"
 PLATFORM_ARGS=()
-PROBE_ARGS=()
 if [[ "${PLATFORM}" == mac-* ]]; then
   PLATFORM_ARGS+=("-DCMAKE_OSX_DEPLOYMENT_TARGET=${MACOS_DEPLOYMENT_TARGET}")
 fi
@@ -57,12 +56,6 @@ if [[ "${PLATFORM}" == win-* ]]; then
   # Vulkan, as on Linux (the SDK defaults to D3D12 on Windows), and the release CRT in every
   # configuration, as the runtime's presets build it, so the SDK and our code share one CRT.
   PLATFORM_ARGS+=("-DREXGLUE_USE_VULKAN=ON" "-DREXGLUE_USE_D3D12=OFF" "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL")
-  # The kit records the commands Ninja would run: with response files they would name .rsp files
-  # Ninja only writes while it builds, so the probes list their arguments in full.
-  PROBE_ARGS+=("-DCMAKE_C_USE_RESPONSE_FILE_FOR_OBJECTS=OFF" "-DCMAKE_CXX_USE_RESPONSE_FILE_FOR_OBJECTS=OFF"
-    "-DCMAKE_C_USE_RESPONSE_FILE_FOR_LIBRARIES=OFF" "-DCMAKE_CXX_USE_RESPONSE_FILE_FOR_LIBRARIES=OFF"
-    "-DCMAKE_C_USE_RESPONSE_FILE_FOR_INCLUDES=OFF" "-DCMAKE_CXX_USE_RESPONSE_FILE_FOR_INCLUDES=OFF"
-    "-DCMAKE_NINJA_FORCE_RESPONSE_FILE=OFF")
 fi
 
 # Python 3: on Windows it is python.exe (python3 there may be the Microsoft Store's placeholder).
@@ -87,8 +80,7 @@ cmake --build "${SDK_BUILD}" --config "${CONFIG_NAME}" --target install --parall
 
 echo "==> Building our code against the installed SDK"
 (cd "${RUNTIME_DIR}" && cmake --preset "${PLATFORM}" -B "${PROBE_BUILD}" \
-  -DAZURA_KIT_PROBE=ON -DCMAKE_PREFIX_PATH="${SDK_INSTALL}" ${PLATFORM_ARGS[@]+"${PLATFORM_ARGS[@]}"} \
-  ${PROBE_ARGS[@]+"${PROBE_ARGS[@]}"})
+  -DAZURA_KIT_PROBE=ON -DCMAKE_PREFIX_PATH="${SDK_INSTALL}" ${PLATFORM_ARGS[@]+"${PLATFORM_ARGS[@]}"})
 cmake --build "${PROBE_BUILD}" --config "${CONFIG_NAME}" --target azura_host --parallel
 
 echo "==> Assembling the kit"

@@ -60,6 +60,9 @@ def ninja_command(build: Path, config: str, target: str) -> str:
     lines = [line for line in result.stdout.splitlines() if line.strip()]
     if not lines:
         raise KitError(f"Ninja has no command for {target}")
+    # A response file is only written while Ninja builds, so the kit cannot record what it holds.
+    if any(token.startswith("@") and token.lower().endswith(".rsp") for token in lines[-1].split()):
+        raise KitError(f"the command for {target} takes its arguments from a response file:\n{lines[-1]}")
     return lines[-1]
 
 
@@ -263,7 +266,7 @@ def link_template(command: str, paths: Paths, output: Path) -> tuple[list[str], 
             continue
         out.append(paths.token(token))
     if objects_at is None:
-        raise KitError("the link command has no objects")
+        raise KitError(f"the link command has no objects:\n{command}")
     paths.check(out, "The link command")
     return out, after
 
