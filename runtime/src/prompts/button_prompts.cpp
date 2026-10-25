@@ -29,6 +29,8 @@
 #include <rex/thread/mutex.h>
 
 #include "glyph_art.h"
+#include "glyph_raster.h"
+#include "input/player_assignment.h"
 #include "script_hooks.h"
 #include "xenos_dxt5.h"
 
@@ -56,6 +58,9 @@ struct AtlasDef {
   std::array<uint32_t, 4> fingerprint_offsets;
   uint64_t fingerprint_hash;
   std::span<const Slot> slots;
+  // HUD icons: the game packs other pieces (the dots of a "hold" prompt, tick marks) right against
+  // its round buttons, inside the corners of their slots, so only the button's disc is ours there.
+  bool round_buttons = false;
 };
 
 using B = PadButton;
@@ -103,9 +108,9 @@ constexpr Slot kDirYSlots[] = {{0, 0, 32, 32, B::kY}};
 const AtlasDef kAtlases[] = {
     {"Xbox360_18pt", 65536, 256, 256, 64, {0x800, 0x5D00, 0x9540, 0xF7A0}, 0x4F275066BCC4C36Cull, kFontSlots},
     {"HUD_ActionIcons2", 65536, 256, 256, 64, {0xC0, 0x4CA0, 0xAE30, 0xFFF0}, 0xA7A6CDBA24A68498ull,
-     kActionIcons2Slots},
+     kActionIcons2Slots, true},
     {"WarfareHUD_ActionIcons", 262144, 512, 512, 128, {0x8A0, 0x18AA0, 0x2B7F0, 0x3F7F0},
-     0x104FCC5D6BCC684Eull, kWarfareSlots},
+     0x104FCC5D6BCC684Eull, kWarfareSlots, true},
     {"HUD_Dir_ButtonA", 16384, 32, 32, 32, {0x110, 0x500, 0x1030, 0x1620}, 0xD1391F5D1B926434ull, kDirASlots},
     {"HUD_Dir_ButtonB", 16384, 32, 32, 32, {0x110, 0x430, 0x1020, 0x1620}, 0x3A3B7F982BE5036Full, kDirBSlots},
     {"HUD_Dir_ButtonX", 16384, 32, 32, 32, {0x110, 0x500, 0x1030, 0x1620}, 0x918B0905E5B3D6C7ull, kDirXSlots},
@@ -198,6 +203,26 @@ PcPrompt PromptFor(PadButton button, const Bindings& b) {
   }
   return single(kBindA);
 }
+
+// Buttons whose game art is a disc: the face buttons and the stick presses.
+bool IsRound(PadButton button) {
+  switch (button) {
+    case B::kA:
+    case B::kB:
+    case B::kX:
+    case B::kY:
+    case B::kLeftStickPress:
+    case B::kRightStickPress:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// Alpha above which a pixel outside a round button's disc is a piece of the game's own art.
+constexpr uint8_t kForeignAlpha = 16;
+// How far past a round button's slot, in pixels, its disc and shadow are cleared.
+constexpr float kDiscMargin = 1.5f;
 
 // --- The player's controller layout ---------------------------------------------------------------
 
@@ -328,6 +353,22 @@ class ButtonPrompts::Impl {
     }
   }
 
+  // The model of player 1's PlayStation controller: a DualShock 4 when that is the one they have,
+  // otherwise (a DualSense, or none) a DualSense.
+  static PsModel CurrentPsModel() {
+    const auto* assignment = azura::input::InstalledPlayerAssignment();
+    if (!assignment) return PsModel::kDualSense;
+    for (const auto& slot : assignment->Slots()) {
+      if (slot.keyboard || slot.player != 0 ||
+          slot.device.controller_subtype != rex::input::ControllerSubtype::kPlayStation) {
+        continue;
+      }
+      std::string name = Lower(slot.device.name);
+      if (name.find("dualsense") == std::string::npos) return PsModel::kDualShock4;
+    }
+    return PsModel::kDualSense;
+  }
+
   static Bindings CurrentBindings() {
     Bindings b;
     for (int i = 0; i < kBindCount; ++i) {
@@ -386,6 +427,9 @@ class ButtonPrompts::Impl {
       for (const auto& k : bindings.keys) key += "|" + k;
       key += bindings.mouse_look ? "|look" : "|keys";
     }
+    // Player 1's PlayStation controller: the DualSense's glyphs are grey, the DualShock 4's coloured.
+    const PsModel ps_model = CurrentPsModel();
+    if (style == Style::kPlayStation && ps_model == PsModel::kDualShock4) key += "|ds4";
     if (style != last_style_) {
       static constexpr const char* kNames[] = {"Xbox", "PlayStation", "keyboard and mouse"};
       REXLOG_INFO("[Azura prompts] Button prompts: {}", kNames[static_cast<int>(style)]);
@@ -401,7 +445,7 @@ class ButtonPrompts::Impl {
       for (auto& inst : atlas.instances) {
         if (inst.written_key == key) continue;
         if (blocks.empty()) {
-          blocks = style == Style::kXbox && !remapped ? inst.original : Draw(atlas, inst.original, style, bindings, layout);
+          blocks = style == Style::kXbox && !remapped ? inst.original : Draw(atlas, inst.original, style, bindings, layout, ps_model);
         }
         Write(memory, membase, atlas, inst.physical, blocks);
         inst.written = blocks;
@@ -517,7 +561,7 @@ class ButtonPrompts::Impl {
   // The atlas with our glyphs: PlayStation's or the keyboard's drawn in every slot, or the game's
   // own Xbox glyphs moved between slots for the player's controller layout.
   static std::vector<Block> Draw(const AtlasState& atlas, const std::vector<Block>& original, Style style,
-                                 const Bindings& bindings, const rex::input::PadLayout& layout) {
+                                 const Bindings& bindings, const rex::input::PadLayout& layout, PsModel ps_model) {
     const AtlasDef& def = *atlas.def;
     const int w = def.width;
     const int h = def.height;
@@ -546,15 +590,29 @@ class ButtonPrompts::Impl {
     }
     for (size_t s = 0; s < def.slots.size() && style != Style::kXbox; ++s) {
       const Slot& slot = def.slots[s];
+      // A round button among the HUD icons: the game's own pieces in the slot's corners, outside
+      // the button's disc, stay as they are and our glyph is drawn around them.
+      const bool round = def.round_buttons && IsRound(slot.button);
+      // The button's disc with its shadow, which reaches a pixel or two past the slot.
+      auto in_disc = [&](int x, int y) {
+        const float dx = (x + 0.5f - (slot.u + slot.w / 2.0f)) / (slot.w / 2.0f + kDiscMargin);
+        const float dy = (y + 0.5f - (slot.v + slot.h / 2.0f)) / (slot.h / 2.0f + kDiscMargin);
+        return dx * dx + dy * dy <= 1.0f;
+      };
+      auto foreign = [&](int x, int y) {
+        return round && !in_disc(x, y) && image[static_cast<size_t>(y * w + x)][3] > kForeignAlpha;
+      };
       for (int y = std::max(0, slot.v - 1); y < std::min(h, slot.v + slot.h + 1); ++y)
-        for (int x = std::max(0, slot.u - 1); x < std::min(w, slot.u + slot.w + 1); ++x)
-          image[static_cast<size_t>(y * w + x)] = Rgba{0, 0, 0, 0};
+        for (int x = std::max(0, slot.u - 1); x < std::min(w, slot.u + slot.w + 1); ++x) {
+          if (!round || in_disc(x, y)) image[static_cast<size_t>(y * w + x)] = Rgba{0, 0, 0, 0};
+        }
       const std::vector<uint8_t> glyph =
           style == Style::kPlayStation
-              ? DrawPlayStationGlyph(PhysicalButton(slot.button, layout), slot.w, slot.h)
-              : DrawPcGlyph(PromptFor(slot.button, bindings), slot.w, slot.h, static_cast<uint32_t>(s * 7 + 11));
+              ? DrawPlayStationGlyph(PhysicalButton(slot.button, layout), slot.w, slot.h, ps_model)
+              : DrawPcGlyph(PromptFor(slot.button, bindings), slot.w, slot.h);
       for (int y = 0; y < slot.h; ++y)
         for (int x = 0; x < slot.w; ++x) {
+          if (foreign(slot.u + x, slot.v + y)) continue;
           const uint8_t* g = &glyph[static_cast<size_t>((y * slot.w + x) * 4)];
           image[static_cast<size_t>((slot.v + y) * w + slot.u + x)] = Rgba{g[0], g[1], g[2], g[3]};
         }
@@ -596,7 +654,12 @@ class ButtonPrompts::Impl {
   std::thread thread_;
 };
 
-ButtonPrompts::ButtonPrompts(rex::Runtime* runtime) : impl_(std::make_unique<Impl>(runtime)) {}
+ButtonPrompts::ButtonPrompts(rex::Runtime* runtime, const std::filesystem::path& legend_font) {
+  if (!LoadLegendFont(legend_font.string())) {
+    REXLOG_WARN("[Azura prompts] {} could not be loaded; keyboard glyphs use pixel fonts", legend_font.string());
+  }
+  impl_ = std::make_unique<Impl>(runtime);
+}
 
 ButtonPrompts::~ButtonPrompts() = default;
 

@@ -1,8 +1,9 @@
 // The button prompt designs: PlayStation (DualSense) glyphs and the PC keyboard and mouse glyphs.
 //
-// The PC glyphs follow the Gears of War 3 key art: ragged black silhouettes backlit by amber light,
-// with the legend "cut through" the black so the light shows, like the eyes of the skull. Every
-// key a binding can name has a face here, so the prompts follow whatever the player binds.
+// The PC glyphs follow the Gears of War 3 key art: black silhouettes with a slightly ragged edge,
+// rimmed by amber light, with amber legends. The rim is opaque and crisp, not a soft glow, so the
+// glyphs sit in the game's text as cleanly as its own. Every key a binding can name has a face here,
+// so the prompts follow whatever the player binds.
 //
 // Each Draw* function returns a straight-alpha RGBA8 image of exactly width x height pixels.
 
@@ -41,7 +42,11 @@ enum class PadButton : uint8_t {
   kDpadLeftRight,
 };
 
-std::vector<uint8_t> DrawPlayStationGlyph(PadButton button, int width, int height);
+// The PlayStation controller the glyphs are drawn for: the DualSense's action button symbols are
+// grey, the DualShock 4's coloured.
+enum class PsModel : uint8_t { kDualSense, kDualShock4 };
+
+std::vector<uint8_t> DrawPlayStationGlyph(PadButton button, int width, int height, PsModel model);
 
 // What a PC prompt shows.
 struct PcPrompt {
@@ -55,8 +60,7 @@ struct PcPrompt {
   std::vector<std::string> keys;  // key names as written in the keybind_* settings
 };
 
-// `seed` varies the ragged outline so neighbouring glyphs do not look stamped from one mould.
-std::vector<uint8_t> DrawPcGlyph(const PcPrompt& prompt, int width, int height, uint32_t seed);
+std::vector<uint8_t> DrawPcGlyph(const PcPrompt& prompt, int width, int height);
 
 // Reduces a keybind value to the key its prompt shows: the first alternative of a comma-separated
 // list, without modifier prefixes ("Shift+W,Q" -> "W"). A bare modifier ("Shift") stays as is.
