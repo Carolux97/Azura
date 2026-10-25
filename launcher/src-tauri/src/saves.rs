@@ -510,7 +510,7 @@ pub fn open_saves_folder_internal(saves_dir: &Path) -> Result<(), String> {
 
     #[cfg(target_os = "linux")]
     {
-        std::process::Command::new("xdg-open")
+        crate::host_env::use_host_env(&mut std::process::Command::new("xdg-open"))
             .arg(&dir)
             .spawn()
             .map_err(|e| e.to_string())?;

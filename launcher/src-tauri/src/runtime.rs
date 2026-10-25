@@ -224,6 +224,8 @@ fn spawn_game<E: GameEvents>(
     // On Linux laptops with an NVIDIA GPU next to an integrated one, PRIME render offload runs the
     // game on the NVIDIA one (and hides the others from it).
     crate::gpus::set_prime_offload(&mut command, prime_offload);
+    // The game loads its own libraries and the system's, never the AppImage's (see host_env.rs).
+    crate::host_env::use_host_env(&mut command);
     let mut child = command.spawn()?;
     let (done, relays_done) = mpsc::channel();
     let mut relays = 0;

@@ -182,6 +182,8 @@ pub fn list_from_runtime(runtime_dir: &Path) -> Result<RuntimeGpuList, String> {
     command.arg("--list_gpus=true").current_dir(runtime_dir).stdin(Stdio::null());
     // Without PRIME render offload, which hides every card but the NVIDIA one.
     set_prime_offload(&mut command, false);
+    // The same libraries as the game, so the list is the one the game will see.
+    crate::host_env::use_host_env(&mut command);
     let output = command
         .output()
         .map_err(|e| format!("cannot run {}: {e}", executable.display()))?;
