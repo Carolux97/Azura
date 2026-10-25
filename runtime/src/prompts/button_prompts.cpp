@@ -124,10 +124,26 @@ uint64_t Fnv1a(const uint8_t* data, size_t size, uint64_t hash = 0xCBF29CE484222
   return hash;
 }
 
+// Copies between our buffers and guest memory, false when the guest memory is gone. The game can
+// free memory at any moment; on Windows the freed pages go back to the system, so a copy can find
+// them gone even right after a readability check, and reading them would end the game.
+bool CopyGuestMemory(void* destination, const void* source, size_t size) {
+#if defined(_WIN32)
+  return azura::TryCopy(destination, source, size);
+#else
+  std::memcpy(destination, source, size);
+  return true;
+#endif
+}
+
 bool FingerprintMatches(const uint8_t* texture, const AtlasDef& atlas) {
   uint64_t hash = 0xCBF29CE484222325ull;
   for (uint32_t offset : atlas.fingerprint_offsets) {
-    hash = Fnv1a(texture + offset, 16, hash);
+    uint8_t sample[16];
+    if (!CopyGuestMemory(sample, texture + offset, sizeof(sample))) {
+      return false;
+    }
+    hash = Fnv1a(sample, sizeof(sample), hash);
   }
   return hash == atlas.fingerprint_hash;
 }
@@ -403,7 +419,8 @@ class ButtonPrompts::Impl {
         if (blocks.empty()) {
           blocks = style == Style::kXbox && !remapped ? inst.original : Draw(atlas, inst.original, style, bindings, layout);
         }
-        Write(memory, membase, atlas, inst.physical, blocks);
+        // Gone memory is dropped by the next Validate.
+        if (!Write(memory, membase, atlas, inst.physical, blocks)) continue;
         inst.written = blocks;
         inst.written_key = key;
       }
@@ -435,7 +452,10 @@ class ButtonPrompts::Impl {
         }
         if (FingerprintMatches(tex, *atlas.def)) {
           if (!it->written.empty()) {  // reloaded by the game: our blocks were overwritten
-            it->original = Read(tex, atlas);
+            if (!Read(tex, atlas, it->original)) {
+              it = list.erase(it);
+              continue;
+            }
             it->written.clear();
             it->written_key.clear();
           }
@@ -491,24 +511,30 @@ class ButtonPrompts::Impl {
         if (std::any_of(list.begin(), list.end(), [&](const Instance& i) { return i.physical == page; })) continue;
         Instance inst;
         inst.physical = page;
-        inst.original = Read(tex, atlas);
+        if (!Read(tex, atlas, inst.original)) continue;
         list.push_back(std::move(inst));
         REXLOG_INFO("[Azura prompts] Found {} at physical 0x{:08X}", atlas.def->name, page);
       }
     }
   }
 
-  static std::vector<Block> Read(const uint8_t* tex, const AtlasState& atlas) {
-    std::vector<Block> blocks(atlas.block_offsets.size());
+  // The atlas's blocks as they are in guest memory, false when the memory is gone.
+  static bool Read(const uint8_t* tex, const AtlasState& atlas, std::vector<Block>& blocks) {
+    blocks.resize(atlas.block_offsets.size());
     for (size_t i = 0; i < blocks.size(); ++i) {
-      std::memcpy(blocks[i].data(), tex + atlas.block_offsets[i], 16);
+      if (!CopyGuestMemory(blocks[i].data(), tex + atlas.block_offsets[i], 16)) {
+        return false;
+      }
     }
-    return blocks;
+    return true;
   }
 
+  // Whether guest memory holds `blocks`; false also when the memory is gone.
   static bool Matches(const uint8_t* tex, const AtlasState& atlas, const std::vector<Block>& blocks) {
     for (size_t i = 0; i < blocks.size(); ++i) {
-      if (std::memcmp(tex + atlas.block_offsets[i], blocks[i].data(), 16) != 0) return false;
+      Block current;
+      if (!CopyGuestMemory(current.data(), tex + atlas.block_offsets[i], current.size())) return false;
+      if (current != blocks[i]) return false;
     }
     return true;
   }
@@ -572,17 +598,20 @@ class ButtonPrompts::Impl {
   // Writes the blocks and makes the GPU texture cache drop its copy of the texture. The cache
   // write-protects the pages it uploaded from; the first notification lifts that, the second makes
   // sure an upload that slipped in between is redone with the new data.
-  static void Write(rex::memory::Memory* memory, uint8_t* membase, const AtlasState& atlas, uint32_t physical,
+  // False when the memory is gone (part of the blocks may be written then).
+  static bool Write(rex::memory::Memory* memory, uint8_t* membase, const AtlasState& atlas, uint32_t physical,
                     const std::vector<Block>& blocks) {
     auto notify = [&] {
       memory->TriggerPhysicalMemoryCallbacks(rex::thread::global_critical_region::AcquireDirect(),
                                              kPhysicalView + physical, atlas.def->byte_size, true, false, true);
     };
     notify();
-    for (size_t i = 0; i < blocks.size(); ++i) {
-      std::memcpy(membase + physical + atlas.block_offsets[i], blocks[i].data(), 16);
+    bool written = true;
+    for (size_t i = 0; i < blocks.size() && written; ++i) {
+      written = CopyGuestMemory(membase + physical + atlas.block_offsets[i], blocks[i].data(), 16);
     }
     notify();
+    return written;
   }
 
   rex::Runtime* runtime_;
