@@ -112,6 +112,7 @@
     "compilerMissing": "コンパイラが見つかりません。",
     "compilerInstallApple": "Apple の Command Line Tools をインストール",
     "compilerInstallPackage": "clang をインストール",
+    "compilerInstallWindows": "LLVM と Visual Studio Build Tools をインストール",
     "compilerInstalling": "コンパイラをインストールしています…",
     "compilerWaitingApple": "Apple のウインドウに従って Command Line Tools をインストールしてください。インストール後、ランチャーは自動で続行します。",
     "compilerCheckAgain": "再確認",
@@ -131,7 +132,10 @@
     "gpu": "グラフィックカード",
     "gpuAuto": "自動（{name}）",
     "gpuDiscrete": "専用",
-    "gpuIntegrated": "内蔵"
+    "gpuIntegrated": "内蔵",
+    "whilePlaying": "プレイ中のランチャー",
+    "whilePlayingMinimize": "最小化する",
+    "whilePlayingKeepOpen": "開いたままにする"
   },
   "achievements": {
     "title": "実績",
@@ -294,5 +298,18 @@
     "done": "完了",
     "cancel": "キャンセル",
     "page": "ページ"
+  },
+  "shaders": {
+    "title": "シェーダーの準備",
+    "help": "以前のプレイのシェーダーをプレイ前にコンパイルし、プレイ中にゲームが行わずに済むようにします。少し時間がかかり、ゲームを閉じておく必要があります。",
+    "prepare": "今すぐ準備",
+    "starting": "開始中…",
+    "progress": "{total} 個中 {done} 個のパイプラインが準備完了",
+    "done": "{total} 個のパイプラインが準備完了。ゲームは準備済みの状態で起動します。",
+    "empty": "保存されたシェーダーはまだありません。プレイ中に保存されるので、しばらくプレイしてから戻ってきてください。",
+    "failed": "シェーダーを準備できませんでした。詳しくはゲームのログを開いてください。",
+    "prepareAgain": "もう一度準備",
+    "prepared": "{date} に {total} 個のパイプラインを準備しました。",
+    "newSince": "前回（{date}）以降、ゲームが新しいシェーダーを保存しました。もう一度準備してください。"
   }
 }

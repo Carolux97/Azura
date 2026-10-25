@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Builds a signed release of the Azura launcher for the platform it runs on (macOS on Apple
-# Silicon, Linux on x86-64), with the player kit inside, and, with --publish, publishes it
-# (scripts/publish-launcher.sh) so installed launchers update themselves. The Release workflow
-# runs it on both platforms and publishes once with both; running it by hand releases one platform.
+# Silicon, Linux on x86-64, Windows on x86-64 from Git Bash), with the player kit inside, and, with
+# --publish, publishes it (scripts/publish-launcher.sh) so installed launchers update themselves.
+# The Release workflow runs it on every platform and publishes once with all of them; running it by
+# hand releases one platform.
 #
 # Steps:
 #   1. read the version from tauri.conf.json and check package.json and Cargo.toml agree; the
@@ -11,7 +12,8 @@
 #      workflow's artifact unpacked in the same place): it goes into the bundle's resources as
 #      kit/, where the launcher's builder looks for it;
 #   3. build the bundle and its signed update archive: on macOS the .app (its update archive is
-#      the .app.tar.gz) and the .dmg players download; on Linux the AppImage, which is both;
+#      the .app.tar.gz) and the .dmg players download; on Linux the AppImage, which is both; on
+#      Windows the NSIS installer, which is both too (the updater runs it);
 #   4. copy them to launcher/dist/<version>/ with space-free names and write the platform's entry
 #      of latest.json (latest-<platform>.json: signature and archive URL), which
 #      publish-launcher.sh merges into the latest.json the launcher's updater reads.
@@ -37,7 +39,9 @@ if ! command -v cargo &>/dev/null; then
   fi
 fi
 
-readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# On Windows (Git Bash) as a Windows path with forward slashes (pwd -W), which the native
+# programs it is passed to (CMake, Python, Node) read; elsewhere pwd -W fails and pwd answers.
+readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 readonly LAUNCHER="${ROOT}/launcher"
 source "${ROOT}/scripts/release-common.sh"
 
@@ -60,8 +64,11 @@ case "$(uname -s)-$(uname -m)" in
   Linux-x86_64)
     readonly KIT_PLATFORM="linux-amd64" UPDATER_PLATFORM="linux-x86_64" BUNDLES="appimage"
     ;;
+  MINGW64_NT*-x86_64 | MSYS_NT*-x86_64)
+    readonly KIT_PLATFORM="win-amd64" UPDATER_PLATFORM="windows-x86_64" BUNDLES="nsis"
+    ;;
   *)
-    echo "Releases are built on macOS (Apple Silicon) or Linux (x86-64), not $(uname -s) $(uname -m)." >&2
+    echo "Releases are built on macOS (Apple Silicon), Linux or Windows (x86-64), not $(uname -s) $(uname -m)." >&2
     exit 1
     ;;
 esac
@@ -130,6 +137,16 @@ if [[ "${KIT_PLATFORM}" == mac-* ]]; then
         done
     "${LSREGISTER}" -gc 2>/dev/null || true
   fi
+elif [[ "${KIT_PLATFORM}" == win-* ]]; then
+  # The installer is what players download and what the updater runs to update.
+  readonly ARCHIVE="Azura-Launcher_${VERSION}_x64-setup.exe"
+  readonly GENERATED_INSTALLER="$(find "${BUNDLE}/nsis" -name "*-setup.exe" -print -quit)"
+  if [[ -z "${GENERATED_INSTALLER}" ]]; then
+    echo "No installer in ${BUNDLE}/nsis." >&2
+    exit 1
+  fi
+  cp "${GENERATED_INSTALLER}" "${DIST}/${ARCHIVE}"
+  cp "${GENERATED_INSTALLER}.sig" "${DIST}/${ARCHIVE}.sig"
 else
   # The AppImage is what players download and what the updater replaces itself with.
   readonly ARCHIVE="Azura-Launcher_${VERSION}_amd64.AppImage"

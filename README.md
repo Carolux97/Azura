@@ -1,8 +1,7 @@
 # Gears3-Azura
 
-Unofficial native port of Gears of War 3 (Xbox 360) to macOS on Apple Silicon and to Linux
-(x86-64), with a Windows (x86-64) version on the way: there the game builds from source and plays
-the campaign, and the launcher runs, but it cannot build or start the game yet.
+Unofficial native port of Gears of War 3 (Xbox 360) to macOS on Apple Silicon, Linux (x86-64) and
+Windows (x86-64).
 
 It does not emulate the console at run time. The game's PowerPC code is translated ahead of time
 into C++ by the [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk) and compiled into a normal
@@ -15,20 +14,17 @@ the recompiled code is generated on your machine from your own `default.xex` and
 
 ## Download
 
-The launcher for macOS (Apple Silicon) and Linux (x86-64) is published in
+The launcher for macOS (Apple Silicon), Linux (x86-64) and Windows (x86-64) is published in
 [gears3-azura-releases](https://github.com/Carolux97/gears3-azura-releases/releases/latest).
 Point it at your own copy of the game (a folder or a disc image): it builds the game for your
 machine and keeps itself and the game up to date. The macOS launcher is not signed with an Apple
 Developer ID, so the first time it opens from System Settings, Privacy & Security.
 
-The Windows version (Windows 10 and 11, x86-64) is not in the releases yet. The game, compiled for
-Windows with Vulkan, builds from source (cross-built from Linux, see Build) and plays the campaign.
-Its launcher, the Windows build of the same launcher, names the Windows PC it runs on and can
-choose the game files and edit the settings, but cannot build or start the game yet: there is no
-Windows player kit. Build it from a checkout on Linux with `scripts/build-launcher-windows.sh`,
-which makes an installer (the launcher then appears in Windows' installed apps, where its
-uninstaller removes it) and the launcher alone, to run without installing. Neither is signed, so
-SmartScreen warns the first time.
+On Windows the launcher comes as an installer (`Azura-Launcher_<version>_x64-setup.exe`) that
+installs it for your user and registers it in Windows' installed apps, where its uninstaller
+removes it. It is not signed, so SmartScreen warns the first time: More info, Run anyway. To build
+the game it needs LLVM's clang and Visual Studio's Build Tools (the C++ workload), which it
+installs with winget when they are missing; the game runs with Vulkan, as on Linux.
 
 ## Layout
 
@@ -48,8 +44,9 @@ SmartScreen warns the first time.
 
 ## Requirements
 
-To play, you only need the launcher (see Download), on macOS 13.3 or later on Apple Silicon, or on
-Linux x86-64 with glibc 2.35 or newer (as Ubuntu 22.04), and your own copy of the game.
+To play, you only need the launcher (see Download), on macOS 13.3 or later on Apple Silicon, on
+Linux x86-64 with glibc 2.35 or newer (as Ubuntu 22.04), or on Windows 10 or 11 x86-64 with a
+Vulkan graphics driver, and your own copy of the game.
 
 To build from source:
 
@@ -58,7 +55,12 @@ To build from source:
 - On Linux: clang, CMake 3.25+, Ninja, the Vulkan SDK and the development libraries the SDK builds
   against (the "Install the toolchain (Linux)" step of `.github/workflows/runtime-kit.yml` lists
   them for Ubuntu 22.04); `iniciar-linux.sh` sets up the launcher.
-- For Windows, on Linux: a Linux build first (its `rexglue` runs codegen for the cross build), and
+- On Windows: LLVM's clang (`winget install LLVM.LLVM`), Visual Studio 2022 or its Build Tools
+  with the C++ workload, CMake 3.25+, Ninja, Python 3 and Git for Windows, whose Git Bash runs the
+  scripts (`scripts/build.sh` uses the preset `win-amd64-sdk-source`). Clone this repository and the
+  SDK with `git config --global core.autocrlf false` first: the SDK patches apply to files with
+  their original line endings.
+- To cross-build for Windows on Linux instead: a Linux build first (its `rexglue` runs codegen for the cross build), and
   for the game the CMake preset `win-amd64-cross-sdk-source` with clang, LLVM and
   Microsoft's CRT and SDK as cargo-xwin downloads them (`~/.cache/cargo-xwin/xwin`, or `XWIN_DIR`;
   see `runtime/cmake/toolchain-win-amd64-cross.cmake`); for the launcher Rust, Node.js, LLVM
@@ -91,7 +93,8 @@ edition, see the comment at the end of `versions.toml`.
 scripts/build.sh
 ```
 
-The game for Windows, cross-built on Linux after that build, in `runtime/`:
+On Windows, `scripts/build.sh` runs in Git Bash as elsewhere. The game for Windows can also be
+cross-built on Linux after a Linux build, in `runtime/`:
 
 ```bash
 cmake --preset win-amd64-cross-sdk-source
@@ -109,8 +112,7 @@ on one computer, and we keep playing it through to fix what turns up. Working to
 co-op (Options, Local co-op), achievements with their artwork, a save manager with backups, and
 video options (render resolution, upscaling, antialiasing, frame rate limit). The launcher builds
 the game from your own copy and keeps itself and the game up to date. Not yet: online co-op and
-multiplayer, and on Windows a player kit, so that the launcher builds and starts the game there
-too.
+multiplayer.
 
 ## Credits
 

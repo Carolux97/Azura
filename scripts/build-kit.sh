@@ -21,7 +21,9 @@
 set -euo pipefail
 
 readonly CONFIG="${1:-relwithdebinfo}"
-readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# On Windows (Git Bash) as a Windows path with forward slashes (pwd -W), which the native
+# programs it is passed to (CMake, Python, Node) read; elsewhere pwd -W fails and pwd answers.
+readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 readonly RUNTIME_DIR="${ROOT}/runtime"
 readonly SDK_SRC="${ROOT}/sdk/rexglue-0.10.0-src"
 # shellcheck source=sdk_prepare.sh
@@ -50,6 +52,18 @@ PLATFORM_ARGS=()
 if [[ "${PLATFORM}" == mac-* ]]; then
   PLATFORM_ARGS+=("-DCMAKE_OSX_DEPLOYMENT_TARGET=${MACOS_DEPLOYMENT_TARGET}")
 fi
+if [[ "${PLATFORM}" == win-* ]]; then
+  # Vulkan, as on Linux (the SDK defaults to D3D12 on Windows), and the release CRT in every
+  # configuration, as the runtime's presets build it, so the SDK and our code share one CRT.
+  PLATFORM_ARGS+=("-DREXGLUE_USE_VULKAN=ON" "-DREXGLUE_USE_D3D12=OFF" "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL")
+fi
+
+# Python 3: on Windows it is python.exe (python3 there may be the Microsoft Store's placeholder).
+if [[ "${PLATFORM}" == win-* ]]; then
+  readonly PYTHON="python"
+else
+  readonly PYTHON="python3"
+fi
 
 require_sdk
 prepare_sdk
@@ -74,12 +88,12 @@ REVISION="$(git -C "${ROOT}" rev-parse --short HEAD)"
 if [[ -n "$(git -C "${ROOT}" status --porcelain -- runtime scripts patches)" ]]; then
   REVISION="${REVISION}-modified"
 fi
-python3 "${ROOT}/scripts/kit/make_kit.py" --probe-build "${PROBE_BUILD}" --config "${CONFIG_NAME}" \
+"${PYTHON}" "${ROOT}/scripts/kit/make_kit.py" --probe-build "${PROBE_BUILD}" --config "${CONFIG_NAME}" \
   --sdk "${SDK_INSTALL}" --runtime "${RUNTIME_DIR}" --root "${ROOT}" --out "${KIT}" \
   --platform "${PLATFORM}" --revision "${REVISION}"
 
 echo "==> Checking the kit"
-python3 "${ROOT}/scripts/kit/check_kit.py" --kit "${KIT}" --registry "${ROOT}/versions.toml" \
+"${PYTHON}" "${ROOT}/scripts/kit/check_kit.py" --kit "${KIT}" --registry "${ROOT}/versions.toml" \
   --work "${OUT}/check"
 
 echo "==> Done. Kit: ${KIT} ($(du -sh "${KIT}" | cut -f 1))"

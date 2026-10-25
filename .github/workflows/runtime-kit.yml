@@ -1,4 +1,4 @@
-# Builds the player kit (scripts/build-kit.sh) on macOS and Linux: what the launcher needs to build
+# Builds the player kit (scripts/build-kit.sh) on macOS, Linux and Windows: what the launcher needs to build
 # the runtime on a player's machine from their own default.xex (docs/player-runtime-build.md). The
 # kit holds no game data, so it builds here; scripts/kit/check_kit.py checks it before it is kept.
 #
@@ -55,6 +55,10 @@ jobs:
           - platform: linux-amd64
             runner: ubuntu-latest
             container: ubuntu:22.04
+          # With the image's LLVM clang and Visual Studio (Microsoft's headers and libraries), as
+          # players build with the Build Tools; the scripts run in Git Bash.
+          - platform: win-amd64
+            runner: windows-latest
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container }}
     env:
@@ -89,6 +93,18 @@ jobs:
         if: startsWith(matrix.platform, 'mac-')
         run: brew install cmake ninja
 
+      # The image has CMake and LLVM; Ninja comes from Chocolatey. The SDK's third-party trees have
+      # paths longer than Windows' default limit, and the patches only apply to files checked out
+      # with the line endings they were made from (Git for Windows turns them into CRLF).
+      - name: Install the toolchain (Windows)
+        if: startsWith(matrix.platform, 'win-')
+        shell: bash
+        run: |
+          choco install ninja -y --no-progress
+          git config --global core.longpaths true
+          git config --global core.autocrlf false
+          clang++ --version
+
       - name: Check out the repository
         uses: actions/checkout@v7
 
@@ -100,10 +116,11 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: sdk/rexglue-${{ env.SDK_VERSION }}-src
-          key: rexglue-src-${{ env.SDK_VERSION }}-${{ runner.os }}-v1
+          key: rexglue-src-${{ env.SDK_VERSION }}-${{ runner.os }}-v2
 
       - name: Get the SDK source
         if: steps.sdk-source.outputs.cache-hit != 'true'
+        shell: bash
         run: |
           git clone --recursive --shallow-submodules --depth 1 --branch "v${SDK_VERSION}" \
             https://github.com/rexglue/rexglue-sdk.git "sdk/rexglue-${SDK_VERSION}-src"
@@ -113,7 +130,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: sdk/rexglue-${{ env.SDK_VERSION }}-src
-          key: rexglue-src-${{ env.SDK_VERSION }}-${{ runner.os }}-v1
+          key: rexglue-src-${{ env.SDK_VERSION }}-${{ runner.os }}-v2
 
       # The patches apply to a clean tree, as the cache and the clone hold it.
       - name: Clean the SDK source
@@ -135,7 +152,9 @@ jobs:
           mkdir -p "sdk/rexglue-${SDK_VERSION}-${{ matrix.platform }}"
           unzip -q -o "sdk/${zip}" -d "sdk/rexglue-${SDK_VERSION}-${{ matrix.platform }}"
           rm "sdk/${zip}"
-          chmod +x "sdk/rexglue-${SDK_VERSION}-${{ matrix.platform }}/${{ matrix.platform }}/bin/rexglue"
+          if [[ "${{ matrix.platform }}" != win-* ]]; then
+            chmod +x "sdk/rexglue-${SDK_VERSION}-${{ matrix.platform }}/${{ matrix.platform }}/bin/rexglue"
+          fi
 
       - name: Build and check the kit
         shell: bash

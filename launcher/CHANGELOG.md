@@ -6,6 +6,24 @@ it as the update's notes (`scripts/release-common.sh`). Bumping the version adds
 release without one fails. One list item (`- `) per change, in English; an item may continue on
 indented lines.
 
+## 0.4.0
+
+- Play has a Prepare shaders card: it compiles the shaders the game stored in your earlier
+  sessions before you play, so they are ready instead of being made while you play. It shows its
+  progress, remembers when it last ran, and offers to prepare again once the game has stored new
+  shaders since.
+- The launcher leaves the game the processor: its animations pause while the game runs or the
+  launcher is in the background, it minimizes itself while you play and comes back when the game
+  ends (Graphics, Launcher while playing), and it draws the game log only when it can be seen.
+- The mouse turns the camera directly, as in a PC game: no dead zone for slow aiming, no limit on
+  fast turns, and the camera stops as soon as the mouse does. Mouse sensitivity now sets the turn
+  per pixel; if you raised it before, lower it again.
+- On Linux, the game and the programs the launcher starts use your system's libraries instead of
+  the launcher's own copies (it fixes keyboard errors in the game log on newer systems).
+- Windows (10 and 11, x86-64): the launcher comes as an installer, builds the game from your copy
+  and keeps itself and the game up to date, as on macOS and Linux. To build the game it installs
+  LLVM and Visual Studio's Build Tools with winget when they are missing.
+
 ## 0.3.0
 
 - Local co-op: two players can play the campaign in split screen on one computer. In the game's

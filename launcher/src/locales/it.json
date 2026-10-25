@@ -112,6 +112,7 @@
     "compilerMissing": "Nessun compilatore trovato.",
     "compilerInstallApple": "Installa i Command Line Tools di Apple",
     "compilerInstallPackage": "Installa clang",
+    "compilerInstallWindows": "Installa LLVM e Visual Studio Build Tools",
     "compilerInstalling": "Installazione del compilatore…",
     "compilerWaitingApple": "Segui la finestra di Apple per installare i Command Line Tools. Il launcher prosegue da solo una volta installati.",
     "compilerCheckAgain": "Verifica di nuovo",
@@ -131,7 +132,10 @@
     "gpu": "Scheda grafica",
     "gpuAuto": "Automatica ({name})",
     "gpuDiscrete": "dedicata",
-    "gpuIntegrated": "integrata"
+    "gpuIntegrated": "integrata",
+    "whilePlaying": "Launcher durante il gioco",
+    "whilePlayingMinimize": "Ridurlo a icona",
+    "whilePlayingKeepOpen": "Lasciarlo aperto"
   },
   "achievements": {
     "title": "Obiettivi",
@@ -294,5 +298,18 @@
     "done": "Fatto",
     "cancel": "Annulla",
     "page": "Pagina"
+  },
+  "shaders": {
+    "title": "Prepara gli shader",
+    "help": "Compila gli shader delle tue sessioni precedenti prima di giocare, così il gioco non deve farlo mentre giochi. Richiede un momento e il gioco deve essere chiuso.",
+    "prepare": "Prepara ora",
+    "starting": "Avvio…",
+    "progress": "{done} di {total} pipeline pronte",
+    "done": "{total} pipeline pronte. Il gioco parte con esse già pronte.",
+    "empty": "Nessuno shader salvato ancora: vengono conservati mentre giochi, quindi gioca un po' e torna qui.",
+    "failed": "Non è stato possibile preparare gli shader. Apri il registro del gioco per i dettagli.",
+    "prepareAgain": "Prepara di nuovo",
+    "prepared": "{total} pipeline preparate il {date}.",
+    "newSince": "Il gioco ha salvato nuovi shader dall'ultima volta ({date}): preparali di nuovo."
   }
 }

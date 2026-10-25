@@ -34,7 +34,11 @@ use tauri::{AppHandle, Emitter};
 use crate::gpus::LaunchChoice;
 
 /// Name of the runtime executable inside the runtime folder.
+#[cfg(not(windows))]
 pub const RUNTIME_EXECUTABLE: &str = "azura";
+/// Name of the runtime executable inside the runtime folder.
+#[cfg(windows)]
+pub const RUNTIME_EXECUTABLE: &str = "azura.exe";
 
 /// Event carrying one line of the game's output.
 pub const OUTPUT_EVENT: &str = "game-output";
@@ -150,6 +154,14 @@ impl GameEvents for AppHandle {
 
     fn exit(&self, exit: ExitInfo) {
         let _ = self.emit(EXIT_EVENT, exit);
+        // The launcher minimized itself for the game (launch_game in lib.rs): it comes back in front.
+        use tauri::Manager;
+        if let Some(window) = self.get_webview_window("main") {
+            if window.is_minimized().unwrap_or(false) {
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }
     }
 }
 
@@ -283,12 +295,14 @@ impl GameProcess {
 
     /// Starts the runtime from its folder, so it finds `azura.toml` and writes its logs there, on
     /// the graphics card of `gpu`. Returns once the process has started; output, restarts and exit
-    /// arrive later as events.
-    pub fn launch<E: GameEvents>(
+    /// arrive later as events. `extra` arguments go after the usual ones (Prepare shaders runs the
+    /// runtime with `shader_precompile_only`).
+    pub fn launch_with<E: GameEvents>(
         &self,
         events: E,
         folders: &LaunchFolders,
         gpu: &LaunchChoice,
+        extra: &[&str],
     ) -> Result<(), LaunchError> {
         let runtime_dir = folders.runtime;
         let executable = executable_path(runtime_dir);
@@ -300,7 +314,8 @@ impl GameProcess {
             return Err(LaunchError::AlreadyRunning);
         }
 
-        let args = launch_arguments(folders, gpu);
+        let mut args = launch_arguments(folders, gpu);
+        args.extend(extra.iter().map(|arg| arg.to_string()));
         let prime_offload = gpu.prime_offload;
         let runtime_dir = runtime_dir.to_path_buf();
         let game = match spawn_game(&events, &executable, &args, &runtime_dir, prime_offload) {
@@ -438,7 +453,7 @@ mod tests {
             LaunchFolders { runtime: &runtime, game: None, saves: &runtime, cache: &runtime };
         let process = GameProcess::default();
         let recorder = Recorder::default();
-        process.launch(recorder.clone(), &folders, &automatic_gpu()).unwrap();
+        process.launch_with(recorder.clone(), &folders, &automatic_gpu(), &[]).unwrap();
 
         let events = recorder.until_exit();
         let position = |event: &str| events.iter().position(|e| e == event);
@@ -464,7 +479,7 @@ mod tests {
             LaunchFolders { runtime: &runtime, game: None, saves: &runtime, cache: &runtime };
         let process = GameProcess::default();
         let recorder = Recorder(Default::default(), Duration::from_millis(2));
-        process.launch(recorder.clone(), &folders, &automatic_gpu()).unwrap();
+        process.launch_with(recorder.clone(), &folders, &automatic_gpu(), &[]).unwrap();
 
         let events = recorder.until_exit();
         assert_eq!(events.len(), 51, "every line and then the exit: {events:?}");
@@ -481,7 +496,7 @@ mod tests {
             LaunchFolders { runtime: &runtime, game: None, saves: &runtime, cache: &runtime };
         let process = GameProcess::default();
         let recorder = Recorder::default();
-        process.launch(recorder.clone(), &folders, &automatic_gpu()).unwrap();
+        process.launch_with(recorder.clone(), &folders, &automatic_gpu(), &[]).unwrap();
 
         let events = recorder.until_exit();
         assert!(!events.contains(&"restart".to_string()), "{events:?}");

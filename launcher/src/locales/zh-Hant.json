@@ -112,6 +112,7 @@
     "compilerMissing": "找不到編譯器。",
     "compilerInstallApple": "安裝 Apple 的 Command Line Tools",
     "compilerInstallPackage": "安裝 clang",
+    "compilerInstallWindows": "安裝 LLVM 與 Visual Studio Build Tools",
     "compilerInstalling": "正在安裝編譯器…",
     "compilerWaitingApple": "請依照 Apple 的視窗安裝 Command Line Tools。安裝完成後，啟動器會自動繼續。",
     "compilerCheckAgain": "重新檢查",
@@ -131,7 +132,10 @@
     "gpu": "顯示卡",
     "gpuAuto": "自動（{name}）",
     "gpuDiscrete": "獨立",
-    "gpuIntegrated": "內建"
+    "gpuIntegrated": "內建",
+    "whilePlaying": "遊玩時的啟動器",
+    "whilePlayingMinimize": "最小化",
+    "whilePlayingKeepOpen": "保持開啟"
   },
   "achievements": {
     "title": "成就",
@@ -294,5 +298,18 @@
     "done": "完成",
     "cancel": "取消",
     "page": "頁面"
+  },
+  "shaders": {
+    "title": "準備著色器",
+    "help": "在遊玩前編譯你先前遊玩時的著色器，讓遊戲不必在遊玩時進行。需要一點時間，且遊戲必須關閉。",
+    "prepare": "立即準備",
+    "starting": "正在啟動…",
+    "progress": "已準備 {done}／{total} 個管線",
+    "done": "已準備 {total} 個管線。遊戲啟動時它們已經完成。",
+    "empty": "目前沒有儲存的著色器：它們會在遊玩時保存，請先玩一陣子再回來。",
+    "failed": "無法準備著色器。請開啟遊戲記錄查看詳細資訊。",
+    "prepareAgain": "重新準備",
+    "prepared": "已於 {date} 準備 {total} 個管線。",
+    "newSince": "自上次（{date}）以來遊戲已儲存新的著色器：請重新準備。"
   }
 }
