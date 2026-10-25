@@ -53,6 +53,7 @@ set(AZURA_SOURCES
     src/relaunch.cpp
     src/perf_marker.cpp
     src/shader_compile_overlay.cpp
+    src/shader_precompile.cpp
     src/local_coop_menu.cpp
     src/coop_ui.cpp
     src/local_coop_notices.cpp
@@ -223,6 +224,16 @@ endfunction()
 # generated code is (rexglue_add_recomp_library), and azura_kit_probe an executable configured
 # exactly as azura is, linking azura_host and that source.
 if(AZURA_KIT_PROBE)
+    # The kit records the commands Ninja would run, and a response file (which CMake's Windows
+    # platform files turn on for clang) is only written while Ninja builds: the probes pass their
+    # objects, libraries and include folders on the command line.
+    if(WIN32)
+        foreach(lang IN ITEMS C CXX)
+            foreach(kind IN ITEMS OBJECTS LIBRARIES INCLUDES)
+                set(CMAKE_${lang}_USE_RESPONSE_FILE_FOR_${kind} 0)
+            endforeach()
+        endforeach()
+    endif()
     rexglue_add_recomp_library(azura_kit_recomp
         SOURCES tools/kit/recomp_probe.cpp
         INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/tools/kit)

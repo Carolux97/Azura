@@ -144,6 +144,20 @@
           </div>
         </div>
 
+        <!-- Prepare shaders: makes the shaders of earlier sessions before playing, with a bar while it
+             runs; renderShaderCard() fills it. -->
+        <div class="panel build-card shader-card" id="shader-card" hidden>
+          <div class="build-card-head">
+            <h2 class="panel-title" data-i18n="shaders.title"></h2>
+            <span class="build-card-percent" id="shader-card-percent"></span>
+          </div>
+          <div class="build-bar" id="shader-card-bar-track" hidden><span id="shader-card-bar"></span></div>
+          <p class="help build-card-detail" id="shader-card-detail"></p>
+          <div class="build-card-actions">
+            <button class="btn btn-small btn-primary" id="shader-card-prepare" data-i18n="shaders.prepare"></button>
+          </div>
+        </div>
+
         <!-- Game log: shown while the game runs and after it ends or fails to start. -->
         <div class="panel log-panel" id="game-log" hidden>
           <div class="log-head">
@@ -258,6 +272,14 @@
             <label class="field" id="gpu-field" hidden>
               <span data-i18n="graphics.gpu"></span>
               <select id="gpu-choice"></select>
+            </label>
+            <!-- Minimized, the launcher costs the game nothing to draw (launch_game in lib.rs). -->
+            <label class="field">
+              <span data-i18n="graphics.whilePlaying"></span>
+              <select id="while-playing">
+                <option value="minimize" data-i18n="graphics.whilePlayingMinimize"></option>
+                <option value="keepOpen" data-i18n="graphics.whilePlayingKeepOpen"></option>
+              </select>
             </label>
           </div>
         </div>

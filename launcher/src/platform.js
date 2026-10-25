@@ -179,6 +179,30 @@ export const launchGame = async () => {
   setTimeout(() => simulated.exit.forEach((listener) => listener({ code: 0, success: true })), 1200);
 };
 
+/**
+ * Prepares the shaders of earlier sessions: the runtime makes them with the game suspended and
+ * closes. Rejects like launchGame. Its progress arrives through onGameOutput as lines
+ * "AZURA_SHADERS <done> <total>" and "AZURA_SHADERS_DONE <total>", and its end through onGameExit.
+ */
+export const prepareShaders = async () => {
+  if (isNativeApp) return tauri.core.invoke("prepare_shaders");
+  const total = 1200;
+  [0, 300, 700, 1200].forEach((done, index) => {
+    setTimeout(
+      () => simulated.output.forEach((listener) => listener({ stream: "stdout", line: `AZURA_SHADERS ${done} ${total}` })),
+      300 * (index + 1),
+    );
+  });
+  setTimeout(() => simulated.output.forEach((listener) => listener({ stream: "stdout", line: `AZURA_SHADERS_DONE ${total}` })), 1500);
+  setTimeout(() => simulated.exit.forEach((listener) => listener({ code: 0, success: true })), 1700);
+};
+
+/** Bytes of the stored pipeline descriptions, to tell new ones from those already prepared. */
+export const shaderStorageBytes = async () => {
+  if (isNativeApp) return tauri.core.invoke("shader_storage_bytes");
+  return 4096;
+};
+
 /** Calls `listener` with { stream, line } for every line the game prints. */
 export const onGameOutput = (listener) => {
   if (isNativeApp) return tauri.event.listen("game-output", (event) => listener(event.payload));

@@ -93,6 +93,40 @@
             }
         },
         {
+            "name": "win-amd64",
+            "displayName": "Windows x86_64",
+            "description": "Builds on Windows with LLVM's clang targeting the MSVC ABI, as the SDK's own Windows build does, with Microsoft's CRT and Windows SDK from Visual Studio (or its Build Tools). Vulkan, as on Linux.",
+            "generator": "Ninja Multi-Config",
+            "binaryDir": "${sourceDir}/out/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++",
+                "CMAKE_C_FLAGS": "-march=x86-64-v3",
+                "CMAKE_CXX_FLAGS": "-march=x86-64-v3",
+                "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreadedDLL",
+                "CMAKE_CONFIGURATION_TYPES": "Debug;Release;RelWithDebInfo",
+                "CMAKE_DEFAULT_BUILD_TYPE": "RelWithDebInfo",
+                "CMAKE_PREFIX_PATH": "${sourceDir}/../sdk/rexglue-0.10.0-win-amd64/win-amd64",
+                "REXGLUE_USE_VULKAN": "ON",
+                "REXGLUE_USE_D3D12": "OFF"
+            },
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Windows"
+            }
+        },
+        {
+            "name": "win-amd64-sdk-source",
+            "displayName": "Windows x86_64, ReXGlue SDK built from source",
+            "description": "Builds the SDK from sdk/rexglue-0.10.0-src as part of the runtime, so its code can be traced and patched. Uses its own build folder.",
+            "inherits": "win-amd64",
+            "binaryDir": "${sourceDir}/out/build/win-amd64-sdk-source",
+            "cacheVariables": {
+                "REXSDK_DIR": "${sourceDir}/../sdk/rexglue-0.10.0-src"
+            }
+        },
+        {
             "name": "win-amd64-cross-sdk-source",
             "displayName": "Windows x86_64 from Linux, ReXGlue SDK built from source",
             "description": "Cross-builds the runtime for Windows with clang, Microsoft's CRT and SDK from xwin and rust-lld (cmake/toolchain-win-amd64-cross.cmake). Uses its own build folder.",
@@ -199,6 +233,36 @@
         {
             "name": "linux-amd64-sdk-source-release",
             "configurePreset": "linux-amd64-sdk-source",
+            "configuration": "Release"
+        },
+        {
+            "name": "win-amd64-debug",
+            "configurePreset": "win-amd64",
+            "configuration": "Debug"
+        },
+        {
+            "name": "win-amd64-relwithdebinfo",
+            "configurePreset": "win-amd64",
+            "configuration": "RelWithDebInfo"
+        },
+        {
+            "name": "win-amd64-release",
+            "configurePreset": "win-amd64",
+            "configuration": "Release"
+        },
+        {
+            "name": "win-amd64-sdk-source-debug",
+            "configurePreset": "win-amd64-sdk-source",
+            "configuration": "Debug"
+        },
+        {
+            "name": "win-amd64-sdk-source-relwithdebinfo",
+            "configurePreset": "win-amd64-sdk-source",
+            "configuration": "RelWithDebInfo"
+        },
+        {
+            "name": "win-amd64-sdk-source-release",
+            "configurePreset": "win-amd64-sdk-source",
             "configuration": "Release"
         },
         {

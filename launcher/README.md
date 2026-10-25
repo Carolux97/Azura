@@ -171,10 +171,11 @@ and releases).
 ### Windows
 
 The launcher builds for Windows (x86-64) from Linux with `../scripts/build-launcher-windows.sh`, into
-`dist/windows/`. On Windows it names the Windows PC it runs on (processor, memory and graphics
-cards) and says the game is recompiled for Windows. The game itself builds from source for Windows
-(see the main README), but there is no Windows player kit yet, so the launcher says it has no kit
-for this platform when asked to build the game. The script
+`dist/windows/`, without a player kit: for a local test of the interface. Releases are built on
+Windows itself by the Release workflow (`scripts/release-launcher.sh` in Git Bash), with the
+`win-amd64` kit inside, as on the other platforms. On Windows the launcher names the PC it runs on
+(processor, memory and graphics cards), builds the game with LLVM's clang and the Build Tools'
+headers and libraries (`toolchain.rs` installs both with winget), and starts `azura.exe`. The script
 cross-builds with [cargo-xwin](https://github.com/rust-cross/cargo-xwin), which it installs when
 missing and which downloads Microsoft's CRT and Windows SDK once (about 1.1 GB, in
 `~/.cache/cargo-xwin`), LLVM's `clang-cl`, `llvm-lib` and `llvm-rc`, and rustup's `rust-lld` as
@@ -191,8 +192,8 @@ the linker, and makes two files:
 - `azura-launcher.exe`, the launcher alone, to run without installing.
 
 Both need only what Windows 10 and 11 bring (WebView2 included; the installer gets it when
-missing). They are not signed, so SmartScreen warns the first time, and the Windows launcher is not
-part of the releases yet, so it does not update itself.
+missing). They are not signed, so SmartScreen warns the first time. Released launchers update
+themselves through the installer, which the updater runs.
 
 The interface also opens in any browser, which is handy for quick design changes:
 

@@ -264,7 +264,10 @@ async fn show_build_log(app: tauri::AppHandle, path: String) -> Result<(), Strin
     }
     #[cfg(target_os = "macos")]
     let status = std::process::Command::new("open").arg("-R").arg(&log).status();
-    #[cfg(not(target_os = "macos"))]
+    // Explorer opens the folder with the log selected; it exits with 1 even when it does.
+    #[cfg(windows)]
+    let status = std::process::Command::new("explorer").arg(format!("/select,{}", log.display())).status();
+    #[cfg(not(any(target_os = "macos", windows)))]
     let status = host_env::use_host_env(&mut std::process::Command::new("xdg-open"))
         .arg(log.parent().unwrap_or(&log))
         .status();
@@ -278,6 +281,50 @@ async fn launch_game(
     app: tauri::AppHandle,
     process: tauri::State<'_, GameProcess>,
 ) -> Result<(), LaunchError> {
+    start_runtime(app.clone(), &process, &[])?;
+    // Minimized, the launcher's window is not drawn while the game runs; it comes back when the
+    // game ends (GameEvents::exit in runtime.rs).
+    let minimize = settings_paths(&app).and_then(|paths| paths.load()).is_ok_and(|settings| settings.minimize_while_playing);
+    if minimize {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.minimize();
+        }
+    }
+    Ok(())
+}
+
+/// Prepares the stored shaders before playing: starts the runtime in a window with
+/// `shader_precompile_only`, which makes every shader and pipeline of earlier runs with the game
+/// suspended and then closes, so the drivers keep them compiled. Its progress arrives as
+/// `game-output` lines `AZURA_SHADERS <done> <total>` and `AZURA_SHADERS_DONE <total>`, and its
+/// end as `game-exit`, as for the game.
+#[tauri::command]
+async fn prepare_shaders(
+    app: tauri::AppHandle,
+    process: tauri::State<'_, GameProcess>,
+) -> Result<(), LaunchError> {
+    start_runtime(app, &process, &["--shader_precompile_only=true", "--fullscreen=false"])
+}
+
+/// Bytes of the stored pipeline descriptions (`cache/shaders/shareable/*.xpso`): they grow as the
+/// game meets new pipelines, so a size above the one of the last Prepare shaders means there are new
+/// ones to prepare. 0 when there are none.
+#[tauri::command]
+async fn shader_storage_bytes(app: tauri::AppHandle) -> Result<u64, String> {
+    let folder = cache_dir(&app)?.join("shaders").join("shareable");
+    let Ok(entries) = std::fs::read_dir(&folder) else {
+        return Ok(0);
+    };
+    Ok(entries
+        .flatten()
+        .filter(|entry| entry.path().extension().is_some_and(|extension| extension == "xpso"))
+        .filter_map(|entry| entry.metadata().ok())
+        .map(|metadata| metadata.len())
+        .sum())
+}
+
+/// Starts the runtime as the game, with `extra` arguments.
+fn start_runtime(app: tauri::AppHandle, process: &GameProcess, extra: &[&str]) -> Result<(), LaunchError> {
     let runtime = runtime_dir(&app).map_err(LaunchError::StartFailed)?;
     let cache = cache_dir(&app).map_err(LaunchError::StartFailed)?;
     let paths = settings_paths(&app).map_err(LaunchError::StartFailed)?;
@@ -298,7 +345,7 @@ async fn launch_game(
     if gpu.chosen_missing {
         let _ = app.emit(GPU_MISSING_EVENT, ());
     }
-    process.launch(app, &folders, &gpu)
+    process.launch_with(app, &folders, &gpu, extra)
 }
 
 /// Event sent when the chosen graphics card is not in the computer any more, before the game starts
@@ -459,6 +506,8 @@ pub fn run() {
             get_runtime_status,
             install_runtime,
             launch_game,
+            prepare_shaders,
+            shader_storage_bytes,
             pick_saves_folder,
             change_saves_folder,
             check_for_update,

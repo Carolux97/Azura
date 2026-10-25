@@ -8,7 +8,8 @@
 2. That its commands work on this machine, the way the launcher will run them: a stand-in for
    generated code (the headers the generated precompiled header includes) is precompiled,
    compiled with that header, and linked with our compiled code and the SDK's libraries; the
-   staged files are copied into a runtime folder. The symbols the player's generated code would
+   staged files are copied into a runtime folder (on Windows, the executable is azura.exe and
+   lld-link reports every undefined symbol, not only the first ones). The symbols the player's generated code would
    define (guest functions, the image description) are stubbed out for the link; any other
    undefined symbol is an error, since the player's link would fail on it too. On Linux, the
    executable must also find the kit's shared libraries it needs: RUNPATH $ORIGIN, and those
@@ -31,8 +32,10 @@ from pathlib import Path
 GENERATED_NAME = re.compile(r"^(azura|ppc)_(recomp|register|init|funcs|pch|config|func_mapping)[._]")
 
 # Symbols the generated code defines and our code uses: guest functions and their originals
-# (sub_XXXXXXXX, __imp__sub_XXXXXXXX), the image description and its function table.
-GENERATED_SYMBOL = re.compile(r"^_?(__imp__)?sub_[0-9A-F]{8}$|^_?PPCImageConfig$|^_?PPCFuncMappings$")
+# (sub_XXXXXXXX, __imp__sub_XXXXXXXX), the image description and its function table (C++ names on
+# Windows: ?PPCImageConfig@@...).
+GENERATED_SYMBOL = re.compile(r"^_?(__imp__)?sub_[0-9A-F]{8}$|^_?PPCImageConfig$|^_?PPCFuncMappings$"
+                              r"|^\?(PPCImageConfig|PPCFuncMappings)@@\S*$")
 
 # The headers the generated precompiled header includes (the code generator's pch_h.inja).
 PCH_HEADER = """#include <rex/chrono/clock.h>
@@ -44,6 +47,8 @@ PCH_HEADER = """#include <rex/chrono/clock.h>
 #include <rex/thread/mutex.h>
 #include <tracy/Tracy.hpp>
 """
+WINDOWS = platform.system() == "Windows"
+
 PROBE_SOURCE = """void AzuraKitCheck(PPCContext& ctx, uint8_t* base) {
   (void)ctx;
   (void)base;
@@ -77,7 +82,7 @@ def check_contents(kit: Path, registry: Path) -> None:
         name = path.name
         if GENERATED_NAME.match(name) or name.lower().endswith(".xex"):
             raise CheckError(f"{relative}: generated code or a game executable")
-        if name == "azura":
+        if name in ("azura", "azura.exe"):
             raise CheckError(f"{relative}: a runtime executable, which holds the game's code")
         digest = sha256(path)
         if digest in game_hashes:
@@ -136,15 +141,20 @@ def check_commands(kit: Path, work: Path) -> None:
     run(fill(description["compile"]["precompile"],
              {**values, "{header}": str(generated / "check_pch.h"), "{pch}": str(pch)}),
         "Precompiling the header with the kit's command")
-    obj = work / "check.o"
+    obj = work / ("check.obj" if WINDOWS else "check.o")
     run(fill(description["compile"]["command"],
              {**values, "{pch}": str(pch), "{source}": str(generated / "check.cpp"), "{object}": str(obj)}),
         "Compiling with the kit's command")
 
     host = [str(kit / path) for path in description["link"]["host_objects"]]
-    output = work / "out" / "azura_check"
+    output = work / "out" / ("azura_check.exe" if WINDOWS else "azura_check")
     output.parent.mkdir()
     link = description["link"]["command"]
+    if WINDOWS:
+        # lld-link stops listing undefined symbols after 20, and names them demangled (sub_ functions'
+        # originals, __imp__sub_..., as "__declspec(dllimport) _sub_..."); the stubs need every
+        # one, by its name in the objects.
+        link = link + ["-Xlinker", "/errorlimit:0", "-Xlinker", "/demangle:no"]
     first = subprocess.run(fill(link, {**values, "{objects}": [str(obj)] + host, "{output}": str(output)}),
                            capture_output=True, text=True)
     objects = [str(obj)] + host
@@ -160,9 +170,10 @@ def check_commands(kit: Path, work: Path) -> None:
             f'void azura_kit_stub_{index}(void) __asm__("{symbol}");\n'
             f"void azura_kit_stub_{index}(void) {{}}\n" for index, symbol in enumerate(sorted(missing))))
         c_compiler = ["xcrun", "clang"] if platform.system() == "Darwin" else ["clang"]
-        run(c_compiler + ["-c", str(stubs), "-o", str(work / "stubs.o")] +
+        stubs_object = work / ("stubs.obj" if WINDOWS else "stubs.o")
+        run(c_compiler + ["-c", str(stubs), "-o", str(stubs_object)] +
             (["-arch", "arm64"] if platform.system() == "Darwin" else []), "Compiling the symbol stubs")
-        objects.append(str(work / "stubs.o"))
+        objects.append(str(stubs_object))
         run(fill(link, {**values, "{objects}": objects, "{output}": str(output)}),
             "Linking with the generated code's symbols stubbed out")
     if not output.is_file():

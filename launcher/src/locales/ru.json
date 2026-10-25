@@ -112,6 +112,7 @@
     "compilerMissing": "Компилятор не найден.",
     "compilerInstallApple": "Установить Command Line Tools от Apple",
     "compilerInstallPackage": "Установить clang",
+    "compilerInstallWindows": "Установить LLVM и Visual Studio Build Tools",
     "compilerInstalling": "Установка компилятора…",
     "compilerWaitingApple": "Следуйте указаниям в окне Apple, чтобы установить Command Line Tools. Лаунчер продолжит сам после установки.",
     "compilerCheckAgain": "Проверить снова",
@@ -131,7 +132,10 @@
     "gpu": "Видеокарта",
     "gpuAuto": "Автоматически ({name})",
     "gpuDiscrete": "дискретная",
-    "gpuIntegrated": "встроенная"
+    "gpuIntegrated": "встроенная",
+    "whilePlaying": "Лаунчер во время игры",
+    "whilePlayingMinimize": "Свернуть",
+    "whilePlayingKeepOpen": "Оставить открытым"
   },
   "achievements": {
     "title": "Достижения",
@@ -294,5 +298,18 @@
     "done": "Готово",
     "cancel": "Отмена",
     "page": "Страница"
+  },
+  "shaders": {
+    "title": "Подготовить шейдеры",
+    "help": "Компилирует шейдеры из ваших прошлых сессий перед игрой, чтобы игре не приходилось делать это во время игры. Это занимает немного времени, и игра должна быть закрыта.",
+    "prepare": "Подготовить сейчас",
+    "starting": "Запуск…",
+    "progress": "Готово {done} из {total} конвейеров",
+    "done": "Готово {total} конвейеров. Игра запустится с уже готовыми.",
+    "empty": "Сохранённых шейдеров пока нет: они сохраняются во время игры, так что поиграйте немного и вернитесь.",
+    "failed": "Не удалось подготовить шейдеры. Подробности в журнале игры.",
+    "prepareAgain": "Подготовить снова",
+    "prepared": "{total} конвейеров подготовлено {date}.",
+    "newSince": "С прошлого раза ({date}) игра сохранила новые шейдеры: подготовьте их снова."
   }
 }

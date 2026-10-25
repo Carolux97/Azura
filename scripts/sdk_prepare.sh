@@ -12,13 +12,19 @@ case "$(uname -s):$(uname -m)" in
   Darwin:arm64) readonly PLATFORM="mac-arm64" ;;
   Linux:x86_64|Linux:amd64) readonly PLATFORM="linux-amd64" ;;
   Linux:aarch64|Linux:arm64) readonly PLATFORM="linux-arm64" ;;
+  # Git for Windows' bash (MINGW64) or MSYS2.
+  MINGW64_NT*:x86_64|MSYS_NT*:x86_64) readonly PLATFORM="win-amd64" ;;
   *)
     echo "Unsupported build platform: $(uname -s) $(uname -m)." >&2
     exit 1
     ;;
 esac
 readonly SDK_DIR="${ROOT}/sdk/rexglue-0.10.0-${PLATFORM}/${PLATFORM}"
-readonly REXGLUE="${SDK_DIR}/bin/rexglue"
+if [[ "${PLATFORM}" == win-* ]]; then
+  readonly REXGLUE="${SDK_DIR}/bin/rexglue.exe"
+else
+  readonly REXGLUE="${SDK_DIR}/bin/rexglue"
+fi
 
 # Optional pkg-config files for the build machine (on Linux, for libraries a distribution may
 # lack), in sdk/compat/pkgconfig when present.

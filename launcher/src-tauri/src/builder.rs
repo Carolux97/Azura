@@ -71,6 +71,7 @@ pub fn platform() -> &'static str {
         ("macos", "aarch64") => "mac-arm64",
         ("linux", "x86_64") => "linux-amd64",
         ("linux", "aarch64") => "linux-arm64",
+        ("windows", "x86_64") => "win-amd64",
         _ => "unsupported",
     }
 }
@@ -474,7 +475,8 @@ fn build_inner(folders: &BuildFolders, manifest: &str, xex_sha256: &str, events:
     let mut all_objects = objects.clone();
     all_objects.extend(kit.link.host_objects.iter().map(|path| folders.kit.join(path).to_string_lossy().into_owned()));
     let output = executable_path(&next);
-    let command = fill(&kit.link.command, &compiler.command, &all_objects, &values(&[(
+    let link_objects = link_inputs(work, &all_objects)?;
+    let command = fill(&kit.link.command, &compiler.command, &link_objects, &values(&[(
         "{output}",
         output.to_string_lossy().into_owned(),
     )]));
@@ -512,6 +514,20 @@ fn build_inner(folders: &BuildFolders, manifest: &str, xex_sha256: &str, events:
     Ok(())
 }
 
+/// The objects as the link command takes them. On Windows a command line holds at most 32767
+/// characters, which the generated code's objects alone come close to, so they go in a response
+/// file the compiler reads (`@file`), one quoted path per line; elsewhere they are passed as they
+/// are.
+fn link_inputs(work: &Path, objects: &[String]) -> std::io::Result<Vec<String>> {
+    if !cfg!(windows) {
+        return Ok(objects.to_vec());
+    }
+    let file = work.join("link-objects.rsp");
+    let text: String = objects.iter().map(|object| format!("\"{}\"\n", object.replace('\\', "/"))).collect();
+    fs::write(&file, text)?;
+    Ok(vec![format!("@{}", file.to_string_lossy())])
+}
+
 /// File in the objects folder with the build key of the kit its objects were compiled with.
 const OBJECTS_BUILD_KEY_FILE: &str = "kit-build-key";
 
@@ -541,6 +557,8 @@ fn translate_and_compile(
     // Codegen reads its manifest and the game's executable from the work folder: the manifest as
     // the kit has it, and game/default.xex, the only file of the game it reads. game/ is a link to
     // the player's game folder, or, for a disc image, a folder with the executable copied out of it.
+    // On Windows a link to a folder needs Developer Mode or administrator rights, so the
+    // executable is copied there too.
     fs::copy(kit_manifest, work.join("azura_manifest.toml"))?;
     let game_dir = work.join("game");
     match fs::symlink_metadata(&game_dir) {
@@ -555,9 +573,14 @@ fn translate_and_compile(
     } else {
         #[cfg(unix)]
         std::os::unix::fs::symlink(folders.game, &game_dir)?;
-        // Needs Developer Mode or administrator rights on Windows.
         #[cfg(windows)]
-        std::os::windows::fs::symlink_dir(folders.game, &game_dir)?;
+        {
+            fs::create_dir_all(&game_dir)?;
+            fs::copy(
+                folders.game.join(crate::game_folder::XEX_FILE_NAME),
+                game_dir.join(crate::game_folder::XEX_FILE_NAME),
+            )?;
+        }
     }
 
     progress(Phase::Translating, 0, 0);
@@ -807,6 +830,19 @@ mod tests {
         values.iter().map(|value| value.to_string()).collect()
     }
 
+    /// A kit file or folder somewhere else: a link to it, or on Windows (where a link needs
+    /// Developer Mode) a copy.
+    fn link_or_copy(from: &Path, to: &Path) {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(from, to).unwrap();
+        #[cfg(windows)]
+        if from.is_dir() {
+            copy_tree(from, to).unwrap();
+        } else {
+            fs::copy(from, to).unwrap();
+        }
+    }
+
     /// Builds a real runtime from a kit and a game, with the launcher's own code, into temporary
     /// folders. Needs both, so it runs only on demand:
     /// `AZURA_TEST_KIT=<kit> AZURA_TEST_GAME=<game folder> cargo test builds_a_runtime -- --ignored --nocapture`
@@ -867,7 +903,7 @@ mod tests {
         fs::create_dir_all(&moved_kit).unwrap();
         for entry in fs::read_dir(&kit).unwrap() {
             let entry = entry.unwrap();
-            std::os::unix::fs::symlink(entry.path(), moved_kit.join(entry.file_name())).unwrap();
+            link_or_copy(&entry.path(), &moved_kit.join(entry.file_name()));
         }
         let started = std::time::Instant::now();
         let moved = BuildFolders { kit: &moved_kit, game: &game, work: &work, runtime: &runtime };
@@ -881,7 +917,7 @@ mod tests {
         for entry in fs::read_dir(&kit).unwrap() {
             let entry = entry.unwrap();
             if entry.file_name() != "kit.json" {
-                std::os::unix::fs::symlink(entry.path(), relinked_kit.join(entry.file_name())).unwrap();
+                link_or_copy(&entry.path(), &relinked_kit.join(entry.file_name()));
             }
         }
         let text = fs::read_to_string(kit.join("kit.json")).unwrap();
@@ -998,7 +1034,8 @@ mod tests {
         assert!(read_kit(&dir).is_ok());
         fs::write(dir.join("kit.json"), kit(KIT_FORMAT + 1, platform())).unwrap();
         assert!(matches!(read_kit(&dir), Err(BuildError::WrongKit { .. })));
-        fs::write(dir.join("kit.json"), kit(KIT_FORMAT, "win-amd64")).unwrap();
+        // A platform no launcher runs on, so the test means the same on every one.
+        fs::write(dir.join("kit.json"), kit(KIT_FORMAT, "plan9-mips")).unwrap();
         assert!(matches!(read_kit(&dir), Err(BuildError::WrongKit { .. })));
     }
 
@@ -1009,12 +1046,12 @@ mod tests {
         let next = dir.join("runtime.next");
         fs::create_dir_all(runtime.join("logs")).unwrap();
         fs::write(runtime.join("azura.toml"), "fullscreen = false").unwrap();
-        fs::write(runtime.join("azura"), "old").unwrap();
+        fs::write(executable_path(&runtime), "old").unwrap();
         fs::write(runtime.join("logs/azura_001.log"), "log").unwrap();
         fs::create_dir_all(&next).unwrap();
-        fs::write(next.join("azura"), "new").unwrap();
+        fs::write(executable_path(&next), "new").unwrap();
         install(&next, &runtime).unwrap();
-        assert_eq!(fs::read_to_string(runtime.join("azura")).unwrap(), "new");
+        assert_eq!(fs::read_to_string(executable_path(&runtime)).unwrap(), "new");
         assert_eq!(fs::read_to_string(runtime.join("azura.toml")).unwrap(), "fullscreen = false");
         assert!(runtime.join("logs/azura_001.log").is_file());
         assert!(!next.exists() && !dir.join("runtime.old").exists());
@@ -1030,9 +1067,9 @@ mod tests {
         fs::create_dir_all(old.join("logs")).unwrap();
         fs::write(old.join("azura.toml"), "fullscreen = false").unwrap();
         fs::create_dir_all(&next).unwrap();
-        fs::write(next.join("azura"), "new").unwrap();
+        fs::write(executable_path(&next), "new").unwrap();
         recover(&runtime);
-        assert_eq!(fs::read_to_string(runtime.join("azura")).unwrap(), "new");
+        assert_eq!(fs::read_to_string(executable_path(&runtime)).unwrap(), "new");
         assert_eq!(fs::read_to_string(runtime.join("azura.toml")).unwrap(), "fullscreen = false");
         assert!(runtime.join("logs").is_dir());
         assert!(!old.exists());
