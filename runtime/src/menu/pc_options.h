@@ -31,8 +31,13 @@ namespace azura::menu {
 struct CoalescedSection;
 
 // Positions in UIScene_Options.OptionCategories (the game's EOptionsMenuMode).
+constexpr int kGameCategory = 0;
 constexpr int kVideoCategory = 1;
-constexpr int kKeyboardMouseCategory = 5;  // the game's storage location position
+// Keyboard and mouse, at the game's storage location position.
+constexpr int kKeyboardMouseCategory = 5;
+// Local co-op, at the game's mature content position (that category's two rows move to the end of
+// Game): choosing it opens the Local co-op menu (local_coop_menu.h) instead of a list.
+constexpr int kLocalCoopCategory = 6;
 // Row of the Video category that opens the brightness calibration screen.
 constexpr int kCalibrateRow = 0;
 

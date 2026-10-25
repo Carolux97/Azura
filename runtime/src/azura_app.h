@@ -15,6 +15,7 @@
 
 #include <rex/cvar.h>
 #include <rex/image_info.h>
+#include <rex/input/input_system.h>
 #include <rex/perf/counter.h>
 #include <rex/rex_app.h>
 #include <rex/runtime.h>
@@ -25,6 +26,8 @@
 #include "achievement_export.h"
 #include "achievement_toast.h"
 #include "input/player_assignment.h"
+#include "local_coop_menu.h"
+#include "local_coop_notices.h"
 #include "gpu_list.h"
 #include "menu/menu_patches.h"
 #include "menu/pc_options.h"
@@ -113,7 +116,18 @@ class AzuraApp : public rex::ReXApp {
   void OnPreLaunchModule() override {
     REXLOG_INFO("[Azura] Active gamertag / user_name: '{}'", REXCVAR_GET(user_name));
     // Before the game polls a controller: which controller plays which player (player_assignment.h).
-    azura::input::InstallPlayerAssignment(runtime());
+    azura::input::InstallPlayerAssignment(runtime(), [this](std::function<void()> work) {
+      app_context().CallInUIThread(std::move(work));
+    });
+    // The local co-op notices (a lost controller, a new one to assign) for as long as the game runs.
+    app_context().CallInUIThread([this] {
+      auto* input = runtime() ? static_cast<rex::input::InputSystem*>(runtime()->input_system()) : nullptr;
+      if (!shutting_down_ && dialog_drawer_ && input && !coop_notices_) {
+        coop_notices_ = new azura::LocalCoopNotices(dialog_drawer_, input, azura::input::InstalledPlayerAssignment(),
+                                                    REXCVAR_GET(user_language), REXCVAR_GET(user_name),
+                                                    title_font_, body_font_);
+      }
+    });
     // The frame rate limit of the Video menu (azura.toml) sets the guest's vertical blanks.
     azura::menu::ApplyFrameRateLimit();
     // The Video menu's sharpness shows as soon as it changes: the presenter takes it again on the
@@ -162,6 +176,17 @@ class AzuraApp : public rex::ReXApp {
         });
       });
     }
+    // Choosing Local co-op in the Options opens the Local co-op menu, on the UI thread.
+    azura::script::SetLocalCoopHandler([this] {
+      app_context().CallInUIThread([this] {
+        auto* input = runtime() ? static_cast<rex::input::InputSystem*>(runtime()->input_system()) : nullptr;
+        if (!shutting_down_ && dialog_drawer_ && input && !local_coop_menu_) {
+          local_coop_menu_ = new azura::LocalCoopMenu(
+              dialog_drawer_, input, azura::input::InstalledPlayerAssignment(), REXCVAR_GET(user_language),
+              REXCVAR_GET(user_name), title_font_, body_font_, &local_coop_menu_);
+        }
+      });
+    });
     azura::script::SetQuitHandler([this] {
       app_context().CallInUIThread([this] {
         if (window()) {
@@ -230,11 +255,16 @@ class AzuraApp : public rex::ReXApp {
     shutting_down_ = true;
     azura::menu::SetSharpnessChangedHandler(nullptr);
     azura::menu::SetUpscalingSupport(nullptr);
+    azura::script::SetLocalCoopHandler(nullptr);
     if (auto* graphics_system = runtime()->graphics_system()) {
       graphics_system->SetShaderCompilationStartedCallback(nullptr);
     }
     delete shader_compile_overlay_;
     shader_compile_overlay_ = nullptr;
+    delete local_coop_menu_;
+    local_coop_menu_ = nullptr;
+    delete coop_notices_;
+    coop_notices_ = nullptr;
   }
 
 
@@ -276,6 +306,11 @@ class AzuraApp : public rex::ReXApp {
   ImFont* body_font_ = nullptr;
   // Deletes itself when it closes, clearing this pointer. Accessed on the UI thread only.
   azura::ShaderCompileOverlay* shader_compile_overlay_ = nullptr;
+  // The Local co-op menu while it is open; deletes itself when it closes, clearing this pointer.
+  // Accessed on the UI thread only.
+  azura::LocalCoopMenu* local_coop_menu_ = nullptr;
+  // The local co-op notices, from the game's start to its end. Accessed on the UI thread only.
+  azura::LocalCoopNotices* coop_notices_ = nullptr;
   bool shutting_down_ = false;
   // Marks frames in the perf_log_csv CSV; only while it records.
   std::unique_ptr<azura::PerfMarker> perf_marker_;
