@@ -17,6 +17,7 @@
 #include <rex/image_info.h>
 #include <rex/input/input_system.h>
 #include <rex/input/mnk/mnk_input_driver.h>
+#include <rex/input/pad_remap.h>
 #include <rex/perf/counter.h>
 #include <rex/rex_app.h>
 #include <rex/runtime.h>
@@ -210,6 +211,10 @@ class AzuraApp : public rex::ReXApp {
     // in every scene: the Options, their message boxes, the multiplayer preferences, the pause menu.
     rex::input::mnk::SetMenuKeysQuery(
         [] { return azura::script::WhereInMenus() == azura::script::Menus::kMenu; });
+    // A controller's custom layout changes what its buttons do in play only; the menus and the
+    // title screen keep its own buttons.
+    rex::input::SetPadLayoutQuery(
+        [] { return azura::script::WhereInMenus() == azura::script::Menus::kPlaying; });
     // Keyboard and mouse, and Controller, in the Options: their controls menus.
     azura::script::SetControlsMenuHandler([this](azura::script::ControlsMenu menu) {
       app_context().CallInUIThread([this, menu] {
@@ -310,6 +315,7 @@ class AzuraApp : public rex::ReXApp {
     azura::script::SetLocalCoopHandler(nullptr);
     azura::script::SetControlsMenuHandler(nullptr);
     rex::input::mnk::SetMenuKeysQuery(nullptr);
+    rex::input::SetPadLayoutQuery(nullptr);
     azura::input::InstallMouseLook(nullptr);
     if (auto* graphics_system = runtime()->graphics_system()) {
       graphics_system->SetShaderCompilationStartedCallback(nullptr);

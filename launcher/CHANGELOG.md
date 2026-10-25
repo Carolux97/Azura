@@ -6,6 +6,13 @@ it as the update's notes (`scripts/release-common.sh`). Bumping the version adds
 release without one fails. One list item (`- `) per change, in English; an item may continue on
 indented lines.
 
+## 0.4.1
+
+- A custom controller layout changes what the buttons do in play only: the menus keep the
+  controller's own buttons (A accepts, B goes back), and their prompts show them.
+- The PlayStation controllers in the controls menu are drawn closer to the real ones: the
+  touchpad's light inside its edges, Create and Options beside it, and the PS button.
+
 ## 0.4.0
 
 - Play has a Prepare shaders card: it compiles the shaders the game stored in your earlier
