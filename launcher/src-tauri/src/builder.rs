@@ -256,7 +256,7 @@ pub struct BuildFolders<'a> {
 /// project's kit build when the launcher runs from a checkout (found by walking up from the
 /// launcher executable).
 pub fn find_kit(resources: Option<&Path>) -> Option<PathBuf> {
-    let valid = |dir: PathBuf| dir.join("kit.json").is_file().then_some(dir);
+    let valid = |dir: PathBuf| dir.join("kit.json").is_file().then_some(without_verbatim_prefix(dir));
     if let Some(dir) = std::env::var_os(KIT_ENV).map(PathBuf::from) {
         return valid(dir);
     }
@@ -265,6 +265,37 @@ pub fn find_kit(resources: Option<&Path>) -> Option<PathBuf> {
     }
     let exe = std::env::current_exe().ok()?;
     exe.ancestors().skip(1).find_map(|dir| valid(dir.join(project_kit())))
+}
+
+/// `path` without the `\\?\` prefix of a Windows verbatim path, when it is a plain drive or network
+/// path short enough not to need it. The kit's command templates add its subfolders with `/`
+/// (`{kit}/sdk/include`), and Windows only takes `/` as a separator in paths without that prefix:
+/// Tauri gives the installed launcher's resource folder as a verbatim path. Unchanged elsewhere.
+fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
+    if cfg!(windows) {
+        if let Some(plain) = path.to_str().and_then(plain_windows_path) {
+            return PathBuf::from(plain);
+        }
+    }
+    path
+}
+
+/// The plain form of the verbatim Windows path `path` (`\\?\C:\x` to `C:\x`, `\\?\UNC\server\share`
+/// to `\\server\share`), or `None` when it is not one or is too long for a plain path.
+fn plain_windows_path(path: &str) -> Option<String> {
+    // MAX_PATH, the longest path Windows takes without the prefix, including the ending zero.
+    const MAX_PLAIN: usize = 259;
+    let plain = if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else {
+        let rest = path.strip_prefix(r"\\?\")?;
+        let bytes = rest.as_bytes();
+        if bytes.len() < 3 || !bytes[0].is_ascii_alphabetic() || bytes[1] != b':' || bytes[2] != b'\\' {
+            return None;
+        }
+        rest.to_owned()
+    };
+    (plain.len() <= MAX_PLAIN).then_some(plain)
 }
 
 /// Reads a kit and checks it is one this launcher can use here.
@@ -985,6 +1016,22 @@ mod tests {
         // The objects to link again are gone.
         assert_eq!(kind(&new_link, "x", "Apple clang 21.0.0", true, false), UpdateKind::Build);
         assert_eq!(update_kind(None, &keys, "x", "Apple clang 21.0.0", true, true), UpdateKind::Build);
+    }
+
+    #[test]
+    fn verbatim_windows_paths_become_plain() {
+        assert_eq!(
+            plain_windows_path(r"\\?\C:\Users\milci\AppData\Local\Azura Launcher\kit").as_deref(),
+            Some(r"C:\Users\milci\AppData\Local\Azura Launcher\kit")
+        );
+        assert_eq!(plain_windows_path(r"\\?\UNC\server\share\kit").as_deref(), Some(r"\\server\share\kit"));
+        // Not verbatim, or not a drive path after the prefix: left alone.
+        assert_eq!(plain_windows_path(r"C:\kit"), None);
+        assert_eq!(plain_windows_path(r"\\?\Volume{0}\kit"), None);
+        assert_eq!(plain_windows_path("/opt/kit"), None);
+        // Too long for a plain path: it keeps the prefix.
+        let long = format!(r"\\?\C:\{}", "a".repeat(300));
+        assert_eq!(plain_windows_path(&long), None);
     }
 
     #[test]
