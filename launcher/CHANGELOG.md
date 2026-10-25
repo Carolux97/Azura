@@ -21,6 +21,9 @@ indented lines.
   "hold" prompt.
 - The button prompts take far less processor time: they no longer search the game's memory every
   two seconds, but look at each texture as the game loads it.
+- Windows: the game no longer closes now and then as the intro movie starts.
+- Windows: the game is no longer held at 20 FPS. It now reaches its frame rate limit, without
+  tearing.
 
 ## 0.4.0
 
