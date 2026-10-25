@@ -30,4 +30,9 @@ std::vector<ReadableRange> ReadableRanges(const void* base, size_t size);
 // Whether all of [data, data + size) can be read.
 bool IsReadable(const void* data, size_t size);
 
+// Copies size bytes, or returns false when part of either range cannot be accessed. The game can
+// free guest memory at any moment and Windows then removes the pages, so a copy can fail even right
+// after IsReadable; this one reports it instead of ending the process.
+bool TryCopy(void* destination, const void* source, size_t size);
+
 }  // namespace azura
