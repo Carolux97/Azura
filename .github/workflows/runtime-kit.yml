@@ -56,9 +56,13 @@ jobs:
             runner: ubuntu-latest
             container: ubuntu:22.04
           # With the image's LLVM clang and Visual Studio (Microsoft's headers and libraries), as
-          # players build with the Build Tools; the scripts run in Git Bash.
+          # players build with the Build Tools; the scripts run in Git Bash. Pinned to Visual Studio
+          # 2022 (MSVC 14.44): the kit's objects are linked on the player's machine with the
+          # player's Microsoft libraries, which must be at least as new as the compiler that built
+          # them, so the kit is built with the oldest Visual Studio players are asked for (see
+          # CONTRIBUTING, Continuous integration).
           - platform: win-amd64
-            runner: windows-latest
+            runner: windows-2022
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container }}
     env:
