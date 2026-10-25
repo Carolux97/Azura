@@ -182,31 +182,33 @@ void DrawControllerIcon(ImDrawList* draw_list, ImVec2 center, float size, PadLoo
       const bool dualsense = look == PadLook::kDualSense;
       PadShape(draw_list, center, w, h, h * 0.035f, dualsense ? col(70, 72, 78) : rim);
       PadShape(draw_list, center, w, h, 0.0f, dualsense ? col(236, 236, 238) : col(46, 48, 54));
-      // The black middle between the grips, with the touchpad on top.
-      draw_list->AddRectFilled(ImVec2(center.x - w * 0.19f, center.y - h * 0.31f),
-                               ImVec2(center.x + w * 0.19f, center.y + h * 0.20f), col(26, 26, 30), h * 0.12f);
+      // The black middle below the touchpad, around the sticks and the PS button.
+      draw_list->AddRectFilled(ImVec2(center.x - w * 0.19f, center.y - h * 0.14f),
+                               ImVec2(center.x + w * 0.19f, center.y + h * 0.20f), col(26, 26, 30), h * 0.10f);
+      // The touchpad across the top, with its light inside its edges: down both sides on the
+      // DualSense, along the top on the DualShock 4.
       const ImVec2 pad_min(center.x - w * 0.15f, center.y - h * 0.33f);
-      const ImVec2 pad_max(center.x + w * 0.15f, center.y - h * 0.09f);
+      const ImVec2 pad_max(center.x + w * 0.15f, center.y - h * 0.08f);
       draw_list->AddRectFilled(pad_min, pad_max, dualsense ? col(214, 214, 218) : col(62, 64, 70), h * 0.04f);
       const ImU32 light = col(40, 130, 240);
+      const float light_width = h * 0.018f;
       if (dualsense) {
-        // The light bar runs down both sides of the touchpad.
-        draw_list->AddLine(ImVec2(pad_min.x - h * 0.03f, pad_min.y + h * 0.03f),
-                           ImVec2(pad_min.x - h * 0.03f, pad_max.y), light, h * 0.03f);
-        draw_list->AddLine(ImVec2(pad_max.x + h * 0.03f, pad_min.y + h * 0.03f),
-                           ImVec2(pad_max.x + h * 0.03f, pad_max.y), light, h * 0.03f);
+        for (const float x : {pad_min.x + h * 0.022f, pad_max.x - h * 0.022f}) {
+          draw_list->AddLine(ImVec2(x, pad_min.y + h * 0.06f), ImVec2(x, pad_max.y - h * 0.03f), light, light_width);
+        }
       } else {
-        draw_list->AddLine(ImVec2(pad_min.x + h * 0.04f, pad_min.y - h * 0.015f),
-                           ImVec2(pad_max.x - h * 0.04f, pad_min.y - h * 0.015f), light, h * 0.03f);
+        draw_list->AddLine(ImVec2(pad_min.x + h * 0.06f, pad_min.y + h * 0.022f),
+                           ImVec2(pad_max.x - h * 0.06f, pad_min.y + h * 0.022f), light, light_width);
       }
-      // Sticks side by side below the touchpad; D-pad and face buttons on the wings.
+      // Sticks side by side below the touchpad, the PS button between them; D-pad and face buttons
+      // on the wings, Create (Share) and Options at the touchpad's top corners.
       Stick(draw_list, ImVec2(center.x - w * 0.11f, center.y + h * 0.06f), h, col(90, 92, 98), col(20, 20, 24));
       Stick(draw_list, ImVec2(center.x + w * 0.11f, center.y + h * 0.06f), h, col(90, 92, 98), col(20, 20, 24));
+      draw_list->AddCircleFilled(ImVec2(center.x, center.y + h * 0.14f), h * 0.028f, col(90, 92, 98), 12);
       const ImU32 marks = dualsense ? col(60, 62, 68) : col(150, 152, 158);
       Dpad(draw_list, ImVec2(center.x - w * 0.28f, center.y - h * 0.12f), h, marks);
-      // Create (Share) and Options, beside the touchpad.
-      MenuButtons(draw_list, center, h, PadPointPosition(center, size, look, PadPoint::kStart).x - center.x,
-                  PadPointPosition(center, size, look, PadPoint::kStart).y, marks, true);
+      const ImVec2 start = PadPointPosition(center, size, look, PadPoint::kStart);
+      MenuButtons(draw_list, center, h, start.x - center.x, start.y, marks, true);
       const ImU32 face[4] = {marks, marks, marks, marks};
       FaceButtons(draw_list, ImVec2(center.x + w * 0.28f, center.y - h * 0.12f), h, face);
       break;
@@ -267,8 +269,8 @@ ImVec2 PadPointPosition(ImVec2 center, float size, PadLook look, PadPoint point)
   const float d = h * 0.08f;  // FaceButtons' distance from the diamond's middle
   const float top = center.y - h * 0.36f;
   // Share and Options beside the touchpad; View and Menu (and their likes) beside the guide button.
-  const float menu_x = playstation ? w * 0.21f : w * 0.08f;
-  const float menu_y = playstation                    ? center.y - h * 0.30f
+  const float menu_x = playstation ? w * 0.15f + h * 0.04f : w * 0.08f;
+  const float menu_y = playstation                    ? center.y - h * 0.28f
                        : look == PadLook::kSwitchPro ? center.y - h * 0.28f
                                                      : center.y - h * 0.14f;
   switch (point) {

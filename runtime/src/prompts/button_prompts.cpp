@@ -374,8 +374,11 @@ class ButtonPrompts::Impl {
     const Style style = CurrentStyle();
     Bindings bindings;
     std::string key = std::to_string(static_cast<int>(style));
-    // A controller's prompts follow the player's own layout.
-    const rex::input::PadLayout layout = rex::input::CurrentPadLayout();
+    // A controller's prompts follow the player's own layout in play; the menus keep the
+    // controller's own buttons, as the layout applies only in play (rex/input/pad_remap.h).
+    const bool playing = azura::script::WhereInMenus() == azura::script::Menus::kPlaying;
+    const rex::input::PadLayout layout =
+        playing ? rex::input::CurrentPadLayout() : rex::input::IdentityPadLayout();
     const bool remapped = layout != rex::input::IdentityPadLayout();
     if (style != Style::kPc && remapped) key += "|" + rex::input::FormatPadLayout(layout);
     if (style == Style::kPc) {

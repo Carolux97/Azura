@@ -1034,18 +1034,19 @@ index c8751b7..7620729 100644
    int32_t prev_mouse_x_ = 0;
 diff --git a/include/rex/input/pad_remap.h b/include/rex/input/pad_remap.h
 new file mode 100644
-index 0000000..1f7e75d
+index 0000000..a146aa8
 --- /dev/null
 +++ b/include/rex/input/pad_remap.h
-@@ -0,0 +1,76 @@
+@@ -0,0 +1,87 @@
 +/**
 + * @file        rex/input/pad_remap.h
 + * @brief       Controller buttons acting as other buttons
 + *
 + * A player's own layout for controllers: each physical control (a button, a trigger, a stick
-+ * press) can act as another one. It applies to every controller, before the guest reads it, and
-+ * only while pad_custom is on (the game's own control schemes are its profile's business). The
-+ * keyboard and mouse have their own binds and are not remapped here.
++ * press) can act as another one. It applies to every controller, before the guest reads it, only
++ * while pad_custom is on (the game's own control schemes are its profile's business) and only in
++ * play: the game's menus keep the controller's own buttons (SetPadLayoutQuery). The keyboard and
++ * mouse have their own binds and are not remapped here.
 + *
 + * pad_remap lists, for each physical control in PadControl order, the name of the control it acts
 + * as: "a,b,x,y,lb,rb,lt,rt,l3,r3,back,start,up,down,left,right" is the controller as it is.
@@ -1061,6 +1062,7 @@ index 0000000..1f7e75d
 +#include <string>
 +#include <string_view>
 +
++#include <rex/input/device.h>
 +#include <rex/input/input.h>
 +
 +namespace rex::input {
@@ -1112,6 +1114,15 @@ index 0000000..1f7e75d
 +/// XInput's trigger threshold, and a button moved to a trigger pulls it all the way. The sticks
 +/// and the guide button are left as they are.
 +void ApplyPadLayout(const PadLayout& layout, X_INPUT_GAMEPAD& pad);
++
++/// Asked whenever a controller is read whether the game is being played: the layout applies only
++/// then, and menus get the controller's own buttons. Null (the default) applies it always.
++void SetPadLayoutQuery(bool (*in_play)());
++
++/// Applies `layout` to controller `id`'s state as the game is being played or not
++/// (SetPadLayoutQuery). Each control keeps what it acted as when pressed until it is released, so
++/// a button held while a menu opens or closes does not turn into another one.
++void ApplyPadLayoutInPlay(DeviceId id, const PadLayout& layout, X_INPUT_GAMEPAD& pad);
 +
 +}  // namespace rex::input
 diff --git a/include/rex/perf/counter.h b/include/rex/perf/counter.h
@@ -17403,7 +17414,7 @@ index 3ea3535..edb6ec4 100644
      nop/nop_input_driver.cpp
  )
 diff --git a/src/input/input_system.cpp b/src/input/input_system.cpp
-index c9f7ed6..59e3507 100644
+index c9f7ed6..6431a26 100644
 --- a/src/input/input_system.cpp
 +++ b/src/input/input_system.cpp
 @@ -20,6 +20,7 @@
@@ -17429,7 +17440,7 @@ index c9f7ed6..59e3507 100644
      }
 +    const DeviceInfo* info = DeviceInfoFor(id);
 +    if (info && !info->synthetic) {
-+      ApplyPadLayout(layout, state.gamepad);
++      ApplyPadLayoutInPlay(id, layout, state.gamepad);
 +    }
      active_devices_.Observe(user_index, id, state.gamepad);
      if (!any) {
@@ -17877,10 +17888,10 @@ index 38c1555..d028903 100644
    }
 diff --git a/src/input/pad_remap.cpp b/src/input/pad_remap.cpp
 new file mode 100644
-index 0000000..5eded29
+index 0000000..27199ec
 --- /dev/null
 +++ b/src/input/pad_remap.cpp
-@@ -0,0 +1,145 @@
+@@ -0,0 +1,186 @@
 +/**
 + * @file        input/pad_remap.cpp
 + * @brief       Controller buttons acting as other buttons (rex/input/pad_remap.h)
@@ -17892,6 +17903,8 @@ index 0000000..5eded29
 +#include <rex/input/pad_remap.h>
 +
 +#include <algorithm>
++#include <atomic>
++#include <map>
 +#include <mutex>
 +
 +#include <rex/cvar.h>
@@ -17943,6 +17956,25 @@ index 0000000..5eded29
 +bool IsTrigger(PadControl control) {
 +  return control == PadControl::kLeftTrigger || control == PadControl::kRightTrigger;
 +}
++
++// Whether physical control `i` is pressed: a button down, or a trigger past the threshold.
++bool IsDown(const X_INPUT_GAMEPAD& pad, size_t i) {
++  const auto control = static_cast<PadControl>(i);
++  if (control == PadControl::kLeftTrigger) return pad.left_trigger > kTriggerThreshold;
++  if (control == PadControl::kRightTrigger) return pad.right_trigger > kTriggerThreshold;
++  return (pad.buttons & kButtons[i]) != 0;
++}
++
++std::atomic<bool (*)()> layout_query{nullptr};
++
++// Per controller: each physical control's press as of the last read, and what it acts as while it
++// stays pressed.
++struct HeldControls {
++  std::array<bool, kPadControlCount> down{};
++  PadLayout acting = IdentityPadLayout();
++};
++std::mutex held_mutex;
++std::map<DeviceId, HeldControls> held;
 +
 +}  // namespace
 +
@@ -18023,6 +18055,26 @@ index 0000000..5eded29
 +  pad.buttons = buttons;
 +  pad.left_trigger = triggers[0];
 +  pad.right_trigger = triggers[1];
++}
++
++void SetPadLayoutQuery(bool (*in_play)()) {
++  layout_query.store(in_play, std::memory_order_relaxed);
++}
++
++void ApplyPadLayoutInPlay(DeviceId id, const PadLayout& layout, X_INPUT_GAMEPAD& pad) {
++  bool (*const in_play)() = layout_query.load(std::memory_order_relaxed);
++  const bool playing = !in_play || in_play();
++  std::lock_guard lock(held_mutex);
++  HeldControls& controls = held[id];
++  for (size_t i = 0; i < kPadControlCount; ++i) {
++    const bool down = IsDown(pad, i);
++    // A released control follows what is shown now; a held one keeps what it was pressed as.
++    if (!down || !controls.down[i]) {
++      controls.acting[i] = playing ? layout[i] : static_cast<PadControl>(i);
++    }
++    controls.down[i] = down;
++  }
++  ApplyPadLayout(controls.acting, pad);
 +}
 +
 +}  // namespace rex::input
