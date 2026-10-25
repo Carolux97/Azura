@@ -41,6 +41,7 @@ struct Texts {
   const char* move;
   const char* done;
   const char* enter;  // the Enter key, on the keyboard's hint
+  const char* back;   // the keyboard's hint: Escape goes back
 };
 
 // Fonts carry Latin-1 only, so the languages written in other scripts use the English texts.
@@ -50,33 +51,33 @@ Texts LocalizedTexts(uint32_t language) {
       return {"LOKALER KOOP",
               "Dr\xC3\xBC""cke links oder rechts auf einem Ger\xC3\xA4t, um es einem anderen Spieler zu geben.",
               "NICHT ZUGEWIESEN", "SPIELER %d", "Tastatur und Maus", "Kein Ger\xC3\xA4t", "Verschieben",
-              "Fertig", "Eingabe"};
+              "Fertig", "Eingabe", "Zur\xC3\xBC""ck"};
     case 4:  // French
       return {"COOP\xC3\x89RATION LOCALE",
               "Appuyez \xC3\xA0 gauche ou \xC3\xA0 droite sur un appareil pour le donner \xC3\xA0 un autre joueur.",
               "NON ASSIGN\xC3\x89", "JOUEUR %d", "Clavier et souris", "Aucun appareil", "D\xC3\xA9placer",
-              "Termin\xC3\xA9", "Entr\xC3\xA9""e"};
+              "Termin\xC3\xA9", "Entr\xC3\xA9""e", "Retour"};
     case 5:  // Spanish
       return {"COOPERATIVO LOCAL",
               "Pulse izquierda o derecha en un dispositivo para pas\xC3\xA1rselo a otro jugador.",
-              "SIN ASIGNAR", "JUGADOR %d", "Teclado y rat\xC3\xB3n", "Sin dispositivo", "Mover", "Listo", "Intro"};
+              "SIN ASIGNAR", "JUGADOR %d", "Teclado y rat\xC3\xB3n", "Sin dispositivo", "Mover", "Listo", "Intro", "Volver"};
     case 6:  // Italian
       return {"COOPERATIVA LOCALE",
               "Premi sinistra o destra su un dispositivo per darlo a un altro giocatore.",
-              "NON ASSEGNATO", "GIOCATORE %d", "Tastiera e mouse", "Nessun dispositivo", "Sposta", "Fatto", "Invio"};
+              "NON ASSEGNATO", "GIOCATORE %d", "Tastiera e mouse", "Nessun dispositivo", "Sposta", "Fatto", "Invio", "Indietro"};
     case 9:  // Portuguese
       return {"COOPERATIVO LOCAL",
               "Pressione esquerda ou direita num dispositivo para pass\xC3\xA1-lo a outro jogador.",
               "N\xC3\x83O ATRIBU\xC3\x8D""DO", "JOGADOR %d", "Teclado e mouse", "Nenhum dispositivo", "Mover",
-              "Pronto", "Enter"};
+              "Pronto", "Enter", "Voltar"};
     case 11:  // Polish
       return {"LOKALNA KOOPERACJA",
               "Naci\xC5\x9Bnij w lewo lub w prawo na urz\xC4\x85""dzeniu, aby da\xC4\x87 je innemu graczowi.",
               "NIEPRZYPISANE", "GRACZ %d", "Klawiatura i mysz", "Brak urz\xC4\x85""dzenia", "Przenie\xC5\x9B",
-              "Gotowe", "Enter"};
+              "Gotowe", "Enter", "Wr\xC3\xB3\xC4\x87"};
     default:
       return {"LOCAL CO-OP", "Press left or right on a device to give it to another player.", "UNASSIGNED",
-              "PLAYER %d", "Keyboard and mouse", "No device", "Move", "Done", "Enter"};
+              "PLAYER %d", "Keyboard and mouse", "No device", "Move", "Done", "Enter", "Back"};
   }
 }
 
@@ -93,7 +94,8 @@ LocalCoopMenu::LocalCoopMenu(rex::ui::ImGuiDrawer* drawer, rex::input::InputSyst
       title_font_(title_font),
       body_font_(body_font),
       owner_(owner),
-      opened_(Clock::now()) {
+      opened_(Clock::now()),
+      last_input_(input) {
   if (assignment_) {
     assignment_->BeginEditing();
     assignment_->SetBlocked(true);
@@ -122,6 +124,7 @@ bool LocalCoopMenu::HandleInput() {
     const bool seen = found != previous_buttons_.end();
     const uint16_t pressed = seen ? static_cast<uint16_t>(buttons & ~found->second) : 0;
     previous_buttons_[slot.device.id] = buttons;
+    if (pressed) last_input_.NotePad(slot.device.id);
     const int direction = (pressed & rex::input::X_INPUT_GAMEPAD_DPAD_LEFT)    ? -1
                           : (pressed & rex::input::X_INPUT_GAMEPAD_DPAD_RIGHT) ? 1
                                                                                 : 0;
@@ -134,6 +137,7 @@ bool LocalCoopMenu::HandleInput() {
     }
   }
   // The keyboard and mouse, through ImGui's keys (the game's keyboard input is blocked).
+  last_input_.NoteKeyboard();
   for (const Slot& slot : assignment_->Slots()) {
     if (!slot.keyboard) {
       continue;
@@ -161,8 +165,17 @@ void LocalCoopMenu::OnDraw(ImGuiIO& io) {
     Close();
     return;
   }
+  // Closing waits for what closed it to be released (coop_ui::CloseInputHeld).
+  if (closing_) {
+    std::vector<DeviceId> pads;
+    for (const Slot& slot : assignment_->Slots()) {
+      if (!slot.keyboard) pads.push_back(slot.device.id);
+    }
+    if (!CloseInputHeld(input_, pads)) Close();
+    return;
+  }
   if (HandleInput()) {
-    Close();
+    closing_ = true;
     return;
   }
 
@@ -272,15 +285,17 @@ void LocalCoopMenu::OnDraw(ImGuiIO& io) {
     }
   }
 
-  // Button hints along the bottom: left and right move, and the button that closes the menu as
-  // player 1's device shows it: their controller's (the cross on PlayStation, A on the others), or
-  // Enter when they only have the keyboard.
+  // Button hints along the bottom: left and right move, and the button that closes the menu as the
+  // device last used shows it: the controller last pressed (else player 1's) with its own glyph
+  // (the cross on PlayStation, A on the others), or Escape when it was the keyboard.
   const float hints_y = panel_max.y - 30.0f * unit;
   const Slot* player_one_pad = nullptr;
-  for (const Slot& slot : slots) {
-    if (slot.player == 0 && !slot.keyboard) {
-      player_one_pad = &slot;
-      break;
+  if (!last_input_.keyboard()) {
+    for (const Slot& slot : slots) {
+      if (!slot.keyboard && slot.device.id == last_input_.pad()) player_one_pad = &slot;
+    }
+    for (const Slot& slot : slots) {
+      if (!player_one_pad && slot.player == 0 && !slot.keyboard) player_one_pad = &slot;
     }
   }
   float x = panel_min.x + margin;
@@ -289,10 +304,11 @@ void LocalCoopMenu::OnDraw(ImGuiIO& io) {
   x += 30.0f * unit;
   draw_list->AddText(body_font, 13.0f * unit, ImVec2(x, hints_y), Text(a(255)), texts.move);
   x += body_font->CalcTextSizeA(13.0f * unit, FLT_MAX, 0.0f, texts.move).x + 26.0f * unit;
+  // With only the keyboard, Escape goes back (Enter closes the menu too).
   x += DrawConfirmGlyph(draw_list, title_font, ImVec2(x, hints_y), unit,
-                        player_one_pad ? &player_one_pad->device : nullptr, texts.enter, a(255)) +
+                        player_one_pad ? &player_one_pad->device : nullptr, "Esc", a(255)) +
        6.0f * unit;
-  draw_list->AddText(body_font, 13.0f * unit, ImVec2(x, hints_y), Text(a(255)), texts.done);
+  draw_list->AddText(body_font, 13.0f * unit, ImVec2(x, hints_y), Text(a(255)), player_one_pad ? texts.done : texts.back);
 }
 
 void LocalCoopMenu::OnClose() {
