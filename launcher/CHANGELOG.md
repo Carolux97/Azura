@@ -12,6 +12,13 @@ indented lines.
   sessions before you play, so they are ready instead of being made while you play. It shows its
   progress, remembers when it last ran, and offers to prepare again once the game has stored new
   shaders since.
+- The mouse turns the camera directly, as in a PC game: no dead zone for slow aiming, no limit on
+  fast turns, and the camera stops as soon as the mouse does. Mouse sensitivity now sets the turn
+  per pixel; if you raised it before, lower it again.
+- On Linux, the game and the programs the launcher starts use your system's libraries instead of
+  the launcher's own copies (it fixes keyboard errors in the game log on newer systems).
+- A Windows version is on the way: the game builds from source for Windows and plays the
+  campaign, and the launcher runs there, but it is not in the releases yet.
 
 ## 0.3.0
 
