@@ -830,6 +830,19 @@ mod tests {
         values.iter().map(|value| value.to_string()).collect()
     }
 
+    /// A kit file or folder somewhere else: a link to it, or on Windows (where a link needs
+    /// Developer Mode) a copy.
+    fn link_or_copy(from: &Path, to: &Path) {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(from, to).unwrap();
+        #[cfg(windows)]
+        if from.is_dir() {
+            copy_tree(from, to).unwrap();
+        } else {
+            fs::copy(from, to).unwrap();
+        }
+    }
+
     /// Builds a real runtime from a kit and a game, with the launcher's own code, into temporary
     /// folders. Needs both, so it runs only on demand:
     /// `AZURA_TEST_KIT=<kit> AZURA_TEST_GAME=<game folder> cargo test builds_a_runtime -- --ignored --nocapture`
@@ -890,7 +903,7 @@ mod tests {
         fs::create_dir_all(&moved_kit).unwrap();
         for entry in fs::read_dir(&kit).unwrap() {
             let entry = entry.unwrap();
-            std::os::unix::fs::symlink(entry.path(), moved_kit.join(entry.file_name())).unwrap();
+            link_or_copy(&entry.path(), &moved_kit.join(entry.file_name()));
         }
         let started = std::time::Instant::now();
         let moved = BuildFolders { kit: &moved_kit, game: &game, work: &work, runtime: &runtime };
@@ -904,7 +917,7 @@ mod tests {
         for entry in fs::read_dir(&kit).unwrap() {
             let entry = entry.unwrap();
             if entry.file_name() != "kit.json" {
-                std::os::unix::fs::symlink(entry.path(), relinked_kit.join(entry.file_name())).unwrap();
+                link_or_copy(&entry.path(), &relinked_kit.join(entry.file_name()));
             }
         }
         let text = fs::read_to_string(kit.join("kit.json")).unwrap();
