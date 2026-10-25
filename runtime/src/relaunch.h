@@ -13,7 +13,14 @@ constexpr int kRestartExitCode = 75;
 bool StartedByLauncher();
 
 // Starts this executable again, with the same arguments, working folder and environment, as soon
-// as the current process has exited. Call right before closing the game. macOS and Linux.
+// as the current process has exited. Call right before closing the game. On macOS and Linux a
+// shell waits for this process and then runs the game; on Windows the new process starts at once
+// and waits itself (WaitForRelaunchingProcess).
 void RelaunchAfterExit();
+
+// In a game RelaunchAfterExit started on Windows, waits until the process that started it has
+// exited (at most 30 seconds), so the two never run at the same time. Call first thing at start-up.
+// Does nothing otherwise, and on macOS and Linux.
+void WaitForRelaunchingProcess();
 
 }  // namespace azura

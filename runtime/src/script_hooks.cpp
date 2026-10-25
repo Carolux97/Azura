@@ -44,6 +44,7 @@
 #include <map>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -60,6 +61,7 @@
 #include "class_dump.h"
 #include "menu/menu_patches.h"
 #include "menu/pc_options.h"
+#include "input/mouse_look.h"
 #include "input/player_assignment.h"
 
 REXCVAR_DEFINE_BOOL(script_trace, false, "Azura/Debug",
@@ -82,6 +84,7 @@ constexpr uint32_t kObjectOuter = 40;
 constexpr uint32_t kObjectName = 44;
 constexpr uint32_t kObjectClass = 52;
 constexpr uint32_t kFieldNext = 60;
+constexpr uint32_t kStructSuper = 64;
 constexpr uint32_t kStructChildren = 68;
 constexpr uint32_t kPropertyFlags = 72;
 constexpr uint32_t kPropertyOffset = 84;
@@ -252,6 +255,7 @@ enum WatchedName {
   kGammaWasChanged,          // UIScene_Options callback of gamma, borrowed by a row of ours
   kSelectStorageLocation,    // UIScene_Options: the Local co-op category, at the storage location's place
   kShouldOptionBeDisabled,   // UIScene_Options: whether a category is greyed out in the list
+  kPlayerInput,              // PlayerInput.PlayerInput: a player's input for the frame (mouse look)
   kWatchedNameCount,
 };
 constexpr const char* kWatchedNames[kWatchedNameCount] = {
@@ -264,7 +268,8 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "PawnDied",              "ShouldDeathCauseFailure", "GetDeathGameOverReason",
     "GameOverPlayer",        "ClientGameOver",         "ClientSetCinematicMode",
     "MatineeCancelled",      "GetCallbackForOptionPSID", "Callback_TVTypeWasChanged",
-    "Callback_GammaWasChanged", "Callback_SelectStorageLocation", "ShouldOptionBeDisabled"};
+    "Callback_GammaWasChanged", "Callback_SelectStorageLocation", "ShouldOptionBeDisabled",
+    "PlayerInput"};
 
 // FName index of each watched name, -1 until found (0 is a valid index: None).
 std::atomic<int32_t> g_names[kWatchedNameCount];
@@ -300,6 +305,73 @@ void ScanNewNames(const uint8_t* base) {
 bool Is(const uint8_t* base, uint32_t function, WatchedName name) {
   const int32_t index = g_names[name].load(std::memory_order_relaxed);
   return function && index >= 0 && LoadU32(base, function + kObjectName) == static_cast<uint32_t>(index);
+}
+
+// --- Mouse look (input/mouse_look.h) --------------------------------------------------------------
+
+// Offset of property `name` in objects of class `cls` (declared there or in a super class), or -1.
+int32_t ClassPropertyOffset(const uint8_t* base, uint32_t cls, const char* name) {
+  for (uint32_t owner = cls; owner; owner = LoadU32(base, owner + kStructSuper)) {
+    for (uint32_t field = LoadU32(base, owner + kStructChildren); field; field = LoadU32(base, field + kFieldNext)) {
+      if (ObjectName(base, field) != name) continue;
+      // Functions and constants are fields too: only a property has a value offset.
+      if (ObjectName(base, LoadU32(base, field + kObjectClass)).ends_with("Property")) {
+        return static_cast<int32_t>(LoadU32(base, field + kPropertyOffset));
+      }
+    }
+  }
+  return -1;
+}
+
+// The engine's PlayerInput.PlayerInput (the one that adds the mouse axes; GearPlayerInput's own
+// calls it), 0 until it first runs.
+std::atomic<uint32_t> g_engine_player_input{0};
+
+// Whether `function` is the engine's PlayerInput.PlayerInput.
+bool IsEnginePlayerInput(const uint8_t* base, uint32_t function) {
+  const uint32_t known = g_engine_player_input.load(std::memory_order_relaxed);
+  if (known) return function == known;
+  if (!Is(base, function, kPlayerInput) || ObjectName(base, LoadU32(base, function + kObjectOuter)) != "PlayerInput") {
+    return false;
+  }
+  g_engine_player_input.store(function, std::memory_order_relaxed);
+  return true;
+}
+
+// Property offsets per class, found by name the first time a class is seen.
+std::mutex g_mouse_look_mutex;
+std::unordered_map<uint64_t, int32_t> g_class_offsets;
+
+int32_t CachedOffset(const uint8_t* base, uint32_t cls, uint32_t slot, const char* name) {
+  const uint64_t key = (static_cast<uint64_t>(cls) << 8) | slot;
+  auto it = g_class_offsets.find(key);
+  if (it == g_class_offsets.end()) {
+    it = g_class_offsets.emplace(key, ClassPropertyOffset(base, cls, name)).first;
+  }
+  return it->second;
+}
+
+// As PlayerInput.PlayerInput starts on `player_input`, writes the mouse motion of its player into
+// aMouseX and aMouseY. The player is its PlayerController's LocalPlayer's ControllerId, the guest
+// user index, so in local co-op the mouse turns the camera of the player who holds it.
+void ApplyMouseLookFor(uint8_t* base, uint32_t player_input) {
+  std::lock_guard lock(g_mouse_look_mutex);
+  const uint32_t input_class = LoadU32(base, player_input + kObjectClass);
+  const int32_t mouse_x = CachedOffset(base, input_class, 0, "aMouseX");
+  const int32_t mouse_y = CachedOffset(base, input_class, 1, "aMouseY");
+  const int32_t sensitivity = CachedOffset(base, input_class, 2, "MouseSensitivity");
+  const uint32_t controller = LoadU32(base, player_input + kObjectOuter);
+  if (mouse_x < 0 || mouse_y < 0 || sensitivity < 0 || !controller) return;
+  const int32_t player = CachedOffset(base, LoadU32(base, controller + kObjectClass), 3, "Player");
+  const uint32_t local_player = player >= 0 ? LoadU32(base, controller + static_cast<uint32_t>(player)) : 0;
+  if (!local_player) return;
+  const int32_t controller_id = CachedOffset(base, LoadU32(base, local_player + kObjectClass), 4, "ControllerId");
+  if (controller_id < 0) return;
+  const uint32_t user = LoadU32(base, local_player + static_cast<uint32_t>(controller_id));
+  if (user >= 4) return;
+  azura::input::ApplyMouseLook(base, user,
+                               {player_input + static_cast<uint32_t>(mouse_x), player_input + static_cast<uint32_t>(mouse_y),
+                                player_input + static_cast<uint32_t>(sensitivity)});
 }
 
 // Whether the frame about to run is the main menu choosing the Quit Game option.
@@ -1008,6 +1080,10 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     ScanNewNames(base);
   }
   const uint32_t function = LoadU32(base, ctx.r4.u32 + kFrameNode);
+  // Before it runs: it reads aMouseX and aMouseY.
+  if (function && IsEnginePlayerInput(base, function)) {
+    ApplyMouseLookFor(base, ctx.r3.u32);
+  }
   if (REXCVAR_GET(script_trace) &&
       (Is(base, function, kPawnDied) || Is(base, function, kShouldDeathCauseFailure) ||
        Is(base, function, kGetDeathGameOverReason) || Is(base, function, kGameOverPlayer) ||

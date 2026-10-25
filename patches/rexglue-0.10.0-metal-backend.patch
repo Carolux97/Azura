@@ -880,20 +880,72 @@ index a318f2c..6751e8d 100644
  };
  
  /// Device ordinal N feeds guest user N. Synthetic devices feed user 0.
+diff --git a/include/rex/input/input_driver.h b/include/rex/input/input_driver.h
+index 52116f1..c464b1a 100644
+--- a/include/rex/input/input_driver.h
++++ b/include/rex/input/input_driver.h
+@@ -46,6 +46,11 @@ class InputDriver {
+ 
+   virtual void OnWindowAvailable(rex::ui::Window* /*window*/) {}
+ 
++  /// Mouse look taken by the game itself rather than as right stick: hands
++  /// over, and clears, the mouse motion of device `id` since the last call, in
++  /// pixels. False when the device has no mouse, or mouse look is off.
++  virtual bool TakeMouseLook(DeviceId /*id*/, float& /*dx*/, float& /*dy*/) { return false; }
++
+   void set_is_active_callback(std::function<bool()> is_active_callback) {
+     is_active_callback_ = is_active_callback;
+   }
 diff --git a/include/rex/input/input_system.h b/include/rex/input/input_system.h
-index d48df09..7549445 100644
+index d48df09..f4cb3de 100644
 --- a/include/rex/input/input_system.h
 +++ b/include/rex/input/input_system.h
-@@ -46,6 +46,9 @@ class InputSystem : public system::IInputSystem {
+@@ -46,6 +46,13 @@ class InputSystem : public system::IInputSystem {
  
    X_RESULT GetCapabilities(uint32_t user_index, uint32_t flags, X_INPUT_CAPABILITIES* out_caps);
    X_RESULT GetState(uint32_t user_index, X_INPUT_STATE* out_state);
 +  /// The state of one device, whichever user it feeds: for host UI that reads each device on its
 +  /// own (an assignment menu). It does not change which device is the active one.
 +  X_RESULT GetDeviceState(DeviceId id, X_INPUT_STATE* out_state);
++  /// The mouse motion, in pixels, of the keyboard and mouse that plays
++  /// `user_index`, since the last call; false when that player has none or
++  /// mouse look is off. See InputDriver::TakeMouseLook.
++  bool TakeMouseLook(uint32_t user_index, float& dx, float& dy);
    X_RESULT SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration);
    X_RESULT GetKeystroke(uint32_t user_index, uint32_t flags, X_INPUT_KEYSTROKE* out_keystroke);
  
+diff --git a/include/rex/input/mnk/mnk_input_driver.h b/include/rex/input/mnk/mnk_input_driver.h
+index c8751b7..80d87cc 100644
+--- a/include/rex/input/mnk/mnk_input_driver.h
++++ b/include/rex/input/mnk/mnk_input_driver.h
+@@ -15,6 +15,7 @@
+ #include <rex/ui/window_listener.h>
+ 
+ #include <atomic>
++#include <chrono>
+ #include <cstdint>
+ #include <mutex>
+ #include <queue>
+@@ -44,6 +45,10 @@ class MnkInputDriver final : public InputDriver,
+ 
+   void OnWindowAvailable(rex::ui::Window* window) override;
+ 
++  // While the game takes mouse look itself (polled at least every
++  // kMouseLookTakeTimeout), the mouse stops driving the right stick.
++  bool TakeMouseLook(DeviceId id, float& dx, float& dy) override;
++
+   // WindowInputListener
+   void OnKeyDown(rex::ui::KeyEvent& e) override;
+   void OnKeyUp(rex::ui::KeyEvent& e) override;
+@@ -81,6 +86,8 @@ class MnkInputDriver final : public InputDriver,
+   // Filled on the UI thread, drained on the guest thread, hence the lock.
+   float mouse_dx_ = 0.0f;
+   float mouse_dy_ = 0.0f;
++  // When TakeMouseLook last handed motion over. Under the lock.
++  std::chrono::steady_clock::time_point last_mouse_look_take_{};
+ 
+   // UI thread only.
+   int32_t prev_mouse_x_ = 0;
 diff --git a/include/rex/perf/counter.h b/include/rex/perf/counter.h
 index 83f0dff..1e1dea1 100644
 --- a/include/rex/perf/counter.h
@@ -17124,7 +17176,7 @@ index f3528ee..b500271 100644
        xenos::TextureFormat::k_DXT1_AS_16_16_16_16,
        xenos::TextureFormat::k_DXT2_3_AS_16_16_16_16,
 diff --git a/src/input/input_system.cpp b/src/input/input_system.cpp
-index c9f7ed6..c41f06d 100644
+index c9f7ed6..af7aad5 100644
 --- a/src/input/input_system.cpp
 +++ b/src/input/input_system.cpp
 @@ -255,6 +255,7 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
@@ -17135,10 +17187,26 @@ index c9f7ed6..c41f06d 100644
    }
  
    if (!any) {
-@@ -266,6 +267,16 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
+@@ -266,6 +267,32 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
    return X_ERROR_SUCCESS;
  }
  
++bool InputSystem::TakeMouseLook(uint32_t user_index, float& dx, float& dy) {
++  std::lock_guard<std::mutex> lock(g_devices_mutex);
++  if (!assignment_) {
++    return false;
++  }
++  std::vector<DeviceId> ids;
++  assignment_->DevicesForUser(user_index, ids);
++  for (DeviceId id : ids) {
++    auto* driver = DriverForDevice(id);
++    if (driver && driver->TakeMouseLook(id, dx, dy)) {
++      return true;
++    }
++  }
++  return false;
++}
++
 +X_RESULT InputSystem::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
 +  std::lock_guard<std::mutex> lock(g_devices_mutex);
 +  RefreshDevices();
@@ -17152,7 +17220,7 @@ index c9f7ed6..c41f06d 100644
  ActiveDeviceKind InputSystem::KindOf(DeviceId id) const {
    const DeviceInfo* info = DeviceInfoFor(id);
    if (!info) {
-@@ -298,6 +309,14 @@ X_RESULT InputSystem::SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration
+@@ -298,6 +325,14 @@ X_RESULT InputSystem::SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration
    std::vector<DeviceId> ids;
    assignment_->DevicesForUser(user_index, ids);
  
@@ -17167,6 +17235,84 @@ index c9f7ed6..c41f06d 100644
    // Every pad on this user belongs to the same player, so all of them buzz.
    // Only pads decide the result: synthetic devices accept any vibration and
    // would otherwise report success for a pad that never rumbled.
+diff --git a/src/input/mnk/mnk_input_driver.cpp b/src/input/mnk/mnk_input_driver.cpp
+index 38c1555..8f26ef1 100644
+--- a/src/input/mnk/mnk_input_driver.cpp
++++ b/src/input/mnk/mnk_input_driver.cpp
+@@ -18,6 +18,7 @@
+ #include <rex/ui/window.h>
+ 
+ #include <algorithm>
++#include <chrono>
+ #include <cmath>
+ #include <cstdlib>
+ #include <cstring>
+@@ -67,6 +68,11 @@ namespace {
+ // A single device, so its handle is a constant.
+ constexpr rex::input::DeviceId kMnkDevice = static_cast<rex::input::DeviceId>(0x4D4E4B00);
+ 
++// How long after the game last took mouse look (TakeMouseLook) the mouse stays
++// off the right stick. The game takes it every frame while it can; past this,
++// as where it does not (another input class), the mouse drives the stick again.
++constexpr auto kMouseLookTakeTimeout = std::chrono::milliseconds(100);
++
+ // Bind values are a comma-separated list of alternatives, each optionally
+ // carrying modifier prefixes: "Q,I" or "Shift+W".
+ constexpr uint8_t kModShift = 1u << 0;
+@@ -332,17 +338,22 @@ X_RESULT MnkInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
+   if (IsBindPressed(key_down_, REXCVAR_GET(keybind_rstick_down)))
+     ry -= INT16_MAX;
+ 
+-  if (REXCVAR_GET(mnk_mouse) && IsMouseLookActive()) {
+-    double sensitivity = REXCVAR_GET(mnk_sensitivity);
+-    constexpr double kBaseScale = 200.0;
+-    rx += static_cast<int32_t>(double(mouse_dx_) * sensitivity * kBaseScale);
+-    ry += static_cast<int32_t>(double(-mouse_dy_) * sensitivity * kBaseScale);
++  // While the game takes mouse look itself, the motion is left for it.
++  const bool taken_by_game =
++      std::chrono::steady_clock::now() - last_mouse_look_take_ < kMouseLookTakeTimeout;
++  if (!taken_by_game) {
++    if (REXCVAR_GET(mnk_mouse) && IsMouseLookActive()) {
++      double sensitivity = REXCVAR_GET(mnk_sensitivity);
++      constexpr double kBaseScale = 200.0;
++      rx += static_cast<int32_t>(double(mouse_dx_) * sensitivity * kBaseScale);
++      ry += static_cast<int32_t>(double(-mouse_dy_) * sensitivity * kBaseScale);
++    }
++    // Drained whether or not the mouse is on: deltas keep accumulating in
++    // OnMouseMove while it is off, and turning it on would otherwise dump the
++    // whole backlog into one frame as a camera snap.
++    mouse_dx_ = 0.0f;
++    mouse_dy_ = 0.0f;
+   }
+-  // Drained unconditionally: deltas keep accumulating in OnMouseMove while the
+-  // mouse is off, and toggling it on would otherwise dump the whole backlog
+-  // into one frame as a camera snap.
+-  mouse_dx_ = 0.0f;
+-  mouse_dy_ = 0.0f;
+ 
+   auto clamp16 = [](int32_t v) -> int16_t {
+     return static_cast<int16_t>(std::clamp(v, (int32_t)INT16_MIN, (int32_t)INT16_MAX));
+@@ -547,6 +558,20 @@ void MnkInputDriver::OnMouseUp(rex::ui::MouseEvent& e) {
+   }
+ }
+ 
++bool MnkInputDriver::TakeMouseLook(DeviceId id, float& dx, float& dy) {
++  if (!IsEnabled() || id != kMnkDevice || !REXCVAR_GET(mnk_mouse) || !IsMouseLookActive() ||
++      !has_focus_ || !is_active()) {
++    return false;
++  }
++  std::lock_guard lock(state_mutex_);
++  dx = mouse_dx_;
++  dy = mouse_dy_;
++  mouse_dx_ = 0.0f;
++  mouse_dy_ = 0.0f;
++  last_mouse_look_take_ = std::chrono::steady_clock::now();
++  return true;
++}
++
+ void MnkInputDriver::OnMouseMove(rex::ui::MouseEvent& e) {
+   if (!IsEnabled() || !has_focus_)
+     return;
 diff --git a/src/input/sdl/sdl_input_driver.cpp b/src/input/sdl/sdl_input_driver.cpp
 index 82a252c..3dcec80 100644
 --- a/src/input/sdl/sdl_input_driver.cpp
