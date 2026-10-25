@@ -881,23 +881,33 @@ index a318f2c..6751e8d 100644
  
  /// Device ordinal N feeds guest user N. Synthetic devices feed user 0.
 diff --git a/include/rex/input/input_driver.h b/include/rex/input/input_driver.h
-index 52116f1..c464b1a 100644
+index 52116f1..6113066 100644
 --- a/include/rex/input/input_driver.h
 +++ b/include/rex/input/input_driver.h
-@@ -46,6 +46,11 @@ class InputDriver {
+@@ -46,6 +46,21 @@ class InputDriver {
  
    virtual void OnWindowAvailable(rex::ui::Window* /*window*/) {}
  
++  /// What a mouse did since the last TakeMouseLook: its motion in pixels, and
++  /// whether its player is aiming or zoomed in with the keyboard and mouse's
++  /// own aim and zoom binds (for their own sensitivity).
++  struct MouseLook {
++    float dx = 0.0f;
++    float dy = 0.0f;
++    bool aiming = false;
++    bool zoomed = false;
++  };
++
 +  /// Mouse look taken by the game itself rather than as right stick: hands
-+  /// over, and clears, the mouse motion of device `id` since the last call, in
-+  /// pixels. False when the device has no mouse, or mouse look is off.
-+  virtual bool TakeMouseLook(DeviceId /*id*/, float& /*dx*/, float& /*dy*/) { return false; }
++  /// over, and clears, the mouse motion of device `id` since the last call.
++  /// False when the device has no mouse, or mouse look is off.
++  virtual bool TakeMouseLook(DeviceId /*id*/, MouseLook& /*look*/) { return false; }
 +
    void set_is_active_callback(std::function<bool()> is_active_callback) {
      is_active_callback_ = is_active_callback;
    }
 diff --git a/include/rex/input/input_system.h b/include/rex/input/input_system.h
-index d48df09..f4cb3de 100644
+index d48df09..208dbf4 100644
 --- a/include/rex/input/input_system.h
 +++ b/include/rex/input/input_system.h
 @@ -46,6 +46,13 @@ class InputSystem : public system::IInputSystem {
@@ -910,12 +920,12 @@ index d48df09..f4cb3de 100644
 +  /// The mouse motion, in pixels, of the keyboard and mouse that plays
 +  /// `user_index`, since the last call; false when that player has none or
 +  /// mouse look is off. See InputDriver::TakeMouseLook.
-+  bool TakeMouseLook(uint32_t user_index, float& dx, float& dy);
++  bool TakeMouseLook(uint32_t user_index, InputDriver::MouseLook& look);
    X_RESULT SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration);
    X_RESULT GetKeystroke(uint32_t user_index, uint32_t flags, X_INPUT_KEYSTROKE* out_keystroke);
  
 diff --git a/include/rex/input/mnk/mnk_input_driver.h b/include/rex/input/mnk/mnk_input_driver.h
-index c8751b7..80d87cc 100644
+index c8751b7..7620729 100644
 --- a/include/rex/input/mnk/mnk_input_driver.h
 +++ b/include/rex/input/mnk/mnk_input_driver.h
 @@ -15,6 +15,7 @@
@@ -926,26 +936,184 @@ index c8751b7..80d87cc 100644
  #include <cstdint>
  #include <mutex>
  #include <queue>
-@@ -44,6 +45,10 @@ class MnkInputDriver final : public InputDriver,
+@@ -25,6 +26,25 @@ namespace rex::input::mnk {
+ void SetMouseLookActive(bool active);
+ bool IsMouseLookActive();
+ 
++/// Which of the fixed keys that press Start (Return, Escape) is held, as of the
++/// last poll: so a game's menu can take Return as accept and Escape as back
++/// while both pause in play. kNone when neither is.
++enum class StartKey : uint8_t { kNone, kReturn, kEscape };
++StartKey HeldStartKey();
++
++/// Presses `button` (an X_INPUT_GAMEPAD_* bit) on the keyboard and mouse's
++/// controller for a moment: a menu that takes Return or Escape as another
++/// button gets that button instead of Start.
++void PressForMenu(uint16_t button);
++
++/// Asked at every poll whether the game shows a menu: while `in_menu` returns
++/// true, Return presses A (accept) and Escape B (back) for a moment, as
++/// PressForMenu does, instead of Start. A key
++/// keeps what it was when pressed until it is released, so the Escape that
++/// pauses does not also go back from the pause menu it opened. Null (the
++/// default) keeps both Start.
++void SetMenuKeysQuery(bool (*in_menu)());
++
+ class MnkInputDriver final : public InputDriver,
+                              public rex::ui::WindowInputListener,
+                              public rex::ui::WindowListener {
+@@ -44,12 +64,17 @@ class MnkInputDriver final : public InputDriver,
  
    void OnWindowAvailable(rex::ui::Window* window) override;
  
 +  // While the game takes mouse look itself (polled at least every
 +  // kMouseLookTakeTimeout), the mouse stops driving the right stick.
-+  bool TakeMouseLook(DeviceId id, float& dx, float& dy) override;
++  bool TakeMouseLook(DeviceId id, MouseLook& look) override;
 +
    // WindowInputListener
    void OnKeyDown(rex::ui::KeyEvent& e) override;
    void OnKeyUp(rex::ui::KeyEvent& e) override;
-@@ -81,6 +86,8 @@ class MnkInputDriver final : public InputDriver,
+   void OnMouseDown(rex::ui::MouseEvent& e) override;
+   void OnMouseUp(rex::ui::MouseEvent& e) override;
+   void OnMouseMove(rex::ui::MouseEvent& e) override;
++  void OnMouseWheel(rex::ui::MouseEvent& e) override;
+ 
+   // WindowListener
+   void OnClosing(rex::ui::UIEvent& e) override;
+@@ -59,6 +84,10 @@ class MnkInputDriver final : public InputDriver,
+  private:
+   bool IsEnabled() const;
+   void SetKeyState(uint16_t vk, bool down);
++  // Presses and releases the wheel's keys for the notches turned (under the lock).
++  void UpdateWheelKeys(std::chrono::steady_clock::time_point now);
++  // Forgets the toggles and the wheel (focus lost). Under the lock.
++  void ResetLatches();
+   void EnqueueKeystroke(uint16_t vk_pad, bool down);
+ 
+   // Called from the guest thread. The rest of the capture path stays on the UI
+@@ -75,12 +104,40 @@ class MnkInputDriver final : public InputDriver,
+ 
+   std::mutex state_mutex_;
+   bool key_down_[256] = {};
++  // Return and Escape: down at the last poll, and whether they were menu keys
++  // (SetMenuKeysQuery) when pressed. Under the lock.
++  bool menu_key_down_[2] = {};
++  bool menu_key_in_menu_[2] = {};
+ 
+   // Mouse delta tracking. Fractional because relative motion arrives in
+   // fractions of a pixel, and truncating each event drops slow movement.
    // Filled on the UI thread, drained on the guest thread, hence the lock.
    float mouse_dx_ = 0.0f;
    float mouse_dy_ = 0.0f;
 +  // When TakeMouseLook last handed motion over. Under the lock.
 +  std::chrono::steady_clock::time_point last_mouse_look_take_{};
++
++  // The mouse wheel: notches still to press for each direction (up, down), and when the key
++  // pressed for the current one is released, and the next one may be pressed. Under the lock.
++  int wheel_pending_[2] = {};
++  // Scrolling not yet a whole notch (a trackpad's), in MouseEvent::kScrollPerDetent units.
++  int32_t wheel_scroll_ = 0;
++  std::chrono::steady_clock::time_point wheel_release_at_[2]{};
++  std::chrono::steady_clock::time_point wheel_next_at_[2]{};
++
++  // Pressing instead of holding (mnk_aim_toggle, mnk_run_toggle) and holding instead of
++  // clicking (mnk_zoom_hold): the binds' state at the last poll, and what they hold now. Under
++  // the lock.
++  bool aim_bind_was_down_ = false;
++  bool aim_latched_ = false;
++  bool run_bind_was_down_ = false;
++  bool run_latched_ = false;
++  bool zoom_bind_was_down_ = false;
++  // A click of the right stick sent for a zoom bind held (on its press and on its release).
++  std::chrono::steady_clock::time_point zoom_click_until_{};
++  // Whether the player is zoomed in, as far as the keyboard and mouse can tell (see MouseLook).
++  bool zoomed_ = false;
++  bool aiming_ = false;
  
    // UI thread only.
    int32_t prev_mouse_x_ = 0;
+diff --git a/include/rex/input/pad_remap.h b/include/rex/input/pad_remap.h
+new file mode 100644
+index 0000000..1f7e75d
+--- /dev/null
++++ b/include/rex/input/pad_remap.h
+@@ -0,0 +1,76 @@
++/**
++ * @file        rex/input/pad_remap.h
++ * @brief       Controller buttons acting as other buttons
++ *
++ * A player's own layout for controllers: each physical control (a button, a trigger, a stick
++ * press) can act as another one. It applies to every controller, before the guest reads it, and
++ * only while pad_custom is on (the game's own control schemes are its profile's business). The
++ * keyboard and mouse have their own binds and are not remapped here.
++ *
++ * pad_remap lists, for each physical control in PadControl order, the name of the control it acts
++ * as: "a,b,x,y,lb,rb,lt,rt,l3,r3,back,start,up,down,left,right" is the controller as it is.
++ *
++ * @license     BSD 3-Clause License
++ *              See LICENSE file in the project root for full license text.
++ */
++
++#pragma once
++
++#include <array>
++#include <cstdint>
++#include <string>
++#include <string_view>
++
++#include <rex/input/input.h>
++
++namespace rex::input {
++
++/// The controls a controller's layout can move, in pad_remap's order.
++enum class PadControl : uint8_t {
++  kA,
++  kB,
++  kX,
++  kY,
++  kLeftShoulder,
++  kRightShoulder,
++  kLeftTrigger,
++  kRightTrigger,
++  kLeftThumb,
++  kRightThumb,
++  kBack,
++  kStart,
++  kDpadUp,
++  kDpadDown,
++  kDpadLeft,
++  kDpadRight,
++  kCount,
++};
++
++constexpr size_t kPadControlCount = static_cast<size_t>(PadControl::kCount);
++
++/// For each physical control, the control it acts as.
++using PadLayout = std::array<PadControl, kPadControlCount>;
++
++/// The controller as it is: every control acts as itself.
++PadLayout IdentityPadLayout();
++
++/// pad_remap's name of a control ("a", "lb", "up", ...).
++std::string_view PadControlName(PadControl control);
++
++/// A layout from pad_remap's text; controls it does not name, or names wrongly, act as
++/// themselves.
++PadLayout ParsePadLayout(std::string_view text);
++
++/// pad_remap's text for a layout.
++std::string FormatPadLayout(const PadLayout& layout);
++
++/// The layout in use: pad_remap while pad_custom is on, otherwise the identity.
++PadLayout CurrentPadLayout();
++
++/// Applies a layout to a controller's state: each pressed physical control presses the one it acts
++/// as. A trigger moved to a trigger keeps its travel; a trigger moved to a button presses it past
++/// XInput's trigger threshold, and a button moved to a trigger pulls it all the way. The sticks
++/// and the guide button are left as they are.
++void ApplyPadLayout(const PadLayout& layout, X_INPUT_GAMEPAD& pad);
++
++}  // namespace rex::input
 diff --git a/include/rex/perf/counter.h b/include/rex/perf/counter.h
 index 83f0dff..1e1dea1 100644
 --- a/include/rex/perf/counter.h
@@ -1405,6 +1573,22 @@ index afb4a30..e9be74f 100644
  
    explicit Presenter(HostGpuLossCallback host_gpu_loss_callback)
        : host_gpu_loss_callback_(host_gpu_loss_callback) {}
+diff --git a/include/rex/ui/virtual_key.h b/include/rex/ui/virtual_key.h
+index 3e1b948..5e1857b 100644
+--- a/include/rex/ui/virtual_key.h
++++ b/include/rex/ui/virtual_key.h
+@@ -45,6 +45,11 @@ enum class VirtualKey : uint16_t {
+   kClear = 0x0C,
+   kReturn = 0x0D,  // Enter.
+ 
++  // Not Windows keys (0x0E and 0x0F are unassigned there): the mouse wheel's notches, which the
++  // keyboard and mouse driver presses briefly so they can be bound like keys.
++  kWheelUp = 0x0E,
++  kWheelDown = 0x0F,
++
+   kShift = 0x10,
+   kControl = 0x11,  // Ctrl.
+   kMenu = 0x12,     // Alt.
 diff --git a/include/rex/ui/vulkan/device.h b/include/rex/ui/vulkan/device.h
 index 947817f..8afd215 100644
 --- a/include/rex/ui/vulkan/device.h
@@ -1617,6 +1801,37 @@ index 107a495..f792c18 100644
  
  set(GENERATED_SOURCES
      {{ cmake_var("CMAKE_CURRENT_LIST_DIR") }}/{{ project }}_init.cpp
+diff --git a/src/core/filesystem_win.cpp b/src/core/filesystem_win.cpp
+index c5a2c5d..723b88e 100644
+--- a/src/core/filesystem_win.cpp
++++ b/src/core/filesystem_win.cpp
+@@ -42,10 +42,23 @@ std::filesystem::path to_path(const std::u16string_view source) {
+ 
+ namespace filesystem {
+ 
++// From the loaded module, whatever the program's entry point: the CRT's _wpgmptr is only set for
++// the wide ones (wmain, wWinMain), and reading it from a program entered through main, as the
++// rexglue tool is, ends the process.
+ std::filesystem::path GetExecutablePath() {
+-  wchar_t* path;
+-  auto error = _get_wpgmptr(&path);
+-  return !error ? std::filesystem::path(path) : std::filesystem::path();
++  std::wstring path(MAX_PATH, L'\0');
++  for (;;) {
++    const DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
++    if (length == 0) {
++      return {};
++    }
++    if (length < path.size()) {
++      path.resize(length);
++      return std::filesystem::path(path);
++    }
++    // Truncated: the path is longer than the buffer.
++    path.resize(path.size() * 2);
++  }
+ }
+ 
+ std::filesystem::path GetExecutableFolder() {
 diff --git a/src/core/memory_posix.cpp b/src/core/memory_posix.cpp
 index b52bf39..13f51dc 100644
 --- a/src/core/memory_posix.cpp
@@ -17175,11 +17390,51 @@ index f3528ee..b500271 100644
        xenos::TextureFormat::k_CTX1,
        xenos::TextureFormat::k_DXT1_AS_16_16_16_16,
        xenos::TextureFormat::k_DXT2_3_AS_16_16_16_16,
+diff --git a/src/input/CMakeLists.txt b/src/input/CMakeLists.txt
+index 3ea3535..edb6ec4 100644
+--- a/src/input/CMakeLists.txt
++++ b/src/input/CMakeLists.txt
+@@ -5,6 +5,7 @@ add_library(rexinput OBJECT
+     input_system.cpp
+     device_assignment.cpp
+     state_merge.cpp
++    pad_remap.cpp
+     mnk/mnk_input_driver.cpp
+     nop/nop_input_driver.cpp
+ )
 diff --git a/src/input/input_system.cpp b/src/input/input_system.cpp
-index c9f7ed6..af7aad5 100644
+index c9f7ed6..59e3507 100644
 --- a/src/input/input_system.cpp
 +++ b/src/input/input_system.cpp
-@@ -255,6 +255,7 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
+@@ -20,6 +20,7 @@
+ #include <rex/input/input_system.h>
+ #include <rex/input/mnk/mnk_input_driver.h>
+ #include <rex/input/nop/nop_input_driver.h>
++#include <rex/input/pad_remap.h>
+ #include <rex/input/sdl/sdl_input_driver.h>
+ #include <rex/input/state_merge.h>
+ #include <rex/input/xinput/xinput_input_driver.h>
+@@ -234,6 +235,8 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
+ 
+   X_INPUT_STATE merged = {};
+   bool any = false;
++  // The player's own controller layout, when they made one (rex/input/pad_remap.h).
++  const PadLayout layout = CurrentPadLayout();
+   for (DeviceId id : ids) {
+     auto* driver = DriverForDevice(id);
+     if (!driver) {
+@@ -243,6 +246,10 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
+     if (driver->GetDeviceState(id, &state) != X_ERROR_SUCCESS) {
+       continue;
+     }
++    const DeviceInfo* info = DeviceInfoFor(id);
++    if (info && !info->synthetic) {
++      ApplyPadLayout(layout, state.gamepad);
++    }
+     active_devices_.Observe(user_index, id, state.gamepad);
+     if (!any) {
+       merged = state;
+@@ -255,6 +262,7 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
    if (user_index < kMaxGuestUsers) {
      active_kind_[user_index].store(static_cast<uint8_t>(KindOf(active_devices_.Active(user_index))),
                                     std::memory_order_relaxed);
@@ -17187,11 +17442,11 @@ index c9f7ed6..af7aad5 100644
    }
  
    if (!any) {
-@@ -266,6 +267,32 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
+@@ -266,6 +274,32 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
    return X_ERROR_SUCCESS;
  }
  
-+bool InputSystem::TakeMouseLook(uint32_t user_index, float& dx, float& dy) {
++bool InputSystem::TakeMouseLook(uint32_t user_index, InputDriver::MouseLook& look) {
 +  std::lock_guard<std::mutex> lock(g_devices_mutex);
 +  if (!assignment_) {
 +    return false;
@@ -17200,7 +17455,7 @@ index c9f7ed6..af7aad5 100644
 +  assignment_->DevicesForUser(user_index, ids);
 +  for (DeviceId id : ids) {
 +    auto* driver = DriverForDevice(id);
-+    if (driver && driver->TakeMouseLook(id, dx, dy)) {
++    if (driver && driver->TakeMouseLook(id, look)) {
 +      return true;
 +    }
 +  }
@@ -17220,7 +17475,7 @@ index c9f7ed6..af7aad5 100644
  ActiveDeviceKind InputSystem::KindOf(DeviceId id) const {
    const DeviceInfo* info = DeviceInfoFor(id);
    if (!info) {
-@@ -298,6 +325,14 @@ X_RESULT InputSystem::SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration
+@@ -298,6 +332,14 @@ X_RESULT InputSystem::SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration
    std::vector<DeviceId> ids;
    assignment_->DevicesForUser(user_index, ids);
  
@@ -17236,10 +17491,10 @@ index c9f7ed6..af7aad5 100644
    // Only pads decide the result: synthetic devices accept any vibration and
    // would otherwise report success for a pad that never rumbled.
 diff --git a/src/input/mnk/mnk_input_driver.cpp b/src/input/mnk/mnk_input_driver.cpp
-index 38c1555..8f26ef1 100644
+index 38c1555..d028903 100644
 --- a/src/input/mnk/mnk_input_driver.cpp
 +++ b/src/input/mnk/mnk_input_driver.cpp
-@@ -18,6 +18,7 @@
+@@ -18,10 +18,12 @@
  #include <rex/ui/window.h>
  
  #include <algorithm>
@@ -17247,10 +17502,106 @@ index 38c1555..8f26ef1 100644
  #include <cmath>
  #include <cstdlib>
  #include <cstring>
-@@ -67,6 +68,11 @@ namespace {
+ #include <string_view>
++#include <utility>
+ 
+ REXCVAR_DEFINE_BOOL(mnk_mode, false, "Input", "Enable keyboard/mouse controller emulation");
+ REXCVAR_DEFINE_BOOL(mnk_mouse, true, "Input",
+@@ -30,35 +32,51 @@ REXCVAR_DEFINE_BOOL(mnk_mouse, true, "Input",
+ REXCVAR_DEFINE_DOUBLE(mnk_sensitivity, 1.0, "Input", "Mouse sensitivity for right stick")
+     .range(0.01, 10.0);
+ 
++// The defaults follow Gears 5 on PC as far as Gears of War 3's controls allow, with no key
++// bound twice. Escape and Return (Start), Backspace (back in menus) and the arrow keys (menus) are
++// fixed (kFixedBinds below) and are not bound here.
+ REXCVAR_DEFINE_STRING(keybind_a, "Space", "Input/Keybinds/Controller", "A button");
+-REXCVAR_DEFINE_STRING(keybind_b, "F,Backspace", "Input/Keybinds/Controller", "B button");
++REXCVAR_DEFINE_STRING(keybind_b, "F", "Input/Keybinds/Controller", "B button");
+ REXCVAR_DEFINE_STRING(keybind_x, "E", "Input/Keybinds/Controller", "X button");
+-REXCVAR_DEFINE_STRING(keybind_y, "V,C", "Input/Keybinds/Controller", "Y button");
+-REXCVAR_DEFINE_STRING(keybind_left_trigger, "RMB,Q", "Input/Keybinds/Controller", "Left trigger");
++REXCVAR_DEFINE_STRING(keybind_y, "C,V", "Input/Keybinds/Controller", "Y button");
++REXCVAR_DEFINE_STRING(keybind_left_trigger, "RMB", "Input/Keybinds/Controller", "Left trigger");
+ REXCVAR_DEFINE_STRING(keybind_right_trigger, "LMB", "Input/Keybinds/Controller", "Right trigger");
+-REXCVAR_DEFINE_STRING(keybind_left_shoulder, "Q", "Input/Keybinds/Controller", "Left shoulder");
++REXCVAR_DEFINE_STRING(keybind_left_shoulder, "Shift", "Input/Keybinds/Controller", "Left shoulder");
+ REXCVAR_DEFINE_STRING(keybind_right_shoulder, "R", "Input/Keybinds/Controller", "Right shoulder");
+ REXCVAR_DEFINE_STRING(keybind_lstick_up, "W", "Input/Keybinds/Controller", "Left stick up");
+ REXCVAR_DEFINE_STRING(keybind_lstick_down, "S", "Input/Keybinds/Controller", "Left stick down");
+ REXCVAR_DEFINE_STRING(keybind_lstick_left, "A", "Input/Keybinds/Controller", "Left stick left");
+ REXCVAR_DEFINE_STRING(keybind_lstick_right, "D", "Input/Keybinds/Controller", "Left stick right");
+-REXCVAR_DEFINE_STRING(keybind_lstick_press, "Shift,Control", "Input/Keybinds/Controller",
++REXCVAR_DEFINE_STRING(keybind_lstick_press, "Ctrl,Q", "Input/Keybinds/Controller",
+                       "Left stick press");
+-REXCVAR_DEFINE_STRING(keybind_rstick_up, "I", "Input/Keybinds/Controller", "Right stick up");
+-REXCVAR_DEFINE_STRING(keybind_rstick_down, "K", "Input/Keybinds/Controller", "Right stick down");
+-REXCVAR_DEFINE_STRING(keybind_rstick_left, "J", "Input/Keybinds/Controller", "Right stick left");
+-REXCVAR_DEFINE_STRING(keybind_rstick_right, "L", "Input/Keybinds/Controller",
++REXCVAR_DEFINE_STRING(keybind_rstick_up, "", "Input/Keybinds/Controller", "Right stick up");
++REXCVAR_DEFINE_STRING(keybind_rstick_down, "", "Input/Keybinds/Controller", "Right stick down");
++REXCVAR_DEFINE_STRING(keybind_rstick_left, "", "Input/Keybinds/Controller", "Right stick left");
++REXCVAR_DEFINE_STRING(keybind_rstick_right, "", "Input/Keybinds/Controller",
+                       "Right stick right");
+ REXCVAR_DEFINE_STRING(keybind_rstick_press, "MMB,Z", "Input/Keybinds/Controller",
+                       "Right stick press");
+-REXCVAR_DEFINE_STRING(keybind_dpad_up, "Up,4", "Input/Keybinds/Controller", "D-pad up");
+-REXCVAR_DEFINE_STRING(keybind_dpad_down, "Down,3", "Input/Keybinds/Controller", "D-pad down");
+-REXCVAR_DEFINE_STRING(keybind_dpad_left, "Left,1", "Input/Keybinds/Controller", "D-pad left");
+-REXCVAR_DEFINE_STRING(keybind_dpad_right, "Right,2", "Input/Keybinds/Controller",
++REXCVAR_DEFINE_STRING(keybind_dpad_up, "4", "Input/Keybinds/Controller", "D-pad up");
++REXCVAR_DEFINE_STRING(keybind_dpad_down, "3", "Input/Keybinds/Controller", "D-pad down");
++REXCVAR_DEFINE_STRING(keybind_dpad_left, "1,WheelUp", "Input/Keybinds/Controller", "D-pad left");
++REXCVAR_DEFINE_STRING(keybind_dpad_right, "2,WheelDown", "Input/Keybinds/Controller",
+                       "D-pad right");
+ REXCVAR_DEFINE_STRING(keybind_back, "Tab", "Input/Keybinds/Controller", "Back button");
+-REXCVAR_DEFINE_STRING(keybind_start, "Return,Escape", "Input/Keybinds/Controller", "Start button");
++REXCVAR_DEFINE_STRING(keybind_start, "", "Input/Keybinds/Controller", "Start button");
+ REXCVAR_DEFINE_STRING(keybind_guide, "", "Input/Keybinds/Controller", "Guide button");
++REXCVAR_DEFINE_STRING(keybind_run, "", "Input/Keybinds/Controller",
++                      "Roadie run: holds the A button (mnk_run_toggle makes a press start and "
++                      "stop it)");
++
++REXCVAR_DEFINE_BOOL(mnk_aim_toggle, false, "Input",
++                    "Aim (left trigger) with a press to start and another to stop, instead of "
++                    "holding it");
++REXCVAR_DEFINE_BOOL(mnk_zoom_hold, false, "Input",
++                    "Zoom (right stick press) while the bind is held, instead of a click to "
++                    "zoom in and another to zoom out");
++REXCVAR_DEFINE_BOOL(mnk_run_toggle, false, "Input",
++                    "Roadie run (keybind_run) with a press to start and another to stop, instead "
++                    "of holding it");
+ 
+ namespace rex::input::mnk {
+ 
+@@ -67,6 +85,36 @@ namespace {
  // A single device, so its handle is a constant.
  constexpr rex::input::DeviceId kMnkDevice = static_cast<rex::input::DeviceId>(0x4D4E4B00);
  
++// Keys that always do the same, so the game can be paused and its menus used whatever is bound:
++// Escape and Return are Start (pause, and accept on the game's title and pause screens; the driver
++// cannot tell a menu from play, so neither can be the menus' A or B alone, unless the game says so:
++// SetMenuKeysQuery), Backspace is B (back in
++// menus), and the arrow keys are the D-pad (moving in menus, and weapons).
++constexpr std::pair<rex::ui::VirtualKey, uint16_t> kFixedBinds[] = {
++    {rex::ui::VirtualKey::kEscape, X_INPUT_GAMEPAD_START},
++    {rex::ui::VirtualKey::kReturn, X_INPUT_GAMEPAD_START},
++    {rex::ui::VirtualKey::kBack, X_INPUT_GAMEPAD_B},
++    {rex::ui::VirtualKey::kUp, X_INPUT_GAMEPAD_DPAD_UP},
++    {rex::ui::VirtualKey::kDown, X_INPUT_GAMEPAD_DPAD_DOWN},
++    {rex::ui::VirtualKey::kLeft, X_INPUT_GAMEPAD_DPAD_LEFT},
++    {rex::ui::VirtualKey::kRight, X_INPUT_GAMEPAD_DPAD_RIGHT},
++};
++
++// A wheel notch holds its key this long, then leaves it up at least kWheelGap before the next
++// notch presses it again, so the game sees each notch as a press of its own.
++constexpr auto kWheelPress = std::chrono::milliseconds(60);
++constexpr auto kWheelGap = std::chrono::milliseconds(40);
++// Notches beyond these still waiting are dropped: a fast spin does not cycle weapons for seconds.
++constexpr int kWheelMaxPending = 3;
++
++// A click of the right stick sent for each press and release of a held zoom bind (mnk_zoom_hold).
++constexpr auto kZoomClick = std::chrono::milliseconds(60);
++
 +// How long after the game last took mouse look (TakeMouseLook) the mouse stays
 +// off the right stick. The game takes it every frame while it can; past this,
 +// as where it does not (another input class), the mouse drives the stick again.
@@ -17259,7 +17610,160 @@ index 38c1555..8f26ef1 100644
  // Bind values are a comma-separated list of alternatives, each optionally
  // carrying modifier prefixes: "Q,I" or "Shift+W".
  constexpr uint8_t kModShift = 1u << 0;
-@@ -332,17 +338,22 @@ X_RESULT MnkInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
+@@ -137,9 +185,31 @@ bool TokenPressed(const bool (&key_down)[256], std::string_view token, uint8_t l
+ }
+ 
+ std::atomic<bool> mouse_look_active{true};
++std::atomic<bool (*)()> menu_keys_query{nullptr};
++std::atomic<uint8_t> held_start_key{0};
++
++// A button pressed for a menu (PressForMenu), and until when, in steady_clock ticks.
++std::atomic<uint16_t> menu_button{0};
++std::atomic<int64_t> menu_button_until{0};
++// Long enough for the game to read it on a frame of its own, at 30 frames per second too.
++constexpr auto kMenuPress = std::chrono::milliseconds(80);
+ 
+ }  // namespace
+ 
++StartKey HeldStartKey() {
++  return static_cast<StartKey>(held_start_key.load(std::memory_order_relaxed));
++}
++
++void PressForMenu(uint16_t button) {
++  menu_button.store(button, std::memory_order_relaxed);
++  menu_button_until.store((std::chrono::steady_clock::now() + kMenuPress).time_since_epoch().count(),
++                          std::memory_order_relaxed);
++}
++
++void SetMenuKeysQuery(bool (*in_menu)()) {
++  menu_keys_query.store(in_menu, std::memory_order_relaxed);
++}
++
+ void SetMouseLookActive(bool active) {
+   mouse_look_active.store(active, std::memory_order_relaxed);
+ }
+@@ -274,8 +344,39 @@ X_RESULT MnkInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
+   }
+ 
+   std::lock_guard lock(state_mutex_);
++  const auto now = std::chrono::steady_clock::now();
++  UpdateWheelKeys(now);
+ 
+   uint16_t buttons = 0;
++  // Return and Escape: menu keys or Start, as they were when pressed. A menu key presses A or B for
++  // a moment (PressForMenu), as the game's menus open others on a press and a button still held
++  // while one opens leaves it taking no input.
++  bool (*const in_menu)() = menu_keys_query.load(std::memory_order_relaxed);
++  constexpr VirtualKey kMenuKeys[2] = {VirtualKey::kReturn, VirtualKey::kEscape};
++  constexpr uint16_t kMenuButtons[2] = {X_INPUT_GAMEPAD_A, X_INPUT_GAMEPAD_B};
++  for (int i = 0; i < 2; ++i) {
++    const bool down = key_down_[static_cast<uint16_t>(kMenuKeys[i])];
++    if (down && !menu_key_down_[i]) {
++      menu_key_in_menu_[i] = in_menu && in_menu();
++      if (menu_key_in_menu_[i]) PressForMenu(kMenuButtons[i]);
++    }
++    menu_key_down_[i] = down;
++  }
++  for (const auto& [key, button] : kFixedBinds) {
++    if (!key_down_[static_cast<uint16_t>(key)]) continue;
++    if ((key == VirtualKey::kReturn && menu_key_in_menu_[0]) || (key == VirtualKey::kEscape && menu_key_in_menu_[1])) {
++      continue;  // a menu key: its button is pressed for it
++    }
++    buttons |= button;
++  }
++  // Only a key that presses Start (not a menu key) counts.
++  const StartKey start_key = menu_key_down_[1] && !menu_key_in_menu_[1]   ? StartKey::kEscape
++                             : menu_key_down_[0] && !menu_key_in_menu_[0] ? StartKey::kReturn
++                                                                          : StartKey::kNone;
++  held_start_key.store(static_cast<uint8_t>(start_key), std::memory_order_relaxed);
++  if (now.time_since_epoch().count() < menu_button_until.load(std::memory_order_relaxed)) {
++    buttons |= menu_button.load(std::memory_order_relaxed);
++  }
+   if (IsBindPressed(key_down_, REXCVAR_GET(keybind_a)))
+     buttons |= X_INPUT_GAMEPAD_A;
+   if (IsBindPressed(key_down_, REXCVAR_GET(keybind_b)))
+@@ -290,8 +391,6 @@ X_RESULT MnkInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
+     buttons |= X_INPUT_GAMEPAD_RIGHT_SHOULDER;
+   if (IsBindPressed(key_down_, REXCVAR_GET(keybind_lstick_press)))
+     buttons |= X_INPUT_GAMEPAD_LEFT_THUMB;
+-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_rstick_press)))
+-    buttons |= X_INPUT_GAMEPAD_RIGHT_THUMB;
+   if (IsBindPressed(key_down_, REXCVAR_GET(keybind_back)))
+     buttons |= X_INPUT_GAMEPAD_BACK;
+   if (IsBindPressed(key_down_, REXCVAR_GET(keybind_start)))
+@@ -307,9 +406,45 @@ X_RESULT MnkInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
+   if (IsBindPressed(key_down_, REXCVAR_GET(keybind_dpad_right)))
+     buttons |= X_INPUT_GAMEPAD_DPAD_RIGHT;
+ 
+-  uint8_t lt = IsBindPressed(key_down_, REXCVAR_GET(keybind_left_trigger)) ? 0xFF : 0;
++  // Aim: held, or a press to start and another to stop.
++  const bool aim_bind = IsBindPressed(key_down_, REXCVAR_GET(keybind_left_trigger));
++  if (REXCVAR_GET(mnk_aim_toggle)) {
++    if (aim_bind && !aim_bind_was_down_) {
++      aim_latched_ = !aim_latched_;
++    }
++  } else {
++    aim_latched_ = aim_bind;
++  }
++  aim_bind_was_down_ = aim_bind;
++  uint8_t lt = aim_latched_ ? 0xFF : 0;
+   uint8_t rt = IsBindPressed(key_down_, REXCVAR_GET(keybind_right_trigger)) ? 0xFF : 0;
+ 
++  // Zoom: the game zooms in with a click of the right stick and out with another. Held, each
++  // press and release of the bind sends one click. The zoom ends with the aim.
++  const bool zoom_bind = IsBindPressed(key_down_, REXCVAR_GET(keybind_rstick_press));
++  const bool zoom_edge = zoom_bind != zoom_bind_was_down_;
++  if (REXCVAR_GET(mnk_zoom_hold)) {
++    if (zoom_edge) {
++      zoom_click_until_ = now + kZoomClick;
++    }
++    if (now < zoom_click_until_) {
++      buttons |= X_INPUT_GAMEPAD_RIGHT_THUMB;
++    }
++    zoomed_ = zoom_bind && aim_latched_;
++  } else {
++    if (zoom_bind) {
++      buttons |= X_INPUT_GAMEPAD_RIGHT_THUMB;
++    }
++    if (zoom_edge && zoom_bind && aim_latched_) {
++      zoomed_ = !zoomed_;
++    }
++  }
++  zoom_bind_was_down_ = zoom_bind;
++  if (!aim_latched_) {
++    zoomed_ = false;
++  }
++  aiming_ = aim_latched_;
++
+   int32_t lx = 0;
+   int32_t ly = 0;
+   if (IsBindPressed(key_down_, REXCVAR_GET(keybind_lstick_left)))
+@@ -321,6 +456,24 @@ X_RESULT MnkInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
+   if (IsBindPressed(key_down_, REXCVAR_GET(keybind_lstick_down)))
+     ly -= INT16_MAX;
+ 
++  // Roadie run: the A button held while the run bind is, or from one press of it to the next.
++  // A toggled run ends when the player stops moving, as a held one would.
++  const bool run_bind = IsBindPressed(key_down_, REXCVAR_GET(keybind_run));
++  if (REXCVAR_GET(mnk_run_toggle)) {
++    if (run_bind && !run_bind_was_down_) {
++      run_latched_ = !run_latched_;
++    }
++    if (lx == 0 && ly == 0) {
++      run_latched_ = false;
++    }
++  } else {
++    run_latched_ = run_bind;
++  }
++  run_bind_was_down_ = run_bind;
++  if (run_latched_) {
++    buttons |= X_INPUT_GAMEPAD_A;
++  }
++
+   int32_t rx = 0;
+   int32_t ry = 0;
+   if (IsBindPressed(key_down_, REXCVAR_GET(keybind_rstick_left)))
+@@ -332,17 +485,22 @@ X_RESULT MnkInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
    if (IsBindPressed(key_down_, REXCVAR_GET(keybind_rstick_down)))
      ry -= INT16_MAX;
  
@@ -17292,18 +17796,20 @@ index 38c1555..8f26ef1 100644
  
    auto clamp16 = [](int32_t v) -> int16_t {
      return static_cast<int16_t>(std::clamp(v, (int32_t)INT16_MIN, (int32_t)INT16_MAX));
-@@ -547,6 +558,20 @@ void MnkInputDriver::OnMouseUp(rex::ui::MouseEvent& e) {
+@@ -547,6 +705,22 @@ void MnkInputDriver::OnMouseUp(rex::ui::MouseEvent& e) {
    }
  }
  
-+bool MnkInputDriver::TakeMouseLook(DeviceId id, float& dx, float& dy) {
++bool MnkInputDriver::TakeMouseLook(DeviceId id, MouseLook& look) {
 +  if (!IsEnabled() || id != kMnkDevice || !REXCVAR_GET(mnk_mouse) || !IsMouseLookActive() ||
 +      !has_focus_ || !is_active()) {
 +    return false;
 +  }
 +  std::lock_guard lock(state_mutex_);
-+  dx = mouse_dx_;
-+  dy = mouse_dy_;
++  look.dx = mouse_dx_;
++  look.dy = mouse_dy_;
++  look.aiming = aiming_;
++  look.zoomed = zoomed_;
 +  mouse_dx_ = 0.0f;
 +  mouse_dy_ = 0.0f;
 +  last_mouse_look_take_ = std::chrono::steady_clock::now();
@@ -17313,6 +17819,213 @@ index 38c1555..8f26ef1 100644
  void MnkInputDriver::OnMouseMove(rex::ui::MouseEvent& e) {
    if (!IsEnabled() || !has_focus_)
      return;
+@@ -571,6 +745,47 @@ void MnkInputDriver::OnMouseMove(rex::ui::MouseEvent& e) {
+   }
+ }
+ 
++void MnkInputDriver::OnMouseWheel(rex::ui::MouseEvent& e) {
++  if (!IsEnabled() || !has_focus_)
++    return;
++  // A trackpad scrolls in fractions of a notch: they add up until they make one.
++  constexpr int32_t kDetent = static_cast<int32_t>(rex::ui::MouseEvent::kScrollPerDetent);
++  std::lock_guard lock(state_mutex_);
++  wheel_scroll_ += e.scroll_y();
++  const int notches = wheel_scroll_ / kDetent;
++  if (notches == 0) {
++    return;
++  }
++  wheel_scroll_ -= notches * kDetent;
++  int& pending = wheel_pending_[notches > 0 ? 0 : 1];
++  pending = std::min(pending + std::abs(notches), kWheelMaxPending);
++}
++
++void MnkInputDriver::UpdateWheelKeys(std::chrono::steady_clock::time_point now) {
++  constexpr VirtualKey kKeys[2] = {VirtualKey::kWheelUp, VirtualKey::kWheelDown};
++  for (int i = 0; i < 2; ++i) {
++    bool& down = key_down_[static_cast<uint16_t>(kKeys[i])];
++    if (down && now >= wheel_release_at_[i]) {
++      down = false;
++      wheel_next_at_[i] = now + kWheelGap;
++    } else if (!down && wheel_pending_[i] > 0 && now >= wheel_next_at_[i]) {
++      down = true;
++      --wheel_pending_[i];
++      wheel_release_at_[i] = now + kWheelPress;
++    }
++  }
++}
++
++void MnkInputDriver::ResetLatches() {
++  wheel_pending_[0] = wheel_pending_[1] = 0;
++  wheel_scroll_ = 0;
++  aim_bind_was_down_ = aim_latched_ = false;
++  run_bind_was_down_ = run_latched_ = false;
++  zoom_bind_was_down_ = zoomed_ = aiming_ = false;
++  zoom_click_until_ = {};
++  held_start_key.store(0, std::memory_order_relaxed);
++}
++
+ void MnkInputDriver::OnLostFocus(rex::ui::UISetupEvent&) {
+   has_focus_ = false;
+   // Withdraw the request too, or an update queued before the focus loss grabs
+@@ -579,6 +794,7 @@ void MnkInputDriver::OnLostFocus(rex::ui::UISetupEvent&) {
+   {
+     std::lock_guard lock(state_mutex_);
+     std::memset(key_down_, 0, sizeof(key_down_));
++    ResetLatches();
+     mouse_dx_ = 0.0f;
+     mouse_dy_ = 0.0f;
+   }
+diff --git a/src/input/pad_remap.cpp b/src/input/pad_remap.cpp
+new file mode 100644
+index 0000000..5eded29
+--- /dev/null
++++ b/src/input/pad_remap.cpp
+@@ -0,0 +1,145 @@
++/**
++ * @file        input/pad_remap.cpp
++ * @brief       Controller buttons acting as other buttons (rex/input/pad_remap.h)
++ *
++ * @license     BSD 3-Clause License
++ *              See LICENSE file in the project root for full license text.
++ */
++
++#include <rex/input/pad_remap.h>
++
++#include <algorithm>
++#include <mutex>
++
++#include <rex/cvar.h>
++
++REXCVAR_DEFINE_BOOL(pad_custom, false, "Input",
++                    "Controllers use the player's own layout (pad_remap) instead of the game's");
++REXCVAR_DEFINE_STRING(pad_remap, "a,b,x,y,lb,rb,lt,rt,l3,r3,back,start,up,down,left,right", "Input",
++                      "For each control of a controller (A, B, X, Y, LB, RB, LT, RT, L3, R3, Back, "
++                      "Start, D-pad up, down, left, right), the control it acts as while pad_custom "
++                      "is on");
++
++namespace rex::input {
++
++namespace {
++
++constexpr std::string_view kNames[kPadControlCount] = {
++    "a", "b", "x", "y", "lb", "rb", "lt", "rt", "l3", "r3", "back", "start", "up", "down", "left", "right",
++};
++
++// The XInput button of each control; 0 for the triggers, which are axes.
++constexpr uint16_t kButtons[kPadControlCount] = {
++    X_INPUT_GAMEPAD_A,
++    X_INPUT_GAMEPAD_B,
++    X_INPUT_GAMEPAD_X,
++    X_INPUT_GAMEPAD_Y,
++    X_INPUT_GAMEPAD_LEFT_SHOULDER,
++    X_INPUT_GAMEPAD_RIGHT_SHOULDER,
++    0,
++    0,
++    X_INPUT_GAMEPAD_LEFT_THUMB,
++    X_INPUT_GAMEPAD_RIGHT_THUMB,
++    X_INPUT_GAMEPAD_BACK,
++    X_INPUT_GAMEPAD_START,
++    X_INPUT_GAMEPAD_DPAD_UP,
++    X_INPUT_GAMEPAD_DPAD_DOWN,
++    X_INPUT_GAMEPAD_DPAD_LEFT,
++    X_INPUT_GAMEPAD_DPAD_RIGHT,
++};
++
++// XInput's published trigger threshold (XINPUT_GAMEPAD_TRIGGER_THRESHOLD).
++constexpr uint8_t kTriggerThreshold = 30;
++
++std::string_view Trim(std::string_view s) {
++  while (!s.empty() && s.front() == ' ') s.remove_prefix(1);
++  while (!s.empty() && s.back() == ' ') s.remove_suffix(1);
++  return s;
++}
++
++bool IsTrigger(PadControl control) {
++  return control == PadControl::kLeftTrigger || control == PadControl::kRightTrigger;
++}
++
++}  // namespace
++
++PadLayout IdentityPadLayout() {
++  PadLayout layout;
++  for (size_t i = 0; i < kPadControlCount; ++i) {
++    layout[i] = static_cast<PadControl>(i);
++  }
++  return layout;
++}
++
++std::string_view PadControlName(PadControl control) {
++  const size_t i = static_cast<size_t>(control);
++  return i < kPadControlCount ? kNames[i] : std::string_view();
++}
++
++PadLayout ParsePadLayout(std::string_view text) {
++  PadLayout layout = IdentityPadLayout();
++  for (size_t i = 0; i < kPadControlCount && !text.empty(); ++i) {
++    const size_t comma = text.find(',');
++    const std::string_view name = Trim(text.substr(0, comma));
++    text = comma == std::string_view::npos ? std::string_view() : text.substr(comma + 1);
++    const auto* found = std::find(std::begin(kNames), std::end(kNames), name);
++    if (found != std::end(kNames)) {
++      layout[i] = static_cast<PadControl>(found - std::begin(kNames));
++    }
++  }
++  return layout;
++}
++
++std::string FormatPadLayout(const PadLayout& layout) {
++  std::string text;
++  for (size_t i = 0; i < kPadControlCount; ++i) {
++    if (i) text += ',';
++    text += PadControlName(layout[i]);
++  }
++  return text;
++}
++
++PadLayout CurrentPadLayout() {
++  if (!REXCVAR_GET(pad_custom)) {
++    return IdentityPadLayout();
++  }
++  // Parsed again only when the setting changes: this runs on every controller poll.
++  static std::mutex mutex;
++  static std::string parsed_text;
++  static PadLayout parsed = IdentityPadLayout();
++  const std::string& text = REXCVAR_GET(pad_remap);
++  std::lock_guard lock(mutex);
++  if (text != parsed_text) {
++    parsed_text = text;
++    parsed = ParsePadLayout(text);
++  }
++  return parsed;
++}
++
++void ApplyPadLayout(const PadLayout& layout, X_INPUT_GAMEPAD& pad) {
++  const uint16_t in_buttons = pad.buttons;
++  const uint8_t in_triggers[2] = {pad.left_trigger, pad.right_trigger};
++  uint16_t buttons = in_buttons & X_INPUT_GAMEPAD_GUIDE;
++  uint8_t triggers[2] = {0, 0};
++  for (size_t i = 0; i < kPadControlCount; ++i) {
++    const auto physical = static_cast<PadControl>(i);
++    const PadControl logical = layout[i];
++    uint8_t travel = 0;
++    if (IsTrigger(physical)) {
++      travel = in_triggers[physical == PadControl::kRightTrigger];
++    } else if (in_buttons & kButtons[i]) {
++      travel = 0xFF;
++    }
++    if (IsTrigger(logical)) {
++      uint8_t& out = triggers[logical == PadControl::kRightTrigger];
++      out = std::max(out, travel);
++    } else if (travel > kTriggerThreshold) {
++      buttons |= kButtons[static_cast<size_t>(logical)];
++    }
++  }
++  pad.buttons = buttons;
++  pad.left_trigger = triggers[0];
++  pad.right_trigger = triggers[1];
++}
++
++}  // namespace rex::input
 diff --git a/src/input/sdl/sdl_input_driver.cpp b/src/input/sdl/sdl_input_driver.cpp
 index 82a252c..3dcec80 100644
 --- a/src/input/sdl/sdl_input_driver.cpp
@@ -17992,6 +18705,19 @@ index f270f3c..1e4d411 100644
    }
  }
  
+diff --git a/src/ui/keybinds.cpp b/src/ui/keybinds.cpp
+index 1799668..fcc6796 100644
+--- a/src/ui/keybinds.cpp
++++ b/src/ui/keybinds.cpp
+@@ -150,6 +150,8 @@ static const std::unordered_map<std::string, VirtualKey> kKeyNames = {
+     {"MB5", VirtualKey::kXButton2},
+     {"Mouse5", VirtualKey::kXButton2},
+     {"XButton2", VirtualKey::kXButton2},
++    {"WheelUp", VirtualKey::kWheelUp},
++    {"WheelDown", VirtualKey::kWheelDown},
+ };
+ 
+ VirtualKey ParseVirtualKey(std::string_view name) {
 diff --git a/src/ui/overlay/achievement_toast.cpp b/src/ui/overlay/achievement_toast.cpp
 index 53b8c0b..33ae38c 100644
 --- a/src/ui/overlay/achievement_toast.cpp
