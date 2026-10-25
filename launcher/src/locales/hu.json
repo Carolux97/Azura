@@ -132,7 +132,10 @@
     "gpu": "Videókártya",
     "gpuAuto": "Automatikus ({name})",
     "gpuDiscrete": "dedikált",
-    "gpuIntegrated": "integrált"
+    "gpuIntegrated": "integrált",
+    "whilePlaying": "Indító játék közben",
+    "whilePlayingMinimize": "Kis méretre",
+    "whilePlayingKeepOpen": "Nyitva hagyás"
   },
   "achievements": {
     "title": "Teljesítmények",

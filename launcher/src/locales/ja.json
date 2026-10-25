@@ -132,7 +132,10 @@
     "gpu": "グラフィックカード",
     "gpuAuto": "自動（{name}）",
     "gpuDiscrete": "専用",
-    "gpuIntegrated": "内蔵"
+    "gpuIntegrated": "内蔵",
+    "whilePlaying": "プレイ中のランチャー",
+    "whilePlayingMinimize": "最小化する",
+    "whilePlayingKeepOpen": "開いたままにする"
   },
   "achievements": {
     "title": "実績",

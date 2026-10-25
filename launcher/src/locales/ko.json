@@ -132,7 +132,10 @@
     "gpu": "그래픽 카드",
     "gpuAuto": "자동 ({name})",
     "gpuDiscrete": "외장",
-    "gpuIntegrated": "내장"
+    "gpuIntegrated": "내장",
+    "whilePlaying": "플레이 중 런처",
+    "whilePlayingMinimize": "최소화",
+    "whilePlayingKeepOpen": "열어 두기"
   },
   "achievements": {
     "title": "도전 과제",

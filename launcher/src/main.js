@@ -155,6 +155,8 @@ const state = {
   compilerAction: "",
   // Graphics card chosen by the player (its UUID), or null for the game's own choice.
   gpu: null,
+  // Whether the launcher minimizes itself while the game runs (minimize_while_playing).
+  minimizeWhilePlaying: true,
   // The graphics cards the runtime lists (see src-tauri/src/gpus.rs), once asked for.
   gpus: { devices: [], automatic: null },
 };
@@ -172,6 +174,7 @@ const currentSettings = () => ({
   seenReleaseNotes: state.seenReleaseNotes,
   gpu: state.gpu,
   savesFolder: state.savesFolder,
+  minimizeWhilePlaying: state.minimizeWhilePlaying,
 });
 
 /** Pending save timer; null when everything is saved. */
@@ -442,17 +445,51 @@ const setLogState = (key, tone = "", vars = {}) => {
   renderLogState();
 };
 
-/** Appends one line of game output, dropping the oldest beyond MAX_LOG_LINES. */
-const appendLogLine = ({ stream, line }) => {
+/**
+ * Lines of game output not drawn yet. The game prints many lines while it runs, and drawing each
+ * as it arrives makes the web view lay the page out again every time: they are drawn together, once
+ * per frame while the window is in front, once a second while it is behind another window, and not
+ * at all while it is minimized or hidden, until it comes back (flushLogLines).
+ */
+let pendingLogLines = [];
+let logFlushScheduled = false;
+
+/** Draws the pending lines in one go, dropping the oldest beyond MAX_LOG_LINES. */
+const flushLogLines = () => {
+  logFlushScheduled = false;
+  if (!pendingLogLines.length || document.hidden) return;
   const body = document.getElementById("game-log-body");
   // Follow the end only if the user has not scrolled up to read something.
   const atEnd = body.scrollTop + body.clientHeight >= body.scrollHeight - 4;
-  const row = document.createElement("span");
-  row.className = stream;
-  row.textContent = `${line}\n`;
-  body.appendChild(row);
+  const rows = document.createDocumentFragment();
+  for (const { stream, line } of pendingLogLines) {
+    const row = document.createElement("span");
+    row.className = stream;
+    row.textContent = `${line}\n`;
+    rows.appendChild(row);
+  }
+  pendingLogLines = [];
+  body.appendChild(rows);
   while (body.childElementCount > MAX_LOG_LINES) body.firstElementChild.remove();
   if (atEnd) body.scrollTop = body.scrollHeight;
+};
+
+/** Schedules drawing the pending lines, as soon as the window can show them (see pendingLogLines). */
+const scheduleLogFlush = () => {
+  if (logFlushScheduled || !pendingLogLines.length || document.hidden) return;
+  logFlushScheduled = true;
+  if (windowFocused) requestAnimationFrame(flushLogLines);
+  else setTimeout(flushLogLines, 1000);
+};
+document.addEventListener("visibilitychange", scheduleLogFlush);
+window.addEventListener("focus", scheduleLogFlush);
+
+/** Appends one line of game output; it is drawn with the others pending (scheduleLogFlush). */
+const appendLogLine = ({ stream, line }) => {
+  pendingLogLines.push({ stream, line });
+  // Only the newest lines would be kept once drawn.
+  if (pendingLogLines.length > MAX_LOG_LINES) pendingLogLines.splice(0, pendingLogLines.length - MAX_LOG_LINES);
+  scheduleLogFlush();
 };
 
 /**
@@ -578,6 +615,7 @@ const setupLaunch = () => {
       return;
     }
     document.getElementById("game-log-body").replaceChildren();
+    pendingLogLines = [];
     state.game = "starting";
     renderPlay();
     if (runtimeNeedsInstall() && !(await runRuntimeInstall())) {
@@ -1053,6 +1091,7 @@ const applyStoredGraphics = (settings) => {
   state.renderResolution = scaleOfResolution(stored) ? stored : "auto";
   state.fullscreen = Boolean(settings.fullscreen);
   state.gpu = settings.gpu ?? null;
+  state.minimizeWhilePlaying = settings.minimizeWhilePlaying ?? true;
 };
 
 /** Text of a resolution scale: "2560 × 1440 (2×)", or "1280 × 720 · original" for 1. */
@@ -1070,6 +1109,7 @@ const renderGraphics = () => {
   for (const scale of RESOLUTION_SCALES) select.add(new Option(resolutionLabel(scale), resolutionValue(scale)));
   select.value = state.renderResolution;
   document.getElementById("display-mode").value = state.fullscreen ? "fullscreen" : "windowed";
+  document.getElementById("while-playing").value = state.minimizeWhilePlaying ? "minimize" : "keepOpen";
   renderGpuChoice();
 };
 
@@ -1116,6 +1156,12 @@ const setupGraphics = () => {
   const displayMode = document.getElementById("display-mode");
   displayMode.addEventListener("change", () => {
     state.fullscreen = displayMode.value === "fullscreen";
+    persist();
+  });
+
+  const whilePlaying = document.getElementById("while-playing");
+  whilePlaying.addEventListener("change", () => {
+    state.minimizeWhilePlaying = whilePlaying.value === "minimize";
     persist();
   });
 

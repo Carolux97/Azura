@@ -132,7 +132,10 @@
     "gpu": "Видеокарта",
     "gpuAuto": "Автоматически ({name})",
     "gpuDiscrete": "дискретная",
-    "gpuIntegrated": "встроенная"
+    "gpuIntegrated": "встроенная",
+    "whilePlaying": "Лаунчер во время игры",
+    "whilePlayingMinimize": "Свернуть",
+    "whilePlayingKeepOpen": "Оставить открытым"
   },
   "achievements": {
     "title": "Достижения",

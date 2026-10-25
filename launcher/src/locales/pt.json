@@ -132,7 +132,10 @@
     "gpu": "Placa de vídeo",
     "gpuAuto": "Automática ({name})",
     "gpuDiscrete": "dedicada",
-    "gpuIntegrated": "integrada"
+    "gpuIntegrated": "integrada",
+    "whilePlaying": "Launcher durante o jogo",
+    "whilePlayingMinimize": "Minimizar",
+    "whilePlayingKeepOpen": "Deixar aberto"
   },
   "achievements": {
     "title": "Conquistas",

@@ -132,7 +132,10 @@
     "gpu": "顯示卡",
     "gpuAuto": "自動（{name}）",
     "gpuDiscrete": "獨立",
-    "gpuIntegrated": "內建"
+    "gpuIntegrated": "內建",
+    "whilePlaying": "遊玩時的啟動器",
+    "whilePlayingMinimize": "最小化",
+    "whilePlayingKeepOpen": "保持開啟"
   },
   "achievements": {
     "title": "成就",

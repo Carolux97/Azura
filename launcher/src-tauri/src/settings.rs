@@ -169,6 +169,10 @@ pub struct Settings {
     /// the saves (`SettingsPaths::set_saves_folder`) changes it, so the interface may leave it out.
     #[serde(default)]
     pub saves_folder: String,
+    /// Whether the launcher minimizes itself while the game runs, so its window costs the game
+    /// nothing to draw, and comes back when the game ends.
+    #[serde(default = "default_true")]
+    pub minimize_while_playing: bool,
 }
 
 /// The part of [`Settings`] stored in `launcher.toml`. Every field has a default, so an old or
@@ -187,6 +191,7 @@ struct LauncherFile {
     seen_release_notes: Option<String>,
     gpu: Option<String>,
     saves_folder: Option<String>,
+    minimize_while_playing: bool,
 }
 
 impl Default for LauncherFile {
@@ -200,6 +205,7 @@ impl Default for LauncherFile {
             seen_release_notes: None,
             gpu: None,
             saves_folder: None,
+            minimize_while_playing: true,
         }
     }
 }
@@ -314,6 +320,7 @@ impl SettingsPaths {
             seen_release_notes: launcher.seen_release_notes,
             gpu: launcher.gpu,
             saves_folder,
+            minimize_while_playing: launcher.minimize_while_playing,
         })
     }
 
@@ -391,6 +398,7 @@ impl SettingsPaths {
             seen_release_notes: settings.seen_release_notes.clone(),
             gpu: settings.gpu.clone(),
             saves_folder: self.load_launcher_file()?.saves_folder,
+            minimize_while_playing: settings.minimize_while_playing,
         };
         self.save_launcher_file(&launcher)
     }
@@ -421,6 +429,7 @@ mod tests {
             seen_release_notes: Some("0.1.0".into()),
             gpu: Some("0123456789abcdef0123456789abcdef".into()),
             saves_folder: crate::saves::default_folder().to_string_lossy().into_owned(),
+            minimize_while_playing: false,
         }
     }
 
