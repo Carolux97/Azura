@@ -16,6 +16,7 @@ Nothing here is game data: only names, offsets and identifiers needed to hook th
 - [Main menu](#main-menu)
 - [Options menu](#options-menu)
 - [Local co-op](#local-co-op)
+- [Keyboard in menus](#keyboard-in-menus)
 - [Profile settings](#profile-settings)
 - [Mouse look](#mouse-look)
 - [Render command queue](#render-command-queue)
@@ -118,11 +119,12 @@ Tokens seen so far (**verified** by matching raw bytes with the code's behaviour
 | `27` / `28` | true / false | |
 | `2C` | one-byte int constant | 1 byte |
 | `81` / `82` / `84` | native `!` / `&&` / `\|\|` | operands |
-| `9A` / `9B` | native `==` / `!=` (int) | two operands, `16` |
+| `99` / `9A` / `9B` | native `>=` / `==` / `!=` (int) | two operands, `16` |
 
 **Patching bytecode.** The menu's bytecode lives in guest memory and can be changed at run time,
 as long as every jump offset stays valid: a replacement must have exactly the size of what it
-replaces. Examples in `script_hooks.cpp`: a one-byte constant changed to another value, and
+replaces. Examples in `script_hooks.cpp`: a one-byte constant changed to another value, a native
+operator changed to another one (`==` to `>=`), and
 `EX_IntOne` (`26`) replaced with `EX_Self` (`17`) so that `x == 1` becomes `x == self`, never true
 for a small number. Patch before the function runs for the first time (in the `ProcessInternal`
 hook), and only once.
@@ -215,9 +217,12 @@ patched (**verified** with `script_trace_args=HandleMenuSelection`).
 | 4 | `Journal` (War Journal) | `MAINMENUOP_WarJournal` | 4, unchanged |
 | 5 | `Calendar` (event calendar) | | removed |
 | 6 | `DLC` (Marketplace) | | removed |
-| | `AzuraQuit` (added) | `MAINMENUOP_None` | 5 |
+| | `Options` (added, as the party client's menu has it) | `MAINMENUOP_None` | 5: the runtime runs `Callback_StartButtonPressed`, what Start does there |
+| | `AzuraQuit` (added) | `MAINMENUOP_None` | 6 |
 
 Indices 0 and 5 were confirmed with `HandleMenuSelection` traces; the others follow the list order.
+The button bar's Start "Options" (`[UIWidget_MainMenu] OptionsButtonStr` of `geargame.<lang>`) is
+replaced with a space, since the list has the option.
 Calendar and Marketplace are the last two entries, so removing them shifts no other index.
 
 ### Sub-menus we change
@@ -256,6 +261,31 @@ the menu stops responding (**verified** in an early test). `script_hooks.cpp` th
 quit handler and skips the script. To keep the hook cheap, functions are compared by FName index;
 the indices of the functions the hooks react to are found by scanning new `GNames` entries every
 1024 calls until all of them have appeared.
+
+### Options
+
+What Start does on the main menu (**verified** from the bytecode of `script_dump_code`):
+
+- `UIScene_FrontEnd.Callback_StartButtonPressed(ControllerIdx)` (locals `ControllerIdx@0`,
+  `OpeningPlayer@4`, `LP@8`) opens the Options: when `OptionsMenuClass` and `GetLP()` are set, it
+  looks the player up with `GameViewportClient.FindPlayerByControllerId(ControllerIdx)` and does
+  nothing when no player has that controller. It then creates `OptionsMenu`, calls
+  `SetupMPPreferencesCallback()` and `OptionsMenu.Init(OpeningPlayer)`, sets
+  `OnOptionsMenuClose` and `bIsInOptionsMenu`. `OptionsMenuClosed()` clears `bIsInOptionsMenu`.
+- `UIWidget_MainMenu.UpdateButtonBar()` builds the bar's HTML text: Accept or Start game, then
+  `Spacer` (five spaces, a string constant), `BackButtonStr`, `Spacer`, `OptionsButtonStr`, and the
+  guest login, post game stats and War Journal buttons when they apply.
+
+`Callback_MenuOptionWasSelected(HistoryArray, bIsHalted)` calls `HandleMenuSelection` and, for an
+entry with `bHaltProgression`, leaves the menu halted until `ContinueFromHaltedState()`, which
+depends on `bWantToContinue`. An entry the script does not know and skips must therefore not halt:
+with `bHaltProgression=true` the main menu took no input after the Options closed (**verified**
+with `script_trace_args`). Quit Game halts, as the game ends anyway.
+
+Our Options entry (`Next=MAINMENUOP_None`, no halt, as in `MAINMENUOP_ClientMenu`): in the
+`HandleMenuSelection` hook (as for Quit Game) the runtime runs
+`Callback_StartButtonPressed` on the same frame with locals of its own, `ControllerIdx` being the
+controller that last pressed a button on the scene (`FilterButtonInput`'s `ControllerId`).
 
 ## Options menu
 
@@ -438,9 +468,11 @@ How:
   borrowed profile settings, which is harmless.
 - **Defaults** resets our rows to the values in `azura.default.toml` (the SDK's default when a key
   is not there).
-- **Positions 1 and 5 show their lists, position 6 does not:** the bytecode of
-  `Callback_MenuOptionSelected` is patched so that `SelectedOption == 5` compares with 6 and
-  `SelectedOption == 1` with `self`. The `1` in `Callback_ReturnToMain` becomes 255 too, so leaving
+- **Position 1 shows its list, positions 4 to 7 do not:** the bytecode of
+  `Callback_MenuOptionSelected` is patched so that `SelectedOption == 5` becomes
+  `SelectedOption >= 4` and `SelectedOption == 1` compares with `self`. Controller (4) and Keyboard
+  and mouse (5) then run their callbacks with `CurrentMode` still 8, the list of categories, which
+  tells Keyboard and mouse's from Game's Reset tutorials row. The `1` in `Callback_ReturnToMain` becomes 255 too, so leaving
   Video plays the usual sound.
 - **Local co-op** has `OnSelectedCallback="Callback_SelectStorageLocation"`, the storage location's
   function, which no category uses any more: Flash runs it instead of opening a list, and the hook
@@ -506,6 +538,37 @@ players 2 to 4 have profiles of their own in the SDK, signed in when they get a 
 player 2's Start and Accept on the title screen, and sends `XN_SYS_INPUTDEVICESCHANGED` when a
 player is left with no device or gets one back.
 
+## Keyboard in menus
+
+The SDK's keyboard and mouse driver binds Escape and Return to Start for good (the game needs a
+Start in play). In menus the runtime turns them into the PC's keys (`TakeKeyboardStartAsMenuKey`
+in `script_hooks.cpp`):
+
+- Every menu button reaches the script as `FilterButtonInput(ControllerId, ButtonName,
+  InputEvent)` on the scene (**verified** with `script_trace_args`). Storing 1 in its return
+  value and not running it uses the press up (**verified**: the menu ignores it).
+- Changing the `ButtonName` local to another button does not work: Flash has already handled the
+  press (**verified**). The runtime uses the press up and has the driver press A (Return) or B
+  (Escape) for 80 ms instead (`mnk::PressForMenu`); `mnk::HeldStartKey` says which key the Start
+  came from.
+- Menus and play are told apart by the player controller's class: `GearPartyPC` in the front end
+  (**verified** in the log; not `GearMenuPC`), and by `WorldInfo.Pauser` in play.
+- On the title screen (`bOnTitleScreen`, see "Local co-op") Return stays Start and Escape is used
+  up.
+- The Options are open from `UIScene_Options.PopulateOptionsMenu` to `UIScene_Options.OnClose`.
+  The `OnOptionsMenuClose` delegate is no use for it: its own body never runs, as whoever opens
+  the Options binds it to a function of its own (`UIScene_FrontEnd.OptionsMenuClosed`,
+  **verified** with `script_trace`).
+- Some scenes never run `FilterButtonInput`: `UIScene_MPPreferences` (Options > Multiplayer) takes
+  its buttons in Flash (**verified**: no call in the log while it is open), and the message boxes
+  (`ShowUIMessage`, such as the reset tutorials confirmation) are not GFx scenes of their own
+  (**inferred**: none of the scene classes is theirs). So the driver also asks the runtime, at
+  every poll, whether a menu is shown (`mnk::SetMenuKeysQuery`, answered with `WhereInMenus()`):
+  in one, Return presses A and Escape B for 80 ms, for every scene. A press as long as the key's
+  froze the Options opened from the main menu with Return still held (**observed**; why is
+  **inferred**: the scene opening with A down). Each key keeps what it was when pressed
+  until it is released, so the Escape that pauses is not also B in the pause menu it opens.
+
 ## Profile settings
 
 Each option row edits a profile setting through `OnlinePlayerStorage` (package `Engine`), which
@@ -534,6 +597,22 @@ and in `Engine.<lang>`, `[OnlineProfileSettings]`. Positions 16 to 22 and 39 are
 (`Id=0`, `'None'`). Positions 11 to 15 are the engine's racing game preferences (Movement Control
 18, Transmission 19, Race Camera 20, Brake 21, Accelerator 22), which Gears never uses.
 
+The Controller category's rows (`OptionCategories[4]`), whose values the controls menu reads and
+writes in `OnlineProfileSettings.ProfileSettings` (24-byte entries, `PropertyId` at +4, value at
++12; the IDs and values come from the class defaults, and reading and writing them from the menu is
+not verified yet):
+
+| Id | Setting | Values |
+| --- | --- | --- |
+| 2 | Invert Y | 0, 1 |
+| 58 | Invert X | 0, 1 |
+| 375 | Omni evade | 1, 0 |
+| 1 | Vibration | 3, 0 |
+| 38 | Sticks | 0 to 3 |
+| 39 | Triggers | 0, 1 |
+| 51 | Control scheme | 0 Default, 1 Alternate |
+| 368, 59, 60 | Look, aim and zoom sensitivity | sliders, 0 to 1 in steps of 0.05 (**inferred** range) |
+
 **Only rewrite the value names of an existing list definition** (**verified**). Two other changes
 made the game hang with endless null writes while reading the profile ("Reading saved games"):
 defining new list settings (new IDs) in the empty positions, and moving a definition (Movement
@@ -558,6 +637,9 @@ loaded until the video options are opened (**inferred**).
 - **Bytecode references are 8 bytes.** Matching them as 4-byte values works by accident (the high
   half is zero) and breaks as soon as the operand's size matters.
 - **Arrays in localized values never shrink**, and indexed keys past the end are ignored.
+- **An empty localized value does not replace the text**: `OptionsButtonStr` emptied still showed
+  the cooked text (**verified**); the engine probably takes empty as missing (**inferred**). Use a
+  space.
 - **The first launch with an empty shader cache looks frozen** while tens of thousands of pipelines
   are created. It is not a hang.
 - **Lock-free code written for the Xbox 360 can break on ARM64.** The Xenon cores run in order,

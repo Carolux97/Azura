@@ -55,6 +55,8 @@
 #include <functional>
 
 #include <rex/cvar.h>
+#include <rex/input/input.h>
+#include <rex/input/mnk/mnk_input_driver.h>
 #include <rex/logging.h>
 #include <rex/ppc.h>
 #include <rex/system/kernel_state.h>
@@ -223,6 +225,8 @@ std::function<void()> g_quit_handler;
 std::function<void()> g_restart_handler;
 // Opens the Local co-op menu (SetLocalCoopHandler).
 std::function<void()> g_local_coop_handler;
+// Opens a controls menu (SetControlsMenuHandler).
+std::function<void(azura::script::ControlsMenu)> g_controls_handler;
 std::atomic<bool> g_quit_requested{false};
 
 // Script functions the hooks react to, matched by FName index to keep the hooks cheap. The indices
@@ -257,6 +261,11 @@ enum WatchedName {
   kSelectStorageLocation,    // UIScene_Options: the Local co-op category, at the storage location's place
   kShouldOptionBeDisabled,   // UIScene_Options: whether a category is greyed out in the list
   kPlayerInput,              // PlayerInput.PlayerInput: a player's input for the frame (mouse look)
+  kViewController,           // UIScene_Options: the Controller category (its controls menu)
+  kResetTutorials,           // UIScene_Options: Game's Reset tutorials, and the Keyboard and mouse category
+  kPopulateOptionsMenu,      // UIScene_Options: the Options menu opens (its list of categories)
+  kOnClose,                  // a menu scene closes (UIScene_Options: the Options menu)
+  kWidgetInitialized,        // a menu scene sets up a widget (the main menu's scene, for the title screen)
   kWatchedNameCount,
 };
 constexpr const char* kWatchedNames[kWatchedNameCount] = {
@@ -270,7 +279,8 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "GameOverPlayer",        "ClientGameOver",         "ClientSetCinematicMode",
     "MatineeCancelled",      "GetCallbackForOptionPSID", "Callback_TVTypeWasChanged",
     "Callback_GammaWasChanged", "Callback_SelectStorageLocation", "ShouldOptionBeDisabled",
-    "PlayerInput"};
+    "PlayerInput",           "Callback_ViewController", "Callback_ResetTutorials",
+    "PopulateOptionsMenu",   "OnClose",     "WidgetInitialized"};
 
 // FName index of each watched name, -1 until found (0 is a valid index: None).
 std::atomic<int32_t> g_names[kWatchedNameCount];
@@ -355,6 +365,23 @@ int32_t CachedOffset(const uint8_t* base, uint32_t cls, uint32_t slot, const cha
 // As PlayerInput.PlayerInput starts on `player_input`, writes the mouse motion of its player into
 // aMouseX and aMouseY. The player is its PlayerController's LocalPlayer's ControllerId, the guest
 // user index, so in local co-op the mouse turns the camera of the player who holds it.
+// Each guest user's PlayerController and the guest memory it is in, as their input last ran: where
+// the controls menus find the player's profile (ReadProfileSetting).
+std::atomic<uint32_t> g_player_controllers[4];
+std::atomic<uint8_t*> g_guest_base{nullptr};
+// Where player 1 is as of their last input (azura::script::Menus): in the front end (its party
+// controller, GearPartyPC), with the game paused (WorldInfo.Pauser set), or playing; and whether
+// the Options menu is open (from PopulateOptionsMenu to the scene's OnClose).
+std::atomic<bool> g_front_end{false};
+std::atomic<bool> g_paused{false};
+std::atomic<bool> g_options_open{false};
+// The main menu's scene (UIScene_FrontEnd), as it last set up a widget or got a button, whose
+// bOnTitleScreen tells the title screen from the main menu.
+std::atomic<uint32_t> g_front_end_scene{0};
+// The controller (ControllerId) that last pressed a button on the main menu's scene: the one that
+// chose a main menu option.
+std::atomic<int32_t> g_front_end_controller{0};
+
 void ApplyMouseLookFor(uint8_t* base, uint32_t player_input) {
   std::lock_guard lock(g_mouse_look_mutex);
   const uint32_t input_class = LoadU32(base, player_input + kObjectClass);
@@ -370,6 +397,26 @@ void ApplyMouseLookFor(uint8_t* base, uint32_t player_input) {
   if (controller_id < 0) return;
   const uint32_t user = LoadU32(base, local_player + static_cast<uint32_t>(controller_id));
   if (user >= 4) return;
+  g_player_controllers[user].store(controller, std::memory_order_relaxed);
+  g_guest_base.store(base, std::memory_order_relaxed);
+  if (user == 0) {
+    const uint32_t controller_class = LoadU32(base, controller + kObjectClass);
+    const std::string controller_name = ObjectName(base, controller_class);
+    const bool front_end = controller_name == "GearPartyPC" || controller_name == "GearMenuPC";
+    const int32_t world_at = CachedOffset(base, controller_class, 7, "WorldInfo");
+    const uint32_t world = world_at >= 0 ? LoadU32(base, controller + static_cast<uint32_t>(world_at)) : 0;
+    bool paused = false;
+    if (world) {
+      const int32_t pauser_at = CachedOffset(base, LoadU32(base, world + kObjectClass), 8, "Pauser");
+      paused = pauser_at >= 0 && LoadU32(base, world + static_cast<uint32_t>(pauser_at)) != 0;
+    }
+    g_paused.store(paused, std::memory_order_relaxed);
+    if (g_front_end.exchange(front_end, std::memory_order_relaxed) != front_end) {
+      // A level change closes every menu, whatever the hooks saw of it.
+      g_options_open.store(false, std::memory_order_relaxed);
+      REXLOG_INFO("[Azura menus] Player 1 {} the front end ({})", front_end ? "is in" : "left", controller_name);
+    }
+  }
   azura::input::ApplyMouseLook(base, user,
                                {player_input + static_cast<uint32_t>(mouse_x), player_input + static_cast<uint32_t>(mouse_y),
                                 player_input + static_cast<uint32_t>(sensitivity)});
@@ -407,6 +454,8 @@ std::unordered_set<uint32_t> g_seen;  // UFunction addresses already logged
 // Offsets from the dump of UIScene_Options (docs/reverse-engineering.md, "Options menu").
 constexpr uint32_t kFrameObject = 20;
 constexpr uint32_t kOptionsCurrentMode = 1028;      // UIScene_Options.CurrentMode (byte)
+// CurrentMode while the list of categories is shown (OMI_MAX).
+constexpr int kNoCategory = 8;
 constexpr uint32_t kPopulateRow = 0;                // PopulateOptionsList local I (row index)
 constexpr uint32_t kPopulateSliderValue = 172;      // PopulateOptionsList local Slider_Value
 constexpr uint32_t kPopulateListIndex = 176;        // PopulateOptionsList local OptionList_Index
@@ -450,12 +499,15 @@ constexpr uint8_t kTokenSelf = 0x17;
 constexpr uint8_t kTokenByteConst = 0x24;
 constexpr uint8_t kTokenEndFunctionParms = 0x16;
 constexpr uint8_t kNativeEqualIntInt = 0x9A;
+constexpr uint8_t kNativeGreaterEqualIntInt = 0x99;
 
 // Callback_MenuOptionSelected(SelectedOption) starts with
 //   if (SelectedOption == 5 || SelectedOption == 1 || SelectedOption == 7) return;
 // because those positions (storage location, Video, Credits) opened another screen instead of a
-// list. Now Keyboard and mouse (at 5) and Video are lists, and Local co-op (at 6) opens its menu:
-//   - in `SelectedOption == 5` the 5 (a one-byte int constant) becomes 6;
+// list. Now Video is a list, while Controller (4), Keyboard and mouse (5) and Local co-op (6) open
+// menus of ours over the list of categories:
+//   - `SelectedOption == 5` becomes `SelectedOption >= 4`: the native == (one byte) becomes >= and
+//     the 5 (a one-byte int constant) becomes 4;
 //   - in `SelectedOption == 1` the one (EX_IntOne, one byte) becomes EX_Self, also one byte: it
 //     evaluates to the scene's own address, which is never a position.
 // The bytecode keeps its size and its jump offsets. The ones patched are those of this condition
@@ -471,20 +523,19 @@ void LetListsShow(uint8_t* base, uint32_t function) {
   bool after_five = false;
   for (uint32_t i = 0; code && i + kOperand + 2 <= size; ++i) {
     if (base[code + i] != kNativeEqualIntInt || !IsLocalVariable(base, code + i + 1, selected_option)) continue;
-    if (!after_five && base[code + i + kOperand] == kTokenIntConstByte &&
-        base[code + i + kOperand + 1] == azura::menu::kKeyboardMouseCategory) {
-      base[code + i + kOperand + 1] = azura::menu::kLocalCoopCategory;
+    const uint8_t token = base[code + i + kOperand];
+    const uint8_t value = base[code + i + kOperand + 1];
+    if (!after_five && token == kTokenIntConstByte && value == azura::menu::kKeyboardMouseCategory) {
+      base[code + i] = kNativeGreaterEqualIntInt;
+      base[code + i + kOperand + 1] = azura::menu::kControllerCategory;
       after_five = true;
-      continue;
-    }
-    if (after_five && base[code + i + kOperand] == kTokenIntOne &&
-        base[code + i + kOperand + 1] == kTokenEndFunctionParms) {
+    } else if (after_five && token == kTokenIntOne && value == kTokenEndFunctionParms) {
       base[code + i + kOperand] = kTokenSelf;
-      REXLOG_INFO("[Azura options] Video and Keyboard and mouse now show their lists");
+      REXLOG_INFO("[Azura options] Video shows its list; the categories from Controller on open menus of ours");
       return;
     }
   }
-  REXLOG_WARN("[Azura options] Callback_MenuOptionSelected does not skip 5 and 1 as expected; those stay empty");
+  REXLOG_WARN("[Azura options] Callback_MenuOptionSelected does not skip 5 and 1 as expected");
 }
 
 // Callback_ReturnToMain plays the "leave" sounds unless CurrentMode is Video (1) or no category
@@ -784,6 +835,31 @@ void OpenRestartDialog(PPCContext& ctx, uint8_t* base, uint32_t return_to_main) 
   REXLOG_INFO("[Azura options] Offered to restart the game to apply Video settings");
 }
 
+// Guest memory for the locals of UIScene_FrontEnd.Callback_StartButtonPressed (ControllerIdx,
+// OpeningPlayer, LP).
+constexpr uint32_t kStartButtonLocalsSize = 16;
+uint32_t g_start_button_locals = 0;
+
+// Opens the Options from the main menu. `ctx` holds the frame of HandleMenuSelection, about to run
+// on the front end scene, whose Callback_StartButtonPressed (what Start does on the main menu)
+// opens them for the controller that chose the option, which has to be a player's.
+void OpenOptionsFromMainMenu(PPCContext& ctx, uint8_t* base, uint32_t handle_menu_selection) {
+  const uint32_t start_pressed =
+      FindClassFunction(base, LoadU32(base, handle_menu_selection + kObjectOuter), "Callback_StartButtonPressed");
+  if (!start_pressed) {
+    REXLOG_WARN("[Azura menus] Callback_StartButtonPressed not found; the Options option does nothing");
+    return;
+  }
+  if (!g_start_button_locals) {
+    g_start_button_locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kStartButtonLocalsSize);
+    if (!g_start_button_locals) return;
+  }
+  std::memset(base + g_start_button_locals, 0, kStartButtonLocalsSize);
+  StoreU32(base, g_start_button_locals, static_cast<uint32_t>(g_front_end_controller.load()));  // ControllerIdx
+  REXLOG_INFO("[Azura menus] Opening the Options from the main menu");
+  RunInstead(ctx, base, start_pressed, g_start_button_locals);
+}
+
 void RequestRestart() {
   std::function<void()> handler;
   {
@@ -821,6 +897,46 @@ bool IgnoreOtherPlayersStart(PPCContext& ctx, uint8_t* base, uint32_t function) 
   if (base[locals + kFilterInputEvent] == kInputPressed) {
     REXLOG_INFO("[Azura co-op] Title screen: player {} pressed {}; only player 1 starts", controller + 1,
                 button);
+  }
+  if (const uint32_t result = ctx.r5.u32) StoreU32(base, result, 1);  // the press was handled
+  return true;
+}
+
+// Return and Escape both press Start (the SDK's keyboard and mouse driver cannot tell a menu from
+// play): pausing in play, and taken as Start by every menu. A press of either that reaches a menu's
+// FilterButtonInput is a menu's, so there it is used up and the driver presses A for Return
+// (accept) or B for Escape (back) instead, as on a PC. On the title screen Return stays Start,
+// which starts, and Escape does nothing. The press's repeats and release are used up too, even once the key is
+// up. Each player's (ControllerId's) press is followed on its own. Returns whether the press was
+// used up, so FilterButtonInput must not run.
+std::atomic<bool> g_start_taken[4];
+bool TakeKeyboardStartAsMenuKey(PPCContext& ctx, uint8_t* base, uint32_t function) {
+  const uint32_t locals = LoadU32(base, ctx.r4.u32 + kFrameLocals);
+  if (NameText(base, LoadU32(base, locals + kFilterButtonName)) != "XboxTypeS_Start") return false;
+  const int32_t controller = SmallParam(base, function, ctx.r4.u32, "ControllerId");
+  if (controller < 0 || controller >= 4) return false;
+  const uint8_t event = base[locals + kFilterInputEvent];
+  if (event == kInputPressed) {
+    using rex::input::mnk::StartKey;
+    const StartKey key = rex::input::mnk::HeldStartKey();
+    const std::string scene = ObjectName(base, LoadU32(base, function + kObjectOuter));
+    const bool front_end = scene == "UIScene_FrontEnd";
+    const bool title_screen = front_end && (LoadU32(base, ctx.r3.u32 + kFrontEndFlags) & kOnTitleScreenBit);
+    const bool keep_start = key == StartKey::kNone || (title_screen && key == StartKey::kReturn);
+    g_start_taken[controller].store(!keep_start);
+    if (keep_start) return false;
+    if (title_screen) {
+      // Escape on the title screen: used up, nothing else.
+      if (const uint32_t result = ctx.r5.u32) StoreU32(base, result, 1);
+      return true;
+    }
+    rex::input::mnk::PressForMenu(key == StartKey::kReturn ? rex::input::X_INPUT_GAMEPAD_A : rex::input::X_INPUT_GAMEPAD_B);
+    REXLOG_INFO("[Azura menus] {} takes the keyboard's {} as {}", scene, key == StartKey::kReturn ? "Return" : "Escape",
+                key == StartKey::kReturn ? "A" : "B");
+  } else if (!g_start_taken[controller].load()) {
+    return false;
+  } else if (event != kInputRepeat) {
+    g_start_taken[controller].store(false);  // the release
   }
   if (const uint32_t result = ctx.r5.u32) StoreU32(base, result, 1);  // the press was handled
   return true;
@@ -1095,6 +1211,84 @@ void SetLocalCoopHandler(std::function<void()> handler) {
   g_local_coop_handler = std::move(handler);
 }
 
+void SetControlsMenuHandler(std::function<void(ControlsMenu)> handler) {
+  std::lock_guard lock(g_quit_mutex);
+  g_controls_handler = std::move(handler);
+}
+
+namespace {
+
+// OnlineProfileSettings.ProfileSettings is a TArray of OnlineProfileSetting: Owner (a byte), then
+// a SettingsProperty: PropertyId, then its SettingsData: Type (a byte), Value1, Value2.
+constexpr uint32_t kSettingId = 4;
+constexpr uint32_t kSettingValue = 12;
+
+// The address of profile setting `id` of guest user `user`, 0 when it cannot be found (the player
+// has no controller yet, or no profile). The element size is found from the array itself: the IDs
+// of consecutive settings are small numbers, and 368 (look sensitivity) is among them.
+uint32_t ProfileSettingAddress(uint32_t user, int id, uint8_t*& base) {
+  base = g_guest_base.load(std::memory_order_relaxed);
+  const uint32_t controller = user < 4 ? g_player_controllers[user].load(std::memory_order_relaxed) : 0;
+  if (!base || !controller) return 0;
+  std::lock_guard lock(g_mouse_look_mutex);
+  const int32_t profile_at = CachedOffset(base, LoadU32(base, controller + kObjectClass), 5, "ProfileSettings");
+  if (profile_at < 0) return 0;
+  const uint32_t profile = LoadU32(base, controller + static_cast<uint32_t>(profile_at));
+  if (!profile) return 0;
+  const int32_t array_at = CachedOffset(base, LoadU32(base, profile + kObjectClass), 6, "ProfileSettings");
+  if (array_at < 0) return 0;
+  const uint32_t data = LoadU32(base, profile + static_cast<uint32_t>(array_at));
+  const uint32_t count = LoadU32(base, profile + static_cast<uint32_t>(array_at) + 4);
+  if (!data || count == 0 || count > 1024) return 0;
+  for (const uint32_t size : {24u, 20u, 28u}) {
+    bool has_368 = false;
+    bool plausible = true;
+    for (uint32_t i = 0; i < count && plausible; ++i) {
+      const uint32_t setting = LoadU32(base, data + i * size + kSettingId);
+      plausible = setting < 100000;
+      has_368 = has_368 || setting == 368;
+    }
+    if (!plausible || !has_368) continue;
+    for (uint32_t i = 0; i < count; ++i) {
+      if (LoadU32(base, data + i * size + kSettingId) == static_cast<uint32_t>(id)) {
+        return data + i * size + kSettingValue;
+      }
+    }
+    return 0;
+  }
+  return 0;
+}
+
+}  // namespace
+
+Menus WhereInMenus() {
+  if (g_front_end.load(std::memory_order_relaxed)) {
+    if (g_options_open.load(std::memory_order_relaxed)) return Menus::kMenu;
+    uint8_t* base = g_guest_base.load(std::memory_order_relaxed);
+    const uint32_t scene = g_front_end_scene.load(std::memory_order_relaxed);
+    if (base && scene && (LoadU32(base, scene + kFrontEndFlags) & kOnTitleScreenBit)) return Menus::kTitleScreen;
+    return Menus::kMenu;
+  }
+  return g_paused.load(std::memory_order_relaxed) || g_options_open.load(std::memory_order_relaxed) ? Menus::kMenu
+                                                                                                      : Menus::kPlaying;
+}
+
+bool ReadProfileSetting(uint32_t user, int id, uint32_t& value) {
+  uint8_t* base = nullptr;
+  const uint32_t address = ProfileSettingAddress(user, id, base);
+  if (!address) return false;
+  value = LoadU32(base, address);
+  return true;
+}
+
+bool WriteProfileSetting(uint32_t user, int id, uint32_t value) {
+  uint8_t* base = nullptr;
+  const uint32_t address = ProfileSettingAddress(user, id, base);
+  if (!address) return false;
+  StoreU32(base, address, value);
+  return true;
+}
+
 }  // namespace azura::script
 
 extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
@@ -1129,12 +1323,34 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
       PatchTravelURL(base, locals + static_cast<uint32_t>(url_offset));
     }
   }
+  // The main menu's Options option opens the Options as Start does there (the script, which does
+  // not know the option, does not run).
+  const int options_option = azura::menu::MainMenuOptionsOption();
+  if (options_option >= 0 && Is(base, function, kHandleMenuSelection) &&
+      IsQuitSelection(base, ctx.r4.u32, options_option)) {
+    OpenOptionsFromMainMenu(ctx, base, function);
+    return;
+  }
   const int quit_option = azura::menu::MainMenuQuitOption();
   if (quit_option >= 0 && Is(base, function, kHandleMenuSelection) && IsQuitSelection(base, ctx.r4.u32, quit_option)) {
     RequestQuit();
     return;  // the script would not know the option and would leave the menu waiting
   }
   if (Is(base, function, kMenuOptionSelected)) LetListsShow(base, function);
+  if (Is(base, function, kPopulateOptionsMenu)) g_options_open.store(true, std::memory_order_relaxed);
+  // OnClose, not the OnOptionsMenuClose delegate, whose body never runs: whoever opened the Options
+  // binds it to a function of its own (the main menu's OptionsMenuClosed).
+  if (Is(base, function, kOnClose) && ObjectName(base, LoadU32(base, function + kObjectOuter)) == "UIScene_Options") {
+    g_options_open.store(false, std::memory_order_relaxed);
+  }
+  if ((Is(base, function, kWidgetInitialized) || Is(base, function, kFilterButtonInput)) &&
+      ObjectName(base, LoadU32(base, function + kObjectOuter)) == "UIScene_FrontEnd") {
+    g_front_end_scene.store(ctx.r3.u32, std::memory_order_relaxed);
+    if (Is(base, function, kFilterButtonInput)) {
+      const int32_t controller = SmallParam(base, function, ctx.r4.u32, "ControllerId");
+      if (controller >= 0 && controller < 4) g_front_end_controller.store(controller, std::memory_order_relaxed);
+    }
+  }
   if (Is(base, function, kReturnToMain)) LetVideoPlayLeaveSound(base, function);
   // Closing the calibration screen runs Callback_ReturnToMain, which puts the script back on the
   // list of categories: right when the screen was opened from there, as in the game. Opened from
@@ -1172,6 +1388,7 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     }
     return;
   }
+  if (Is(base, function, kFilterButtonInput) && TakeKeyboardStartAsMenuKey(ctx, base, function)) return;
   if (Is(base, function, kFilterButtonInput) && HandleOptionsButton(ctx, base, function)) return;
   if (Is(base, function, kFilterButtonInput) && IgnoreOtherPlayersStart(ctx, base, function)) return;
   // The Local co-op category runs the storage location's callback: it opens the Local co-op menu.
@@ -1184,6 +1401,24 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     }
     REXLOG_INFO("[Azura options] Opening the Local co-op menu");
     if (handler) handler();
+    return;
+  }
+  // Controller runs Callback_ViewController, and Keyboard and mouse Callback_ResetTutorials from the
+  // list of categories (CurrentMode 8, as LetListsShow keeps it; Game's list runs it for its own
+  // row): each opens its controls menu instead.
+  if ((Is(base, function, kViewController) ||
+       (Is(base, function, kResetTutorials) && CurrentMode(base, ctx.r3.u32) == kNoCategory)) &&
+      ObjectName(base, LoadU32(base, function + kObjectOuter)) == "UIScene_Options") {
+    const auto menu = Is(base, function, kViewController) ? azura::script::ControlsMenu::kController
+                                                          : azura::script::ControlsMenu::kKeyboardMouse;
+    std::function<void(azura::script::ControlsMenu)> handler;
+    {
+      std::lock_guard lock(g_quit_mutex);
+      handler = g_controls_handler;
+    }
+    REXLOG_INFO("[Azura options] Opening the {} controls menu",
+                menu == azura::script::ControlsMenu::kController ? "controller" : "keyboard and mouse");
+    if (handler) handler(menu);
     return;
   }
   // Local co-op is greyed out with no controller connected (the keyboard and mouse alone play one
