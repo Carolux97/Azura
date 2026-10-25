@@ -67,6 +67,8 @@ user_name = "User"
 # it works concurrently.
 mnk_mode = true
 mnk_mouse = true
+# Mouse look turns the camera by about 0.044 degrees per pixel times this (Options, Keyboard and
+# mouse, Mouse sensitivity).
 mnk_sensitivity = 1.0
 
 # Button prompts: "auto" (follows the device last used: keyboard/mouse, DualSense or Xbox),

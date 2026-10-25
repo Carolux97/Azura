@@ -58,6 +58,7 @@ set(AZURA_SOURCES
     src/local_coop_notices.cpp
     src/menu/coalesced.cpp
     src/input/install_player_assignment.cpp
+    src/input/mouse_look.cpp
     src/input/player_assignment.cpp
     src/menu/menu_patches.cpp
     src/menu/pc_options.cpp
