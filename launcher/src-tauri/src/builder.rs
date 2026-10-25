@@ -317,6 +317,7 @@ pub fn generated_sources(sources_cmake: &str) -> Vec<String> {
 }
 
 /// Free space on the disk that holds `path`, in bytes.
+#[cfg(unix)]
 fn free_space(path: &Path) -> Option<u64> {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
@@ -328,6 +329,12 @@ fn free_space(path: &Path) -> Option<u64> {
     }
     #[allow(clippy::unnecessary_cast)]
     Some(stat.f_bavail as u64 * stat.f_frsize as u64)
+}
+
+/// Unknown elsewhere: the build then goes ahead without checking the free space.
+#[cfg(not(unix))]
+fn free_space(_path: &Path) -> Option<u64> {
+    None
 }
 
 /// The key an output is built for: a hash of its input's content and of everything else given.
@@ -546,7 +553,11 @@ fn translate_and_compile(
         crate::game_folder::copy_xex_from_image(folders.game, &game_dir.join(crate::game_folder::XEX_FILE_NAME))
             .map_err(|error| step_failed(Phase::Translating, format!("could not read the disc image: {error}"), log))?;
     } else {
+        #[cfg(unix)]
         std::os::unix::fs::symlink(folders.game, &game_dir)?;
+        // Needs Developer Mode or administrator rights on Windows.
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(folders.game, &game_dir)?;
     }
 
     progress(Phase::Translating, 0, 0);

@@ -2,6 +2,9 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #endif
+#if defined(_WIN32)
+#include "platform_win.h"
+#endif
 #include "button_prompts.h"
 
 #include <algorithm>
@@ -344,6 +347,12 @@ class ButtonPrompts::Impl {
           it = list.erase(it);
           continue;
         }
+#elif defined(_WIN32)
+        // Memory the game freed may have gone back to Windows, and reading it would end the game.
+        if (!azura::IsReadable(tex, atlas.def->byte_size)) {
+          it = list.erase(it);
+          continue;
+        }
 #endif
         if (!it->written.empty() && Matches(tex, atlas, it->written)) {
           ++it;
@@ -380,15 +389,27 @@ class ButtonPrompts::Impl {
     constexpr size_t kPageCount = kPhysicalSize / kTextureAlignment;
     std::vector<unsigned char> mincore_vec(kPageCount, 0);
     const bool mincore_ok = (mincore(const_cast<void*>(static_cast<const void*>(membase)), kPhysicalSize, mincore_vec.data()) == 0);
+#elif defined(_WIN32)
+    // Windows commits guest memory as the game allocates it, and reading memory that is only
+    // reserved ends the game: only textures that lie wholly in committed memory are looked at.
+    const auto readable = azura::ReadableRanges(membase, kPhysicalSize);
+    size_t range = 0;
 #endif
     for (uint32_t page = 0; page < kPhysicalSize; page += kTextureAlignment) {
 #if defined(__linux__)
       if (mincore_ok && !(mincore_vec[page / kTextureAlignment] & 1)) {
         continue;
       }
+#elif defined(_WIN32)
+      while (range < readable.size() && readable[range].end <= page) ++range;
+      if (range == readable.size()) break;
+      if (page < readable[range].begin) continue;
 #endif
       for (auto& atlas : atlases_) {
         if (page + atlas.def->byte_size > kPhysicalSize) continue;
+#if defined(_WIN32)
+        if (page + atlas.def->byte_size > readable[range].end) continue;
+#endif
         const uint8_t* tex = membase + page;
         if (!FingerprintMatches(tex, *atlas.def)) continue;
         auto& list = atlas.instances;

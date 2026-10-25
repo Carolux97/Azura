@@ -39,3 +39,13 @@ objc2-game-controller = "0.3"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 gilrs = "0.11"
+
+# The processor, memory and graphics cards on Windows (system.rs): the registry, the memory status
+# and SetupAPI's display adapters.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_System_Registry",
+  "Win32_System_SystemInformation",
+  "Win32_Devices_DeviceAndDriverInstallation",
+] }
