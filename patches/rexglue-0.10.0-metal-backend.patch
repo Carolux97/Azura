@@ -880,6 +880,20 @@ index a318f2c..6751e8d 100644
  };
  
  /// Device ordinal N feeds guest user N. Synthetic devices feed user 0.
+diff --git a/include/rex/input/input_system.h b/include/rex/input/input_system.h
+index d48df09..7549445 100644
+--- a/include/rex/input/input_system.h
++++ b/include/rex/input/input_system.h
+@@ -46,6 +46,9 @@ class InputSystem : public system::IInputSystem {
+ 
+   X_RESULT GetCapabilities(uint32_t user_index, uint32_t flags, X_INPUT_CAPABILITIES* out_caps);
+   X_RESULT GetState(uint32_t user_index, X_INPUT_STATE* out_state);
++  /// The state of one device, whichever user it feeds: for host UI that reads each device on its
++  /// own (an assignment menu). It does not change which device is the active one.
++  X_RESULT GetDeviceState(DeviceId id, X_INPUT_STATE* out_state);
+   X_RESULT SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration);
+   X_RESULT GetKeystroke(uint32_t user_index, uint32_t flags, X_INPUT_KEYSTROKE* out_keystroke);
+ 
 diff --git a/include/rex/perf/counter.h b/include/rex/perf/counter.h
 index 83f0dff..1e1dea1 100644
 --- a/include/rex/perf/counter.h
@@ -1017,6 +1031,107 @@ index d54df86..74913c7 100644
    // One-shot convenience for callers that don't care about the split.
    X_STATUS Setup(runtime::FunctionDispatcher* function_dispatcher, KernelState* kernel_state,
                   ui::WindowedAppContext* app_context, bool with_presentation) {
+diff --git a/include/rex/system/kernel_state.h b/include/rex/system/kernel_state.h
+index 9b9cf9e..429888a 100644
+--- a/include/rex/system/kernel_state.h
++++ b/include/rex/system/kernel_state.h
+@@ -10,6 +10,7 @@
+  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
+  */
+ 
++#include <array>
+ #include <atomic>
+ #include <condition_variable>
+ #include <filesystem>
+@@ -199,7 +200,16 @@ class KernelState {
+ 
+   xam::AppManager* app_manager() const { return app_manager_.get(); }
+   xam::ContentManager* content_manager() const { return content_manager_.get(); }
+-  xam::UserProfile* user_profile() const { return user_profile_.get(); }
++  // Player 1's profile, always signed in.
++  xam::UserProfile* user_profile() const { return user_profiles_[0].get(); }
++  // The profile of local player `user_index` (0 to 3) when signed in, nullptr otherwise.
++  xam::UserProfile* user_profile(uint32_t user_index) const;
++  // Signs local player `user_index` (1 to 3) in under `name`, or out, and tells the game
++  // (XN_SYS_SIGNINCHANGED with the signed-in players). Callable from any thread.
++  void SignInLocalUser(uint32_t user_index, const std::string& name);
++  void SignOutLocalUser(uint32_t user_index);
++  // Bit N set for each signed-in local player N.
++  uint32_t signed_in_users() const;
+ 
+   // Access must be guarded by the global critical region.
+   util::ObjectTable* object_table() { return &object_table_; }
+@@ -353,7 +363,8 @@ class KernelState {
+ 
+   std::unique_ptr<xam::AppManager> app_manager_;
+   std::unique_ptr<xam::ContentManager> content_manager_;
+-  std::unique_ptr<xam::UserProfile> user_profile_;
++  // Local players 1 to 4 (user indices 0 to 3); only the first is signed in from the start.
++  std::array<std::unique_ptr<xam::UserProfile>, 4> user_profiles_;
+ 
+   rex::thread::global_critical_region global_critical_region_;
+ 
+diff --git a/include/rex/system/xam/content_manager.h b/include/rex/system/xam/content_manager.h
+index 949d185..60ccca8 100644
+--- a/include/rex/system/xam/content_manager.h
++++ b/include/rex/system/xam/content_manager.h
+@@ -170,7 +170,8 @@ class ContentManager {
+   X_RESULT ReadContentHeaderFile(const std::string_view file_name, uint64_t xuid, uint32_t title_id,
+                                  XContentType content_type, XCONTENT_AGGREGATE_DATA& data) const;
+ 
+-  std::filesystem::path ResolveGameUserContentPath();
++  // The folder of the running title's settings for the profile named `user_name`.
++  std::filesystem::path ResolveGameUserContentPath(const std::string& user_name);
+   bool IsContentOpen(const XCONTENT_AGGREGATE_DATA& data) const;
+   void CloseOpenedFilesFromContent(const std::string_view root_name);
+ 
+diff --git a/include/rex/system/xam/user_profile.h b/include/rex/system/xam/user_profile.h
+index 06888b9..4f93b37 100644
+--- a/include/rex/system/xam/user_profile.h
++++ b/include/rex/system/xam/user_profile.h
+@@ -11,6 +11,7 @@
+ 
+ #pragma once
+ 
++#include <atomic>
+ #include <memory>
+ #include <string>
+ #include <unordered_map>
+@@ -214,14 +215,23 @@ class UserProfile {
+     }
+   };
+ 
++  // Player 1's profile: signed in from the start, named after user_name.
+   UserProfile();
++  // The profile of another local player (players 2 to 4): signed out until SignIn.
++  explicit UserProfile(uint64_t xuid);
+ 
+   uint64_t xuid() const { return xuid_; }
++  // Read only while signed in: SignIn sets it before the profile shows as signed in.
+   std::string name() const { return name_; }
+-  uint32_t signin_state() const { return 1; }
++  // 1 (signed in locally) or 0.
++  uint32_t signin_state() const { return signed_in_.load(std::memory_order_acquire) ? 1 : 0; }
++  bool signed_in() const { return signin_state() != 0; }
+   uint32_t type() const { return 1 | 2; /* local | online profile? */ }
+ 
+   void set_name(std::string name) { name_ = std::move(name); }
++  // Signs this profile in under `name` (at most 15 characters), or out.
++  void SignIn(std::string name);
++  void SignOut() { signed_in_.store(false, std::memory_order_release); }
+   void set_kernel_state(KernelState* ks) { kernel_state_ = ks; }
+ 
+   void AddSetting(std::unique_ptr<Setting> setting);
+@@ -230,6 +240,9 @@ class UserProfile {
+  private:
+   uint64_t xuid_;
+   std::string name_;
++  std::atomic<bool> signed_in_{false};
++  // Adds the settings every profile starts with.
++  void AddDefaultSettings();
+   std::vector<std::unique_ptr<Setting>> setting_list_;
+   std::unordered_map<uint32_t, Setting*> settings_;
+   KernelState* kernel_state_ = nullptr;
 diff --git a/include/rex/ui/imgui_dialog.h b/include/rex/ui/imgui_dialog.h
 index a7ab6b3..f4425b8 100644
 --- a/include/rex/ui/imgui_dialog.h
@@ -17002,7 +17117,7 @@ index f3528ee..b500271 100644
        xenos::TextureFormat::k_DXT1_AS_16_16_16_16,
        xenos::TextureFormat::k_DXT2_3_AS_16_16_16_16,
 diff --git a/src/input/input_system.cpp b/src/input/input_system.cpp
-index c9f7ed6..bf37992 100644
+index c9f7ed6..c41f06d 100644
 --- a/src/input/input_system.cpp
 +++ b/src/input/input_system.cpp
 @@ -255,6 +255,7 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
@@ -17013,7 +17128,24 @@ index c9f7ed6..bf37992 100644
    }
  
    if (!any) {
-@@ -298,6 +299,14 @@ X_RESULT InputSystem::SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration
+@@ -266,6 +267,16 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
+   return X_ERROR_SUCCESS;
+ }
+ 
++X_RESULT InputSystem::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
++  std::lock_guard<std::mutex> lock(g_devices_mutex);
++  RefreshDevices();
++  auto* driver = DriverForDevice(id);
++  if (!driver || !out_state) {
++    return X_ERROR_DEVICE_NOT_CONNECTED;
++  }
++  return driver->GetDeviceState(id, out_state);
++}
++
+ ActiveDeviceKind InputSystem::KindOf(DeviceId id) const {
+   const DeviceInfo* info = DeviceInfoFor(id);
+   if (!info) {
+@@ -298,6 +309,14 @@ X_RESULT InputSystem::SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration
    std::vector<DeviceId> ids;
    assignment_->DevicesForUser(user_index, ids);
  
@@ -17060,6 +17192,376 @@ index 82a252c..3dcec80 100644
    // Pressed or released?
    if (event.gbutton.down) {
      if (xbutton == X_INPUT_GAMEPAD_GUIDE && !REXCVAR_GET(guide_button)) {
+diff --git a/src/kernel/xam/apps/xgi_app.cpp b/src/kernel/xam/apps/xgi_app.cpp
+index 2b222da..2c828d0 100644
+--- a/src/kernel/xam/apps/xgi_app.cpp
++++ b/src/kernel/xam/apps/xgi_app.cpp
+@@ -83,9 +83,14 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+         }
+         auto* base = memory_->TranslateVirtual(achievements_ptr);
+         for (uint32_t i = 0; i < achievement_count; ++i) {
++          uint32_t user_index = memory::load_and_swap<uint32_t>(base + i * kEntryStride);
+           uint32_t id = memory::load_and_swap<uint32_t>(base + i * kEntryStride + kEntryIdOffset);
+-          REXKRNL_INFO("XGIUserWriteAchievements: id={} ({})", id, i);
+-          kernel_state_->UnlockAchievement(id);
++          REXKRNL_INFO("XGIUserWriteAchievements: id={} ({}) for user {}", id, i, user_index);
++          // Achievements are player 1's: the other local players (user indices 1 to 3) have none
++          // of their own. A value above 3 is not a user index, so that unlock is kept.
++          if (user_index == 0 || user_index > 3) {
++            kernel_state_->UnlockAchievement(id);
++          }
+         }
+       } else {
+         REXKRNL_INFO("XGIUserWriteAchievements: skipped (count={} ptr={:08X})", achievement_count,
+diff --git a/src/kernel/xam/xam_content.cpp b/src/kernel/xam/xam_content.cpp
+index 72a50cb..2a724c5 100644
+--- a/src/kernel/xam/xam_content.cpp
++++ b/src/kernel/xam/xam_content.cpp
+@@ -44,6 +44,13 @@ u32 XamContentGetLicenseMask_entry(mapped_u32 mask_ptr, mapped_void overlapped_p
+   }
+ }
+ 
++
++// The XUID whose content a call for `user_index` reads and writes: that local player's when signed
++// in, player 1's otherwise (0xFF means any player).
++uint64_t ContentXuid(uint32_t user_index) {
++  const auto* user_profile = REX_KERNEL_STATE()->user_profile(user_index);
++  return (user_profile ? user_profile : REX_KERNEL_STATE()->user_profile())->xuid();
++}
+ u32 XamContentResolve_entry(u32 user_index, mapped_void content_data_ptr, mapped_void buffer_ptr,
+                             u32 buffer_size, u32 unk1, u32 unk2, u32 unk3) {
+   auto content_data = content_data_ptr.as<XCONTENT_DATA*>();
+@@ -75,7 +82,7 @@ u32 XamContentCreateEnumerator_entry(u32 user_index, u32 device_id, u32 content_
+     *buffer_size_ptr = sizeof(XCONTENT_DATA) * items_per_enumerate;
+   }
+ 
+-  uint64_t xuid = REX_KERNEL_STATE()->user_profile()->xuid();
++  uint64_t xuid = ContentXuid(user_index);
+ 
+   auto e = make_object<XStaticEnumerator<XCONTENT_DATA>>(REX_KERNEL_STATE(), items_per_enumerate);
+   auto result = e->Initialize(0xFF, 0xFE, 0x20005, 0x20007, 0);
+@@ -119,7 +126,7 @@ u32 xeXamContentCreate(u32 user_index, mapped_string root_name, mapped_void cont
+                        u32 content_data_size, u32 flags, mapped_u32 disposition_ptr,
+                        mapped_u32 license_mask_ptr, u32 cache_size, u64 content_size,
+                        mapped_void overlapped_ptr) {
+-  uint64_t xuid = REX_KERNEL_STATE()->user_profile()->xuid();
++  uint64_t xuid = ContentXuid(user_index);
+ 
+   XCONTENT_AGGREGATE_DATA content_data;
+   if (content_data_size == sizeof(XCONTENT_DATA)) {
+@@ -297,7 +304,7 @@ u32 XamContentGetCreator_entry(u32 user_index, mapped_void content_data_ptr,
+                                mapped_void overlapped_ptr) {
+   auto result = X_ERROR_SUCCESS;
+ 
+-  uint64_t xuid = REX_KERNEL_STATE()->user_profile()->xuid();
++  uint64_t xuid = ContentXuid(user_index);
+   XCONTENT_AGGREGATE_DATA content_data = *content_data_ptr.as<XCONTENT_DATA*>();
+ 
+   bool content_exists = REX_KERNEL_STATE()->content_manager()->ContentExists(xuid, content_data);
+@@ -332,7 +339,7 @@ u32 XamContentGetThumbnail_entry(u32 user_index, mapped_void content_data_ptr,
+                                  mapped_void overlapped_ptr) {
+   assert_not_null(buffer_size_ptr);
+   uint32_t buffer_size = *buffer_size_ptr;
+-  uint64_t xuid = REX_KERNEL_STATE()->user_profile()->xuid();
++  uint64_t xuid = ContentXuid(user_index);
+   XCONTENT_AGGREGATE_DATA content_data = *content_data_ptr.as<XCONTENT_DATA*>();
+ 
+   // Get thumbnail (if it exists).
+@@ -367,7 +374,7 @@ u32 XamContentGetThumbnail_entry(u32 user_index, mapped_void content_data_ptr,
+ u32 XamContentSetThumbnail_entry(u32 user_index, mapped_void content_data_ptr,
+                                  mapped_void buffer_ptr, u32 buffer_size,
+                                  mapped_void overlapped_ptr) {
+-  uint64_t xuid = REX_KERNEL_STATE()->user_profile()->xuid();
++  uint64_t xuid = ContentXuid(user_index);
+   XCONTENT_AGGREGATE_DATA content_data = *content_data_ptr.as<XCONTENT_DATA*>();
+ 
+   // Buffer is PNG data.
+@@ -385,7 +392,7 @@ u32 XamContentSetThumbnail_entry(u32 user_index, mapped_void content_data_ptr,
+ 
+ u32 XamContentDelete_entry(u32 user_index, mapped_void content_data_ptr,
+                            mapped_void overlapped_ptr) {
+-  uint64_t xuid = REX_KERNEL_STATE()->user_profile()->xuid();
++  uint64_t xuid = ContentXuid(user_index);
+   XCONTENT_AGGREGATE_DATA content_data = *content_data_ptr.as<XCONTENT_DATA*>();
+ 
+   auto result = REX_KERNEL_STATE()->content_manager()->DeleteContent(xuid, content_data);
+diff --git a/src/kernel/xam/xam_user.cpp b/src/kernel/xam/xam_user.cpp
+index 94468e6..151f680 100644
+--- a/src/kernel/xam/xam_user.cpp
++++ b/src/kernel/xam/xam_user.cpp
+@@ -46,8 +46,7 @@ i32 XamUserGetXUID_entry(u32 user_index, u32 type_mask, mapped_u64 xuid_ptr) {
+   uint32_t result = X_E_NO_SUCH_USER;
+   uint64_t xuid = 0;
+   if (user_index < 4) {
+-    if (user_index == 0) {
+-      const auto& user_profile = REX_KERNEL_STATE()->user_profile();
++    if (const auto* user_profile = REX_KERNEL_STATE()->user_profile(user_index)) {
+       auto type = user_profile->type() & type_mask;
+       if (type & (2 | 4)) {
+         // maybe online profile?
+@@ -67,14 +66,8 @@ i32 XamUserGetXUID_entry(u32 user_index, u32 type_mask, mapped_u64 xuid_ptr) {
+ }
+ 
+ u32 XamUserGetSigninState_entry(u32 user_index) {
+-  uint32_t signin_state = 0;
+-  if (user_index < 4) {
+-    if (user_index == 0) {
+-      const auto& user_profile = REX_KERNEL_STATE()->user_profile();
+-      signin_state = user_profile->signin_state();
+-    }
+-  }
+-  return signin_state;
++  const auto* user_profile = REX_KERNEL_STATE()->user_profile(user_index);
++  return user_profile ? user_profile->signin_state() : 0;
+ }
+ 
+ typedef struct {
+@@ -93,11 +86,11 @@ i32 XamUserGetSigninInfo_entry(u32 user_index, u32 flags, ppc_ptr_t<X_USER_SIGNI
+   }
+ 
+   std::memset(info, 0, sizeof(X_USER_SIGNIN_INFO));
+-  if (user_index) {
++  const auto* user_profile = REX_KERNEL_STATE()->user_profile(user_index);
++  if (!user_profile) {
+     return X_E_NO_SUCH_USER;
+   }
+ 
+-  const auto& user_profile = REX_KERNEL_STATE()->user_profile();
+   info->xuid = user_profile->xuid();
+   info->signin_state = user_profile->signin_state();
+   rex::string::copy_truncating(info->name, user_profile->name(), rex::countof(info->name));
+@@ -109,11 +102,11 @@ u32 XamUserGetName_entry(u32 user_index, mapped_string buffer, u32 buffer_len) {
+     return X_E_INVALIDARG;
+   }
+ 
+-  if (user_index) {
++  const auto* user_profile = REX_KERNEL_STATE()->user_profile(user_index);
++  if (!user_profile) {
+     return X_E_NO_SUCH_USER;
+   }
+ 
+-  const auto& user_profile = REX_KERNEL_STATE()->user_profile();
+   const auto& user_name = user_profile->name();
+   rex::string::copy_truncating(buffer, user_name, std::min(buffer_len, uint32_t(16)));
+   return X_E_SUCCESS;
+@@ -124,7 +117,8 @@ u32 XamUserGetGamerTag_entry(u32 user_index, mapped_wstring buffer, u32 buffer_l
+     return X_E_INVALIDARG;
+   }
+ 
+-  if (user_index) {
++  const auto* user_profile = REX_KERNEL_STATE()->user_profile(user_index);
++  if (!user_profile) {
+     return X_E_NO_SUCH_USER;
+   }
+ 
+@@ -132,7 +126,6 @@ u32 XamUserGetGamerTag_entry(u32 user_index, mapped_wstring buffer, u32 buffer_l
+     return X_E_INVALIDARG;
+   }
+ 
+-  const auto& user_profile = REX_KERNEL_STATE()->user_profile();
+   auto user_name = rex::string::to_utf16(user_profile->name());
+   rex::string::copy_and_swap_truncating(buffer, user_name, std::min(buffer_len, uint32_t(16)));
+   return X_E_SUCCESS;
+@@ -156,8 +149,6 @@ uint32_t XamUserReadProfileSettingsEx(uint32_t title_id, uint32_t user_index, ui
+     assert_true(xuid_count == 1);
+     assert_not_null(xuids);
+     // TODO(gibbed): allow proper lookup of arbitrary XUIDs
+-    const auto& user_profile = REX_KERNEL_STATE()->user_profile();
+-    assert_true(static_cast<uint64_t>(xuids[0]) == user_profile->xuid());
+     // TODO(gibbed): we assert here, but in case a title passes xuid_count > 1
+     // until it's implemented for release builds...
+     xuid_count = 1;
+@@ -212,8 +203,21 @@ uint32_t XamUserReadProfileSettingsEx(uint32_t title_id, uint32_t user_index, ui
+   // Title ID = 0 means us.
+   // 0xfffe07d1 = profile?
+ 
+-  if (!xuids && user_index) {
+-    // Only support user 0.
++  // The profile asked for: the local player of user_index, or the signed-in local player with that
++  // XUID (player 1 for any other XUID).
++  xam::UserProfile* user_profile = nullptr;
++  if (xuids) {
++    user_profile = REX_KERNEL_STATE()->user_profile();
++    for (uint32_t i = 0; i < 4; ++i) {
++      auto* local = REX_KERNEL_STATE()->user_profile(i);
++      if (local && local->xuid() == static_cast<uint64_t>(xuids[0])) {
++        user_profile = local;
++      }
++    }
++  } else {
++    user_profile = REX_KERNEL_STATE()->user_profile(user_index);
++  }
++  if (!user_profile) {
+     if (overlapped) {
+       REX_KERNEL_STATE()->CompleteOverlappedImmediate(
+           REX_KERNEL_MEMORY()->HostToGuestVirtual(overlapped), X_ERROR_NO_SUCH_USER);
+@@ -222,8 +226,6 @@ uint32_t XamUserReadProfileSettingsEx(uint32_t title_id, uint32_t user_index, ui
+     return X_ERROR_NO_SUCH_USER;
+   }
+ 
+-  const auto& user_profile = REX_KERNEL_STATE()->user_profile();
+-
+   // First call asks for size (fill buffer_size_ptr).
+   // Second call asks for buffer contents with that size.
+ 
+@@ -309,8 +311,8 @@ u32 XamUserWriteProfileSettings_entry(u32 title_id, u32 user_index, u32 setting_
+     return X_ERROR_INVALID_PARAMETER;
+   }
+ 
+-  if (user_index) {
+-    // Only support user 0.
++  auto* user_profile = REX_KERNEL_STATE()->user_profile(user_index);
++  if (!user_profile) {
+     if (overlapped) {
+       REX_KERNEL_STATE()->CompleteOverlappedImmediate(overlapped.guest_address(),
+                                                       X_ERROR_NO_SUCH_USER);
+@@ -320,7 +322,6 @@ u32 XamUserWriteProfileSettings_entry(u32 title_id, u32 user_index, u32 setting_
+   }
+ 
+   // Update and save settings.
+-  const auto& user_profile = REX_KERNEL_STATE()->user_profile();
+ 
+   for (uint32_t n = 0; n < setting_count; ++n) {
+     const X_USER_PROFILE_SETTING& setting = settings[n];
+@@ -378,7 +379,7 @@ u32 XamUserCheckPrivilege_entry(u32 user_index, u32 mask, mapped_u32 out_value)
+       return X_ERROR_INVALID_PARAMETER;
+     }
+ 
+-    if (user_index) {
++    if (!REX_KERNEL_STATE()->user_profile(user_index)) {
+       return X_ERROR_NO_SUCH_USER;
+     }
+   }
+@@ -389,7 +390,7 @@ u32 XamUserCheckPrivilege_entry(u32 user_index, u32 mask, mapped_u32 out_value)
+ }
+ 
+ u32 XamUserContentRestrictionGetFlags_entry(u32 user_index, mapped_u32 out_flags) {
+-  if (user_index) {
++  if (!REX_KERNEL_STATE()->user_profile(user_index)) {
+     return X_ERROR_NO_SUCH_USER;
+   }
+ 
+@@ -400,7 +401,7 @@ u32 XamUserContentRestrictionGetFlags_entry(u32 user_index, mapped_u32 out_flags
+ 
+ u32 XamUserContentRestrictionGetRating_entry(u32 user_index, u32 unk1, mapped_u32 out_unk2,
+                                              mapped_u32 out_unk3) {
+-  if (user_index) {
++  if (!REX_KERNEL_STATE()->user_profile(user_index)) {
+     return X_ERROR_NO_SUCH_USER;
+   }
+ 
+@@ -431,7 +432,7 @@ u32 XamUserGetMembershipTier_entry(u32 user_index) {
+   if (user_index >= 4) {
+     return X_ERROR_INVALID_PARAMETER;
+   }
+-  if (user_index) {
++  if (!REX_KERNEL_STATE()->user_profile(user_index)) {
+     return X_ERROR_NO_SUCH_USER;
+   }
+   return 6 /* 6 appears to be Gold */;
+@@ -445,18 +446,13 @@ u32 XamUserAreUsersFriends_entry(u32 user_index, u32 unk1, u32 unk2, mapped_u32
+   if (user_index >= 4) {
+     result = X_ERROR_INVALID_PARAMETER;
+   } else {
+-    if (user_index == 0) {
+-      const auto& user_profile = REX_KERNEL_STATE()->user_profile();
+-      if (user_profile->signin_state() == 0) {
+-        result = X_ERROR_NOT_LOGGED_ON;
+-      } else {
+-        // No friends!
+-        are_friends = 0;
+-        result = X_ERROR_SUCCESS;
+-      }
++    if (REX_KERNEL_STATE()->user_profile(user_index)) {
++      // No friends!
++      are_friends = 0;
++      result = X_ERROR_SUCCESS;
+     } else {
+-      // Only support user 0.
+-      result = X_ERROR_NO_SUCH_USER;  // if user is local -> X_ERROR_NOT_LOGGED_ON
++      // A local player who is not signed in.
++      result = X_ERROR_NOT_LOGGED_ON;
+     }
+   }
+ 
+@@ -481,8 +477,8 @@ u32 XamShowSigninUI_entry(u32 unk, u32 unk_mask) {
+ 
+   // To fix game modes that display a 4 profile signin UI (even if playing
+   // alone):
+-  // XN_SYS_SIGNINCHANGED
+-  REX_KERNEL_STATE()->BroadcastNotification(0x0000000A, 1);
++  // XN_SYS_SIGNINCHANGED, with the local players signed in now.
++  REX_KERNEL_STATE()->BroadcastNotification(0x0000000A, REX_KERNEL_STATE()->signed_in_users());
+   // Games seem to sit and loop until we trigger this notification:
+   // XN_SYS_UI (off)
+   REX_KERNEL_STATE()->BroadcastNotification(0x00000009, 0);
+diff --git a/src/system/kernel_state.cpp b/src/system/kernel_state.cpp
+index 697399c..76bf9a0 100644
+--- a/src/system/kernel_state.cpp
++++ b/src/system/kernel_state.cpp
+@@ -65,8 +65,14 @@ KernelState::KernelState(Runtime* emulator)
+   file_system_ = emulator->file_system();
+ 
+   app_manager_ = std::make_unique<xam::AppManager>();
+-  user_profile_ = std::make_unique<xam::UserProfile>();
+-  user_profile_->set_kernel_state(this);
++  user_profiles_[0] = std::make_unique<xam::UserProfile>();
++  for (uint32_t i = 1; i < user_profiles_.size(); ++i) {
++    // Next to player 1's XUID, which keeps the bits 58410A1F checks (0x00C0000000000000) clear.
++    user_profiles_[i] = std::make_unique<xam::UserProfile>(user_profiles_[0]->xuid() + i);
++  }
++  for (auto& profile : user_profiles_) {
++    profile->set_kernel_state(this);
++  }
+ 
+   auto user_data_root = emulator_->user_data_root();
+   if (!user_data_root.empty()) {
+@@ -1118,6 +1124,45 @@ void KernelState::UnregisterNotifyListener(XNotifyListener* listener) {
+   }
+ }
+ 
++xam::UserProfile* KernelState::user_profile(uint32_t user_index) const {
++  if (user_index >= user_profiles_.size() || !user_profiles_[user_index]->signed_in()) {
++    return nullptr;
++  }
++  return user_profiles_[user_index].get();
++}
++
++uint32_t KernelState::signed_in_users() const {
++  uint32_t mask = 0;
++  for (uint32_t i = 0; i < user_profiles_.size(); ++i) {
++    if (user_profiles_[i]->signed_in()) {
++      mask |= 1u << i;
++    }
++  }
++  return mask;
++}
++
++void KernelState::SignInLocalUser(uint32_t user_index, const std::string& name) {
++  if (user_index == 0 || user_index >= user_profiles_.size()) {
++    return;
++  }
++  user_profiles_[user_index]->SignIn(name);
++  REXSYS_INFO("Local player {} signed in as '{}'", user_index + 1,
++              user_profiles_[user_index]->name());
++  // XN_SYS_SIGNINCHANGED
++  BroadcastNotification(0x0000000A, signed_in_users());
++}
++
++void KernelState::SignOutLocalUser(uint32_t user_index) {
++  if (user_index == 0 || user_index >= user_profiles_.size() ||
++      !user_profiles_[user_index]->signed_in()) {
++    return;
++  }
++  user_profiles_[user_index]->SignOut();
++  REXSYS_INFO("Local player {} signed out", user_index + 1);
++  // XN_SYS_SIGNINCHANGED
++  BroadcastNotification(0x0000000A, signed_in_users());
++}
++
+ void KernelState::BroadcastNotification(XNotificationID id, uint32_t data) {
+   std::vector<object_ref<XNotifyListener>> snapshot;
+   {
 diff --git a/src/system/runtime.cpp b/src/system/runtime.cpp
 index c10694c..2225156 100644
 --- a/src/system/runtime.cpp
@@ -17101,6 +17603,67 @@ index c10694c..2225156 100644
      return false;
    }
    REXSYS_DEBUG("  Mounted {} at {}", abs_game_root.string(), mount_path);
+diff --git a/src/system/xam/content_manager.cpp b/src/system/xam/content_manager.cpp
+index 5f44a44..e444603 100644
+--- a/src/system/xam/content_manager.cpp
++++ b/src/system/xam/content_manager.cpp
+@@ -452,9 +452,9 @@ X_RESULT ContentManager::UnmountAndDeleteContent(uint64_t xuid,
+   return X_ERROR_FILE_NOT_FOUND;
+ }
+ 
+-std::filesystem::path ContentManager::ResolveGameUserContentPath() {
++std::filesystem::path ContentManager::ResolveGameUserContentPath(const std::string& name) {
+   auto title_id = fmt::format("{:08X}", kernel_state_->title_id());
+-  auto user_name = rex::to_path(kernel_state_->user_profile()->name());
++  auto user_name = rex::to_path(name);
+ 
+   // Per-game per-profile data location:
+   // content_root/title_id/profile/user_name
+diff --git a/src/system/xam/user_profile.cpp b/src/system/xam/user_profile.cpp
+index 7ed67aa..1ab4438 100644
+--- a/src/system/xam/user_profile.cpp
++++ b/src/system/xam/user_profile.cpp
+@@ -35,8 +35,22 @@ UserProfile::UserProfile() {
+     config_name.resize(15);
+   }
+   name_ = config_name;
++  signed_in_.store(true, std::memory_order_release);
+   REXLOG_DEBUG("[Kernel] UserProfile initialized with gamertag: '{}'", name_);
++  AddDefaultSettings();
++}
++
++UserProfile::UserProfile(uint64_t xuid) : xuid_(xuid) { AddDefaultSettings(); }
++
++void UserProfile::SignIn(std::string name) {
++  if (name.size() > 15) {
++    name.resize(15);
++  }
++  name_ = std::move(name);
++  signed_in_.store(true, std::memory_order_release);
++}
+ 
++void UserProfile::AddDefaultSettings() {
+   // https://cs.rin.ru/forum/viewtopic.php?f=38&t=60668&hilit=gfwl+live&start=195
+   // https://github.com/arkem/py360/blob/master/py360/constants.py
+   // XPROFILE_GAMER_YAXIS_INVERSION
+@@ -142,7 +156,7 @@ UserProfile::Setting* UserProfile::GetSetting(uint32_t setting_id) {
+ 
+ void UserProfile::LoadSetting(UserProfile::Setting* setting) {
+   if (setting->is_title_specific()) {
+-    auto content_dir = kernel_state_->content_manager()->ResolveGameUserContentPath();
++    auto content_dir = kernel_state_->content_manager()->ResolveGameUserContentPath(name_);
+     auto setting_id = fmt::format("{:08X}", setting->setting_id);
+     auto file_path = content_dir / setting_id;
+     auto file = rex::filesystem::OpenFile(file_path, "rb");
+@@ -167,7 +181,7 @@ void UserProfile::LoadSetting(UserProfile::Setting* setting) {
+ void UserProfile::SaveSetting(UserProfile::Setting* setting) {
+   if (setting->is_title_specific()) {
+     auto serialized_setting = setting->Serialize();
+-    auto content_dir = kernel_state_->content_manager()->ResolveGameUserContentPath();
++    auto content_dir = kernel_state_->content_manager()->ResolveGameUserContentPath(name_);
+     std::filesystem::create_directories(content_dir);
+     auto setting_id = fmt::format("{:08X}", setting->setting_id);
+     auto file_path = content_dir / setting_id;
 diff --git a/src/system/xsocket.cpp b/src/system/xsocket.cpp
 index 2d13ac8..492ba5b 100644
 --- a/src/system/xsocket.cpp

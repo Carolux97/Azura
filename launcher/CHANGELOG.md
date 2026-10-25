@@ -6,6 +6,21 @@ it as the update's notes (`scripts/release-common.sh`). Bumping the version adds
 release without one fails. One list item (`- `) per change, in English; an item may continue on
 indented lines.
 
+## 0.3.0
+
+- Local co-op: two players can play the campaign in split screen on one computer. In the game's
+  Options, Local co-op gives a controller, or the keyboard and mouse, to player 2, who plays with
+  a profile of their own (your gamertag with "(1)") and saves of their own.
+- When a player's only controller switches off, the game pauses for them and a notice asks to
+  reconnect it, or to press the confirm button on another controller to use that one. The same
+  controller coming back plays for the same player again.
+- On the title screen after player 2 joins, only player 1 can start, so the game always loads
+  player 1's profile and saves.
+- In the Options, Keyboard and mouse is followed by Local co-op, and the mature content settings
+  (violence, mature language) are now at the end of Game.
+- Image scaling offers what your graphics support: on Linux, AMD CAS and AMD FSR 1 as well.
+- On Linux, far fewer hitches while the game prepares new graphics in the background.
+
 ## 0.2.2
 
 - On macOS, Play shows the chip as one entry again, without an empty CPU entry.
