@@ -32,8 +32,10 @@ from pathlib import Path
 GENERATED_NAME = re.compile(r"^(azura|ppc)_(recomp|register|init|funcs|pch|config|func_mapping)[._]")
 
 # Symbols the generated code defines and our code uses: guest functions and their originals
-# (sub_XXXXXXXX, __imp__sub_XXXXXXXX), the image description and its function table.
-GENERATED_SYMBOL = re.compile(r"^_?(__imp__)?sub_[0-9A-F]{8}$|^_?PPCImageConfig$|^_?PPCFuncMappings$")
+# (sub_XXXXXXXX, __imp__sub_XXXXXXXX), the image description and its function table (C++ names on
+# Windows: ?PPCImageConfig@@...).
+GENERATED_SYMBOL = re.compile(r"^_?(__imp__)?sub_[0-9A-F]{8}$|^_?PPCImageConfig$|^_?PPCFuncMappings$"
+                              r"|^\?(PPCImageConfig|PPCFuncMappings)@@\S*$")
 
 # The headers the generated precompiled header includes (the code generator's pch_h.inja).
 PCH_HEADER = """#include <rex/chrono/clock.h>
@@ -149,8 +151,10 @@ def check_commands(kit: Path, work: Path) -> None:
     output.parent.mkdir()
     link = description["link"]["command"]
     if WINDOWS:
-        # lld-link stops listing undefined symbols after 20; the stubs need all of them.
-        link = link + ["-Xlinker", "/errorlimit:0"]
+        # lld-link stops listing undefined symbols after 20, and names them demangled (sub_ functions'
+        # originals, __imp__sub_..., as "__declspec(dllimport) _sub_..."); the stubs need every
+        # one, by its name in the objects.
+        link = link + ["-Xlinker", "/errorlimit:0", "-Xlinker", "/demangle:no"]
     first = subprocess.run(fill(link, {**values, "{objects}": [str(obj)] + host, "{output}": str(output)}),
                            capture_output=True, text=True)
     objects = [str(obj)] + host
