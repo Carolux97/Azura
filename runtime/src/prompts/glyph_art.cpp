@@ -101,7 +101,7 @@ const Bitmap& SymbolMove() {
 
 // --- Key faces ----------------------------------------------------------------------------------
 
-enum class MouseButton : uint8_t { kNone, kLeft, kRight, kMiddle, kBack, kForward };
+enum class MouseButton : uint8_t { kNone, kLeft, kRight, kMiddle, kBack, kForward, kWheelUp, kWheelDown };
 
 // How one bindable key is drawn.
 struct KeyFace {
@@ -224,6 +224,8 @@ KeyFace DescribeKey(std::string_view name) {
       {"mb5", MouseKey(MouseButton::kForward)},
       {"mouse5", MouseKey(MouseButton::kForward)},
       {"xbutton2", MouseKey(MouseButton::kForward)},
+      {"wheelup", MouseKey(MouseButton::kWheelUp)},
+      {"wheeldown", MouseKey(MouseButton::kWheelDown)},
   };
   auto it = named.find(key);
   if (it != named.end()) {
@@ -402,7 +404,14 @@ void DrawOmenMouse(Canvas& canvas, MouseButton lit, bool look, uint32_t seed) {
   // Wheel.
   Sdf wheel = RoundedRect(cx, cy - half_h * 0.50f, 1.3f, half_h * 0.20f, 1.2f);
   canvas.Fill(Inset(wheel, -0.7f), kOmenBlack);
-  canvas.Fill(wheel, lit == MouseButton::kMiddle ? kAmberHot : kAmberDeep);
+  const bool wheel_lit = lit == MouseButton::kMiddle || lit == MouseButton::kWheelUp || lit == MouseButton::kWheelDown;
+  canvas.Fill(wheel, wheel_lit ? kAmberHot : kAmberDeep);
+  // Turning the wheel: an arrow below it, up or down.
+  if (lit == MouseButton::kWheelUp || lit == MouseButton::kWheelDown) {
+    const Bitmap& arrow = lit == MouseButton::kWheelUp ? SymbolArrowUp() : SymbolArrowDown();
+    const float ay = cy + half_h * 0.40f;
+    DrawBitmap(canvas, arrow, cx, ay, 1, VerticalGradient(kAmberHot, kAmber, ay - 3, ay + 3));
+  }
   // Side buttons, on the thumb side: forward above, back below.
   if (side) {
     const float sx = cx - half_w * 0.93f;

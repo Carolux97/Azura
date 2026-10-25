@@ -8,6 +8,7 @@
 #include "button_prompts.h"
 
 #include <algorithm>
+#include <utility>
 #include <array>
 #include <cctype>
 #include <chrono>
@@ -21,12 +22,14 @@
 
 #include <rex/cvar.h>
 #include <rex/input/input_system.h>
+#include <rex/input/pad_remap.h>
 #include <rex/logging.h>
 #include <rex/runtime.h>
 #include <rex/system/xmemory.h>
 #include <rex/thread/mutex.h>
 
 #include "glyph_art.h"
+#include "script_hooks.h"
 #include "xenos_dxt5.h"
 
 REXCVAR_DEFINE_STRING(controller_icons, "auto", "Input",
@@ -196,6 +199,44 @@ PcPrompt PromptFor(PadButton button, const Bindings& b) {
   return single(kBindA);
 }
 
+// --- The player's controller layout ---------------------------------------------------------------
+
+// The layout's control of a prompt's button; kCount for the sticks and the D-pad, which it does not
+// move.
+rex::input::PadControl ControlOf(PadButton button) {
+  using C = rex::input::PadControl;
+  switch (button) {
+    case B::kA: return C::kA;
+    case B::kB: return C::kB;
+    case B::kX: return C::kX;
+    case B::kY: return C::kY;
+    case B::kLeftTrigger: return C::kLeftTrigger;
+    case B::kRightTrigger: return C::kRightTrigger;
+    case B::kLeftShoulder: return C::kLeftShoulder;
+    case B::kRightShoulder: return C::kRightShoulder;
+    case B::kStart: return C::kStart;
+    case B::kBack: return C::kBack;
+    case B::kLeftStickPress: return C::kLeftThumb;
+    case B::kRightStickPress: return C::kRightThumb;
+    default: return C::kCount;
+  }
+}
+
+// The button a prompt for `button` shows with the player's own layout: the physical control that
+// acts as it (rex/input/pad_remap.h). The button itself when nothing does, or with no layout.
+PadButton PhysicalButton(PadButton button, const rex::input::PadLayout& layout) {
+  const auto control = ControlOf(button);
+  if (control == rex::input::PadControl::kCount) return button;
+  for (size_t i = 0; i < rex::input::kPadControlCount; ++i) {
+    if (layout[i] != control) continue;
+    const auto physical = static_cast<rex::input::PadControl>(i);
+    for (int b = 0; b <= static_cast<int>(B::kRightStickPress); ++b) {
+      if (ControlOf(static_cast<PadButton>(b)) == physical) return static_cast<PadButton>(b);
+    }
+  }
+  return button;
+}
+
 // --- Texture bookkeeping ------------------------------------------------------------------------
 
 // One copy of a texture found in guest memory.
@@ -292,6 +333,33 @@ class ButtonPrompts::Impl {
     for (int i = 0; i < kBindCount; ++i) {
       b.keys[i] = PrimaryKeyName(rex::cvar::GetFlagByName(kBindCvars[i]));
     }
+    // Buttons with no key of their own still have the driver's fixed ones (kFixedBinds in the
+    // SDK's keyboard and mouse driver): Escape is Start, the arrow keys the D-pad.
+    constexpr std::pair<Bind, const char*> kFixed[] = {
+        {kBindStart, "Return"}, {kBindB, "Backspace"},
+        {kBindDpadUp, "Up"}, {kBindDpadDown, "Down"}, {kBindDpadLeft, "Left"}, {kBindDpadRight, "Right"},
+    };
+    for (const auto& [bind, key] : kFixed) {
+      if (b.keys[bind].empty()) {
+        b.keys[bind] = key;
+      }
+    }
+    // In the menus Return accepts and Escape goes back (script_hooks.cpp turns them into A and B
+    // there), so their prompts show those keys; on the title screen Return is Start; in play, the
+    // actions' own keys.
+    switch (azura::script::WhereInMenus()) {
+      case azura::script::Menus::kTitleScreen:
+        b.keys[kBindA] = "Return";
+        b.keys[kBindStart] = "Return";
+        break;
+      case azura::script::Menus::kMenu:
+        b.keys[kBindA] = "Return";
+        b.keys[kBindB] = "Escape";
+        b.keys[kBindStart] = "Return";
+        break;
+      case azura::script::Menus::kPlaying:
+        break;
+    }
     b.mouse_look = rex::cvar::GetFlagByName("mnk_mouse") != "false";
     return b;
   }
@@ -306,6 +374,10 @@ class ButtonPrompts::Impl {
     const Style style = CurrentStyle();
     Bindings bindings;
     std::string key = std::to_string(static_cast<int>(style));
+    // A controller's prompts follow the player's own layout.
+    const rex::input::PadLayout layout = rex::input::CurrentPadLayout();
+    const bool remapped = layout != rex::input::IdentityPadLayout();
+    if (style != Style::kPc && remapped) key += "|" + rex::input::FormatPadLayout(layout);
     if (style == Style::kPc) {
       bindings = CurrentBindings();
       for (const auto& k : bindings.keys) key += "|" + k;
@@ -326,7 +398,7 @@ class ButtonPrompts::Impl {
       for (auto& inst : atlas.instances) {
         if (inst.written_key == key) continue;
         if (blocks.empty()) {
-          blocks = style == Style::kXbox ? inst.original : Draw(atlas, inst.original, style, bindings);
+          blocks = style == Style::kXbox && !remapped ? inst.original : Draw(atlas, inst.original, style, bindings, layout);
         }
         Write(memory, membase, atlas, inst.physical, blocks);
         inst.written = blocks;
@@ -439,8 +511,10 @@ class ButtonPrompts::Impl {
   }
 
   // Draws every slot of `atlas` in `style` over the original blocks and returns the new blocks.
+  // The atlas with our glyphs: PlayStation's or the keyboard's drawn in every slot, or the game's
+  // own Xbox glyphs moved between slots for the player's controller layout.
   static std::vector<Block> Draw(const AtlasState& atlas, const std::vector<Block>& original, Style style,
-                                 const Bindings& bindings) {
+                                 const Bindings& bindings, const rex::input::PadLayout& layout) {
     const AtlasDef& def = *atlas.def;
     const int w = def.width;
     const int h = def.height;
@@ -450,14 +524,31 @@ class ButtonPrompts::Impl {
       const auto [bx, by] = atlas.block_coords[i];
       for (int p = 0; p < 16; ++p) image[static_cast<size_t>((by * 4 + p / 4) * w + bx * 4 + p % 4)] = px[p];
     }
-    for (size_t s = 0; s < def.slots.size(); ++s) {
+    if (style == Style::kXbox) {
+      // Each slot gets the game's glyph of the button that acts as its button, scaled to the slot
+      // when the two slots differ in size. A button with no slot in this atlas stays as it is.
+      const std::vector<Rgba> game = image;
+      for (const Slot& slot : def.slots) {
+        const PadButton shown = PhysicalButton(slot.button, layout);
+        if (shown == slot.button) continue;
+        const auto from = std::find_if(def.slots.begin(), def.slots.end(), [&](const Slot& s) { return s.button == shown; });
+        if (from == def.slots.end()) continue;
+        for (int y = 0; y < slot.h; ++y)
+          for (int x = 0; x < slot.w; ++x) {
+            const int sx = from->u + x * from->w / slot.w;
+            const int sy = from->v + y * from->h / slot.h;
+            image[static_cast<size_t>((slot.v + y) * w + slot.u + x)] = game[static_cast<size_t>(sy * w + sx)];
+          }
+      }
+    }
+    for (size_t s = 0; s < def.slots.size() && style != Style::kXbox; ++s) {
       const Slot& slot = def.slots[s];
       for (int y = std::max(0, slot.v - 1); y < std::min(h, slot.v + slot.h + 1); ++y)
         for (int x = std::max(0, slot.u - 1); x < std::min(w, slot.u + slot.w + 1); ++x)
           image[static_cast<size_t>(y * w + x)] = Rgba{0, 0, 0, 0};
       const std::vector<uint8_t> glyph =
           style == Style::kPlayStation
-              ? DrawPlayStationGlyph(slot.button, slot.w, slot.h)
+              ? DrawPlayStationGlyph(PhysicalButton(slot.button, layout), slot.w, slot.h)
               : DrawPcGlyph(PromptFor(slot.button, bindings), slot.w, slot.h, static_cast<uint32_t>(s * 7 + 11));
       for (int y = 0; y < slot.h; ++y)
         for (int x = 0; x < slot.w; ++x) {

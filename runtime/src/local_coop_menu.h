@@ -23,6 +23,8 @@
 #include <rex/input/device.h>
 #include <rex/ui/imgui_dialog.h>
 
+#include "coop_ui.h"
+
 struct ImFont;
 
 namespace rex::input {
@@ -63,10 +65,14 @@ class LocalCoopMenu : public rex::ui::ImGuiDialog {
   ImFont* body_font_;
   LocalCoopMenu** owner_;
   Clock::time_point opened_;
+  // The keyboard or the controller the player last used: the closing hint's glyph.
+  coop_ui::LastUsedInput last_input_;
   // Each controller's buttons the frame before (the left stick's direction as D-pad bits), so a
   // move happens once per press. A controller seen for the first time does nothing that frame: the
   // press that opened the menu does not also close it.
   std::map<rex::input::DeviceId, uint16_t> previous_buttons_;
+  // A press closed the menu, which closes once it is released (coop_ui::CloseInputHeld).
+  bool closing_ = false;
   // The device moved last and when, which glows for a moment.
   rex::input::DeviceId moved_ = rex::input::DeviceId::kInvalid;
   Clock::time_point moved_at_;
