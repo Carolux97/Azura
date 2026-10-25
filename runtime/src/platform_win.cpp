@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -34,6 +35,12 @@ constexpr OverlayLayer kCrashingLayers[] = {
 
 // The layers this run disabled, for LogDisabledVulkanLayers.
 std::vector<std::string> disabled_layers;
+
+// The copy of TryCopy, in a call of its own: without -fasync-exceptions clang lets an __except see
+// a hardware exception only when it is raised inside a called function.
+__declspec(noinline) void CopyBytes(void* destination, const void* source, size_t size) {
+  std::memcpy(destination, source, size);
+}
 
 }  // namespace
 
@@ -87,6 +94,16 @@ std::vector<ReadableRange> ReadableRanges(const void* base, size_t size) {
 bool IsReadable(const void* data, size_t size) {
   const auto ranges = ReadableRanges(data, size);
   return ranges.size() == 1 && ranges.front().begin == 0 && ranges.front().end == size;
+}
+
+bool TryCopy(void* destination, const void* source, size_t size) {
+  __try {
+    CopyBytes(destination, source, size);
+    return true;
+  } __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER
+                                                                : EXCEPTION_CONTINUE_SEARCH) {
+    return false;
+  }
 }
 
 }  // namespace azura
