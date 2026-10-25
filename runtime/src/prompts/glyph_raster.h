@@ -4,8 +4,8 @@
 // in pixel units:
 //   - shapes are signed distance functions (negative inside), sampled 4x4 per pixel for smooth
 //     edges;
-//   - legends are pixel art drawn on whole pixels, so letters stay sharp instead of blurring at
-//     this size;
+//   - letters and digits are drawn in a TrueType font (Barlow), antialiased, on whole pixels;
+//     symbols are pixel art drawn as a smooth field, so their diagonals do not come out stepped;
 //   - colours are straight (not premultiplied) RGB in 0..255 with a separate alpha.
 
 #pragma once
@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <functional>
 #include <initializer_list>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -94,9 +95,35 @@ Bitmap TextBitmap(std::string_view text, bool small);
 // Largest whole scale at which `bitmap` fits in max_w x max_h (at least 1).
 int FitScale(const Bitmap& bitmap, int max_w, int max_h);
 
-// Draws `bitmap` centred on (cx, cy) at a whole `scale`. `bold` also lights the pixel to the right
-// of each lit pixel, for legends drawn at scale 1. `shadow`, when set, is drawn 1 px down-right
-// first.
+// --- Smooth text --------------------------------------------------------------------------------
+
+// Loads the TrueType font (Barlow) that letters and digits are drawn with, antialiased. Until it is
+// loaded, or when it cannot be, legends use the pixel fonts above. Call it before drawing.
+bool LoadLegendFont(const std::string& path);
+bool HasLegendFont();
+
+// Coverage of a text drawn in the legend font: width x height values in 0..1. The capitals take
+// `cap_rows` rows from `cap_top`; what reaches past them (the tail of a Q, a comma, a bracket) is
+// above or below, so a text is centred by its capitals.
+struct Coverage {
+  int width = 0;
+  int height = 0;
+  int cap_top = 0;
+  int cap_rows = 0;
+  std::vector<float> alpha;
+
+  bool empty() const { return width == 0; }
+};
+
+// `text` in the legend font with capitals `cap_height` pixels tall. Empty without the font.
+Coverage TextCoverage(std::string_view text, float cap_height);
+
+// Draws `coverage` with its top left at whole pixel (x, y).
+void DrawCoverage(Canvas& canvas, const Coverage& coverage, int x, int y, const ColorFn& color);
+
+// Draws `bitmap` centred on (cx, cy) at a whole `scale`, its edges antialiased (a bilinear field of
+// its pixels, so diagonals and corners are smooth). `bold` thickens its strokes by about a pixel,
+// for legends drawn at scale 1. `shadow`, when set, is drawn 1 px down-right first.
 void DrawBitmap(Canvas& canvas, const Bitmap& bitmap, float cx, float cy, int scale,
                 const ColorFn& color, bool bold = false, const Rgb* shadow = nullptr);
 

@@ -267,7 +267,8 @@ class AzuraApp : public rex::ReXApp {
       });
       return;
     }
-    button_prompts_ = std::make_unique<azura::prompts::ButtonPrompts>(runtime());
+    button_prompts_ = std::make_unique<azura::prompts::ButtonPrompts>(
+        runtime(), exe_dir_ / "assets" / "fonts" / "Barlow-SemiBold.ttf");
   }
 
   // The ImGui drawer the game's own dialogs are added to.

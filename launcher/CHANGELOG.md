@@ -12,6 +12,13 @@ indented lines.
   controller's own buttons (A accepts, B goes back), and their prompts show them.
 - The PlayStation controllers in the controls menu are drawn closer to the real ones: the
   touchpad's light inside its edges, Create and Options beside it, and the PS button.
+- Keyboard and mouse button prompts are easier to read: letters and digits in a smooth font, no
+  glow smudging the text around them, and the movement keys drawn as two keys, W above ASD, instead
+  of four tiny ones.
+- PlayStation prompts: grey symbols for a DualSense and coloured ones for a DualShock 4, and the
+  Create (Share) button where the game shows Back.
+- Prompts in the HUD no longer cut the game's own marks around a button, such as the dots of a
+  "hold" prompt.
 
 ## 0.4.0
 

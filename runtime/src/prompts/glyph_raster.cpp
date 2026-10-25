@@ -2,7 +2,16 @@
 
 #include <algorithm>
 #include <cmath>
+#include <fstream>
+#include <iterator>
+#include <memory>
+#include <mutex>
 #include <unordered_map>
+
+// ImGui's copy of stb_truetype, compiled here on its own (static, so it does not clash with ImGui's).
+#define STB_TRUETYPE_IMPLEMENTATION
+#define STBTT_STATIC
+#include <imstb_truetype.h>
 
 namespace azura::prompts {
 
@@ -334,21 +343,142 @@ void DrawBitmap(Canvas& canvas, const Bitmap& bitmap, float cx, float cy, int sc
   const int h = bitmap.height * scale;
   const int x0 = static_cast<int>(std::lround(cx - w / 2.0f));
   const int y0 = static_cast<int>(std::lround(cy - h / 2.0f));
-  for (int pass = shadow ? 0 : 1; pass < 2; ++pass) {
-    const int off = pass == 0 ? 1 : 0;
-    for (int y = 0; y < bitmap.height; ++y) {
-      for (int x = 0; x < bitmap.width; ++x) {
-        if (!bitmap.at(x, y)) {
-          continue;
-        }
-        for (int dy = 0; dy < scale; ++dy) {
-          for (int dx = 0; dx < scale + extra; ++dx) {
-            const int px = x0 + x * scale + dx + off;
-            const int py = y0 + y * scale + dy + off;
-            canvas.Blend(px, py, pass == 0 ? *shadow : color(px + 0.5f, py + 0.5f), 1.0f);
-          }
-        }
+  // The bitmap as a smooth field: its lit pixels sampled bilinearly, inside where the field passes
+  // one half. Straight edges stay where the pixels are; diagonals and corners come out antialiased
+  // instead of as steps. Bold lowers the threshold, which thickens strokes by about a pixel.
+  auto lit = [&](int bx, int by) {
+    return bx >= 0 && by >= 0 && bx < bitmap.width && by < bitmap.height && bitmap.at(bx, by) ? 1.0f : 0.0f;
+  };
+  const float threshold = bold ? 0.3f : 0.5f;
+  auto field = [&, threshold](float ox, float oy) -> Sdf {
+    return [&, ox, oy, threshold](float x, float y) {
+      const float u = (x - x0 - ox) / scale - 0.5f;
+      const float v = (y - y0 - oy) / scale - 0.5f;
+      const int iu = static_cast<int>(std::floor(u));
+      const int iv = static_cast<int>(std::floor(v));
+      const float fu = u - iu;
+      const float fv = v - iv;
+      const float value = (lit(iu, iv) * (1 - fu) + lit(iu + 1, iv) * fu) * (1 - fv) +
+                          (lit(iu, iv + 1) * (1 - fu) + lit(iu + 1, iv + 1) * fu) * fv;
+      return threshold - value;
+    };
+  };
+  if (shadow) {
+    canvas.Fill(field(1.0f, 1.0f), *shadow);
+  }
+  canvas.Fill(field(0.0f, 0.0f), color);
+}
+
+// --- Smooth text --------------------------------------------------------------------------------
+
+namespace {
+
+struct LegendFont {
+  std::vector<unsigned char> data;
+  stbtt_fontinfo info{};
+  float cap_units = 0;  // the capitals' height in font units ('H')
+};
+
+std::mutex g_font_mutex;
+LegendFont* g_font = nullptr;  // loaded once, never freed
+
+}  // namespace
+
+bool LoadLegendFont(const std::string& path) {
+  std::lock_guard lock(g_font_mutex);
+  if (g_font) return true;
+  std::ifstream file(path, std::ios::binary);
+  if (!file) return false;
+  auto font = std::make_unique<LegendFont>();
+  font->data.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+  if (font->data.empty() || !stbtt_InitFont(&font->info, font->data.data(), stbtt_GetFontOffsetForIndex(font->data.data(), 0))) {
+    return false;
+  }
+  int x0, y0, x1, y1;
+  if (!stbtt_GetCodepointBox(&font->info, 'H', &x0, &y0, &x1, &y1) || y1 <= 0) return false;
+  font->cap_units = static_cast<float>(y1);
+  g_font = font.release();
+  return true;
+}
+
+bool HasLegendFont() {
+  std::lock_guard lock(g_font_mutex);
+  return g_font != nullptr;
+}
+
+Coverage TextCoverage(std::string_view text, float cap_height) {
+  Coverage out;
+  const LegendFont* font = nullptr;
+  {
+    std::lock_guard lock(g_font_mutex);
+    font = g_font;
+  }
+  if (!font || text.empty() || cap_height <= 0) return out;
+  const stbtt_fontinfo* info = &font->info;
+  const float scale = cap_height / font->cap_units;
+  // Glyph boxes, laid out along the baseline at y = 0, with kerning.
+  struct Placed {
+    int codepoint;
+    float x;
+    int x0, y0, x1, y1;
+  };
+  std::vector<Placed> placed;
+  float pen = 0;
+  int min_x = 1 << 20, max_x = -(1 << 20);
+  int min_y = 1 << 20, max_y = -(1 << 20);
+  for (size_t i = 0; i < text.size(); ++i) {
+    const int c = static_cast<unsigned char>(text[i]);
+    Placed p{c, pen, 0, 0, 0, 0};
+    stbtt_GetCodepointBitmapBoxSubpixel(info, c, scale, scale, pen - std::floor(pen), 0, &p.x0, &p.y0, &p.x1, &p.y1);
+    if (p.x1 > p.x0) {
+      min_x = std::min(min_x, static_cast<int>(std::floor(pen)) + p.x0);
+      max_x = std::max(max_x, static_cast<int>(std::floor(pen)) + p.x1);
+      min_y = std::min(min_y, p.y0);
+      max_y = std::max(max_y, p.y1);
+    }
+    placed.push_back(p);
+    int advance, bearing;
+    stbtt_GetCodepointHMetrics(info, c, &advance, &bearing);
+    pen += advance * scale;
+    if (i + 1 < text.size()) {
+      pen += scale * stbtt_GetCodepointKernAdvance(info, c, static_cast<unsigned char>(text[i + 1]));
+    }
+  }
+  if (max_x <= min_x) return out;
+  // Rows from the highest to the lowest glyph pixel, the capitals' rows among them.
+  const int cap_rows = static_cast<int>(std::ceil(cap_height));
+  const int top = std::min(min_y, -cap_rows);
+  out.width = max_x - min_x;
+  out.height = std::max(max_y, 0) - top;
+  out.cap_top = -cap_rows - top;
+  out.cap_rows = cap_rows;
+  out.alpha.assign(static_cast<size_t>(out.width * out.height), 0.0f);
+  for (const Placed& p : placed) {
+    const int w = p.x1 - p.x0;
+    const int h = p.y1 - p.y0;
+    if (w <= 0 || h <= 0) continue;
+    std::vector<unsigned char> bits(static_cast<size_t>(w * h));
+    stbtt_MakeCodepointBitmapSubpixel(info, bits.data(), w, h, w, scale, scale, p.x - std::floor(p.x), 0, p.codepoint);
+    const int ox = static_cast<int>(std::floor(p.x)) + p.x0 - min_x;
+    const int oy = p.y0 - top;
+    for (int y = 0; y < h; ++y) {
+      for (int x = 0; x < w; ++x) {
+        const int tx = ox + x;
+        const int ty = oy + y;
+        if (tx < 0 || ty < 0 || tx >= out.width || ty >= out.height) continue;
+        float& a = out.alpha[static_cast<size_t>(ty * out.width + tx)];
+        a = std::min(1.0f, a + bits[static_cast<size_t>(y * w + x)] / 255.0f);
       }
+    }
+  }
+  return out;
+}
+
+void DrawCoverage(Canvas& canvas, const Coverage& coverage, int x, int y, const ColorFn& color) {
+  for (int cy = 0; cy < coverage.height; ++cy) {
+    for (int cx = 0; cx < coverage.width; ++cx) {
+      const float a = coverage.alpha[static_cast<size_t>(cy * coverage.width + cx)];
+      if (a > 0.0f) canvas.Blend(x + cx, y + cy, color(x + cx + 0.5f, y + cy + 0.5f), a);
     }
   }
 }
