@@ -11,14 +11,14 @@ use serde::Serialize;
 pub struct SystemInfo {
     /// Processor name, for example "Apple M4" or "AMD Ryzen 7".
     pub chip: Option<String>,
-    /// Graphics cards on Linux, for example ["NVIDIA GeForce RTX 3050 Laptop GPU"], in the order
-    /// the system numbers them. Empty on macOS, where the chip is also the GPU.
+    /// Graphics cards on Linux and Windows, for example ["NVIDIA GeForce RTX 3050 Laptop GPU"], in
+    /// the order the system numbers them. Empty on macOS, where the chip is also the GPU.
     pub gpus: Vec<String>,
     /// Installed memory in whole gigabytes.
     pub memory_gb: Option<u64>,
     /// CPU architecture the launcher was built for ("x86_64" or "aarch64").
     pub arch: String,
-    /// Operating system the launcher is running on ("linux" or "macos").
+    /// Operating system the launcher is running on ("linux", "macos" or "windows").
     pub os: String,
 }
 
@@ -174,6 +174,125 @@ fn linux_gpu_names() -> Vec<String> {
     names
 }
 
+/// Whether a display adapter is a graphics card: one on the PCI bus, as its hardware IDs say
+/// ("PCI\VEN_10DE&DEV_2D04&..."). Leaves out the software and virtual adapters Windows lists with
+/// them (Microsoft Basic Render Driver, remote desktop and streaming displays), as Linux only lists
+/// the cards the kernel drives.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn is_pci_display_adapter(hardware_ids: &[String]) -> bool {
+    hardware_ids.iter().any(|id| id.to_ascii_uppercase().starts_with("PCI\\VEN_"))
+}
+
+/// Splits a REG_MULTI_SZ value (UTF-16 strings, each ended by a zero, the list by another) into its
+/// strings.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn split_multi_sz(units: &[u16]) -> Vec<String> {
+    units
+        .split(|&unit| unit == 0)
+        .filter(|part| !part.is_empty())
+        .map(String::from_utf16_lossy)
+        .collect()
+}
+
+/// The UTF-16 form of `text` with its ending zero, for Windows calls.
+#[cfg(target_os = "windows")]
+fn wide(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// The processor's name, as Windows keeps it in the registry
+/// (HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\0, ProcessorNameString).
+#[cfg(target_os = "windows")]
+fn windows_cpu_name() -> Option<String> {
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ};
+    let key = wide(r"HARDWARE\DESCRIPTION\System\CentralProcessor\0");
+    let value = wide("ProcessorNameString");
+    let mut buffer = [0u16; 256];
+    let mut size = std::mem::size_of_val(&buffer) as u32;
+    // SAFETY: the key and value names end in a zero, and `size` is the size of `buffer` in bytes.
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            key.as_ptr(),
+            value.as_ptr(),
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            buffer.as_mut_ptr().cast(),
+            &mut size,
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return None;
+    }
+    let length = buffer.iter().position(|&unit| unit == 0).unwrap_or(buffer.len());
+    let name = String::from_utf16_lossy(&buffer[..length]).trim().to_owned();
+    (!name.is_empty()).then_some(name)
+}
+
+/// The installed memory, from Windows' memory status.
+#[cfg(target_os = "windows")]
+fn windows_memory_gb() -> Option<u64> {
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    let mut status = MEMORYSTATUSEX { dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32, ..Default::default() };
+    // SAFETY: `status` is a MEMORYSTATUSEX with its length set, as the call requires.
+    (unsafe { GlobalMemoryStatusEx(&mut status) } != 0).then(|| bytes_to_gb(status.ullTotalPhys))
+}
+
+/// The graphics cards present, from SetupAPI's display adapters (the ones Device Manager lists),
+/// named as their drivers name them ("NVIDIA GeForce RTX 5060 Ti").
+#[cfg(target_os = "windows")]
+fn windows_gpu_names() -> Vec<String> {
+    use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
+        SetupDiDestroyDeviceInfoList, SetupDiEnumDeviceInfo, SetupDiGetClassDevsW, SetupDiGetDeviceRegistryPropertyW,
+        DIGCF_PRESENT, GUID_DEVCLASS_DISPLAY, SPDRP_DEVICEDESC, SPDRP_HARDWAREID, SP_DEVINFO_DATA,
+    };
+    // SAFETY: a class GUID and no enumerator or window, as the call allows.
+    let devices = unsafe {
+        SetupDiGetClassDevsW(&GUID_DEVCLASS_DISPLAY, std::ptr::null(), std::ptr::null_mut(), DIGCF_PRESENT)
+    };
+    if devices == -1 {
+        return Vec::new();
+    }
+    // A device property as UTF-16 units, or None when it cannot be read.
+    let property = |device: &SP_DEVINFO_DATA, which| -> Option<Vec<u16>> {
+        let mut buffer = vec![0u16; 1024];
+        // SAFETY: `devices` and `device` come from SetupAPI, and the size is the buffer's in bytes.
+        let read = unsafe {
+            SetupDiGetDeviceRegistryPropertyW(
+                devices,
+                device,
+                which,
+                std::ptr::null_mut(),
+                buffer.as_mut_ptr().cast(),
+                (buffer.len() * 2) as u32,
+                std::ptr::null_mut(),
+            )
+        };
+        (read != 0).then_some(buffer)
+    };
+    let mut names = Vec::new();
+    for index in 0.. {
+        let mut device = SP_DEVINFO_DATA { cbSize: std::mem::size_of::<SP_DEVINFO_DATA>() as u32, ..Default::default() };
+        // SAFETY: `device` has its size set, as the call requires; it fails past the last device.
+        if unsafe { SetupDiEnumDeviceInfo(devices, index, &mut device) } == 0 {
+            break;
+        }
+        let hardware_ids = property(&device, SPDRP_HARDWAREID).map(|units| split_multi_sz(&units)).unwrap_or_default();
+        if !is_pci_display_adapter(&hardware_ids) {
+            continue;
+        }
+        let Some(description) = property(&device, SPDRP_DEVICEDESC) else { continue };
+        let name = split_multi_sz(&description).into_iter().next().map(|name| name.trim().to_owned());
+        if let Some(name) = name.filter(|name| !name.is_empty()) {
+            names.push(name);
+        }
+    }
+    // SAFETY: `devices` came from SetupDiGetClassDevsW and is not used afterwards.
+    unsafe { SetupDiDestroyDeviceInfoList(devices) };
+    names
+}
+
 /// Collects the hardware summary.
 pub fn system_info() -> SystemInfo {
     #[cfg(target_os = "macos")]
@@ -187,12 +306,17 @@ pub fn system_info() -> SystemInfo {
     #[cfg(target_os = "linux")]
     let (chip, memory_gb) = (linux_cpu_name(), linux_memory_gb());
 
+    #[cfg(target_os = "windows")]
+    let (chip, memory_gb) = (windows_cpu_name(), windows_memory_gb());
+
     #[cfg(target_os = "linux")]
     let gpus = linux_gpu_names();
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
+    let gpus = windows_gpu_names();
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     let gpus = Vec::new();
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     let (chip, memory_gb) = (None, None);
 
     SystemInfo {
@@ -207,6 +331,27 @@ pub fn system_info() -> SystemInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_pci_display_adapters_are_graphics_cards() {
+        let ids = |list: &[&str]| list.iter().map(|id| id.to_string()).collect::<Vec<_>>();
+        assert!(is_pci_display_adapter(&ids(&["PCI\\VEN_10DE&DEV_2D04&SUBSYS_00000000", "PCI\\VEN_10DE&DEV_2D04"])));
+        // Hardware IDs are case-insensitive in Windows.
+        assert!(is_pci_display_adapter(&ids(&["pci\\ven_1002&dev_73bf"])));
+        // Microsoft Basic Render Driver, and a virtual display of a streaming program.
+        assert!(!is_pci_display_adapter(&ids(&["ROOT\\BasicRender"])));
+        assert!(!is_pci_display_adapter(&ids(&["Root\\Parsec\\VDA"])));
+        assert!(!is_pci_display_adapter(&[]));
+    }
+
+    #[test]
+    fn splits_a_multi_string_value() {
+        let units: Vec<u16> = "PCI\\VEN_10DE&DEV_2D04\0PCI\\VEN_10DE\0\0\0\0".encode_utf16().collect();
+        assert_eq!(split_multi_sz(&units), vec!["PCI\\VEN_10DE&DEV_2D04".to_string(), "PCI\\VEN_10DE".to_string()]);
+        // A single string, as a device description is.
+        let units: Vec<u16> = "NVIDIA GeForce RTX 5060 Ti\0\0\0".encode_utf16().collect();
+        assert_eq!(split_multi_sz(&units), vec!["NVIDIA GeForce RTX 5060 Ti".to_string()]);
+    }
 
     #[test]
     fn converts_memory_to_whole_gigabytes() {
