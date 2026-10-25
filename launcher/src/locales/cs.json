@@ -132,7 +132,10 @@
     "gpu": "Grafická karta",
     "gpuAuto": "Automaticky ({name})",
     "gpuDiscrete": "dedikovaná",
-    "gpuIntegrated": "integrovaná"
+    "gpuIntegrated": "integrovaná",
+    "whilePlaying": "Spouštěč během hraní",
+    "whilePlayingMinimize": "Minimalizovat",
+    "whilePlayingKeepOpen": "Nechat otevřený"
   },
   "achievements": {
     "title": "Úspěchy",

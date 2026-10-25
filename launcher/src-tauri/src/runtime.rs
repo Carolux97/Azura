@@ -154,6 +154,14 @@ impl GameEvents for AppHandle {
 
     fn exit(&self, exit: ExitInfo) {
         let _ = self.emit(EXIT_EVENT, exit);
+        // The launcher minimized itself for the game (launch_game in lib.rs): it comes back in front.
+        use tauri::Manager;
+        if let Some(window) = self.get_webview_window("main") {
+            if window.is_minimized().unwrap_or(false) {
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }
     }
 }
 

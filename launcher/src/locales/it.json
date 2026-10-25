@@ -132,7 +132,10 @@
     "gpu": "Scheda grafica",
     "gpuAuto": "Automatica ({name})",
     "gpuDiscrete": "dedicata",
-    "gpuIntegrated": "integrata"
+    "gpuIntegrated": "integrata",
+    "whilePlaying": "Launcher durante il gioco",
+    "whilePlayingMinimize": "Ridurlo a icona",
+    "whilePlayingKeepOpen": "Lasciarlo aperto"
   },
   "achievements": {
     "title": "Obiettivi",

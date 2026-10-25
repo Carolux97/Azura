@@ -281,7 +281,16 @@ async fn launch_game(
     app: tauri::AppHandle,
     process: tauri::State<'_, GameProcess>,
 ) -> Result<(), LaunchError> {
-    start_runtime(app, &process, &[])
+    start_runtime(app.clone(), &process, &[])?;
+    // Minimized, the launcher's window is not drawn while the game runs; it comes back when the
+    // game ends (GameEvents::exit in runtime.rs).
+    let minimize = settings_paths(&app).and_then(|paths| paths.load()).is_ok_and(|settings| settings.minimize_while_playing);
+    if minimize {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.minimize();
+        }
+    }
+    Ok(())
 }
 
 /// Prepares the stored shaders before playing: starts the runtime in a window with

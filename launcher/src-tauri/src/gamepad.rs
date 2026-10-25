@@ -147,6 +147,11 @@ impl Stick {
 /// Sends the interface the actions in `changes`: presses only while the launcher window has the
 /// focus, releases always.
 fn send(app: &AppHandle, family: Family, changes: impl IntoIterator<Item = (&'static str, bool)>) {
+    // While the game runs the controllers are the game's: the launcher's interface is not woken
+    // for them at all (the interface ignores them then anyway).
+    if app.try_state::<crate::runtime::GameProcess>().is_some_and(|process| process.is_running()) {
+        return;
+    }
     let focused = || app.get_webview_window("main").and_then(|window| window.is_focused().ok()).unwrap_or(false);
     for (action, pressed) in changes {
         if pressed && !focused() {

@@ -273,6 +273,14 @@
               <span data-i18n="graphics.gpu"></span>
               <select id="gpu-choice"></select>
             </label>
+            <!-- Minimized, the launcher costs the game nothing to draw (launch_game in lib.rs). -->
+            <label class="field">
+              <span data-i18n="graphics.whilePlaying"></span>
+              <select id="while-playing">
+                <option value="minimize" data-i18n="graphics.whilePlayingMinimize"></option>
+                <option value="keepOpen" data-i18n="graphics.whilePlayingKeepOpen"></option>
+              </select>
+            </label>
           </div>
         </div>
       </section>
