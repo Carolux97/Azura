@@ -576,12 +576,8 @@ start (35 resolve kinds, among them 26 depth sizes, D24FS8 and the 2_10_10_10_FL
 | Host compute dispatches | 114 | 80 |
 
 The image comparison of this run says nothing (the two runs were at different points of the intro
-video). The user saw some textures look wrong at 4K, and then saw them in all three of `pm4`,
-`hle` without native resolves and `hle` with them, watching a run of each: they come from the 4K
-path itself (draw resolution scale 3), not from the HLE work, which also matches the byte-exact
-resolves. Not investigated here. A per-second image comparison of the three, driven by a run
-recorded by hand (`AZURA_RECORD_PAD`, replayed with `PAD_SCRIPT`), did not line up either: the
-runs drift apart within seconds (cutscenes and loading), so it cannot locate them.
+video). Runs replayed from a run recorded by hand (`AZURA_RECORD_PAD`, replayed with `PAD_SCRIPT`)
+do not line up second by second either: they drift apart within seconds (cutscenes and loading).
 
 ## gfx = hle by default on macOS
 
@@ -612,13 +608,11 @@ title and the menu match `pm4` (0.9 and 1.9% median of pixels over 16, one run e
 
 1. Measure a heavy scene with a person playing both modes, uncapped, where a GPU-time saving
    becomes frame rate (most of all at 1440p and 4K, where the native resolves save the most).
-2. The wrong textures at 3840x2160, which `pm4` shows too (separate Trello card).
-3. A full HLE without emulated EDRAM: render targets as the game's D3D surfaces instead of EDRAM
-   tile ranges, conversions only where the game reinterprets EDRAM on purpose. It is the only way
-   to a non-integer resolution such as 1080p (the EDRAM emulation needs a whole number of host
-   pixels per guest sample). Design document first (`04-full-hle-design.md`), no code before it is
-   approved.
-4. Resolves still end the render pass (37 of 82 pass ends at the campaign start). The in-pass spike
+2. 1080p through a rational draw resolution scale (3/2) in the EDRAM model: render targets without
+   emulated EDRAM would rebuild it, as the transfer audit shows (`04-full-hle-design.md`); the map
+   of what assumes a whole scale and the order of work are in `05-rational-scale-map.md`, and the
+   first step (the scale as a ratio) is done.
+3. Resolves still end the render pass (37 of 82 pass ends at the campaign start). The in-pass spike
    shows that pays only once the textures the next draws sample are written in the pass too, and
    the tile dispatch's cost is understood.
-5. A handoff document for a Vulkan equivalent of the native resolves (Linux, Windows).
+4. A handoff document for a Vulkan equivalent of the native resolves (Linux, Windows).
