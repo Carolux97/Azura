@@ -5,13 +5,15 @@ changes, measured on the same scripted runs in both modes. Everything here was m
 machine, a MacBook Pro with an Apple M4, on Metal; the Vulkan check is noted where it applies.
 
 **In short:** the HLE path renders the same images as the PM4 path (within the run-to-run noise),
-makes 25 to 40% fewer render target transfers and a few fewer render passes, and costs nothing
-extra in pipelines or hitches. At the 30 FPS cap the GPU time it reports at the campaign start
-looked about 1.4 ms higher; Metal System Traces showed that was the GPU clock, not the work (the
-system ran the GPU at its minimum performance state under the lighter HLE load). With the GPU at
-the same clock in both modes, the HLE path takes about 3 to 10% less GPU time per frame: its
-transfers cost 30% less, and the draw passes, once traces label them correctly, cost about the same. See
-[the campaign start gap](#the-campaign-start-gap-explained).
+makes fewer render target transfers (4 fewer per frame, and 4 or 5 more cut down, with the final
+rules) and costs nothing extra in pipelines or hitches. At the 30 FPS cap the GPU time it reports
+at the campaign start looked about 1.4 ms higher; Metal System Traces showed that was the GPU
+clock, not the work (the system ran the GPU at its minimum performance state under the lighter HLE
+load). With the GPU at the same clock in both modes, its transfers cost 30% less and the draw
+passes, once traces label them correctly, about the same; with the final rules for which clears
+qualify, it takes 1 to 4% less GPU time per frame in the menu and at the campaign start. See
+[the campaign start gap](#the-campaign-start-gap-explained) and
+[after phases A and B](#after-phases-a-and-b-pm4-against-hle-uncapped).
 
 ## Method
 
