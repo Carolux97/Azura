@@ -10,7 +10,8 @@ extra in pipelines or hitches. At the 30 FPS cap the GPU time it reports at the 
 looked about 1.4 ms higher; Metal System Traces showed that was the GPU clock, not the work (the
 system ran the GPU at its minimum performance state under the lighter HLE load). With the GPU at
 the same clock in both modes, the HLE path takes about 3 to 10% less GPU time per frame: its
-transfers cost 30% less, partly offset by longer draw passes. See [the campaign start gap](#the-campaign-start-gap-explained).
+transfers cost 30% less, and the draw passes, once traces label them correctly, cost about the same. See
+[the campaign start gap](#the-campaign-start-gap-explained).
 
 ## Method
 
@@ -141,12 +142,36 @@ encoder labels; the two modes ran at the same frame rate):
 | Resolves | 186 | 187 |
 | Texture loads | 153 | 149 |
 
-The transfers cost 30% less, as the counters predicted; the guest draw passes take longer in the
-HLE run, which offsets part of that. Why the draw passes grow is not known yet (perhaps loads and
-stores that used to happen in transfer passes now happen in draw passes, or the work overlaps
-differently; not verified). Net, at the same clock the HLE path saves about 0.3 ms of a 10 ms
-frame here, and up to 10% in the title screen; at the 30 FPS cap it lets the GPU run slower, which
-saves power rather than time.
+The transfers cost 30% less, as the counters predicted. The guest draw passes looked longer in
+the HLE run; the next section shows that was mostly how the trace labels the work.
+
+### Why the draw passes looked longer
+
+A render target transfer opens a render pass on its destination, labelled "Render target
+transfer". When the game's next draw uses the same targets (often the clear right after it), the
+Metal backend keeps that pass open, so in a trace the draw's GPU time counts as a transfer. The
+`draws_in_transfer_passes` counter, which only the Vulkan backend had, now counts those draws on
+Metal too: at the campaign start about 120 draws per frame ran inside transfer passes in `pm4`
+and 63 in `hle` (77 and 134 at the title screen). Skipping a transfer moves those draws into a pass
+labelled "Guest draws" without changing their cost.
+
+With `gpu_debug_markers = true` the Metal backend now gives such a draw a pass of its own, as the
+Vulkan backend does with `vulkan_debug_labels`, so traces count it as a draw (this adds render
+passes, more of them in `pm4`). Traced again that way, uncapped, both at the maximum performance
+state: run to run the GPU speed differed by several percent even for the work that is the same in
+both modes (resolves and texture loads were 6 to 7% slower per frame in the run recorded second),
+so each kind of work is compared relative to resolves plus texture loads in the same run:
+
+| Campaign start, relative to resolves + texture loads | pm4 | hle |
+| --- | --- | --- |
+| Guest draw passes, labels as before (earlier pair) | 1.32 | 1.52 (+15%) |
+| Guest draw passes, draws in passes of their own | 1.54 | 1.59 (+4%) |
+| Render target transfers, draws in passes of their own | 0.38 | 0.27 (-29%) |
+
+So most of the apparent growth was labelling; the 4% left is within the run-to-run variation these
+pairs show, and was not pursued further. Which run of a pair goes first also changes its speed by
+several percent here, which is why the comparisons above alternate the modes and why single pairs
+of traces need this normalisation.
 
 ## Success criteria
 
@@ -168,10 +193,8 @@ saves power rather than time.
 
 ## Next steps
 
-1. Find why the guest draw passes take longer in `hle` at the same clock (Metal System Trace with
-   per-pass detail, or a GPU capture of one frame in each mode).
-2. Measure a heavy scene with a person playing both modes, uncapped, where a GPU-time saving
+1. Measure a heavy scene with a person playing both modes, uncapped, where a GPU-time saving
    becomes frame rate.
-3. The larger HLE piece left: resolves still end the render pass and go through EDRAM dumps (37
+2. The larger HLE piece left: resolves still end the render pass and go through EDRAM dumps (37
    of 82 pass ends at the campaign start); resolving straight from the host texture and planning
    passes across resolves is where the remaining render pass count is.

@@ -2838,10 +2838,10 @@ index 0000000..b432d7c
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_command_processor.mm b/src/graphics/metal/metal_command_processor.mm
 new file mode 100644
-index 0000000..677bd57
+index 0000000..b17c2d6
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.mm
-@@ -0,0 +1,2486 @@
+@@ -0,0 +1,2497 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.mm
 + * @brief       Xenos command processing with Metal
@@ -4427,6 +4427,17 @@ index 0000000..677bd57
 +      BeginRenderPass(render_pass, rex::perf::CounterId::kRenderPassEndsTargetChange);
 +  if (encoder.label == nil) {
 +    encoder.label = GetGuestDrawsLabel(render_pass);
++  } else if ([encoder.label
++                 isEqualToString:GetEncoderLabel(rex::perf::CounterId::kRenderPassEndsTransfer)]) {
++    // The draw could continue the pass a render target transfer began (same targets), and then
++    // GPU traces would count its time as a transfer. With gpu_debug_markers it gets a pass of its
++    // own instead, so traces count it as a draw.
++    PERF_counter_inc(kDrawsInTransferPasses);
++    if (REXCVAR_GET(gpu_debug_markers)) {
++      EndEncoder(rex::perf::CounterId::kRenderPassEndsOther);
++      encoder = BeginRenderPass(render_pass, rex::perf::CounterId::kRenderPassEndsTargetChange);
++      encoder.label = GetGuestDrawsLabel(render_pass);
++    }
 +  }
 +
 +  // Viewport, scissor and the rest of the dynamic state, in host pixels: with sample-space render
