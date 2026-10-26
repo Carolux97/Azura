@@ -491,6 +491,37 @@ For C4 to pay, the tile function would also have to write the textures the next 
 texture cache's textures are not writable today, and the draws would need a barrier after the
 tile stage), and its cost per dispatch has to be found and cut. Until then the option stays off.
 
+## Native resolves, step C3: what skipping the memory writes could save
+
+C3 would leave out a native resolve's write to the shared memory when only the texture cache reads
+that memory and its textures are updated without it. That is only true today for the resolves C1
+copies into their textures (3 per frame); the other native resolves' textures load from memory, so
+their write is needed. Making the skip safe also means producing the bytes for any other reader
+first: another texture key, another resolve, memexport, vertex fetch, and the game's CPU, whose
+reads of the shared memory (the guest memory itself on Metal) nothing watches.
+
+Before designing it, its ceiling was measured with a temporary switch (local, not committed) that
+skips the writes, without any of that safety: the images may then be wrong, only the GPU time
+counts. Uncapped, one 100-second run each, with C1 and C2 extended:
+
+| GPU ms (title / menu) | Native resolves written to memory per frame |
+| --- | --- |
+| 6.29 / 6.38 (all written) | 26 |
+| 6.33 / 6.39 (all written, run again) | 26 |
+| 6.07 / 6.17 (the 3 C1 updates not written: the scope of C3 today) | 23 |
+| 5.25 / 5.32 (none written: the ceiling) | 0 |
+
+The two baseline runs agree within 0.05 ms, so both differences are real: C3 as it could be built
+today saves about 0.2 ms (3%), and the writes of all native resolves cost about 1 ms (17%) in
+these scenes. Reaching that ceiling needs C1 to cover those resolves first (the 64-bit converted
+ones, whose textures need a conversion of their own) and then C3's tracking of every reader; the
+3% alone does not justify the risk of a silent corruption, so C3 is not built.
+
+## gfx = hle by default on macOS
+
+On this branch `gfx` defaults to `hle` on macOS (Metal) and stays `pm4` elsewhere; `--gfx=pm4` or
+`gfx = "pm4"` in azura.toml selects the console path. `hle_native_resolves` stays off by default.
+
 ## Success criteria
 
 | Criterion | Status |
