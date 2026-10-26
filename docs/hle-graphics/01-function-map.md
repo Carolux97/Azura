@@ -4,7 +4,8 @@ Which guest functions build the PM4 command stream, what each one asks the GPU t
 sure we are. Everything here comes from observing the player's own retail `default.xex` (World
 and España editions share the code) at run time, plus the public PM4 opcode and register lists in
 the ReXGlue SDK (`rex/graphics/xenos.h`, `register_table.inc`). No leaked or proprietary material
-was used. Names below are ours, chosen to describe behaviour; they are not the library's symbols.
+was used. Names below are ours, chosen to describe behaviour; they are not the library's symbols. Rows
+marked high after phase 3 started were confirmed by the hooks' markers (arguments and order).
 
 Confidence: **high** = packets and code both agree and the count matches the role (for example
 one per frame); **medium** = the packets or the code point to it, not both; **low** = a guess
@@ -43,9 +44,10 @@ Every D3D call receives the device in `r3`; the game reaches it through the glob
 | +48 | command buffer write cursor (address of the last word written; packets are stored with pre-incrementing stores) | every writer; the game also stores it after inline draws |
 | +56 | command buffer limit; past it the writer calls the kick function | compare + call of `82AF58B8` |
 | +1152 + 24·n | texture fetch constants, 6 words each (fetch constant n = sampler n) | `82AEF370`, `82AEBF48`, `82AEC0F0` index `(n + 48) · 24` |
-| ~+10370 to +10600 | shadow copies of Xenos registers (RB_SURFACE_INFO region, etc.) | setters build register values there; the flush functions write them out |
+| +10368 + 4·k | image of the render backend registers from 0x2000 (RB_SURFACE_INFO, RB_COLOR_INFO at +10372, RB_DEPTH_INFO at +10376, RB_COLOR1_INFO at +10380, ...) | the render target setters copy a surface's RB_*_INFO word there; the flush functions write them out |
 | +12152, +12156 | render-state flag words | boolean setters `82AEA700`, `82AEAA90` |
-| +12704 | current render target (surface pointer) | `82AED028` |
+| +12688 + 4·i | colour render target i (surface pointer, i = 0 to 3) | `82AECC98` stores its argument there |
+| +12704 | depth/stencil surface (surface pointer) | `82AED028` |
 | +12940, +12944 | current vertex and pixel shader | `82AF2750`, `82AF2AF8` |
 | +13716 | end of the space an inline draw reserved | the game sets +48 from it after copying vertices |
 
@@ -78,10 +80,11 @@ Per-frame rates are per frame of the title screen (about 2,960 frames per run).
 
 | Address | Role (inferred) | Confidence | Evidence |
 | --- | --- | --- | --- |
-| `82AED028` | set render target | medium | stores the surface at +12704, copies its fields into the register shadow, rewrites window and scissor (`82AEA088`) |
+| `82AECC98` | SetRenderTarget(index, surface) | high | stores the surface at +12688 + 4·index, copies its RB_COLOR_INFO word (surface +28) into the register image, checks its format, rewrites window and scissor (`82AEA088`) |
+| `82AED028` | SetDepthStencilSurface(surface) | high | stores the surface at +12704, copies its RB_DEPTH_INFO word (surface +28) to +10376 |
 | `82AF34A8` | **resolve** (EDRAM to memory copy) | high | RB_COPY_CONTROL, RB_COPY_DEST_INFO, COHER_DEST_BASE, a DRAW_INDX_2 rectangle and EVENT_WRITE per call; about 27 per frame |
-| `82AF1D50` | clear (draws a rectangle with built-in shaders) | medium | IM_LOAD_IMMEDIATE (embedded shader), DRAW_INDX_2, RB_DEPTHCONTROL, RB_SURFACE_INFO, RB_COLOR_INFO; about 12 per frame |
-| `82AECC98`, `82AECA70` | set scissor or viewport window | low | write PA_SC_WINDOW_OFFSET and PA_SC_WINDOW_SCISSOR_TL/BR at once |
+| `82AF1D50` | ClearF(flags, rect, colour pointer, depth, stencil): draws a rectangle with built-in shaders | high | IM_LOAD_IMMEDIATE (embedded shader), DRAW_INDX_2, RB_DEPTHCONTROL, RB_SURFACE_INFO, RB_COLOR_INFO; about 12 per frame |
+| `82AECA70` | SetViewport(viewport) | high | reads x, y, width, height, min and max depth from its argument |
 
 ### State setters (no packets)
 
@@ -111,7 +114,7 @@ Per-frame rates are per frame of the title screen (about 2,960 frames per run).
 | Address | Role (inferred) | Confidence | Evidence |
 | --- | --- | --- | --- |
 | `82AF6B10` | present (calls VdSwap) | high | already replaced by the frame rate overlay (`runtime/src/perf_overlay.cpp`) |
-| `82AF65D8` | end of frame: fence and GPU interrupt | high | WAIT_REG_MEM, CALLBACK_ADDRESS, SCRATCH_REG, INTERRUPT; exactly one per frame |
+| `82AF65D8` | end of the scene's work: fence and GPU interrupt (the resolve to the front buffer comes after it) | high | WAIT_REG_MEM, CALLBACK_ADDRESS, SCRATCH_REG, INTERRUPT; exactly one per frame |
 | `82AE9F60` | start of frame: tiling bins reset | medium | SET_BIN_MASK and SET_BIN_SELECT (all four), RB_BC_CONTROL; one per frame |
 | `82AF58B8` | kick: hand the command buffer to the GPU | high | called when the cursor passes the limit, and by the game to flush |
 | `82AF4C80` | kick worker (segment hand-off) | medium | only called from the kick; about 53 KB per call |
