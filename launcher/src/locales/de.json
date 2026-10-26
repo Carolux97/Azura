@@ -119,6 +119,7 @@
     "compilerManual": "Oder führe dies in einem Terminal aus:",
     "compilerManualSteamOS": "Führe es auf einem Steam Deck im Desktopmodus in Konsole aus. sudo fragt nach dem Passwort des Benutzers deck: Hat er noch keines, lege zuerst mit passwd eines fest. Ein SteamOS-Update entfernt den Compiler, führe es daher nach jedem Update erneut aus.",
     "runtimeNotBuilt": "Noch nicht gebaut: Der erste Bau aus deiner Spielkopie dauert einige Minuten.",
+    "runtimeNeedsCompiler": "Installiere zuerst den Compiler (weiter unten).",
     "runtimeUpdateLink": "Ein Update ist bereit: Es ist in wenigen Sekunden installiert.",
     "runtimeUpdateBuild": "Ein Update erfordert, das Spiel neu zu bauen: etwa zwei Minuten."
   },
