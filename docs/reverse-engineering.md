@@ -19,6 +19,8 @@ Nothing here is game data: only names, offsets and identifiers needed to hook th
 - [Keyboard in menus](#keyboard-in-menus)
 - [Profile settings](#profile-settings)
 - [Mouse look](#mouse-look)
+- [Field of view](#field-of-view)
+- [Film grain](#film-grain)
 - [Render command queue](#render-command-queue)
 - [Pitfalls](#pitfalls)
 
@@ -88,7 +90,7 @@ UTF-16BE when the flag is set).
 | `FString` | | `TArray<TCHAR>` (data, num, max), UTF-16BE, num includes the terminator |
 
 A function's parameters are its first child properties, followed by its locals. Bool properties
-share a 32-bit word; their bit masks are not decoded yet.
+share a 32-bit word; each one's bit is the `BitMask` at +104 of its `BoolProperty` (see Film grain).
 
 ## Script bytecode
 
@@ -395,6 +397,8 @@ mature-language rows when not supported), builds a Flash object with `label`, `t
   `Slider_Minimum = GetModifiedSliderMinimum(psid, Slider_Minimum)`, the same for the maximum, and
   `Slider_Increment`. The two `GetModified*` functions only change the sensitivity rows (368, 59,
   60) and return `CurrentDefault` otherwise.
+  The slider shows the step it is on, not its value (seen on screen: a 70 to 100 slider with
+  step 5 showed 1 to 6), so a value the player must read is better offered as a list.
 - **List, `bUsesRawValue` false:** value names from `MyProfile.GetProfileSettingValues(psid)`, the
   selected index from `MyProfile.GetProfileSettingValueId(psid, ValueId, ListIndex)`.
 - **List, `bUsesRawValue` true:** value names from `GetProfileSettingValue_SpecialCase(psid,
@@ -424,7 +428,7 @@ Implemented in `runtime/src/menu/pc_options.{h,cpp}` (data and texts) and `scrip
 
 | Position | Category | Change |
 | --- | --- | --- |
-| 1 | Video | A list: Calibrate brightness (opens the game's calibration screen), Full screen, Frame rate limit (a list of our own), Anti-aliasing, Motion blur, Anisotropic filtering, Render resolution (a list of our own), Image scaling, Sharpness (a slider, only with an image scaling effect that sharpens), Performance overlay and Overlay position (lists of our own). Back and Defaults |
+| 1 | Video | A list: Calibrate brightness (opens the game's calibration screen), Full screen, Frame rate limit (a list of our own), Field of view (a list of our own), Anti-aliasing, Motion blur, Film grain (a list of our own), Anisotropic filtering, Render resolution (a list of our own), Image scaling, Sharpness (a slider, only with an image scaling effect that sharpens), Performance overlay and Overlay position (lists of our own). Back and Defaults |
 | 0 | Game | The game's own rows, then the two of the mature content category (violence 46, mature language 37 with `bRequiresMatureLanguageSupport`) |
 | 5 | Keyboard and mouse | Replaces the storage location: Mouse sensitivity. Back and Defaults |
 | 6 | Local co-op | Replaces the mature content: no list; choosing it opens the Local co-op menu (`runtime/src/local_coop_menu.h`). Greyed out with no controller connected |
@@ -446,7 +450,7 @@ How:
 - **Lists of our own** (**verified**): a raw-value list row (`bUsesRawValue=true`) with an ID the
   profile does not have (9106 frame rate limit, 9107 image scaling, whose values are the upscaling
   effects of each platform's build, 9108 render resolution, whose first value is "Automatic" in
-  the player's language, 9110 performance overlay, 9111 overlay position) needs no definition, so it can have any number of
+  the player's language, 9110 performance overlay, 9111 overlay position, 9112 field of view, 9113 film grain) needs no definition, so it can have any number of
   values with any names. `PopulateOptionsList` empties its local `OptionValues`
   (`TArray<string>`), fills it with `GetProfileSettingValue_SpecialCase(psid, OptionValues)` (which
   only knows the multiplayer characters 44/45 and weapons 50/130 and leaves it empty otherwise),
@@ -646,6 +650,79 @@ loaded until the video options are opened (**inferred**).
   so the game publishes data between threads without barriers where it relies on that; ARM64
   reorders memory accesses. See "Render command queue".
 
+## Field of view
+
+The gameplay camera (**verified**, `script_dump_classes` and `script_dump_code`):
+`GearPlayerCamera` (extends `GamePlayerCamera`) creates in its `PostBeginPlay` its `GameplayCam`
+(+1196), a `GearGameplayCamera` (extends `GameThirdPersonCamera`). Its `Init` creates one camera
+mode object per situation with `CreateCameraMode` and keeps them in properties `GearCamCover`
+(+408) to `GearCamReaverTargeting` (+580); `FindBestCameraMode` picks the one in use. The modes
+are `GameplayCam_*` classes extending `GearGameplayCameraMode`, which extends the engine's
+`GameThirdPersonCameraMode`, where `FOVAngle` is declared.
+
+Each mode's `FOVAngle` comes from `GearCamera.ini` in the coalesced file: `GameplayCam_Default` 80,
+`GameplayCam_Cover` 95, `GameplayCam_Targeting` and `GameplayCam_CoverTargeting` 50,
+`GameplayCam_RoadieRun` 105, `GameplayCam_DBNO` 110, and others between 50 and 120. Vehicles and
+turrets have their own values in `GearPawn.ini` (`CameraFOV`, `DefaultFOV`, ...).
+`Xbox360-GearEngine.ini` sets `[Engine.LocalPlayer] AspectRatioAxisConstraint=AspectRatio_MaintainXFOV`:
+the angles are horizontal.
+
+How a mode gives its field of view (a reading of the rough bytecode listings; the exact
+parameters of the weapon calls are not decoded):
+
+```
+GearGameplayCameraMode.GetDesiredFOV(ViewedPawn)
+  GW = ViewedPawn.Weapon
+  if (GW != None) return GW.GetAdjustedFOV(true, FOVAngle + FOVAngle_ViewportAdjustments[CurrentViewportType])
+  return FOVAngle + FOVAngle_ViewportAdjustments[CurrentViewportType]
+GameplayCam_Targeting.GetDesiredFOV(ViewedPawn)
+  if (Wpn != None) return Wpn.GetTargetingFOV(FOVAngle + FOVAngle_ViewportAdjustments[...])
+  return GearGameplayCameraMode.GetDesiredFOV(ViewedPawn)
+```
+
+`FOVAngle_ViewportAdjustments` (+604 of `GearGameplayCameraMode`) is an adjustment per split-screen
+viewport type. Kismet's Set Camera FOV goes through `GearPC.ClientSetForcedCameraFOV`, which sets
+`bUseForcedCamFOV` and `ForcedCamFOV` on the player camera instead. Which native code calls
+`GetDesiredFOV`, and how often, is **not verified**.
+
+The runtime scales every mode's `FOVAngle` by `field_of_view / 80` just before its `GetDesiredFOV`
+runs (`runtime/src/script_hooks.cpp`, "Field of view"), keeping the value the game gave each mode
+object to scale it again when the setting changes.
+
+Since the look input is multiplied by the field of view (see Mouse look), a wider view would
+also turn faster, with the mouse and with the stick. As the engine's `PlayerInput.PlayerInput`
+returns, the runtime divides `aTurn` and `aLookUp` by `field_of_view / 80`, so the turn per mouse
+motion or stick deflection stays the game's. Modes whose angle does not come from their
+`FOVAngle` (vehicles and turrets with their own `CameraFOV`, if any) would turn that much slower
+(**not verified**).
+
+## Film grain
+
+The film grain is drawn by `UberPostProcessEffect` (extends `DOFBloomMotionBlurEffect`), an effect
+of the post-process chains (**verified**, reading the objects in the front end):
+
+| Chain | How it is reached | Effects |
+| --- | --- | --- |
+| The player's, the one drawn | `LocalPlayer.PlayerPostProcess` | 3 `MaterialEffect`, `UberPostProcessEffect`, 2 `MaterialEffect`, `AmbientOcclusionEffect`, `DwTriovizImplEffect` |
+| The engine's default, `DefaultScenePostProcess` | `GearEngine.DefaultPostProcess`; the engine is the outer of `LocalPlayer.ViewportClient` (`GearGameViewportClient`) | the same without `DwTriovizImplEffect` |
+| A level's | `WorldInfo.WorldPostProcessChain` (+692) | none in the front end |
+
+Both `UberPostProcessEffect` objects have `bEnableImageGrain` set and `SceneImageGrainScale` 0.0125
+(`Default__UberPostProcessEffect` has it clear and 0.02). `PostProcessEffect.bUseWorldSettings` is
+set too, so the scale may come from the blended `PostProcessSettings.Scene_ImageGrainScale` (+128,
+with `bOverride_Scene_ImageGrainScale`) instead; that is **not verified**. No script function reads
+or writes any of them (`script_dump_code` of `Camera`, `PostProcessVolume`, `WorldInfo`, `GearPC`).
+
+`UberPostProcessEffect` properties: `bEnableImageGrain`, `bScaleEffectsWithViewSize` and
+`bEnableHDRTonemapper` share the word at +272; `SceneImageGrainScale` is at +276. A
+`BoolProperty`'s bit is its `BitMask` at +104 of the property object (**verified**: those three are
+`0x80000000`, `0x40000000` and `0x20000000`, in the order they are declared; `PostProcessEffect`'s
+`bShowInEditor`, `bShowInGame`, `bUseWorldSettings` and `bAffectsLightingOnly` likewise).
+
+The runtime clears `bEnableImageGrain` in the effects of those three chains while `film_grain` is
+off, every frame as each player's input runs, and puts back the value each effect had otherwise
+(`runtime/src/script_hooks.cpp`, "Film grain").
+
 ## Render command queue
 
 Game threads enqueue render commands into the engine's ring buffer (`FRingBuffer`, guest
@@ -723,7 +800,17 @@ GearPC.UpdateRotation                         DeltaRot = (aLookUp, aTurn) / Time
                                               ApplyAdhesion, ProcessViewRotation, FaceRotation
 ```
 
-`FOVScale` is `GetFOVAngle() * 0.01111` when `bEnableFOVScaling`, else 1. The mouse axes are
+`FOVScale` is `GetFOVAngle() * 0.01111` when `bEnableFOVScaling`, else 1 (**verified** in the
+bytecode of `PlayerInput.PlayerInput`: the stick's `aTurn` and `aLookUp` and, through
+`AdjustMouseSensitivity`, the mouse axes are multiplied by it). `ApplyTurnDeceleration` keeps its
+state in `LastaTurn` and `LastaLookup`, set inside `PreProcessInput`, before that multiplication.
+
+`GetFOVAngle` answers the player camera's `CameraCache.POV.FOV` (`Camera` +776, `POV` +4, `FOV` +24
+in `TPOV`; `PlayerController.PlayerCamera` +880). Aiming narrows the view (50 instead of 80), so
+FOVScale makes the mouse turn about 0.6 times as far. While the keyboard and mouse aim bind is
+held (and not the zoom one), the runtime multiplies the turn per pixel by `field_of_view` over
+that angle, as of the last frame, so aiming turns as far per pixel as looking around. The stick
+keeps the game's behaviour. The mouse axes are
 added after the stick's curve, acceleration and deceleration, so a value written into `aMouseX`
 and `aMouseY` before `PlayerInput.PlayerInput` runs turns the view directly: what a mouse posing as
 the right stick could not do, as it went through the dead zone, the full-deflection cap and the
