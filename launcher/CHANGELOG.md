@@ -13,6 +13,12 @@ indented lines.
   clang on SteamOS itself, and the launcher says where to run it, that the deck user needs a
   password, and that a SteamOS update removes the compiler, so the command is run again after one.
 - Bazzite and other image-based systems no longer suggest a container either.
+- Video options: Field of view, from 80 (the game's) to 100 degrees. Aiming, cover and roadie run
+  widen or narrow with it, and the camera turns as fast as with the game's field of view, with the
+  mouse and the controller.
+- Video options: Film grain can be turned off.
+- With the mouse, aiming turns the camera as far as looking around does. Zooming in still turns it
+  slower, and the keyboard and mouse settings' aim and zoom sensitivities still apply.
 
 ## 0.4.1
 
