@@ -6,6 +6,14 @@ it as the update's notes (`scripts/release-common.sh`). Bumping the version adds
 release without one fails. One list item (`- `) per change, in English; an item may continue on
 indented lines.
 
+## 0.4.2
+
+- Steam Deck and SteamOS: the launcher now finds the compiler once it is installed. The command it
+  showed put the compiler inside a container, where the launcher cannot use it; it now installs
+  clang on SteamOS itself, and the launcher says where to run it, that the deck user needs a
+  password, and that a SteamOS update removes the compiler, so the command is run again after one.
+- Bazzite and other image-based systems no longer suggest a container either.
+
 ## 0.4.1
 
 - A custom controller layout changes what the buttons do in play only: the menus keep the
