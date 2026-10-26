@@ -29,10 +29,13 @@
 #include "achievement_toast.h"
 #include "input/mouse_look.h"
 #include "input/player_assignment.h"
+#include "input/scripted_pad.h"
 #include "controls_menu.h"
 #include "local_coop_menu.h"
 #include "local_coop_notices.h"
 #include "gpu_list.h"
+#include "hle_gfx/frame_capture.h"
+#include "hle_gfx/hle_gfx.h"
 #include "menu/menu_patches.h"
 #include "menu/pc_options.h"
 #include "perf_marker.h"
@@ -134,6 +137,11 @@ class AzuraApp : public rex::ReXApp {
   // and route Quit Game to a normal window close (OnClosing shuts the title down).
   void OnPreLaunchModule() override {
     REXLOG_INFO("[Azura] Active gamertag / user_name: '{}'", REXCVAR_GET(user_name));
+    // Before the game draws: the HLE graphics path's marker handler, when gfx = hle.
+    azura::hle_gfx::Install();
+    // Debug aid for unattended runs: a controller pressing buttons on a schedule (AZURA_SCRIPTED_PAD).
+    azura::input::InstallScriptedPad(
+        runtime() ? static_cast<rex::input::InputSystem*>(runtime()->input_system()) : nullptr);
     // Before the game polls a controller: which controller plays which player (player_assignment.h).
     azura::input::InstallPlayerAssignment(runtime(), [this](std::function<void()> work) {
       app_context().CallInUIThread(std::move(work));
@@ -185,6 +193,10 @@ class AzuraApp : public rex::ReXApp {
              presenter->SupportsGuestOutputEffect(effect);
     });
     azura::menu::InstallMenuPatches(runtime());
+    // Debug aid: periodic captures of the game's output when AZURA_CAPTURE_DIR is set.
+    if (auto* graphics_system = runtime()->graphics_system()) {
+      azura::hle_gfx::StartFrameCapture(graphics_system->presenter());
+    }
     // A notice while the GPU backend compiles shaders in the background, from the shader storage
     // preload that runs right after this hook to the shaders of new areas while playing.
     if (auto* graphics_system = runtime()->graphics_system()) {
