@@ -409,6 +409,8 @@ code, kbd {
   clip-path: polygon(0 0, calc(100% - var(--cut)) 0, 100% var(--cut), 100% 100%, 0 100%);
   backdrop-filter: blur(6px);
 }
+/* A panel the player must act on first (the compiler, when Install waits for it). */
+.panel.is-attention { border-color: var(--imulsion); box-shadow: 0 0 0 1px var(--imulsion-glow) inset; }
 /* Rivet line along the top edge. */
 .panel::before {
   content: "";

@@ -100,6 +100,10 @@ const state = {
   // and whether it is being installed.
   runtime: { installed: false, buildFound: false, updateAvailable: false },
   installingRuntime: false,
+  // Why the last runtime install failed ({ kind, key, vars, log }), shown where it was started, in
+  // the Installation view; null once it succeeds or is tried again, or once the missing compiler it
+  // failed for is there.
+  runtimeInstallError: null,
   // The kit build's last progress ({ phase, done, total }), or null when no build runs.
   buildProgress: null,
   // The runtime build from the kit the Play view's card shows: its tracker (buildProgress.js) and,
@@ -693,6 +697,7 @@ const setupLaunch = () => {
 const runRuntimeInstall = async () => {
   const fromKit = state.runtime.source === "kit";
   state.installingRuntime = true;
+  state.runtimeInstallError = null;
   state.buildProgress = null;
   if (fromKit) {
     // A build from the kit shows its own card with a bar on Play, not the game log.
@@ -714,7 +719,8 @@ const runRuntimeInstall = async () => {
     return true;
   } catch (error) {
     const [key, vars] = buildErrorMessage(error);
-    if (fromKit) state.build = { ...state.build, failed: { key, vars, log: error?.detail?.log ?? null } };
+    state.runtimeInstallError = { kind: error?.kind ?? null, key, vars, log: error?.detail?.log ?? null };
+    if (fromKit) state.build = { ...state.build, failed: state.runtimeInstallError };
     else setLogState(key, "error", vars);
     if (error?.kind === "noCompiler") refreshCompiler();
     return false;
@@ -838,6 +844,9 @@ const setupBuildProgress = () => {
   document.getElementById("build-card-log").addEventListener("click", () => {
     if (state.build?.failed?.log) showBuildLog(state.build.failed.log).catch((error) => console.error(error));
   });
+  document.getElementById("install-runtime-log").addEventListener("click", () => {
+    if (state.runtimeInstallError?.log) showBuildLog(state.runtimeInstallError.log).catch((error) => console.error(error));
+  });
 };
 
 /** How often the status is checked while Apple's install window is open, and for how long. */
@@ -886,6 +895,12 @@ const refreshCompiler = async () => {
     console.error("Checking the compiler failed:", error);
   }
   renderCompiler();
+  // A failure for want of a compiler no longer applies once there is one.
+  if (state.compiler?.status === "ready" && state.runtimeInstallError?.kind === "noCompiler") {
+    state.runtimeInstallError = null;
+  }
+  // Install waits for a working compiler (renderInstall).
+  renderInstall();
   renderPlay();
 };
 
@@ -947,14 +962,32 @@ const renderInstall = () => {
 
   const [runtimeKey, runtimeTone] = runtimeState();
   const runtimeLine = document.getElementById("runtime-check");
-  runtimeLine.dataset.state = runtimeTone;
   const progress = state.buildProgress;
-  runtimeLine.textContent = state.installingRuntime && progress
-    ? t(BUILD_PHASE_KEYS[progress.phase] ?? "log.buildPreparing", { done: progress.done, total: progress.total })
-    : t(runtimeKey);
+  // A build from the kit needs a working compiler: without one, Install cannot work, so it waits
+  // for the compiler (whose panel below is highlighted) instead of failing at once.
+  const needsCompiler =
+    state.runtime.source === "kit" && runtimeNeedsInstall() && Boolean(state.compiler) && state.compiler.status !== "ready";
+  const failure = state.installingRuntime ? null : state.runtimeInstallError;
+  if (state.installingRuntime && progress) {
+    runtimeLine.dataset.state = runtimeTone;
+    runtimeLine.textContent = t(BUILD_PHASE_KEYS[progress.phase] ?? "log.buildPreparing", { done: progress.done, total: progress.total });
+  } else if (failure) {
+    // The failure is shown here too, not only on the Play view's build card.
+    runtimeLine.dataset.state = "error";
+    runtimeLine.textContent = t(failure.key, failure.vars);
+  } else if (needsCompiler) {
+    runtimeLine.dataset.state = "warn";
+    runtimeLine.textContent = t("install.runtimeNeedsCompiler");
+  } else {
+    runtimeLine.dataset.state = runtimeTone;
+    runtimeLine.textContent = t(runtimeKey);
+  }
+  document.getElementById("install-runtime-log").hidden = !failure?.log;
+  document.getElementById("compiler-panel").classList.toggle("is-attention", needsCompiler);
   const runtimeButton = document.getElementById("install-runtime");
   runtimeButton.hidden = !state.runtime.buildFound;
-  runtimeButton.disabled = state.installingRuntime || state.game !== "idle" || !runtimeNeedsInstall();
+  runtimeButton.disabled =
+    state.installingRuntime || state.game !== "idle" || !runtimeNeedsInstall() || needsCompiler;
   runtimeButton.textContent = t(
     state.installingRuntime ? "install.installingRuntime" : state.runtime.installed ? "install.updateRuntime" : "install.installRuntime",
   );
