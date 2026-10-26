@@ -1,9 +1,9 @@
 diff --git a/include/rex/graphics/hle/markers.h b/include/rex/graphics/hle/markers.h
 new file mode 100644
-index 0000000..b29bc43
+index 0000000..39185d9
 --- /dev/null
 +++ b/include/rex/graphics/hle/markers.h
-@@ -0,0 +1,111 @@
+@@ -0,0 +1,114 @@
 +/**
 + * @file        graphics/hle/markers.h
 + * @brief       Markers that describe the guest's graphics API calls inside its command stream
@@ -53,6 +53,9 @@ index 0000000..b29bc43
 +// With hle_resolve_from_render_targets, on Metal: a resolve whose render target is attached to the
 +// open render pass is written by a tile function inside that pass, which then goes on. Experimental.
 +REXCVAR_DECLARE(bool, hle_resolve_in_render_pass);
++// Debugging aid, with gfx = hle: follows each render target transfer until its destination gets the
++// next one and counts whether its data was read, only written over or untouched (perf counters).
++REXCVAR_DECLARE(bool, hle_audit_transfers);
 +// Debugging aid for hle_native_resolves: resolves and texture loads work as before, and what the
 +// native path would have written (to the textures, and to the memory) is compared with what they
 +// wrote; mismatches are logged.
@@ -117,10 +120,10 @@ index 0000000..b29bc43
 +}  // namespace rex::graphics::hle
 diff --git a/src/system/hle_markers.cpp b/src/system/hle_markers.cpp
 new file mode 100644
-index 0000000..7ed4b13
+index 0000000..4a2d444
 --- /dev/null
 +++ b/src/system/hle_markers.cpp
-@@ -0,0 +1,148 @@
+@@ -0,0 +1,152 @@
 +/**
 + * @file        system/hle_markers.cpp
 + * @brief       The gfx option and the dispatch of the HLE graphics markers
@@ -173,6 +176,10 @@ index 0000000..7ed4b13
 +                    "Experimental, Metal: with hle_resolve_from_render_targets, write a resolve "
 +                    "whose render target is attached to the open render pass from a tile function "
 +                    "inside the pass, without ending it")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++REXCVAR_DEFINE_BOOL(hle_audit_transfers, false, "GPU",
++                    "Debugging aid, with gfx = hle: count whether the data each render target "
++                    "transfer copies is read, only written over or untouched before the next one")
 +    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 +REXCVAR_DEFINE_BOOL(hle_verify_resolves, false, "GPU",
 +                    "Debugging aid for hle_native_resolves: resolve and load textures as before, "
