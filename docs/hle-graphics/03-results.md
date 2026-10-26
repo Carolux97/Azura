@@ -517,10 +517,42 @@ these scenes. Reaching that ceiling needs C1 to cover those resolves first (the 
 ones, whose textures need a conversion of their own) and then C3's tracking of every reader; the
 3% alone does not justify the risk of a silent corruption, so C3 is not built.
 
+## Native resolves at every resolution, and reinterpreted EDRAM
+
+**At a draw resolution scale** (the Render resolution option at 2560x1440 or 3840x2160, and
+"auto" on Pro, Max and Ultra chips with 16 GB or more), resolves go to the texture cache's scaled
+resolve buffer instead of the guest memory. Its layout, read from the SDK's scaled resolve copy
+shaders (decompiled with SPIRV-Cross): each 16 bytes of the guest's tiled destination (4 pixels at
+32bpp, 2 at 64bpp) are scale_x * scale_y blocks of 16 bytes, each holding consecutive host pixels
+of one row; with ResolveEdramInfo::fill_half_pixel_offset, the first scale / 2 host columns and
+rows take the first surely covered one. The native kernels now compute that address (the same
+formula gives the plain tiled address without a scale), read the render target at the scale,
+and the resolves of data (kDataTargetMaxSize) are still reduced to the guest memory afterwards.
+C1's texture copy stays at the guest resolution only; the in-pass spike too.
+
+**Reinterpreted EDRAM.** A bitwise resolve copies the EDRAM bits whatever 32bpp format wrote them,
+so the native path now packs the owner's pixels as the dump does for its own format, and copies
+those bits as the resolve's format. That covers the 2_10_10_10 resolve of a 2_10_10_10_FLOAT target
+(the float 7e3 packing of SpirvShaderTranslator::UnclampedFloat32To7e3).
+
+**Checked** with `hle_verify_resolves`, every pixel, no mismatch:
+
+| Resolution | Kinds checked | Reached |
+| --- | --- | --- |
+| 1280x720 | 12, including the 2_10_10_10 of a float target | the campaign start |
+| 2560x1440 (scale 2) | 9 | the main menu |
+| 3840x2160 (scale 3) | 9 | the main menu |
+
+Still through the EDRAM dump: depth resolves, resolves from EDRAM a depth target holds, the
+2_10_10_10_FLOAT_AS_16_16_16_16 conversion with an exponent bias, and resolves whose source
+several render targets share.
+
 ## gfx = hle by default on macOS
 
 On this branch `gfx` defaults to `hle` on macOS (Metal) and stays `pm4` elsewhere; `--gfx=pm4` or
-`gfx = "pm4"` in azura.toml selects the console path. `hle_native_resolves` stays off by default.
+`gfx = "pm4"` in azura.toml selects the console path. `hle_native_resolves` is on by default too
+(it only acts with `gfx = hle`, and only the Metal backend implements it). With both defaults, the
+title and the menu match `pm4` (0.9 and 1.9% median of pixels over 16, one run each).
 
 ## Success criteria
 

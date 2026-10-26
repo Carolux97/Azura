@@ -1,6 +1,6 @@
 diff --git a/include/rex/graphics/hle/markers.h b/include/rex/graphics/hle/markers.h
 new file mode 100644
-index 0000000..7e51210
+index 0000000..b29bc43
 --- /dev/null
 +++ b/include/rex/graphics/hle/markers.h
 @@ -0,0 +1,111 @@
@@ -45,7 +45,7 @@ index 0000000..7e51210
 +REXCVAR_DECLARE(bool, hle_clear_transfer_cutouts);
 +// With gfx = hle: a resolve to a texture the texture cache holds with exactly the resolve's key
 +// copies the render target into that texture, which is then not loaded back from memory (the
-+// memory is still written). Off until verified on the backends that support it.
++// memory is still written). On by default; only the Metal backend implements it.
 +REXCVAR_DECLARE(bool, hle_native_resolves);
 +// With hle_native_resolves: a resolve that copies a render target to memory with no conversion
 +// writes the memory straight from the render target, without the EDRAM dump.
@@ -117,7 +117,7 @@ index 0000000..7e51210
 +}  // namespace rex::graphics::hle
 diff --git a/src/system/hle_markers.cpp b/src/system/hle_markers.cpp
 new file mode 100644
-index 0000000..129a2a6
+index 0000000..7ed4b13
 --- /dev/null
 +++ b/src/system/hle_markers.cpp
 @@ -0,0 +1,148 @@
@@ -160,7 +160,7 @@ index 0000000..129a2a6
 +                    "With gfx = hle, leave the rectangle of a clear of part of its targets out of "
 +                    "the render target transfers into them")
 +    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
-+REXCVAR_DEFINE_BOOL(hle_native_resolves, false, "GPU",
++REXCVAR_DEFINE_BOOL(hle_native_resolves, true, "GPU",
 +                    "With gfx = hle, copy a resolved render target straight into the texture the "
 +                    "texture cache holds for the resolve's destination, instead of loading it back "
 +                    "from memory")
