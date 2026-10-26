@@ -6,6 +6,14 @@ it as the update's notes (`scripts/release-common.sh`). Bumping the version adds
 release without one fails. One list item (`- `) per change, in English; an item may continue on
 indented lines.
 
+## 0.4.3
+
+- Installing the game runtime shows why it failed next to the Install button, instead of looking
+  as if nothing happened, and Install waits until a compiler is installed.
+- Linux and Windows: smoother play. The game no longer waits for the graphics card to count what
+  is visible before going on, which caused frequent short stalls.
+- Vulkan (Linux and Windows): at 2560 × 1440 and 3840 × 2160, dark areas and shadows no longer turn green.
+
 ## 0.4.2
 
 - Steam Deck and SteamOS: the launcher now finds the compiler once it is installed. The command it
