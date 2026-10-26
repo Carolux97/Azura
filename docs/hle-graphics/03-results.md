@@ -543,9 +543,21 @@ those bits as the resolve's format. That covers the 2_10_10_10 resolve of a 2_10
 | 2560x1440 (scale 2) | 9 | the main menu |
 | 3840x2160 (scale 3) | 9 | the main menu |
 
-Still through the EDRAM dump: depth resolves, resolves from EDRAM a depth target holds, the
-2_10_10_10_FLOAT_AS_16_16_16_16 conversion with an exponent bias, and resolves whose source
-several render targets share.
+**Depth, and the 2_10_10_10_FLOAT conversion.** Depth resolves of a D24S8 target, and bitwise
+color resolves of EDRAM a D24S8 target holds, pack its pixels as the dump does (the depth times
+0xFFFFFF rounded to the nearest even, above the 8-bit stencil). The full 32bpp copy of
+2_10_10_10_FLOAT (and _AS_16_16_16_16) to 2_10_10_10 or 8_8_8_8 unpacks the 7e3 bits as that shader
+does, scales them by the exponent bias, swaps and packs them. Checked the same way: about 25
+depth resolve sizes of the campaign start (to k_24_8), and the 2_10_10_10_FLOAT_AS_16_16_16_16
+resolve with bias -5, every pixel.
+
+| Per frame, 1280x720 (one run) | Resolves | Native |
+| --- | --- | --- |
+| Title screen, main menu | 30 | 27, before the 7e3 conversion (28 with it) |
+| Campaign start | 38 | 33, before the 7e3 conversion |
+
+Still through the EDRAM dump: depth resolves of D24FS8 targets (float 20e4 depth), and resolves
+whose source several render targets share (some 640x360 8_8_8_8 and 16_16_FLOAT ones).
 
 ## gfx = hle by default on macOS
 
