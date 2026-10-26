@@ -62,7 +62,13 @@ was built with `scripts/build.sh` (RelWithDebInfo, Apple M4) and removed afterwa
   checked: the probe proves the call path, not the visual result (a pass-through cannot change
   it anyway).
 
-**Not verified by a build:** Linux and Windows. No Linux machine was available, and the Windows
+The project already relies on this: the frame rate overlay (`runtime/src/perf_overlay.cpp`)
+replaces `sub_82AF6B10`, the game's present function, and that file is built on every platform
+(it is in the runtime's sources unconditionally, and `runtime/CMakeLists.txt` links our code as an
+object library precisely so such replacements are not dropped by the linker). So the same
+replacement is compiled into the Linux and Windows releases.
+
+**Not verified by a build in this phase:** Linux and Windows. No Linux machine was available, and the Windows
 build (native or cross from Linux) was not run. The mechanism there is the standard one (a
 strong definition overrides a weak alias in ld, lld and lld-link), but that is an inference until
 phase 3 builds the replacement on those platforms.
