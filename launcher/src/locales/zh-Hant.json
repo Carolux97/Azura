@@ -117,6 +117,7 @@
     "compilerWaitingApple": "請依照 Apple 的視窗安裝 Command Line Tools。安裝完成後，啟動器會自動繼續。",
     "compilerCheckAgain": "重新檢查",
     "compilerManual": "或在終端機中執行：",
+    "compilerManualSteamOS": "在 Steam Deck 上，請於桌面模式的 Konsole 中執行。sudo 會要求 deck 使用者的密碼：若尚未設定，請先用 passwd 設定。SteamOS 更新會移除編譯器，因此每次更新後都要再執行一次。",
     "runtimeNotBuilt": "尚未建置：第一次從你的遊戲副本建置需要幾分鐘。",
     "runtimeUpdateLink": "有可用的更新：幾秒內即可安裝。",
     "runtimeUpdateBuild": "更新需要重新建置遊戲：約兩分鐘。"
