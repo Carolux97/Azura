@@ -258,6 +258,22 @@ cutout run that reached it matched PM4 at the noise level until second 216 and t
 27 to 32%, which the previews show is a different camera position and HUD state (that run reached
 the chapter later), not a rendering difference.
 
+## After phases A and B: pm4 against hle, uncapped
+
+Two alternating rounds with the build of phase B, uncapped (one `hle` run reached the campaign):
+
+| Median per frame, each run | pm4 | hle |
+| --- | --- | --- |
+| Transfers (title and menu / campaign start) | 18 / 32 | 14 / 28 |
+| Title screen, frame ms / GPU ms | 7.37 / 6.74, 7.76 / 6.88 | 7.15 / 6.13, 8.31 / 7.18 |
+| Main menu, frame ms / GPU ms | 7.36 / 6.57, 7.02 / 6.51 | 6.84 / 6.28, 6.76 / 6.25 |
+| Campaign start, frame ms / GPU ms | 9.51 / 9.43, 9.38 / 9.30 | 10.98 / 9.26 |
+
+The HLE path takes 1 to 4% less GPU time in the menu and at the campaign start, and is within the
+noise at the title. These are smaller savings than the earlier figures in this document, which
+came before the clear coverage used the clear's real rectangle (phase A): some of the transfers
+skipped then were not safe to skip.
+
 ## Is the CPU the bottleneck now? (phase D: the case for option B)
 
 Option B of the design (replacing the guest D3D calls and reading the device structure instead of
