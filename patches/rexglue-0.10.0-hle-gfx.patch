@@ -1,9 +1,9 @@
 diff --git a/include/rex/graphics/hle/markers.h b/include/rex/graphics/hle/markers.h
 new file mode 100644
-index 0000000..1e6e980
+index 0000000..f57d262
 --- /dev/null
 +++ b/include/rex/graphics/hle/markers.h
-@@ -0,0 +1,94 @@
+@@ -0,0 +1,104 @@
 +/**
 + * @file        graphics/hle/markers.h
 + * @brief       Markers that describe the guest's graphics API calls inside its command stream
@@ -43,8 +43,18 @@ index 0000000..1e6e980
 +// With gfx = hle: a clear of part of its targets has its rectangle cut out of the render target
 +// transfers into them, which then copy only what the clear keeps.
 +REXCVAR_DECLARE(bool, hle_clear_transfer_cutouts);
++// With gfx = hle: a resolve to a texture the texture cache holds with exactly the resolve's key
++// copies the render target into that texture, which is then not loaded back from memory (the
++// memory is still written). Off until verified on the backends that support it.
++REXCVAR_DECLARE(bool, hle_native_resolves);
++// Debugging aid for hle_native_resolves: textures still load from memory, and what the render
++// target copy would have put in them is compared with the loaded texels; mismatches are logged.
++REXCVAR_DECLARE(bool, hle_verify_resolves);
 +
 +namespace rex::graphics::hle {
++
++// Whether the HLE graphics path is on (gfx = hle), read once.
++bool HleGraphicsEnabled();
 +
 +// First payload word of a marker ("AZHL").
 +constexpr uint32_t kMarkerMagic = 0x415A484C;
@@ -100,10 +110,10 @@ index 0000000..1e6e980
 +}  // namespace rex::graphics::hle
 diff --git a/src/system/hle_markers.cpp b/src/system/hle_markers.cpp
 new file mode 100644
-index 0000000..f0542ee
+index 0000000..3368380
 --- /dev/null
 +++ b/src/system/hle_markers.cpp
-@@ -0,0 +1,119 @@
+@@ -0,0 +1,133 @@
 +/**
 + * @file        system/hle_markers.cpp
 + * @brief       The gfx option and the dispatch of the HLE graphics markers
@@ -136,6 +146,15 @@ index 0000000..f0542ee
 +REXCVAR_DEFINE_BOOL(hle_clear_transfer_cutouts, true, "GPU",
 +                    "With gfx = hle, leave the rectangle of a clear of part of its targets out of "
 +                    "the render target transfers into them")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++REXCVAR_DEFINE_BOOL(hle_native_resolves, false, "GPU",
++                    "With gfx = hle, copy a resolved render target straight into the texture the "
++                    "texture cache holds for the resolve's destination, instead of loading it back "
++                    "from memory")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++REXCVAR_DEFINE_BOOL(hle_verify_resolves, false, "GPU",
++                    "Debugging aid for hle_native_resolves: load textures from memory as before "
++                    "and log where the render target copy would have differed")
 +    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 +REXCVAR_DEFINE_BOOL(hle_verify_clears, false, "GPU",
 +                    "Debugging aid for hle_clear_load_actions: draw clears as before and log where "
@@ -208,6 +227,11 @@ index 0000000..f0542ee
 +    handler->function(words, count, handler->user);
 +  }
 +  return true;
++}
++
++bool HleGraphicsEnabled() {
++  static const bool enabled = REXCVAR_GET(gfx) == "hle";
++  return enabled;
 +}
 +
 +bool InClear() { return g_in_clear; }
