@@ -26,3 +26,6 @@ azura.toml
 
 # macOS
 .DS_Store
+
+# Generated from the player's game by scripts/hle/gen_pm4_trace_hooks.py.
+runtime/src/hle_gfx/*.gen.cpp
