@@ -8,20 +8,21 @@
 # output is the game's and stays local: OUT_DIR defaults to captures/compare (ignored by git).
 #
 # Usage: scripts/hle/compare_modes.sh [ROUNDS] [SECONDS] [OUT_DIR] [extra runtime options...]
-#   (default: 3 rounds of 200 seconds, Metal; pass --gpu_backend=vulkan for Vulkan)
+#   (default: 3 rounds of 240 seconds, Metal; pass --gpu_backend=vulkan for Vulkan)
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ROUNDS="${1:-3}"
-SECONDS_PER_RUN="${2:-200}"
+SECONDS_PER_RUN="${2:-240}"
 OUT_DIR="${3:-${ROOT}/captures/compare}"
 shift $(( $# < 3 ? $# : 3 ))
 RUNTIME_DIR="${ROOT}/runtime/out/build/mac-arm64-sdk-source/RelWithDebInfo"
 GAME_DIR="$(awk -F'"' '/^game_data_root/{print $2; exit}' \
   "${HOME}/Library/Application Support/com.gears3azura.launcher/runtime/azura.toml")"
-# Start, Campaign, Standard, New, then accept the screens up to the chapter.
-PAD_SCRIPT="45:start,52:a,60:a,66:down,68:a,75:a,82:a,89:a,96:a,103:a"
+# Start (twice, in case the title takes input late), Campaign, Standard, New, then accept the screens
+# up to the chapter. Timed for a run that compiles its shaders from scratch.
+PAD_SCRIPT="55:start,59:start,68:a,78:a,86:down,88:a,96:a,103:a,110:a,117:a,124:a"
 
 [[ -x "${RUNTIME_DIR}/azura" ]] || { echo "No runtime in ${RUNTIME_DIR}: build it first" >&2; exit 1; }
 [[ -d "${GAME_DIR}" ]] || { echo "No game folder (${GAME_DIR})" >&2; exit 1; }
