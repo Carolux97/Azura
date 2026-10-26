@@ -39,6 +39,8 @@ PER_FRAME = [
     ("render passes", "host_render_passes", 1),
     ("transfers", "render_target_transfers", 1),
     ("transfers skipped", "render_target_transfers_skipped", 1),
+    ("transfers cut out", "render_target_transfers_cut_out", 1),
+    ("transfer tiles", "render_target_transfer_tiles", 1),
     ("pass ends: transfer", "pass_ends_transfer", 1),
     ("pass ends: resolve", "pass_ends_resolve", 1),
     ("draws in transfer passes", "draws_in_transfer_passes", 1),
