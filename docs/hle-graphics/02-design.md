@@ -1,8 +1,8 @@
 # HLE graphics, phase 2: design
 
 How the HLE path is built, on Metal (macOS) and Vulkan (Linux, Windows), from what phases 0 and 1
-found. **This design needs review before phase 3 starts**, including one decision that is the
-user's: the SDK patch it proposes (ReXGlue is only changed with the user's OK).
+found. Reviewed and approved (option A and the SDK patch) before phase 3; what phase 3 actually
+built, and where it departs from the plan below, is in [As built in phase 3](#as-built-in-phase-3).
 
 ## What the earlier phases established
 
@@ -199,3 +199,59 @@ needs a new patch, `patches/rexglue-0.10.0-hle-gfx.patch`, applied like the othe
 `pm4` against `hle` on the same runs: frame diff with a tolerance (captures local, ignored by git),
 CPU and GPU frame time, render passes per frame, pipeline compiles, frames over 50 ms, and the
 number of content carries.
+
+## As built in phase 3
+
+Phase 3 kept the approach (option A: the guest D3D library keeps running, markers in the command
+stream drive the render targets) but changed where the render target logic lives, after reading
+the existing render target caches and measuring before writing a new one.
+
+**What changed and why.** The plan was a new `HleRenderTargets` per backend replacing the render
+target cache. Reading the caches showed that the Metal one already keeps a host texture per guest
+surface (one per EDRAM base, format and pitch, in sample space, so MSAA changes need no transfer),
+and that the waste left is the transfers it makes when a surface takes over EDRAM tiles another
+one used: it cannot know whether the old contents are needed. The markers answer exactly that. So
+the HLE logic went into the render target cache base class that Metal and Vulkan share
+(`RenderTargetCache::Update` in `src/graphics/pipeline/render_target/cache.cpp`): when the markers
+say the draw is the guest's clear of whole surfaces, a target it writes completely (every colour
+channel without blending or alpha testing, or depth and stencil both) takes ownership of its
+tiles without the transfers. Everything else is unchanged, and `gfx = pm4` writes no markers, so it
+behaves exactly as before. One implementation serves both backends.
+
+**Built:**
+
+| Piece | Where |
+| --- | --- |
+| Marker format, dispatch, the `gfx` option (in the runtime library, which both the GPU plugin and the game's runtime link) | `include/rex/graphics/hle/markers.h`, `src/system/hle_markers.cpp` (patch `rexglue-0.10.0-hle-gfx.patch`) |
+| Marker NOPs handed to the dispatcher | `CommandProcessor::ExecutePacketType3_NOP` (Metal backend patch) |
+| Transfers skipped for whole-surface clears, counters, log-once of the clears it cannot handle | `RenderTargetCache` (Metal backend patch) |
+| Hooks writing the markers: SetRenderTarget (`82AECC98`), SetDepthStencilSurface (`82AED028`), ClearF (`82AF1D50`), Resolve (`82AF34A8`), frame start (`82AE9F60`) and end of scene work (`82AF65D8`) | `runtime/src/hle_gfx/hooks.cpp` |
+| Marker handler that checks the stream (counts, unmatched ends) | `runtime/src/hle_gfx/planner.cpp` |
+| Test aids: periodic captures (`AZURA_CAPTURE_DIR`), a scripted controller (`AZURA_SCRIPTED_PAD`), the frame diff | `runtime/src/hle_gfx/frame_capture.cpp`, `runtime/src/input/scripted_pad.cpp`, `scripts/hle/frame_diff.py` |
+
+**Milestones** (macOS, M4, Metal; and Vulkan through MoltenVK on the same machine):
+
+- **A, title screen and main menu with `gfx = hle`: met.** Captures at the same seconds of two
+  scripted runs (`pm4`, `hle`) show the same images; the differences measured are the animated
+  menu background (about 1.5% of pixels over a tolerance of 16 on Metal). Same result on Vulkan.
+- **B, first campaign chapter: its start is met; playing it through is blocked on input.** The
+  scripted controller starts a new campaign; the chapter loads, its opening cutscene plays and
+  the first playable moment (the walking tutorial) renders the same in both modes, with no errors
+  in the log. Playing the rest of the chapter needs someone at the controls (or a controller
+  script that steers, which the scripted pad does not do): that run is the next step.
+- The markers arrive in order and paired (0 unmatched clear or resolve ends over thousands of
+  frames); `gfx = pm4` logs no marker and renders as before.
+
+**First numbers** (medians of steady frames; phase 4 measures properly):
+
+| Scene | Mode | Transfers | Skipped | Render passes | GPU ms |
+| --- | --- | --- | --- | --- | --- |
+| Title screen, Metal | pm4 / hle | 18 / 8 | 0 / 8 | 58 / 55 | noisy, see phase 4 |
+| Main menu, Vulkan (MoltenVK) | pm4 / hle | 18 / 8 | 0 / 8 | 70 / 66 | 9.4 / 9.2 |
+| Campaign start, Metal | pm4 / hle | 32 / 20 | 0 / 9 | 84 / 79 | 12.5 / 13.2 (runs back to back, not alternated) |
+
+**Not handled yet** (logged once each when met): clears of depth only or stencil only (the other
+part is kept, so the transfer stays, which is correct), clears with a rectangle. Resolves still end
+the render pass and go through EDRAM dumps (37 of the 79 pass ends at the campaign start): making
+the resolve destination the host texture itself, and planning passes across resolves, is the next
+piece of HLE work and the larger one.
