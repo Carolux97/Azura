@@ -169,5 +169,9 @@ void SetSharpnessChangedHandler(std::function<void()> handler);
 // Applies frame_rate_limit to the guest's vertical blanks (vsync, guest_vblank_rate). Called at
 // start-up and when the Video menu changes it.
 void ApplyFrameRateLimit();
+// On Windows, allows the mailbox presentation mode unless the player's azura.toml sets
+// vulkan_allow_present_mode_mailbox. Elsewhere it does nothing. Called at start-up, before the
+// presenter creates its swapchain.
+void ApplyPresentMode();
 
 }  // namespace azura::menu
