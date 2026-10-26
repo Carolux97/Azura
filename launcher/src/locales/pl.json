@@ -119,6 +119,7 @@
     "compilerManual": "Albo uruchom to w terminalu:",
     "compilerManualSteamOS": "Na Steam Decku uruchom to w Konsole w trybie pulpitu. sudo poprosi o hasło użytkownika deck: jeśli jeszcze go nie ma, najpierw ustaw je poleceniem passwd. Aktualizacja SteamOS usuwa kompilator, więc uruchom to ponownie po każdej aktualizacji.",
     "runtimeNotBuilt": "Jeszcze nie zbudowano: pierwsze budowanie z twojej kopii gry trwa kilka minut.",
+    "runtimeNeedsCompiler": "Najpierw zainstaluj kompilator (poniżej).",
     "runtimeUpdateLink": "Aktualizacja jest gotowa: instaluje się w kilka sekund.",
     "runtimeUpdateBuild": "Aktualizacja wymaga ponownego zbudowania gry: około dwóch minut."
   },

@@ -200,11 +200,12 @@
             <!-- State of the installed runtime; renderInstall() fills it. -->
             <p class="check" id="runtime-check"></p>
             <button class="btn" id="install-runtime"></button>
+            <button class="btn btn-small" id="install-runtime-log" data-i18n="build.openLog" hidden></button>
           </div>
           <div class="build-bar" id="install-build-bar" hidden><span></span></div>
         </div>
         <!-- The C++ compiler the runtime is built with; renderCompiler() fills it. -->
-        <div class="panel">
+        <div class="panel" id="compiler-panel">
           <h2 class="panel-title" data-i18n="install.compilerTitle"></h2>
           <p class="help" data-i18n="install.compilerHelp"></p>
           <p class="check" id="compiler-check"></p>
