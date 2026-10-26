@@ -576,8 +576,12 @@ start (35 resolve kinds, among them 26 depth sizes, D24FS8 and the 2_10_10_10_FL
 | Host compute dispatches | 114 | 80 |
 
 The image comparison of this run says nothing (the two runs were at different points of the intro
-video), and the user saw artifacts while it ran, not located yet: the resolves are byte-exact, so
-they come from somewhere else (to investigate before trusting these figures).
+video). The user saw some textures look wrong at 4K, and then saw them in all three of `pm4`,
+`hle` without native resolves and `hle` with them, watching a run of each: they come from the 4K
+path itself (draw resolution scale 3), not from the HLE work, which also matches the byte-exact
+resolves. Not investigated here. A per-second image comparison of the three, driven by a run
+recorded by hand (`AZURA_RECORD_PAD`, replayed with `PAD_SCRIPT`), did not line up either: the
+runs drift apart within seconds (cutscenes and loading), so it cannot locate them.
 
 ## gfx = hle by default on macOS
 
