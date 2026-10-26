@@ -88,7 +88,13 @@ void ApplyMouseLook(uint8_t* base, uint32_t user_index, const MouseLookTarget& t
   const double speed = std::hypot(double(dx), double(dy));
   const double acceleration =
       1.0 + 2.0 * REXCVAR_GET(mnk_mouse_acceleration) * std::min(speed / kAccelerationFullSpeed, 1.0);
-  const double per_pixel = kRotatorUnitsPerPixel * sensitivity * acceleration / engine_sensitivity;
+  double per_pixel = kRotatorUnitsPerPixel * sensitivity * acceleration / engine_sensitivity;
+  // The game turns less the narrower the view (FOVScale): aiming, with its narrower angle, would
+  // turn slower than looking around. Scaled back here so a pixel turns as far as without aiming;
+  // zoomed in, the slower turn is kept for precision.
+  if (look.aiming && !look.zoomed && target.view_fov > 0.0f && target.base_fov > 0.0f) {
+    per_pixel *= target.base_fov / target.view_fov;
+  }
   StoreFloat(base, target.mouse_x, static_cast<float>(dx * per_pixel));
   // The window's y grows downwards; aMouseY looks up when positive.
   StoreFloat(base, target.mouse_y, static_cast<float>(-dy * per_pixel));

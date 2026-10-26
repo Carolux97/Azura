@@ -38,6 +38,15 @@ REXCVAR_DEFINE_DOUBLE(upscaling_sharpness, 0.0, "Azura/Graphics",
                       "present_cas_additional_sharpness and present_fsr_sharpness_reduction")
     .range(0.0, 1.0);
 
+REXCVAR_DEFINE_DOUBLE(field_of_view, 80.0, "Azura/Graphics",
+                      "Horizontal field of view of the game's base camera, in degrees: 80 (the "
+                      "original), 85, 90, 95 or 100. Every gameplay camera mode is scaled by "
+                      "field_of_view / 80")
+    .range(80.0, 100.0);
+REXCVAR_DEFINE_BOOL(film_grain, true, "Azura/Graphics",
+                    "The game's film grain (UberPostProcessEffect.bEnableImageGrain); applies while the "
+                    "game runs");
+
 namespace azura::menu {
 
 namespace {
@@ -59,6 +68,8 @@ enum class Label {
   kLocalCoop,
   kPerformanceOverlay,
   kPerformanceOverlayPosition,
+  kFieldOfView,
+  kFilmGrain,
   kCount
 };
 
@@ -108,28 +119,37 @@ const std::vector<Option>& Options() {
       // names come from PcOptionValueNames when the menu asks for them (script_hooks.cpp).
       {kVideoCategory, 2, Label::kFrameRateLimit, "frame_rate_limit", Kind::kChoice, 9106, -1,
        {"30", "60", "90", "120", "150"}},
-      {kVideoCategory, 3, Label::kAntialiasing, "swap_post_effect", Kind::kChoice, 20, 13,
+      // Applies while the game runs: the camera modes read it each frame (script_hooks.cpp, "Field
+      // of view"). A list of our own (ID 9112) rather than a slider, because the menu's slider only
+      // shows the step it is on, and the player should see the degrees.
+      {kVideoCategory, 3, Label::kFieldOfView, "field_of_view", Kind::kChoice, 9112, -1,
+       {"80", "85", "90", "95", "100"}},
+      {kVideoCategory, 4, Label::kAntialiasing, "swap_post_effect", Kind::kChoice, 20, 13,
        {"none", "fxaa", "fxaa_extreme"}},
-      {kVideoCategory, 4, Label::kMotionBlur, "motion_blur", Kind::kToggle, 21, 14, {}},
+      {kVideoCategory, 5, Label::kMotionBlur, "motion_blur", Kind::kToggle, 21, 14, {}},
+      // Applies while the game runs (script_hooks.cpp, "Film grain"). A list of our own (ID 9113):
+      // a toggle would need a definition of a profile setting the game does not use, and none is
+      // left with two values.
+      {kVideoCategory, 6, Label::kFilmGrain, "film_grain", Kind::kChoice, 9113, -1, {"false", "true"}},
       // Generic Xbox profile settings with three values that Gears never reads: Controller
       // Sensitivity (it has its own, 368, 59 and 60) and Voice Via Speakers.
-      {kVideoCategory, 5, Label::kAnisotropic, "anisotropic_override", Kind::kChoice, 13, 2, {"0", "3", "5"}},
+      {kVideoCategory, 7, Label::kAnisotropic, "anisotropic_override", Kind::kChoice, 13, 2, {"0", "3", "5"}},
       // Lists of our own too: the resolution's value names include "Automatic" in the player's
       // language, and the upscaling values depend on the platform (UpscalingChoices).
-      {kVideoCategory, 6, Label::kRenderResolution, "render_resolution", Kind::kChoice, 9108, -1,
+      {kVideoCategory, 8, Label::kRenderResolution, "render_resolution", Kind::kChoice, 9108, -1,
        {"auto", "1280x720", "2560x1440", "3840x2160"}},
       // Right above the sharpness row, which belongs to it.
-      {kVideoCategory, 7, Label::kUpscaling, "present_effect", Kind::kChoice, 9107, -1, UpscalingChoices()},
+      {kVideoCategory, 9, Label::kUpscaling, "present_effect", Kind::kChoice, 9107, -1, UpscalingChoices()},
       // Applies while the game runs, so the player sees the sharpening change (ApplyUpscalingSharpness).
       // Only shown with an image scaling effect that sharpens; the rows below it then move up one.
-      {kVideoCategory, 8, Label::kSharpness, "upscaling_sharpness", Kind::kSlider, 9109, -1, {}, 0.0f, 1.0f,
+      {kVideoCategory, 10, Label::kSharpness, "upscaling_sharpness", Kind::kSlider, 9109, -1, {}, 0.0f, 1.0f,
        0.1f},
       // A list of our own (ID 9110): its values grow as the overlay gets more modes. Last in the
       // list, with its position below it.
-      {kVideoCategory, 9, Label::kPerformanceOverlay, "performance_overlay", Kind::kChoice, 9110, -1,
+      {kVideoCategory, 11, Label::kPerformanceOverlay, "performance_overlay", Kind::kChoice, 9110, -1,
        {"off", "fps", "detailed", "advanced"}},
       // Our own list too (ID 9111): the corner the overlay is shown in.
-      {kVideoCategory, 10, Label::kPerformanceOverlayPosition, "performance_overlay_position", Kind::kChoice, 9111, -1,
+      {kVideoCategory, 12, Label::kPerformanceOverlayPosition, "performance_overlay_position", Kind::kChoice, 9111, -1,
        {"top_left", "top_right", "bottom_left", "bottom_right"}},
   };
   return options;
@@ -171,7 +191,9 @@ const std::map<std::string, Texts>& LocalizedTexts() {
           "How much extra sharpening the image scaling adds. 0 keeps its own."},
          {"LOCAL CO-OP", "Choose which controller or keyboard each player uses, to play the campaign together on this computer."},
          {"PERFORMANCE OVERLAY", "Show the game's frame rate in a corner of the screen."},
-         {"OVERLAY POSITION", "Corner of the screen the performance overlay is shown in."}},
+         {"OVERLAY POSITION", "Corner of the screen the performance overlay is shown in."},
+         {"FIELD OF VIEW", "How wide the camera sees. 80 is the original; aiming and cover widen or narrow with it."},
+         {"FILM GRAIN", "The film grain noise the game adds to the image."}},
         "Off", "On", "FXAA", "FXAA extreme", "Open", "Bilinear (original)", "AMD CAS (sharpening)", "AMD FSR 1", "Automatic", {"Top left", "Top right", "Bottom left", "Bottom right"}, "Detailed", "Advanced"}},
       {"esn",
        {{"TECLADO Y RATÓN", "Ajuste las opciones del teclado y el ratón."},
@@ -190,7 +212,9 @@ const std::map<std::string, Texts>& LocalizedTexts() {
           "Cuánto enfoque añade el escalado de imagen. 0 deja el suyo propio."},
          {"COOPERATIVO LOCAL", "Elija qué mando o teclado usa cada jugador para jugar la campaña juntos en este equipo."},
          {"INDICADOR DE RENDIMIENTO", "Muestre los fotogramas por segundo del juego en una esquina de la pantalla."},
-         {"POSICIÓN DEL INDICADOR", "Esquina de la pantalla en la que se muestra el indicador de rendimiento."}},
+         {"POSICIÓN DEL INDICADOR", "Esquina de la pantalla en la que se muestra el indicador de rendimiento."},
+         {"CAMPO DE VISIÓN", "Amplitud de la vista de la cámara. 80 es el original; apuntar y cubrirse cambian en la misma proporción."},
+         {"GRANO DE PELÍCULA", "El ruido de grano de película que el juego añade a la imagen."}},
         "Desactivado", "Activado", "FXAA", "FXAA extremo", "Abrir", "Bilineal (original)", "AMD CAS (nitidez)", "AMD FSR 1", "Automática", {"Arriba a la izquierda", "Arriba a la derecha", "Abajo a la izquierda", "Abajo a la derecha"}, "Detallado", "Avanzado"}},
       {"deu",
        {{"TASTATUR UND MAUS", "Passen Sie die Einstellungen für Tastatur und Maus an."},
@@ -208,7 +232,9 @@ const std::map<std::string, Texts>& LocalizedTexts() {
           "Wie viel zusätzliche Schärfe die Bildskalierung hinzufügt. 0 behält ihre eigene."},
          {"LOKALER KOOP", "Wählen Sie, welchen Controller oder welche Tastatur jeder Spieler verwendet, um die Kampagne gemeinsam an diesem Computer zu spielen."},
          {"LEISTUNGSANZEIGE", "Zeigt die Bildrate des Spiels in einer Ecke des Bildschirms an."},
-         {"POSITION DER ANZEIGE", "Bildschirmecke, in der die Leistungsanzeige erscheint."}},
+         {"POSITION DER ANZEIGE", "Bildschirmecke, in der die Leistungsanzeige erscheint."},
+         {"SICHTFELD", "Wie weit die Kamera sieht. 80 ist der ursprüngliche Wert; Zielen und Deckung ändern sich im gleichen Verhältnis."},
+         {"FILMKORN", "Das Filmkorn, das das Spiel dem Bild hinzufügt."}},
         "Aus", "Ein", "FXAA", "FXAA extrem", "Öffnen", "Bilinear (Original)", "AMD CAS (Schärfung)", "AMD FSR 1", "Automatisch", {"Oben links", "Oben rechts", "Unten links", "Unten rechts"}, "Detailliert", "Erweitert"}},
       {"ita",
        {{"TASTIERA E MOUSE", "Regola le impostazioni di tastiera e mouse."},
@@ -226,7 +252,9 @@ const std::map<std::string, Texts>& LocalizedTexts() {
           "Quanta nitidezza aggiuntiva applica il ridimensionamento dell'immagine. 0 mantiene la sua."},
          {"COOPERATIVA LOCALE", "Scegli il controller o la tastiera di ogni giocatore per giocare insieme la campagna su questo computer."},
          {"INDICATORE PRESTAZIONI", "Mostra la frequenza dei fotogrammi del gioco in un angolo dello schermo."},
-         {"POSIZIONE INDICATORE", "Angolo dello schermo in cui compare l'indicatore delle prestazioni."}},
+         {"POSIZIONE INDICATORE", "Angolo dello schermo in cui compare l'indicatore delle prestazioni."},
+         {"CAMPO VISIVO", "Ampiezza della visuale. 80 è il valore originale; mira e copertura cambiano nella stessa proporzione."},
+         {"GRANA PELLICOLA", "La grana pellicola che il gioco aggiunge all'immagine."}},
         "Disattivato", "Attivato", "FXAA", "FXAA estremo", "Apri", "Bilineare (originale)", "AMD CAS (nitidezza)", "AMD FSR 1", "Automatica", {"In alto a sinistra", "In alto a destra", "In basso a sinistra", "In basso a destra"}, "Dettagliato", "Avanzato"}},
       {"jpn",
        {{"キーボードとマウス", "キーボードとマウスの設定を調整します。"},
@@ -244,7 +272,9 @@ const std::map<std::string, Texts>& LocalizedTexts() {
           "画像スケーリングに加えるシャープ化の強さです。0 は標準のままです。"},
          {"ローカル協力プレイ", "このコンピューターでキャンペーンを一緒にプレイするため、各プレイヤーが使うコントローラーまたはキーボードを選びます。"},
          {"パフォーマンス表示", "ゲームのフレームレートを画面の隅に表示します。"},
-         {"表示位置", "パフォーマンス表示を出す画面の隅。"}},
+         {"表示位置", "パフォーマンス表示を出す画面の隅。"},
+         {"視野角", "カメラの視野の広さです。80 がオリジナルです。エイムやカバーも同じ割合で変わります。"},
+         {"フィルムグレイン", "ゲームが映像に加えるフィルムグレインのノイズです。"}},
         "オフ", "オン", "FXAA", "FXAA (最大)", "開く", "バイリニア（オリジナル）", "AMD CAS（シャープ化）", "AMD FSR 1", "自動", {"左上", "右上", "左下", "右下"}, "詳細", "高度"}},
       {"fra",
        {{"CLAVIER ET SOURIS", "Réglez les options du clavier et de la souris."},
@@ -262,7 +292,9 @@ const std::map<std::string, Texts>& LocalizedTexts() {
           "Netteté supplémentaire ajoutée par la mise à l'échelle de l'image. 0 conserve la sienne."},
          {"COOPÉRATION LOCALE", "Choisissez la manette ou le clavier de chaque joueur pour jouer la campagne ensemble sur cet ordinateur."},
          {"INDICATEUR DE PERFORMANCES", "Affiche la fréquence d'images du jeu dans un coin de l'écran."},
-         {"POSITION DE L'INDICATEUR", "Coin de l'écran où s'affiche l'indicateur de performances."}},
+         {"POSITION DE L'INDICATEUR", "Coin de l'écran où s'affiche l'indicateur de performances."},
+         {"CHAMP DE VISION", "Largeur de la vue de la caméra. 80 est la valeur d'origine ; la visée et le couvert changent dans la même proportion."},
+         {"GRAIN DE FILM", "Le grain de film que le jeu ajoute à l'image."}},
         "Désactivé", "Activé", "FXAA", "FXAA extrême", "Ouvrir", "Bilinéaire (d'origine)", "AMD CAS (netteté)", "AMD FSR 1", "Automatique", {"En haut à gauche", "En haut à droite", "En bas à gauche", "En bas à droite"}, "Détaillé", "Avancé"}},
       {"ptb",
        {{"TECLADO E MOUSE", "Ajuste as opções do teclado e do mouse."},
@@ -281,7 +313,9 @@ const std::map<std::string, Texts>& LocalizedTexts() {
           "Quanta nitidez extra a escala da imagem adiciona. 0 mantém a dela."},
          {"COOPERATIVO LOCAL", "Escolha o controle ou o teclado de cada jogador para jogar a campanha juntos neste computador."},
          {"INDICADOR DE DESEMPENHO", "Mostra a taxa de quadros do jogo em um canto da tela."},
-         {"POSIÇÃO DO INDICADOR", "Canto da tela em que o indicador de desempenho aparece."}},
+         {"POSIÇÃO DO INDICADOR", "Canto da tela em que o indicador de desempenho aparece."},
+         {"CAMPO DE VISÃO", "Amplitude da visão da câmera. 80 é o original; mirar e se proteger mudam na mesma proporção."},
+         {"GRANULAÇÃO DE FILME", "A granulação de filme que o jogo adiciona à imagem."}},
         "Desativado", "Ativado", "FXAA", "FXAA extremo", "Abrir", "Bilinear (original)", "AMD CAS (nitidez)", "AMD FSR 1", "Automática", {"Superior esquerdo", "Superior direito", "Inferior esquerdo", "Inferior direito"}, "Detalhado", "Avançado"}},
       {"pol",
        {{"KLAWIATURA I MYSZ", "Dostosuj ustawienia klawiatury i myszy."},
@@ -299,7 +333,9 @@ const std::map<std::string, Texts>& LocalizedTexts() {
           "Ile dodatkowej ostrości dodaje skalowanie obrazu. 0 zachowuje domyślną."},
          {"LOKALNA KOOPERACJA", "Wybierz kontroler lub klawiaturę każdego gracza, aby grać razem w kampanię na tym komputerze."},
          {"WSKAŹNIK WYDAJNOŚCI", "Wyświetla liczbę klatek na sekundę gry w rogu ekranu."},
-         {"POŁOŻENIE WSKAŹNIKA", "Róg ekranu, w którym wyświetla się wskaźnik wydajności."}},
+         {"POŁOŻENIE WSKAŹNIKA", "Róg ekranu, w którym wyświetla się wskaźnik wydajności."},
+         {"POLE WIDZENIA", "Szerokość widoku kamery. 80 to wartość oryginalna; celowanie i osłona zmieniają się w tej samej proporcji."},
+         {"ZIARNO FILMOWE", "Ziarno filmowe, które gra dodaje do obrazu."}},
         "Wyłączone", "Włączone", "FXAA", "FXAA ekstremalne", "Otwórz", "Dwuliniowe (oryginalne)", "AMD CAS (wyostrzanie)", "AMD FSR 1", "Automatyczna", {"Lewy górny róg", "Prawy górny róg", "Lewy dolny róg", "Prawy dolny róg"}, "Szczegółowy", "Zaawansowany"}},
       {"rus",
        {{"КЛАВИАТУРА И МЫШЬ", "Настройте параметры клавиатуры и мыши."},
@@ -317,7 +353,9 @@ const std::map<std::string, Texts>& LocalizedTexts() {
           "Сколько дополнительной резкости добавляет масштабирование изображения. 0 — без изменений."},
          {"ЛОКАЛЬНЫЙ КООПЕРАТИВ", "Выберите контроллер или клавиатуру для каждого игрока, чтобы пройти кампанию вместе на этом компьютере."},
          {"ПОКАЗАТЕЛЬ ПРОИЗВОДИТЕЛЬНОСТИ", "Показывает частоту кадров игры в углу экрана."},
-         {"ПОЛОЖЕНИЕ ПОКАЗАТЕЛЯ", "Угол экрана, в котором показывается показатель производительности."}},
+         {"ПОЛОЖЕНИЕ ПОКАЗАТЕЛЯ", "Угол экрана, в котором показывается показатель производительности."},
+         {"ПОЛЕ ЗРЕНИЯ", "Ширина обзора камеры. 80 — исходное значение; прицеливание и укрытие меняются в той же пропорции."},
+         {"ЗЕРНИСТОСТЬ ПЛЁНКИ", "Эффект зернистости плёнки, который игра добавляет к изображению."}},
         "Выкл.", "Вкл.", "FXAA", "FXAA (макс.)", "Открыть", "Билинейное (оригинал)", "AMD CAS (резкость)", "AMD FSR 1", "Автоматически", {"Сверху слева", "Сверху справа", "Снизу слева", "Снизу справа"}, "Подробно", "Расширенный"}},
       {"cze",
        {{"KLÁVESNICE A MYŠ", "Upravte nastavení klávesnice a myši."},
@@ -335,7 +373,9 @@ const std::map<std::string, Texts>& LocalizedTexts() {
           "Kolik dalšího zostření přidá škálování obrazu. 0 ponechá výchozí."},
          {"MÍSTNÍ KOOPERACE", "Vyberte ovladač nebo klávesnici každého hráče a hrajte kampaň společně na tomto počítači."},
          {"UKAZATEL VÝKONU", "Zobrazí snímkovou frekvenci hry v rohu obrazovky."},
-         {"UMÍSTĚNÍ UKAZATELE", "Roh obrazovky, ve kterém se zobrazuje ukazatel výkonu."}},
+         {"UMÍSTĚNÍ UKAZATELE", "Roh obrazovky, ve kterém se zobrazuje ukazatel výkonu."},
+         {"ZORNÉ POLE", "Šířka záběru kamery. 80 je původní hodnota; míření a kryt se mění ve stejném poměru."},
+         {"FILMOVÉ ZRNO", "Filmové zrno, které hra přidává do obrazu."}},
         "Vypnuto", "Zapnuto", "FXAA", "FXAA extrémní", "Otevřít", "Bilineární (původní)", "AMD CAS (zostření)", "AMD FSR 1", "Automaticky", {"Vlevo nahoře", "Vpravo nahoře", "Vlevo dole", "Vpravo dole"}, "Podrobný", "Pokročilý"}},
       {"hun",
        {{"BILLENTYŰZET ÉS EGÉR", "A billentyűzet és az egér beállításai."},
@@ -353,7 +393,9 @@ const std::map<std::string, Texts>& LocalizedTexts() {
           "Mennyi további élesítést ad a képskálázás. A 0 a sajátját hagyja meg."},
          {"HELYI KOOPERATÍV", "Válaszd ki, melyik kontrollert vagy billentyűzetet használják az egyes játékosok, hogy együtt játsszatok a kampányban ezen a számítógépen."},
          {"TELJESÍTMÉNYJELZŐ", "Megjeleníti a játék képkockasebességét a képernyő sarkában."},
-         {"JELZŐ HELYE", "A képernyő sarka, ahol a teljesítményjelző megjelenik."}},
+         {"JELZŐ HELYE", "A képernyő sarka, ahol a teljesítményjelző megjelenik."},
+         {"LÁTÓMEZŐ", "A kamera látószögének szélessége. A 80 az eredeti; a célzás és a fedezék ugyanilyen arányban változik."},
+         {"FILMSZEMCSÉZET", "A filmszemcsés zaj, amelyet a játék a képhez ad."}},
         "Ki", "Be", "FXAA", "FXAA (extrém)", "Megnyitás", "Bilineáris (eredeti)", "AMD CAS (élesítés)", "AMD FSR 1", "Automatikus", {"Bal felső sarok", "Jobb felső sarok", "Bal alsó sarok", "Jobb alsó sarok"}, "Részletes", "Haladó"}},
       {"chn",
        {{"鍵盤與滑鼠", "調整鍵盤與滑鼠設定。"},
@@ -371,7 +413,9 @@ const std::map<std::string, Texts>& LocalizedTexts() {
           "影像縮放額外增加的銳利度。0 為保持原樣。"},
          {"本機合作", "選擇每位玩家使用的控制器或鍵盤，在這台電腦上一起遊玩戰役。"},
          {"效能顯示", "在畫面角落顯示遊戲的每秒影格數。"},
-         {"顯示位置", "效能顯示出現在畫面的哪個角落。"}},
+         {"顯示位置", "效能顯示出現在畫面的哪個角落。"},
+         {"視野", "鏡頭視野的寬度。80 為原始值；瞄準與掩護會以相同比例改變。"},
+         {"底片顆粒", "遊戲加在畫面上的底片顆粒雜訊。"}},
         "關閉", "開啟", "FXAA", "FXAA 極致", "開啟", "雙線性（原始）", "AMD CAS（銳利化）", "AMD FSR 1", "自動", {"左上角", "右上角", "左下角", "右下角"}, "詳細", "進階"}},
       {"kor",
        {{"키보드 및 마우스", "키보드 및 마우스 설정을 조정합니다."},
@@ -389,7 +433,9 @@ const std::map<std::string, Texts>& LocalizedTexts() {
           "이미지 스케일링에 더할 선명도입니다. 0은 기본값을 유지합니다."},
          {"로컬 협동", "이 컴퓨터에서 함께 캠페인을 플레이하도록 각 플레이어가 사용할 컨트롤러나 키보드를 선택합니다."},
          {"성능 표시", "화면 모서리에 게임의 프레임 속도를 표시합니다."},
-         {"표시 위치", "성능 표시가 나타나는 화면 모서리입니다."}},
+         {"표시 위치", "성능 표시가 나타나는 화면 모서리입니다."},
+         {"시야각", "카메라 시야의 넓이입니다. 80이 원래 값이며, 조준과 엄폐도 같은 비율로 바뀝니다."},
+         {"필름 그레인", "게임이 화면에 더하는 필름 그레인 노이즈입니다."}},
         "끔", "켬", "FXAA", "FXAA 최대", "열기", "바이리니어 (원본)", "AMD CAS (선명화)", "AMD FSR 1", "자동", {"왼쪽 위", "오른쪽 위", "왼쪽 아래", "오른쪽 아래"}, "상세", "고급"}},
   };
   return texts;
@@ -530,7 +576,8 @@ std::string FormatValue(const Option& option, float value, bool toml) {
       const size_t index = std::min(static_cast<size_t>(value < 0 ? 0 : value + 0.5f), choices.size() - 1);
       const std::string choice = choices[index];
       const bool number = !choice.empty() && choice.find_first_not_of("0123456789.") == std::string::npos;
-      return toml && !number ? std::string("\"") + choice + "\"" : choice;
+      const bool boolean = choice == "true" || choice == "false";
+      return toml && !number && !boolean ? std::string("\"") + choice + "\"" : choice;
     }
     case Kind::kSlider:
       return FormatFloat(value);
@@ -719,6 +766,13 @@ bool PcOptionValueNames(int psid, std::vector<std::u16string>& names) {
           {9, u"Ilimitado"},  {11, u"Bez limitu"}, {12, u"Без ограничения"}};
       const auto found = unlimited.find(REXCVAR_GET(user_language));
       names = {u"30", u"60", u"90", u"120", found != unlimited.end() ? found->second : u"Unlimited"};
+    }
+    if (option.label == Label::kFilmGrain) {
+      const Texts& texts = TextsFor(PlayerLanguage());
+      names = {CoalescedString::FromUtf8(texts.off).text, CoalescedString::FromUtf8(texts.on).text};
+    }
+    if (option.label == Label::kFieldOfView) {
+      for (const char* degrees : option.choices) names.push_back(CoalescedString::FromAscii(degrees).text);
     }
     if (option.label == Label::kPerformanceOverlay) {
       const std::string language = PlayerLanguage();
