@@ -258,6 +258,34 @@ cutout run that reached it matched PM4 at the noise level until second 216 and t
 27 to 32%, which the previews show is a different camera position and HUD state (that run reached
 the chapter later), not a rendering difference.
 
+## Is the CPU the bottleneck now? (phase D: the case for option B)
+
+Option B of the design (replacing the guest D3D calls and reading the device structure instead of
+the command stream) saves CPU work: register tracking and packet parsing. It is worth doing only
+if the CPU limits the frame rate. Without the frame rate cap, so that the game runs as fast as it
+can, after phases A and B (two rounds each of `hle`, M4, Metal):
+
+| Uncapped, median per frame | Title screen | Main menu | Campaign start |
+| --- | --- | --- | --- |
+| Frame time | 7.0 to 7.6 ms | 6.8 to 6.9 ms | 9.2 to 11.2 ms |
+| GPU busy time | 6.4 to 6.5 ms | 6.3 ms | 9.2 to 9.7 ms |
+| Command processor waits for the GPU | 0 | 0 | 0 |
+| CPU time requesting textures in draws (`draw_texture_load_us`) | 0.17 ms | 0.17 to 0.20 ms | 0.25 to 0.27 ms |
+
+The GPU is busy for 90 to 100% of every frame and the command processor never waits for it, so
+these scenes are limited by the GPU, not the CPU: a faster command processor would not shorten
+the frame. The gaps of up to 1.8 ms between frame and GPU time in some campaign runs are pacing
+(the 90th percentile frame is 10 to 13.6 ms), not a CPU-bound steady state.
+
+What this does not cover, and is not measured: the CPU time of the command processor thread
+itself (there is no counter for it; the counters above are a part of it), and heavy gameplay
+scenes, where far more draws per frame raise the CPU work per frame faster than the GPU work.
+
+**Conclusion: option B is not justified by these measurements.** The GPU-side work (resolves,
+texture loads, transfers, render passes; phase C) is where frame time can still be saved.
+Revisit with a heavy scene played uncapped: if its frame time then exceeds its GPU time by a wide
+margin with the GPU idle between submissions, the CPU has become the limit.
+
 ## Success criteria
 
 | Criterion | Status |
