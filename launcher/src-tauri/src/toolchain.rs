@@ -12,7 +12,11 @@
 //!   by itself, so they are only run once `xcode-select -p` (which never does) names a folder.
 //! - Linux: clang from the distribution's package manager, through `pkexec`, so the system asks
 //!   for the password in its own dialog. Systems whose base image cannot take packages that way
-//!   (Fedora Atomic spins such as Bazzite, SteamOS) get the manual instructions instead.
+//!   (Fedora Atomic spins such as Bazzite, SteamOS) get the manual instructions instead, which install
+//!   on the system itself: a compiler inside a container is not on the launcher's PATH. On SteamOS
+//!   those install clang on the system itself with pacman: its read-only base image is opened for
+//!   that, and the packages that ship headers (stripped from SteamOS' image) are installed again.
+//!   An update of SteamOS replaces the image, so the player runs them again after one.
 //! - Windows: LLVM's clang, with Microsoft's C++ headers and libraries from Visual Studio's Build
 //!   Tools (clang finds them by itself), both through `winget` in a console window of its own,
 //!   where the player accepts the packages' agreements and Windows asks for permission to install.
@@ -68,6 +72,9 @@ pub enum CompilerStatus {
         install: InstallMethod,
         /// The command the player can run in a terminal instead.
         manual: String,
+        /// What the interface adds to the manual command for this system: "steamos" (where to
+        /// run it, the password sudo needs, and running it again after a SteamOS update).
+        manual_note: Option<String>,
         /// Apple's Command Line Tools installer is open (macOS), so they may be on their way.
         installer_running: bool,
     },
@@ -151,14 +158,26 @@ pub fn manual_command(install: &InstallMethod, release: Option<&OsRelease>) -> S
             commands.iter().map(|command| quoted_command(command)).collect::<Vec<_>>().join("; ")
         }
         InstallMethod::Manual => match release {
-            Some(release) if release.id == "steamos" => {
-                "distrobox create --name azura --image fedora:latest && distrobox enter azura -- sudo dnf install -y clang gcc-c++".into()
-            }
-            Some(_) => "rpm-ostree install clang gcc-c++  (then restart), or use a distrobox container".into(),
+            // On the system itself: the launcher runs the compiler from the host, and the game must
+            // link with the host's libraries. SteamOS' repositories have clang 18 from 3.7 on.
+            // glibc, linux-api-headers and gcc are installed again for their headers (C, Linux and
+            // the C++ standard library), which SteamOS' image leaves out.
+            Some(release) if release.id == "steamos" => STEAMOS_MANUAL.into(),
+            Some(_) => "rpm-ostree install clang gcc-c++  (then restart)".into(),
             None if cfg!(windows) => "Install LLVM (clang 18 or newer) and Visual Studio 2022 Build Tools with the C++ workload".into(),
             None => "Install clang 18 or newer with your distribution's package manager".into(),
         },
     }
+}
+
+/// The manual command on SteamOS, one line for Konsole.
+const STEAMOS_MANUAL: &str = "sudo steamos-readonly disable && sudo pacman-key --init && \
+    sudo pacman-key --populate archlinux holo && sudo pacman -Sy --noconfirm clang glibc linux-api-headers gcc && \
+    sudo steamos-readonly enable";
+
+/// The note the interface shows with the manual command on `release`.
+fn manual_note(release: Option<&OsRelease>) -> Option<String> {
+    release.filter(|release| release.id == "steamos").map(|_| "steamos".to_string())
 }
 
 /// The packages that give a working clang on Windows: LLVM, and the Build Tools with their C++
@@ -363,6 +382,7 @@ pub fn status() -> CompilerStatus {
         problem,
         install,
         manual,
+        manual_note: manual_note(release.as_ref()),
         installer_running: apple_installer_running(),
     }
 }
@@ -447,7 +467,19 @@ mod tests {
         let steamos = parse_os_release("ID=steamos\nID_LIKE=arch\n");
         assert_eq!(package_install(&steamos, false), None);
         assert!(manual_command(&InstallMethod::Manual, Some(&bazzite)).starts_with("rpm-ostree install clang"));
-        assert!(manual_command(&InstallMethod::Manual, Some(&steamos)).starts_with("distrobox create"));
+        assert_eq!(manual_command(&InstallMethod::Manual, Some(&steamos)), STEAMOS_MANUAL);
+    }
+
+    #[test]
+    fn steamos_gets_its_own_note() {
+        let steamos = parse_os_release("ID=steamos\nID_LIKE=arch\n");
+        let arch = parse_os_release("ID=arch\n");
+        assert_eq!(manual_note(Some(&steamos)), Some("steamos".into()));
+        assert_eq!(manual_note(Some(&arch)), None);
+        assert_eq!(manual_note(None), None);
+        // A container's compiler is never found on the host's PATH, so no instruction may lead there.
+        assert!(!STEAMOS_MANUAL.contains("distrobox"));
+        assert!(!manual_command(&InstallMethod::Manual, Some(&parse_os_release("ID=bazzite\n"))).contains("distrobox"));
     }
 
     #[test]

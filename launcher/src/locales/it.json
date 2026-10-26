@@ -117,6 +117,7 @@
     "compilerWaitingApple": "Segui la finestra di Apple per installare i Command Line Tools. Il launcher prosegue da solo una volta installati.",
     "compilerCheckAgain": "Verifica di nuovo",
     "compilerManual": "Oppure esegui questo in un terminale:",
+    "compilerManualSteamOS": "Su uno Steam Deck, eseguilo in Konsole in modalità Desktop. sudo chiede la password dell'utente deck: se non ne ha ancora una, impostala prima con passwd. Un aggiornamento di SteamOS rimuove il compilatore, quindi eseguilo di nuovo dopo ogni aggiornamento.",
     "runtimeNotBuilt": "Non ancora costruito: la prima costruzione dalla tua copia del gioco richiede qualche minuto.",
     "runtimeUpdateLink": "È pronto un aggiornamento: si installa in pochi secondi.",
     "runtimeUpdateBuild": "Un aggiornamento richiede di ricostruire il gioco: circa due minuti."
