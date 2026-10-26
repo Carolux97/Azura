@@ -351,10 +351,10 @@ index ac6b056..8ef1ee8 100644
  
  }  // namespace rex::graphics
 diff --git a/include/rex/graphics/pipeline/render_target/cache.h b/include/rex/graphics/pipeline/render_target/cache.h
-index b246319..03162b3 100644
+index b246319..3343e05 100644
 --- a/include/rex/graphics/pipeline/render_target/cache.h
 +++ b/include/rex/graphics/pipeline/render_target/cache.h
-@@ -194,6 +194,13 @@ class RenderTargetCache {
+@@ -194,6 +194,16 @@ class RenderTargetCache {
  
    virtual void BeginFrame();
  
@@ -364,11 +364,14 @@ index b246319..03162b3 100644
 +  uint32_t GetRenderTargetsOverwrittenByClear(uint32_t depth_and_color_rts_used_bits,
 +                                              reg::RB_DEPTHCONTROL normalized_depth_control,
 +                                              uint32_t normalized_color_mask) const;
++  // Logs, once per reason, why the guest's clear still needs a render target's old contents.
++  void LogClearKeepingContents(uint32_t rt_bit_index, reg::RB_DEPTHCONTROL normalized_depth_control,
++                               uint32_t normalized_color_mask) const;
 +
    virtual bool Update(bool is_rasterization_done, reg::RB_DEPTHCONTROL normalized_depth_control,
                        uint32_t normalized_color_mask, const Shader& vertex_shader);
  
-@@ -666,6 +673,11 @@ class RenderTargetCache {
+@@ -666,6 +676,11 @@ class RenderTargetCache {
    bool WouldOwnershipChangeRequireTransfers(RenderTargetKey dest,
                                              uint32_t start_tiles_base_relative,
                                              uint32_t length_tiles) const;
@@ -15006,19 +15009,21 @@ index 0000000..b9bc2fb
 +
 +#undef CAMetalLayer
 diff --git a/src/graphics/pipeline/render_target/cache.cpp b/src/graphics/pipeline/render_target/cache.cpp
-index bd0019c..b67df19 100644
+index bd0019c..461f916 100644
 --- a/src/graphics/pipeline/render_target/cache.cpp
 +++ b/src/graphics/pipeline/render_target/cache.cpp
-@@ -13,6 +13,8 @@
+@@ -13,6 +13,10 @@
  #include <cmath>
  #include <cstring>
  #include <iterator>
 +#include <map>
++#include <mutex>
++#include <set>
 +#include <string>
  #include <tuple>
  #include <unordered_set>
  #include <utility>
-@@ -20,6 +22,7 @@
+@@ -20,6 +24,7 @@
  #include <rex/assert.h>
  #include <rex/cvar.h>
  #include <rex/graphics/flags.h>
@@ -15026,7 +15031,7 @@ index bd0019c..b67df19 100644
  #include <rex/graphics/pipeline/render_target/cache.h>
  #include <rex/graphics/register_file.h>
  #include <rex/graphics/registers.h>
-@@ -27,6 +30,7 @@
+@@ -27,6 +32,7 @@
  #include <rex/graphics/xenos.h>
  #include <rex/logging.h>
  #include <rex/math.h>
@@ -15034,7 +15039,7 @@ index bd0019c..b67df19 100644
  
  REXCVAR_DEFINE_BOOL(mrt_edram_used_range_clamp_to_min, true, "GPU",
                      "Clamp MRT EDRAM used range to minimum");
-@@ -407,6 +411,48 @@ void RenderTargetCache::BeginFrame() {
+@@ -407,6 +413,80 @@ void RenderTargetCache::BeginFrame() {
    ResetAccumulatedRenderTargets();
  }
  
@@ -15080,10 +15085,42 @@ index bd0019c..b67df19 100644
 +  return overwritten_bits;
 +}
 +
++void RenderTargetCache::LogClearKeepingContents(uint32_t rt_bit_index,
++                                                reg::RB_DEPTHCONTROL normalized_depth_control,
++                                                uint32_t normalized_color_mask) const {
++  // Why the guest's clear still needs the target's old contents, logged once per reason: the cases
++  // the HLE path does not handle yet.
++  const RegisterFile& regs = register_file();
++  const char* reason;
++  if (!hle::InWholeSurfaceClear()) {
++    reason = "the clear has a rectangle";
++  } else if (rt_bit_index == 0) {
++    bool depth_written = normalized_depth_control.z_enable &&
++                         normalized_depth_control.z_write_enable &&
++                         normalized_depth_control.zfunc == xenos::CompareFunction::kAlways;
++    reason = depth_written ? "depth cleared, stencil kept" : "stencil cleared, depth kept";
++  } else if (((normalized_color_mask >> (4 * (rt_bit_index - 1))) & 0b1111) != 0b1111) {
++    reason = "color cleared with some channels masked";
++  } else if (regs.Get<reg::RB_COLORCONTROL>().alpha_test_enable ||
++             regs.Get<reg::RB_COLORCONTROL>().alpha_to_mask_enable) {
++    reason = "color cleared with alpha testing";
++  } else {
++    reason = "color cleared with blending";
++  }
++  static std::mutex mutex;
++  static std::set<std::string> logged;
++  std::lock_guard<std::mutex> lock(mutex);
++  if (logged.insert(reason).second) {
++    REXGPU_INFO("HLE graphics: a clear keeps the old contents of a render target ({}); its "
++                "transfers stay",
++                reason);
++  }
++}
++
  bool RenderTargetCache::Update(bool is_rasterization_done,
                                 reg::RB_DEPTHCONTROL normalized_depth_control,
                                 uint32_t normalized_color_mask, const Shader& vertex_shader) {
-@@ -693,11 +739,27 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
+@@ -693,11 +773,31 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
    // draw with whatever contents currently are in the render target in this
    // case).
  
@@ -15102,9 +15139,13 @@ index bd0019c..b67df19 100644
      uint32_t rt_bit_index = rt_base_index.second;
 +    bool transfers_needed =
 +        !interlock_barrier_only && !(rts_overwritten_bits & (uint32_t(1) << rt_bit_index));
-+    if (!transfers_needed && !interlock_barrier_only &&
++    if (!interlock_barrier_only && hle::InClear() &&
 +        WouldOwnershipChangeRequireTransfers(rt_keys[rt_bit_index], 0, rt_lengths_tiles[i])) {
-+      PERF_counter_inc(kRenderTargetTransfersSkipped);
++      if (transfers_needed) {
++        LogClearKeepingContents(rt_bit_index, normalized_depth_control, normalized_color_mask);
++      } else {
++        PERF_counter_inc(kRenderTargetTransfersSkipped);
++      }
 +    }
      ChangeOwnership(rt_keys[rt_bit_index], 0, rt_lengths_tiles[i],
 -                    interlock_barrier_only ? nullptr : &last_update_transfers_[rt_bit_index]);
@@ -15112,7 +15153,7 @@ index bd0019c..b67df19 100644
    }
  
    if (interlock_barrier_only) {
-@@ -1254,6 +1316,104 @@ bool RenderTargetCache::WouldOwnershipChangeRequireTransfers(RenderTargetKey des
+@@ -1254,6 +1354,104 @@ bool RenderTargetCache::WouldOwnershipChangeRequireTransfers(RenderTargetKey des
    return false;
  }
  
@@ -15217,7 +15258,7 @@ index bd0019c..b67df19 100644
  void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_tiles_base_relative,
                                          uint32_t length_tiles,
                                          std::vector<Transfer>* transfers_append_out,
-@@ -1335,6 +1495,8 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
+@@ -1335,6 +1533,8 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
                       transfer_host_depth_source)) {
                // Extend the last transfer if, for example, transferring color,
                // but host depth is different.
@@ -15226,7 +15267,7 @@ index bd0019c..b67df19 100644
                transfers_append_out->back().end_tiles = transfer_end_tiles;
              } else {
                auto transfer_source_rt_it = render_targets_.find(transfer_source);
-@@ -1353,6 +1515,7 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
+@@ -1353,6 +1553,7 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
                        transfer_host_depth_source_rt_it != render_targets_.end()
                            ? transfer_host_depth_source_rt_it->second
                            : nullptr);

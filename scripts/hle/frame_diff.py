@@ -23,11 +23,22 @@ import zlib
 def read_ppm(path):
     with open(path, "rb") as f:
         data = f.read()
-    parts = data.split(maxsplit=4)
-    if parts[0] != b"P6":
+    # The header is four whitespace-separated fields; exactly one whitespace byte follows the last
+    # one, and the pixels (which may start with bytes that look like whitespace) come right after.
+    fields = []
+    at = 0
+    while len(fields) < 4:
+        while data[at:at + 1].isspace():
+            at += 1
+        end = at
+        while not data[end:end + 1].isspace():
+            end += 1
+        fields.append(data[at:end])
+        at = end
+    if fields[0] != b"P6":
         raise ValueError(f"{path}: not a binary PPM")
-    width, height = int(parts[1]), int(parts[2])
-    pixels = parts[4][: width * height * 3]
+    width, height = int(fields[1]), int(fields[2])
+    pixels = data[at + 1:at + 1 + width * height * 3]
     return width, height, pixels
 
 
@@ -74,6 +85,10 @@ def main():
         wb, hb, b = read_ppm(os.path.join(args.dir_b, name))
         if (wa, ha) != (wb, hb):
             print(f"{name:16s} sizes differ: {wa}x{ha} and {wb}x{hb}")
+            continue
+        if len(a) != wa * ha * 3 or len(b) != wb * hb * 3:
+            # Written while the run was being stopped.
+            print(f"{name:16s} incomplete capture, skipped")
             continue
         total = 0
         over = 0
