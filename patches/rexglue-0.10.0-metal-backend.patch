@@ -351,10 +351,24 @@ index ac6b056..8ef1ee8 100644
  
  }  // namespace rex::graphics
 diff --git a/include/rex/graphics/pipeline/render_target/cache.h b/include/rex/graphics/pipeline/render_target/cache.h
-index b246319..d57e36f 100644
+index b246319..03162b3 100644
 --- a/include/rex/graphics/pipeline/render_target/cache.h
 +++ b/include/rex/graphics/pipeline/render_target/cache.h
-@@ -666,6 +666,11 @@ class RenderTargetCache {
+@@ -194,6 +194,13 @@ class RenderTargetCache {
+ 
+   virtual void BeginFrame();
+ 
++  // Of the render targets a draw uses (bit 0 depth, 1 + i color i), those the guest's clear of
++  // whole surfaces writes completely with the current state, so their old contents are not needed
++  // (gfx = hle).
++  uint32_t GetRenderTargetsOverwrittenByClear(uint32_t depth_and_color_rts_used_bits,
++                                              reg::RB_DEPTHCONTROL normalized_depth_control,
++                                              uint32_t normalized_color_mask) const;
++
+   virtual bool Update(bool is_rasterization_done, reg::RB_DEPTHCONTROL normalized_depth_control,
+                       uint32_t normalized_color_mask, const Shader& vertex_shader);
+ 
+@@ -666,6 +673,11 @@ class RenderTargetCache {
    bool WouldOwnershipChangeRequireTransfers(RenderTargetKey dest,
                                              uint32_t start_tiles_base_relative,
                                              uint32_t length_tiles) const;
@@ -1166,7 +1180,7 @@ index 0000000..a146aa8
 +
 +}  // namespace rex::input
 diff --git a/include/rex/perf/counter.h b/include/rex/perf/counter.h
-index 83f0dff..1e1dea1 100644
+index 83f0dff..4a312bb 100644
 --- a/include/rex/perf/counter.h
 +++ b/include/rex/perf/counter.h
 @@ -10,6 +10,7 @@
@@ -1229,10 +1243,17 @@ index 83f0dff..1e1dea1 100644
    kResolves,              // Guest resolves (EDRAM to memory copies)
    // Why the open render pass was ended (each ended pass adds to one of these)
    kRenderPassEndsTargetChange,  // A draw to other render targets
-@@ -81,6 +120,10 @@ enum class CounterId : uint16_t {
+@@ -81,6 +120,17 @@ enum class CounterId : uint16_t {
    // Guest draws that continue a render pass begun for a render target transfer
    kDrawsInTransferPasses,
  
++  // Render target transfers made inside a guest clear or resolve (gfx = hle tells them apart through
++  // its markers): a transfer into a target a clear then overwrites is wasted work
++  kRenderTargetTransfersInClears,
++  kRenderTargetTransfersInResolves,
++  // Transfers left out because the guest's clear overwrites their destination completely (gfx = hle)
++  kRenderTargetTransfersSkipped,
++
 +  // Marks the player sets with a key while playing (the runtime's bind_perf_marker key), to find the
 +  // frames they noticed in the CSV
 +  kMarkers,
@@ -1240,7 +1261,7 @@ index 83f0dff..1e1dea1 100644
    kCount  // sentinel -- must be last
  };
  
-@@ -162,6 +205,29 @@ class Profiler {
+@@ -162,6 +212,29 @@ class Profiler {
    }
  };
  
@@ -1930,7 +1951,7 @@ index b52bf39..13f51dc 100644
  
  void* MapFileView(FileMappingHandle handle, void* base_address, size_t length, PageAccess access,
 diff --git a/src/core/perf/counter.cpp b/src/core/perf/counter.cpp
-index d3f26eb..f04a74e 100644
+index d3f26eb..5e5a2a9 100644
 --- a/src/core/perf/counter.cpp
 +++ b/src/core/perf/counter.cpp
 @@ -46,6 +46,29 @@ std::array<std::atomic<int64_t>, kNumCounters> g_snapshot{};
@@ -1971,15 +1992,18 @@ index d3f26eb..f04a74e 100644
      "resolves",
      "pass_ends_target_change",
      "pass_ends_draw_barriers",
-@@ -86,6 +110,7 @@ constexpr const char* kCounterNames[] = {
+@@ -86,6 +110,10 @@ constexpr const char* kCounterNames[] = {
      "uploads_for_textures",
      "uploads_after_textures",
      "draws_in_transfer_passes",
++    "render_target_transfers_in_clears",
++    "render_target_transfers_in_resolves",
++    "render_target_transfers_skipped",
 +    "markers",
  };
  static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must match CounterId enum");
  
-@@ -94,6 +119,29 @@ static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must matc
+@@ -94,6 +122,29 @@ static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must matc
  constexpr bool kIsGauge[] = {
      false,  // kFrameTimeUs       (set each frame)
      false,  // kFps               (set each frame)
@@ -2009,7 +2033,7 @@ index d3f26eb..f04a74e 100644
      false,  // kDrawCalls
      false,  // kCommandBufferStalls
      false,  // kVerticesProcessed
-@@ -118,6 +166,7 @@ constexpr bool kIsGauge[] = {
+@@ -118,6 +169,7 @@ constexpr bool kIsGauge[] = {
      false,  // kHostGpuWaits
      false,  // kHostGpuWaitUs
      false,  // kMemexportReadbacks
@@ -2017,10 +2041,13 @@ index d3f26eb..f04a74e 100644
      false,  // kResolves
      false,  // kRenderPassEndsTargetChange
      false,  // kRenderPassEndsDrawBarriers
-@@ -134,6 +183,7 @@ constexpr bool kIsGauge[] = {
+@@ -134,6 +186,10 @@ constexpr bool kIsGauge[] = {
      false,  // kUploadsForTextures
      false,  // kUploadsAfterTextures
      false,  // kDrawsInTransferPasses
++    false,  // kRenderTargetTransfersInClears
++    false,  // kRenderTargetTransfersInResolves
++    false,  // kRenderTargetTransfersSkipped
 +    false,  // kMarkers
  };
  static_assert(std::size(kIsGauge) == kNumCounters, "kIsGauge must match CounterId enum");
@@ -14979,7 +15006,7 @@ index 0000000..b9bc2fb
 +
 +#undef CAMetalLayer
 diff --git a/src/graphics/pipeline/render_target/cache.cpp b/src/graphics/pipeline/render_target/cache.cpp
-index bd0019c..ca62abd 100644
+index bd0019c..b67df19 100644
 --- a/src/graphics/pipeline/render_target/cache.cpp
 +++ b/src/graphics/pipeline/render_target/cache.cpp
 @@ -13,6 +13,8 @@
@@ -14991,7 +15018,15 @@ index bd0019c..ca62abd 100644
  #include <tuple>
  #include <unordered_set>
  #include <utility>
-@@ -27,6 +29,7 @@
+@@ -20,6 +22,7 @@
+ #include <rex/assert.h>
+ #include <rex/cvar.h>
+ #include <rex/graphics/flags.h>
++#include <rex/graphics/hle/markers.h>
+ #include <rex/graphics/pipeline/render_target/cache.h>
+ #include <rex/graphics/register_file.h>
+ #include <rex/graphics/registers.h>
+@@ -27,6 +30,7 @@
  #include <rex/graphics/xenos.h>
  #include <rex/logging.h>
  #include <rex/math.h>
@@ -14999,7 +15034,85 @@ index bd0019c..ca62abd 100644
  
  REXCVAR_DEFINE_BOOL(mrt_edram_used_range_clamp_to_min, true, "GPU",
                      "Clamp MRT EDRAM used range to minimum");
-@@ -1254,6 +1257,99 @@ bool RenderTargetCache::WouldOwnershipChangeRequireTransfers(RenderTargetKey des
+@@ -407,6 +411,48 @@ void RenderTargetCache::BeginFrame() {
+   ResetAccumulatedRenderTargets();
+ }
+ 
++uint32_t RenderTargetCache::GetRenderTargetsOverwrittenByClear(
++    uint32_t depth_and_color_rts_used_bits, reg::RB_DEPTHCONTROL normalized_depth_control,
++    uint32_t normalized_color_mask) const {
++  const RegisterFile& regs = register_file();
++  uint32_t overwritten_bits = 0;
++  // Depth and stencil: both written everywhere the clear draws, whatever was there.
++  if (depth_and_color_rts_used_bits & 1) {
++    auto stencil_ref_mask = regs.Get<reg::RB_STENCILREFMASK>();
++    bool depth_written = normalized_depth_control.z_enable && normalized_depth_control.z_write_enable &&
++                         normalized_depth_control.zfunc == xenos::CompareFunction::kAlways;
++    bool stencil_written = normalized_depth_control.stencil_enable &&
++                           normalized_depth_control.stencilfunc == xenos::CompareFunction::kAlways &&
++                           normalized_depth_control.stencilzpass == xenos::StencilOp::kReplace &&
++                           stencil_ref_mask.stencilwritemask == 0xFF;
++    if (depth_written && stencil_written) {
++      overwritten_bits |= 1;
++    }
++  }
++  // Color: every channel written, without blending, and nothing discarded by alpha testing.
++  auto color_control = regs.Get<reg::RB_COLORCONTROL>();
++  if (!color_control.alpha_test_enable && !color_control.alpha_to_mask_enable) {
++    for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
++      uint32_t rt_bit_index = 1 + i;
++      if (!(depth_and_color_rts_used_bits & (uint32_t(1) << rt_bit_index)) ||
++          ((normalized_color_mask >> (4 * i)) & 0b1111) != 0b1111) {
++        continue;
++      }
++      auto blend_control =
++          regs.Get<reg::RB_BLENDCONTROL>(reg::RB_BLENDCONTROL::rt_register_indices[i]);
++      if (blend_control.color_srcblend == xenos::BlendFactor::kOne &&
++          blend_control.color_destblend == xenos::BlendFactor::kZero &&
++          blend_control.color_comb_fcn == xenos::BlendOp::kAdd &&
++          blend_control.alpha_srcblend == xenos::BlendFactor::kOne &&
++          blend_control.alpha_destblend == xenos::BlendFactor::kZero &&
++          blend_control.alpha_comb_fcn == xenos::BlendOp::kAdd) {
++        overwritten_bits |= uint32_t(1) << rt_bit_index;
++      }
++    }
++  }
++  return overwritten_bits;
++}
++
+ bool RenderTargetCache::Update(bool is_rasterization_done,
+                                reg::RB_DEPTHCONTROL normalized_depth_control,
+                                uint32_t normalized_color_mask, const Shader& vertex_shader) {
+@@ -693,11 +739,27 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
+   // draw with whatever contents currently are in the render target in this
+   // case).
+ 
++  // With gfx = hle, the markers say when this draw is the guest's clear of whole surfaces: a target
++  // it writes completely needs nothing of what the EDRAM held before, so it takes ownership of
++  // its tiles without the transfers that would copy the old contents in.
++  uint32_t rts_overwritten_bits = 0;
++  if (!interlock_barrier_only && hle::InWholeSurfaceClear()) {
++    rts_overwritten_bits = GetRenderTargetsOverwrittenByClear(depth_and_color_rts_used_bits,
++                                                              normalized_depth_control,
++                                                              normalized_color_mask);
++  }
++
+   for (uint32_t i = 0; i < edram_bases_sorted_count; ++i) {
+     const std::pair<uint32_t, uint32_t>& rt_base_index = edram_bases_sorted[i];
+     uint32_t rt_bit_index = rt_base_index.second;
++    bool transfers_needed =
++        !interlock_barrier_only && !(rts_overwritten_bits & (uint32_t(1) << rt_bit_index));
++    if (!transfers_needed && !interlock_barrier_only &&
++        WouldOwnershipChangeRequireTransfers(rt_keys[rt_bit_index], 0, rt_lengths_tiles[i])) {
++      PERF_counter_inc(kRenderTargetTransfersSkipped);
++    }
+     ChangeOwnership(rt_keys[rt_bit_index], 0, rt_lengths_tiles[i],
+-                    interlock_barrier_only ? nullptr : &last_update_transfers_[rt_bit_index]);
++                    transfers_needed ? &last_update_transfers_[rt_bit_index] : nullptr);
+   }
+ 
+   if (interlock_barrier_only) {
+@@ -1254,6 +1316,104 @@ bool RenderTargetCache::WouldOwnershipChangeRequireTransfers(RenderTargetKey des
    return false;
  }
  
@@ -15056,6 +15169,11 @@ index bd0019c..ca62abd 100644
 +                                    bool extends_last) {
 +  if (!extends_last) {
 +    PERF_counter_inc(kRenderTargetTransfers);
++    if (hle::InClear()) {
++      PERF_counter_inc(kRenderTargetTransfersInClears);
++    } else if (hle::InResolve()) {
++      PERF_counter_inc(kRenderTargetTransfersInResolves);
++    }
 +  }
 +  PERF_counter_add(kRenderTargetTransferTiles, int64_t(tiles));
 +  if (!REXCVAR_GET(log_render_target_transfers)) {
@@ -15099,7 +15217,7 @@ index bd0019c..ca62abd 100644
  void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_tiles_base_relative,
                                          uint32_t length_tiles,
                                          std::vector<Transfer>* transfers_append_out,
-@@ -1335,6 +1431,8 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
+@@ -1335,6 +1495,8 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
                       transfer_host_depth_source)) {
                // Extend the last transfer if, for example, transferring color,
                // but host depth is different.
@@ -15108,7 +15226,7 @@ index bd0019c..ca62abd 100644
                transfers_append_out->back().end_tiles = transfer_end_tiles;
              } else {
                auto transfer_source_rt_it = render_targets_.find(transfer_source);
-@@ -1353,6 +1451,7 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
+@@ -1353,6 +1515,7 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
                        transfer_host_depth_source_rt_it != render_targets_.end()
                            ? transfer_host_depth_source_rt_it->second
                            : nullptr);
