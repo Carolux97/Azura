@@ -173,6 +173,55 @@ pairs show, and was not pursued further. Which run of a pair goes first also cha
 several percent here, which is why the comparisons above alternate the modes and why single pairs
 of traces need this normalisation.
 
+## Pass reduction, phase A: clears as load actions
+
+With `hle_clear_load_actions` (on by default with `gfx = hle`), a game clear that writes every
+target it uses completely is not drawn: it becomes a pending clear of those textures, and the
+next render pass on them starts with `MTLLoadActionClear` (colour, depth and stencil separately).
+Pending clears are applied in a pass of their own before anything reads render targets outside a
+render pass (compute and blit work, the backend's own passes, the end of a submission). A clear in
+the middle of a pass on the same targets, a target format whose host storage needs a conversion
+(gamma, the 2_10_10_10 formats, 16-bit fixed point with a non-zero value) or a 24-bit float depth
+other than 0 or 1 is drawn as before.
+
+**What the values are.** `hle_verify_clears = true` draws the clears as before and compares two
+texels of each target (a corner and one inside) with what the load action would have written,
+byte for byte. That found two things before the feature was right:
+
+- The depth a clear writes is not ClearF's depth argument: Direct3D draws the clear with the
+  viewport's depth transform, so an argument of 0 writes 0.9961 and 1 writes 0.0000036 in some
+  passes. The depth is now taken from the clear's vertices, run on the CPU.
+- Many clears do not cover their surface. With the viewport transform off (as Direct3D draws
+  clears) the viewport registers can belong to another draw; the clear's real rectangle, from its
+  vertices run on the CPU (`DrawExtentEstimator::EstimateVertexRectangle`, which also handles the
+  immediate indices Direct3D uses), is often narrower than the pitch (0 to 793 of 1280) or offset
+  (800 to 818). Phase 3's transfer skipping used the viewport and so also skipped transfers for
+  some of those partial clears; it now uses the real rectangle, which skips fewer (4 per frame
+  instead of 6 to 9) but only where the clear writes everything.
+
+With both fixed, every check matches (colour, depth and stencil, corner and inside).
+
+**Measured** (two rounds each, alternating, M4):
+
+| Campaign start | pm4 | hle without load actions | hle |
+| --- | --- | --- | --- |
+| Clears as load actions per frame | 0 | 0 | 4 |
+| Transfers / skipped per frame | 32 / 0 | 28 / 4 | 28 / 4 |
+| Render passes per frame | 84 | 83 | 83 |
+| Images, % of pixels over 16 from the closest pm4 capture (median / worst) | 7.5 / 11.0 (noise floor) | 5.7 / 7.7 | 6.0 / 7.7 |
+
+| Uncapped, frame ms / GPU ms per frame, each run | hle without load actions | hle |
+| --- | --- | --- |
+| Title screen | 8.17 / 6.97, 8.05 / 6.94 | 8.39 / 7.22, 8.15 / 7.03 |
+| Main menu | 6.82 / 6.25, 6.81 / 6.31 | 6.81 / 6.27, 6.83 / 6.28 |
+| Campaign start | 9.34 / 9.30, 11.17 / 8.98 | 9.17 / 9.19, 9.21 / 9.21 |
+
+The load actions are correct but make no measurable difference: only 3 or 4 clears per frame
+qualify (most are partial or in the middle of a pass), they did not end passes of their own (the
+clear was drawn in the pass that follows it), and a full-screen rectangle without textures is
+cheap on a tile-based GPU. The rectangle and depth fixes are the useful part: they make the
+transfer skipping safe.
+
 ## Success criteria
 
 | Criterion | Status |

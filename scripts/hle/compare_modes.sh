@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Compares the graphics paths (gfx = pm4 and gfx = hle) on the same scripted runs, alternating the
-# two modes so heat and background load affect both alike (docs/hle-graphics/03-results.md).
+# order every round so heat and background load affect them alike (docs/hle-graphics/03-results.md).
+# VARIANTS lists what to compare as "name:runtime options" separated by "|" (names without "_";
+# default "pm4:--gfx=pm4|hle:--gfx=hle"), for example to compare an HLE option on and off.
 #
 # Each run starts the built runtime with a fresh saves folder outside ~/Documents, the scripted
 # controller (AZURA_SCRIPTED_PAD) that reaches the campaign start, periodic captures
@@ -35,8 +37,12 @@ if pgrep -x azura >/dev/null; then
 fi
 mkdir -p "${OUT_DIR}"
 
+VARIANTS="${VARIANTS:-pm4:--gfx=pm4|hle:--gfx=hle}"
+IFS='|' read -r -a VARIANT_LIST <<< "${VARIANTS}"
+
 run() {
-  local mode="$1" round="$2"
+  local mode="$1" round="$2" options="$3"
+  shift 3
   local tag="${mode}_${round}"
   local work="${OUT_DIR}/${tag}"
   # One game at a time: two would share the GPU and spoil both measurements.
@@ -46,12 +52,12 @@ run() {
   fi
   rm -rf "${work}"
   mkdir -p "${work}/saves" "${work}/cache"
-  echo "==> round ${round}, gfx = ${mode}"
+  echo "==> round ${round}, ${mode} (${options})"
   # exec, so the background job's PID is the game's own and stopping it stops the game.
   (cd "${RUNTIME_DIR}" && AZURA_SCRIPTED_PAD="${PAD_SCRIPT}" AZURA_CAPTURE_DIR="${work}/frames" \
     AZURA_CAPTURE_EVERY=4 exec ./azura "--game_data_root=${GAME_DIR}" "--user_data_root=${work}/saves" \
     "--cache_root=${work}/cache" "--log_file=${work}/run.log" --log_max_file_size_mb=4000 \
-    "--perf_log_csv=${work}/perf.csv" "--gfx=${mode}" "$@" >/dev/null 2>&1) &
+    "--perf_log_csv=${work}/perf.csv" ${options} "$@" >/dev/null 2>&1) &
   local pid=$!
   local end=$((SECONDS + SECONDS_PER_RUN))
   while kill -0 "${pid}" 2>/dev/null && (( SECONDS < end )); do
@@ -72,13 +78,16 @@ run() {
 }
 
 for (( round = 1; round <= ROUNDS; ++round )); do
-  # Alternate which mode goes first, so neither always runs on a cooler machine.
-  if (( round % 2 )); then
-    run pm4 "${round}" "$@"
-    run hle "${round}" "$@"
-  else
-    run hle "${round}" "$@"
-    run pm4 "${round}" "$@"
+  # Alternate the order, so no variant always runs on a cooler machine.
+  order=("${VARIANT_LIST[@]}")
+  if (( round % 2 == 0 )); then
+    order=()
+    for (( i = ${#VARIANT_LIST[@]} - 1; i >= 0; --i )); do
+      order+=("${VARIANT_LIST[i]}")
+    done
   fi
+  for variant in "${order[@]}"; do
+    run "${variant%%:*}" "${round}" "${variant#*:}" "$@"
+  done
 done
 echo "==> Done: ${OUT_DIR}"
