@@ -8,6 +8,9 @@ runtime/generated/
 runtime/azura_manifest.toml
 *.xex
 *.iso
+# GPU captures and frame dumps (they hold the game's shaders, textures and draw data).
+captures/
+*.gputrace
 
 # Build output
 runtime/out/
