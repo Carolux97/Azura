@@ -351,10 +351,10 @@ index ac6b056..8ef1ee8 100644
  
  }  // namespace rex::graphics
 diff --git a/include/rex/graphics/pipeline/render_target/cache.h b/include/rex/graphics/pipeline/render_target/cache.h
-index b246319..b0890ed 100644
+index b246319..6adcb6a 100644
 --- a/include/rex/graphics/pipeline/render_target/cache.h
 +++ b/include/rex/graphics/pipeline/render_target/cache.h
-@@ -194,6 +194,29 @@ class RenderTargetCache {
+@@ -194,6 +194,34 @@ class RenderTargetCache {
  
    virtual void BeginFrame();
  
@@ -373,6 +373,11 @@ index b246319..b0890ed 100644
 +  // The depth that clear's vertices write, from them run on the CPU (NaN if unknown or not the
 +  // same at every vertex).
 +  float last_update_clear_vertex_depth() const { return last_update_clear_vertex_depth_; }
++  // Of the render targets a draw uses, those the guest's clear writes completely where it draws:
++  // every color channel without blending or alpha testing, depth and stencil both.
++  uint32_t GetRenderTargetsWrittenByClear(uint32_t depth_and_color_rts_used_bits,
++                                          reg::RB_DEPTHCONTROL normalized_depth_control,
++                                          uint32_t normalized_color_mask) const;
 +  // Whether the clear in progress writes the whole range that changes ownership: from column 0 to
 +  // the pitch and from row 0 to height_used (its rectangle from its vertices run on the CPU).
 +  bool ClearCoversRange(uint32_t pitch_pixels, uint32_t height_used, const Shader& vertex_shader);
@@ -384,10 +389,21 @@ index b246319..b0890ed 100644
    virtual bool Update(bool is_rasterization_done, reg::RB_DEPTHCONTROL normalized_depth_control,
                        uint32_t normalized_color_mask, const Shader& vertex_shader);
  
-@@ -510,6 +533,11 @@ class RenderTargetCache {
+@@ -510,6 +538,22 @@ class RenderTargetCache {
    // false).
    virtual bool IsHostDepthEncodingDifferent(xenos::DepthRenderTargetFormat format) const = 0;
  
++  // The rectangle, in pixels of the render targets, the last successful update's draw (a guest
++  // clear of part of its targets) cut out of their transfers, or nullptr: what the transfers of
++  // that update leave out when they run.
++  const Transfer::Rectangle* last_update_clear_cutout() const {
++    return last_update_has_clear_cutout_ ? &last_update_clear_cutout_ : nullptr;
++  }
++  // The pixels the guest's clear in progress covers whole, from its vertices run on the CPU,
++  // within the scissor and the pitch. False if none or unknown.
++  bool GetClearCutout(uint32_t pitch_pixels, const Shader& vertex_shader,
++                      Transfer::Rectangle& cutout_out);
++
 +  // The render target the last successful update's draw uses (0 depth, 1 + i color i), or
 +  // nullptr.
 +  RenderTarget* last_update_used_render_target(uint32_t index) const {
@@ -396,7 +412,7 @@ index b246319..b0890ed 100644
    void ResetAccumulatedRenderTargets() { are_accumulated_render_targets_valid_ = false; }
    RenderTarget* const* last_update_accumulated_render_targets() const {
      assert_true(GetPath() == Path::kHostRenderTargets);
-@@ -666,6 +694,11 @@ class RenderTargetCache {
+@@ -666,6 +710,11 @@ class RenderTargetCache {
    bool WouldOwnershipChangeRequireTransfers(RenderTargetKey dest,
                                              uint32_t start_tiles_base_relative,
                                              uint32_t length_tiles) const;
@@ -408,13 +424,16 @@ index b246319..b0890ed 100644
    // Updates ownership_ranges_, adds the transfers needed for the ownership
    // change to transfers_append_out if it's not null.
    void ChangeOwnership(RenderTargetKey dest, uint32_t start_tiles_base_relative,
-@@ -688,6 +721,9 @@ class RenderTargetCache {
+@@ -688,6 +737,12 @@ class RenderTargetCache {
    // update. 0 is depth, color starting from 1, nullptr if not bound.
    // Only valid for non-pixel-shader-interlock paths.
    RenderTarget* last_update_used_render_targets_[1 + xenos::kMaxColorRenderTargets];
 +  // See last_update_overwritten_by_clear() and last_update_clear_vertex_depth().
 +  uint32_t last_update_overwritten_by_clear_ = 0;
 +  float last_update_clear_vertex_depth_ = 0.0f;
++  // See last_update_clear_cutout().
++  bool last_update_has_clear_cutout_ = false;
++  Transfer::Rectangle last_update_clear_cutout_ = {};
    // Render targets used by the draw call with the last successful update or
    // previous updates, unless a different or a totally new one was bound (or
    // surface info was changed), to avoid unneeded render target switching (which
@@ -1239,7 +1258,7 @@ index 0000000..a146aa8
 +
 +}  // namespace rex::input
 diff --git a/include/rex/perf/counter.h b/include/rex/perf/counter.h
-index 83f0dff..0d862e9 100644
+index 83f0dff..ae59a34 100644
 --- a/include/rex/perf/counter.h
 +++ b/include/rex/perf/counter.h
 @@ -10,6 +10,7 @@
@@ -1302,7 +1321,7 @@ index 83f0dff..0d862e9 100644
    kResolves,              // Guest resolves (EDRAM to memory copies)
    // Why the open render pass was ended (each ended pass adds to one of these)
    kRenderPassEndsTargetChange,  // A draw to other render targets
-@@ -81,6 +120,19 @@ enum class CounterId : uint16_t {
+@@ -81,6 +120,21 @@ enum class CounterId : uint16_t {
    // Guest draws that continue a render pass begun for a render target transfer
    kDrawsInTransferPasses,
  
@@ -1312,6 +1331,8 @@ index 83f0dff..0d862e9 100644
 +  kRenderTargetTransfersInResolves,
 +  // Transfers left out because the guest's clear overwrites their destination completely (gfx = hle)
 +  kRenderTargetTransfersSkipped,
++  // Transfers that leave out the rectangle a guest clear of part of their target writes (gfx = hle)
++  kRenderTargetTransfersCutOut,
 +  // Guest clear draws turned into render pass load actions (gfx = hle)
 +  kClearsAsLoadActions,
 +
@@ -1322,7 +1343,7 @@ index 83f0dff..0d862e9 100644
    kCount  // sentinel -- must be last
  };
  
-@@ -162,6 +214,29 @@ class Profiler {
+@@ -162,6 +216,29 @@ class Profiler {
    }
  };
  
@@ -2012,7 +2033,7 @@ index b52bf39..13f51dc 100644
  
  void* MapFileView(FileMappingHandle handle, void* base_address, size_t length, PageAccess access,
 diff --git a/src/core/perf/counter.cpp b/src/core/perf/counter.cpp
-index d3f26eb..6031d2c 100644
+index d3f26eb..11ae583 100644
 --- a/src/core/perf/counter.cpp
 +++ b/src/core/perf/counter.cpp
 @@ -46,6 +46,29 @@ std::array<std::atomic<int64_t>, kNumCounters> g_snapshot{};
@@ -2053,19 +2074,20 @@ index d3f26eb..6031d2c 100644
      "resolves",
      "pass_ends_target_change",
      "pass_ends_draw_barriers",
-@@ -86,6 +110,11 @@ constexpr const char* kCounterNames[] = {
+@@ -86,6 +110,12 @@ constexpr const char* kCounterNames[] = {
      "uploads_for_textures",
      "uploads_after_textures",
      "draws_in_transfer_passes",
 +    "render_target_transfers_in_clears",
 +    "render_target_transfers_in_resolves",
 +    "render_target_transfers_skipped",
++    "render_target_transfers_cut_out",
 +    "clears_as_load_actions",
 +    "markers",
  };
  static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must match CounterId enum");
  
-@@ -94,6 +123,29 @@ static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must matc
+@@ -94,6 +124,29 @@ static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must matc
  constexpr bool kIsGauge[] = {
      false,  // kFrameTimeUs       (set each frame)
      false,  // kFps               (set each frame)
@@ -2095,7 +2117,7 @@ index d3f26eb..6031d2c 100644
      false,  // kDrawCalls
      false,  // kCommandBufferStalls
      false,  // kVerticesProcessed
-@@ -118,6 +170,7 @@ constexpr bool kIsGauge[] = {
+@@ -118,6 +171,7 @@ constexpr bool kIsGauge[] = {
      false,  // kHostGpuWaits
      false,  // kHostGpuWaitUs
      false,  // kMemexportReadbacks
@@ -2103,13 +2125,14 @@ index d3f26eb..6031d2c 100644
      false,  // kResolves
      false,  // kRenderPassEndsTargetChange
      false,  // kRenderPassEndsDrawBarriers
-@@ -134,6 +187,11 @@ constexpr bool kIsGauge[] = {
+@@ -134,6 +188,12 @@ constexpr bool kIsGauge[] = {
      false,  // kUploadsForTextures
      false,  // kUploadsAfterTextures
      false,  // kDrawsInTransferPasses
 +    false,  // kRenderTargetTransfersInClears
 +    false,  // kRenderTargetTransfersInResolves
 +    false,  // kRenderTargetTransfersSkipped
++    false,  // kRenderTargetTransfersCutOut
 +    false,  // kClearsAsLoadActions
 +    false,  // kMarkers
  };
@@ -9025,10 +9048,10 @@ index 0000000..552106b
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_render_target_cache.mm b/src/graphics/metal/metal_render_target_cache.mm
 new file mode 100644
-index 0000000..ecf09a5
+index 0000000..e935e41
 --- /dev/null
 +++ b/src/graphics/metal/metal_render_target_cache.mm
-@@ -0,0 +1,3956 @@
+@@ -0,0 +1,3960 @@
 +/**
 + * @file        graphics/metal/metal_render_target_cache.mm
 + * @brief       EDRAM emulation with sample-space host render targets for the Metal backend
@@ -9610,6 +9633,7 @@ index 0000000..ecf09a5
 +         viewport_height <= float(kDataTargetMaxSize);
 +}
 +
++
 +bool MetalRenderTargetCache::Resolve(const memory::Memory& memory,
 +                                     MetalSharedMemory& shared_memory,
 +                                     MetalTextureCache& texture_cache,
@@ -9628,6 +9652,7 @@ index 0000000..ecf09a5
 +  if (!resolve_info.coordinate_info.width_div_8 || !resolve_info.height_div_8) {
 +    return true;
 +  }
++
 +
 +  // Copying.
 +  bool copied = false;
@@ -9792,8 +9817,10 @@ index 0000000..ecf09a5
 +  auto rb_surface_info = register_file().Get<reg::RB_SURFACE_INFO>();
 +  RenderTarget* const* depth_and_color_render_targets = last_update_accumulated_render_targets();
 +
++  // With gfx = hle, a guest clear of part of its targets left its rectangle out of the transfers.
 +  PerformTransfersAndResolveClears(1 + xenos::kMaxColorRenderTargets,
-+                                   depth_and_color_render_targets, last_update_transfers());
++                                   depth_and_color_render_targets, last_update_transfers(), nullptr,
++                                   last_update_clear_cutout());
 +
 +  MetalRenderPass render_pass;
 +  MetalRenderPassFormats formats;
@@ -15462,7 +15489,7 @@ index 0000000..b9bc2fb
 +
 +#undef CAMetalLayer
 diff --git a/src/graphics/pipeline/render_target/cache.cpp b/src/graphics/pipeline/render_target/cache.cpp
-index bd0019c..c6130d9 100644
+index bd0019c..674d59f 100644
 --- a/src/graphics/pipeline/render_target/cache.cpp
 +++ b/src/graphics/pipeline/render_target/cache.cpp
 @@ -13,6 +13,10 @@
@@ -15492,7 +15519,7 @@ index bd0019c..c6130d9 100644
  
  REXCVAR_DEFINE_BOOL(mrt_edram_used_range_clamp_to_min, true, "GPU",
                      "Clamp MRT EDRAM used range to minimum");
-@@ -407,11 +413,117 @@ void RenderTargetCache::BeginFrame() {
+@@ -407,11 +413,151 @@ void RenderTargetCache::BeginFrame() {
    ResetAccumulatedRenderTargets();
  }
  
@@ -15518,15 +15545,47 @@ index bd0019c..c6130d9 100644
 +         bottom >= float(height_used);
 +}
 +
++bool RenderTargetCache::GetClearCutout(uint32_t pitch_pixels, const Shader& vertex_shader,
++                                       Transfer::Rectangle& cutout_out) {
++  draw_util::Scissor scissor;
++  draw_util::GetScissor(register_file(), scissor);
++  float left, top, right, bottom;
++  if (!draw_extent_estimator_.EstimateVertexRectangle(vertex_shader, left, top, right, bottom)) {
++    return false;
++  }
++  // The pixels the rectangle covers whole (with every sample of them), within the scissor.
++  int64_t x0 = std::max(int64_t(std::ceil(left)), int64_t(scissor.offset[0]));
++  int64_t y0 = std::max(int64_t(std::ceil(top)), int64_t(scissor.offset[1]));
++  int64_t x1 = std::min({int64_t(std::floor(right)), int64_t(scissor.offset[0] + scissor.extent[0]),
++                         int64_t(pitch_pixels)});
++  int64_t y1 =
++      std::min(int64_t(std::floor(bottom)), int64_t(scissor.offset[1] + scissor.extent[1]));
++  if (x1 <= x0 || y1 <= y0) {
++    return false;
++  }
++  cutout_out.x_pixels = uint32_t(x0);
++  cutout_out.y_pixels = uint32_t(y0);
++  cutout_out.width_pixels = uint32_t(x1 - x0);
++  cutout_out.height_pixels = uint32_t(y1 - y0);
++  return true;
++}
++
 +uint32_t RenderTargetCache::GetRenderTargetsOverwrittenByClear(
 +    uint32_t depth_and_color_rts_used_bits, reg::RB_DEPTHCONTROL normalized_depth_control,
 +    uint32_t normalized_color_mask, uint32_t pitch_pixels, uint32_t height_used,
 +    const Shader& vertex_shader) {
-+  const RegisterFile& regs = register_file();
-+  uint32_t overwritten_bits = 0;
 +  if (!ClearCoversRange(pitch_pixels, height_used, vertex_shader)) {
 +    return 0;
 +  }
++  return GetRenderTargetsWrittenByClear(depth_and_color_rts_used_bits, normalized_depth_control,
++                                        normalized_color_mask);
++}
++
++uint32_t RenderTargetCache::GetRenderTargetsWrittenByClear(
++    uint32_t depth_and_color_rts_used_bits, reg::RB_DEPTHCONTROL normalized_depth_control,
++    uint32_t normalized_color_mask) const {
++  const RegisterFile& regs = register_file();
++  uint32_t overwritten_bits = 0;
 +  // Depth and stencil: both written everywhere the clear draws, whatever was there.
 +  if (depth_and_color_rts_used_bits & 1) {
 +    auto stencil_ref_mask = regs.Get<reg::RB_STENCILREFMASK>();
@@ -15573,7 +15632,9 @@ index bd0019c..c6130d9 100644
 +  // the HLE path does not handle yet.
 +  const RegisterFile& regs = register_file();
 +  const char* reason;
-+  if (!hle::InWholeSurfaceClear()) {
++  if (last_update_has_clear_cutout_) {
++    reason = "the clear covers part of the target: its rectangle is cut out of the transfers";
++  } else if (!hle::InWholeSurfaceClear()) {
 +    reason = "the clear has a rectangle";
 +  } else if (!ClearCoversRange(pitch_pixels, height_used, vertex_shader)) {
 +    reason = "the clear's rectangle or scissor is smaller than the rows that change owner";
@@ -15610,7 +15671,7 @@ index bd0019c..c6130d9 100644
  
    auto rb_surface_info = regs.Get<reg::RB_SURFACE_INFO>();
    xenos::MsaaSamples msaa_samples = rb_surface_info.msaa_samples;
-@@ -693,11 +805,33 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
+@@ -693,11 +839,52 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
    // draw with whatever contents currently are in the render target in this
    // case).
  
@@ -15618,11 +15679,25 @@ index bd0019c..c6130d9 100644
 +  // it writes completely needs nothing of what the EDRAM held before, so it takes ownership of
 +  // its tiles without the transfers that would copy the old contents in.
 +  uint32_t rts_overwritten_bits = 0;
++  last_update_has_clear_cutout_ = false;
 +  if (!interlock_barrier_only && hle::InWholeSurfaceClear()) {
 +    rts_overwritten_bits = GetRenderTargetsOverwrittenByClear(
 +        depth_and_color_rts_used_bits, normalized_depth_control, normalized_color_mask,
 +        pitch_pixels, height_used, vertex_shader);
 +    last_update_overwritten_by_clear_ = rts_overwritten_bits;
++  }
++  // gfx = hle: a clear of part of its targets that writes them completely within its rectangle
++  // (the clear's vertices run on the CPU) needs their old contents only outside it, so that
++  // rectangle is cut out of the transfers. One rectangle serves every target of the draw, so only
++  // when the clear writes all of them (a clear draw normally uses one).
++  if (!interlock_barrier_only && !rts_overwritten_bits && hle::InClear() &&
++      REXCVAR_GET(hle_clear_transfer_cutouts)) {
++    uint32_t written = GetRenderTargetsWrittenByClear(
++        depth_and_color_rts_used_bits, normalized_depth_control, normalized_color_mask);
++    if (written && written == depth_and_color_rts_used_bits) {
++      last_update_has_clear_cutout_ =
++          GetClearCutout(pitch_pixels, vertex_shader, last_update_clear_cutout_);
++    }
 +  }
 +
    for (uint32_t i = 0; i < edram_bases_sorted_count; ++i) {
@@ -15639,13 +15714,18 @@ index bd0019c..c6130d9 100644
 +        PERF_counter_inc(kRenderTargetTransfersSkipped);
 +      }
 +    }
++    if (last_update_has_clear_cutout_ && transfers_needed &&
++        WouldOwnershipChangeRequireTransfers(rt_keys[rt_bit_index], 0, rt_lengths_tiles[i])) {
++      PERF_counter_inc(kRenderTargetTransfersCutOut);
++    }
      ChangeOwnership(rt_keys[rt_bit_index], 0, rt_lengths_tiles[i],
 -                    interlock_barrier_only ? nullptr : &last_update_transfers_[rt_bit_index]);
-+                    transfers_needed ? &last_update_transfers_[rt_bit_index] : nullptr);
++                    transfers_needed ? &last_update_transfers_[rt_bit_index] : nullptr,
++                    last_update_has_clear_cutout_ ? &last_update_clear_cutout_ : nullptr);
    }
  
    if (interlock_barrier_only) {
-@@ -1254,6 +1388,104 @@ bool RenderTargetCache::WouldOwnershipChangeRequireTransfers(RenderTargetKey des
+@@ -1254,6 +1441,104 @@ bool RenderTargetCache::WouldOwnershipChangeRequireTransfers(RenderTargetKey des
    return false;
  }
  
@@ -15750,7 +15830,7 @@ index bd0019c..c6130d9 100644
  void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_tiles_base_relative,
                                          uint32_t length_tiles,
                                          std::vector<Transfer>* transfers_append_out,
-@@ -1335,6 +1567,8 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
+@@ -1335,6 +1620,8 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
                       transfer_host_depth_source)) {
                // Extend the last transfer if, for example, transferring color,
                // but host depth is different.
@@ -15759,7 +15839,7 @@ index bd0019c..c6130d9 100644
                transfers_append_out->back().end_tiles = transfer_end_tiles;
              } else {
                auto transfer_source_rt_it = render_targets_.find(transfer_source);
-@@ -1353,6 +1587,7 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
+@@ -1353,6 +1640,7 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
                        transfer_host_depth_source_rt_it != render_targets_.end()
                            ? transfer_host_depth_source_rt_it->second
                            : nullptr);

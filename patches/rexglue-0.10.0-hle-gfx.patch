@@ -1,9 +1,9 @@
 diff --git a/include/rex/graphics/hle/markers.h b/include/rex/graphics/hle/markers.h
 new file mode 100644
-index 0000000..55c410b
+index 0000000..1e6e980
 --- /dev/null
 +++ b/include/rex/graphics/hle/markers.h
-@@ -0,0 +1,91 @@
+@@ -0,0 +1,94 @@
 +/**
 + * @file        graphics/hle/markers.h
 + * @brief       Markers that describe the guest's graphics API calls inside its command stream
@@ -40,6 +40,9 @@ index 0000000..55c410b
 +// Debugging aid for hle_clear_load_actions: clears are drawn as before, and the value the load
 +// action would have written is compared with what the draw wrote; mismatches are logged.
 +REXCVAR_DECLARE(bool, hle_verify_clears);
++// With gfx = hle: a clear of part of its targets has its rectangle cut out of the render target
++// transfers into them, which then copy only what the clear keeps.
++REXCVAR_DECLARE(bool, hle_clear_transfer_cutouts);
 +
 +namespace rex::graphics::hle {
 +
@@ -97,10 +100,10 @@ index 0000000..55c410b
 +}  // namespace rex::graphics::hle
 diff --git a/src/system/hle_markers.cpp b/src/system/hle_markers.cpp
 new file mode 100644
-index 0000000..59fb53d
+index 0000000..f0542ee
 --- /dev/null
 +++ b/src/system/hle_markers.cpp
-@@ -0,0 +1,115 @@
+@@ -0,0 +1,119 @@
 +/**
 + * @file        system/hle_markers.cpp
 + * @brief       The gfx option and the dispatch of the HLE graphics markers
@@ -129,6 +132,10 @@ index 0000000..59fb53d
 +REXCVAR_DEFINE_BOOL(hle_clear_load_actions, true, "GPU",
 +                    "With gfx = hle, turn the game's clears of whole surfaces into the load action "
 +                    "of the next render pass on their targets instead of a full-screen draw")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++REXCVAR_DEFINE_BOOL(hle_clear_transfer_cutouts, true, "GPU",
++                    "With gfx = hle, leave the rectangle of a clear of part of its targets out of "
++                    "the render target transfers into them")
 +    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 +REXCVAR_DEFINE_BOOL(hle_verify_clears, false, "GPU",
 +                    "Debugging aid for hle_clear_load_actions: draw clears as before and log where "

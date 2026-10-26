@@ -222,6 +222,42 @@ clear was drawn in the pass that follows it), and a full-screen rectangle withou
 cheap on a tile-based GPU. The rectangle and depth fixes are the useful part: they make the
 transfer skipping safe.
 
+## Pass reduction, phase B: clears that keep part of the target
+
+**Partial clears.** A clear whose rectangle (its vertices run on the CPU) covers only part of the
+range that changes owner still needs the old contents outside it. With
+`hle_clear_transfer_cutouts` (on by default with `gfx = hle`), when the clear writes every target
+it uses completely within its rectangle, the whole pixels of that rectangle (within the scissor
+and the pitch) are cut out of the transfers into them, with the cutout mechanism the SDK already
+uses for resolve clears: transfers entirely inside it are dropped, the others copy only the parts
+outside it. One rectangle serves every target of the draw, so it is used only when the clear
+writes all of them; a clear draw normally uses one target. On Vulkan the dropped transfers are
+dropped too, and the partial ones run whole (correct, without the saving), since only the Metal
+execution passes the rectangle on.
+
+**Depth-only and stencil-only clears are not handled.** They keep the other aspect everywhere,
+and the SDK's transfers copy depth and stencil together; transferring one aspect alone needs new
+transfer shaders. They keep their full transfers, and the render target cache logs them once.
+
+**Measured** (two rounds each, alternating, M4):
+
+| | pm4 | hle without cutouts | hle |
+| --- | --- | --- | --- |
+| Transfers cut out per frame (title / menu / campaign start) | 0 | 0 | 4 / 4 / 5 |
+| Transfers per frame (campaign start) | 32 | 28 | 28 |
+
+| Uncapped, frame ms / GPU ms per frame, each run | hle without cutouts | hle |
+| --- | --- | --- |
+| Title screen | 7.22 / 6.42, 7.58 / 6.47 | 7.03 / 6.36, 7.16 / 6.37 |
+| Main menu | 6.89 / 6.33, 6.81 / 6.33 | 6.82 / 6.33, 6.83 / 6.32 |
+| Campaign start | 11.24 / 9.70, 9.30 / 9.30 | 11.12 / 9.34, 9.22 / 9.23 |
+
+About 1 to 2% less GPU time, within the noise of two rounds. Images: at the title and menu the
+HLE runs are 0.4 to 1.7% (median) from the closest PM4 capture; at the campaign start the one
+cutout run that reached it matched PM4 at the noise level until second 216 and then differed by
+27 to 32%, which the previews show is a different camera position and HUD state (that run reached
+the chapter later), not a rendering difference.
+
 ## Success criteria
 
 | Criterion | Status |
