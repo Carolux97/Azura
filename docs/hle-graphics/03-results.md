@@ -352,6 +352,86 @@ render pass, because the pass the load ended now ends at the next transfer or re
 time differences are within the run-to-run noise. Its value is as the base for C2 and C3, which
 remove the EDRAM dump and the memory copy of the same resolves.
 
+## Native resolves, step C2: resolves written to memory from the render target
+
+With `hle_native_resolves`, a resolve that copies one render target's bits unchanged (the
+conditions of C1 except that the destination may be anywhere in the texture, and the fast 32bpp
+copy shader, not an array destination) is written to the shared memory by a compute shader that
+reads the render target (`resolve_from_render_target_float` and `_uint` in the render target
+cache's Metal source). It packs each pixel as the EDRAM dump does, swaps red and blue and the
+bytes as the fast resolve copy does, and stores it at its 2D tiled address. The EDRAM dump and the
+copy from it are skipped for those resolves. `hle_resolve_from_render_targets = false` keeps C1
+alone, to compare.
+
+**What the values are.** With `hle_verify_resolves`, resolves work as before and then the new
+shader runs in a checking mode: for every pixel it compares what it would write with what the
+usual path wrote at that address, and counts the mismatches. Every kind of eligible resolve in
+the scripted scenes matches, every pixel: 8_8_8_8 1280x720 (endianness 0 and 2), 640x360 and
+16x512 (endianness 2), all with red and blue swapped, and 16_16_FLOAT 640x360 (endianness 2).
+
+**Measured** (one run each, M4, muted; the 10-minute budget per measurement leaves no rounds):
+
+| Per frame, at the cap | C1 only | C1 and C2 |
+| --- | --- | --- |
+| Resolves written from the render target (title, menu / campaign start) | 0 / 0 | 8 / 10 |
+| Host compute dispatches (title, menu / campaign start) | 106 / 137 | 98 / 127 |
+| Render passes (title / menu / campaign start) | 58 / 61 / 83 | 58 / 61 / 83 |
+
+| Uncapped, one run each, frame ms / GPU ms | C1 only | C1 and C2 |
+| --- | --- | --- |
+| Title screen | 6.5 / 6.5 | 6.3 / 6.2 |
+| Main menu | 6.7 / 6.6 | 6.4 / 6.3 |
+
+The image comparison of these runs says nothing: the only `pm4` run stayed in the intro video
+the title plays when left alone, so it never showed the title and menu the other runs captured,
+and the campaign captures differ in the camera's position (the input timing of the scripted
+controller). The captures of C1 and C2 look right, and the per-pixel check above is the proof of
+correctness.
+
+C2 removes 8 to 10 compute dispatches per frame (the dumps of those resolves), and with them the
+EDRAM buffer traffic. The 0.3 ms less GPU time in both scenes is in the direction expected, but
+one run cannot tell it from the noise. No render pass is saved: the resolve's compute still ends
+the pass.
+
+## Native resolves, step C4: how many pass breaks a resolve inside the pass could save
+
+C4 (a tile shader doing the resolve inside the render pass, Apple GPUs only) only saves a pass
+break when the pass after the resolve draws to the same attachments again. Two counters measure
+that before any tile shader is written: `render_passes_resumed_after_resolve` (a render pass
+begun on exactly the attachments of the pass the last resolve ended) and
+`render_passes_resumed_after_native_resolve` (the same, when that resolve was written from the
+render target, C2).
+
+**Measured** (one 100-second run with C1 and C2, title and menu; per frame):
+
+| | Title screen | Main menu |
+| --- | --- | --- |
+| Render passes | 58 | 61 |
+| Pass ends by a resolve | 28 | 29 |
+| Passes resumed on the same attachments after a resolve | 19 | 20 |
+| Of them after a resolve written from the render target (C2) | 4 | 4 |
+
+So a third of the render passes start again on the attachments a resolve just interrupted, but
+only 4 per frame follow a resolve C2 handles. Which resolves the others are (a temporary log
+during one run, by render target format, destination format, exponent bias, size; about 2,240
+frames):
+
+| Resolve | Per frame | Native today |
+| --- | --- | --- |
+| 16_16_16_16 (fixed) 328x184 to 16_16_16_16, exponent bias -5, endianness 8 in 16 | 12.6 | No: 64 bits per pixel, and the bias scales the values |
+| 16_16_FLOAT 640x360 to 16_16_FLOAT, endianness 8 in 32 | 4 | Yes (C2) |
+| 16_16_16_16 (fixed) 192x96, as the first row | 1 | No |
+| 2_10_10_10 1280x720 to 2_10_10_10, no bias | 1 | No: format not in the list, though the copy is bitwise |
+| 2_10_10_10_FLOAT_AS_16_16_16_16 1280x720 to 2_10_10_10, exponent bias -5 | 1 | No: converts |
+
+The repeated small 16_16_16_16 resolves (a chain of passes on a 328x184 target, likely a blur or
+a luminance reduction; not verified) are most of the breaks C4 could remove. Before a tile shader
+can do them, the native resolve has to handle 64-bit pixels and the exponent bias conversion.
+
+What this does not say: what a pass break on a 328x184 target costs. Its attachments are small
+(about 470 KB at 64 bits per pixel), so storing and loading them is cheap; the fixed cost of a
+render pass on this GPU was not measured.
+
 ## Success criteria
 
 | Criterion | Status |

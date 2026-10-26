@@ -1284,7 +1284,7 @@ index 0000000..a146aa8
 +
 +}  // namespace rex::input
 diff --git a/include/rex/perf/counter.h b/include/rex/perf/counter.h
-index 83f0dff..3caf103 100644
+index 83f0dff..d8a865c 100644
 --- a/include/rex/perf/counter.h
 +++ b/include/rex/perf/counter.h
 @@ -10,6 +10,7 @@
@@ -1347,7 +1347,7 @@ index 83f0dff..3caf103 100644
    kResolves,              // Guest resolves (EDRAM to memory copies)
    // Why the open render pass was ended (each ended pass adds to one of these)
    kRenderPassEndsTargetChange,  // A draw to other render targets
-@@ -81,6 +120,23 @@ enum class CounterId : uint16_t {
+@@ -81,6 +120,30 @@ enum class CounterId : uint16_t {
    // Guest draws that continue a render pass begun for a render target transfer
    kDrawsInTransferPasses,
  
@@ -1363,6 +1363,13 @@ index 83f0dff..3caf103 100644
 +  kClearsAsLoadActions,
 +  // Textures updated from the render target at a resolve instead of loaded from memory (gfx = hle)
 +  kResolvesToTextures,
++  // Resolves copied to memory straight from the render target, without the EDRAM dump (gfx = hle)
++  kResolvesFromRenderTargets,
++  // Render passes begun on exactly the attachments of the pass the last resolve ended: the pass
++  // breaks a resolve inside the render pass would avoid
++  kRenderPassesResumedAfterResolve,
++  // The same, where the resolve was written from the render target (gfx = hle, C2)
++  kRenderPassesResumedAfterNativeResolve,
 +
 +  // Marks the player sets with a key while playing (the runtime's bind_perf_marker key), to find the
 +  // frames they noticed in the CSV
@@ -1371,7 +1378,7 @@ index 83f0dff..3caf103 100644
    kCount  // sentinel -- must be last
  };
  
-@@ -162,6 +218,29 @@ class Profiler {
+@@ -162,6 +225,29 @@ class Profiler {
    }
  };
  
@@ -2061,7 +2068,7 @@ index b52bf39..13f51dc 100644
  
  void* MapFileView(FileMappingHandle handle, void* base_address, size_t length, PageAccess access,
 diff --git a/src/core/perf/counter.cpp b/src/core/perf/counter.cpp
-index d3f26eb..d3e6356 100644
+index d3f26eb..f77133e 100644
 --- a/src/core/perf/counter.cpp
 +++ b/src/core/perf/counter.cpp
 @@ -46,6 +46,29 @@ std::array<std::atomic<int64_t>, kNumCounters> g_snapshot{};
@@ -2102,7 +2109,7 @@ index d3f26eb..d3e6356 100644
      "resolves",
      "pass_ends_target_change",
      "pass_ends_draw_barriers",
-@@ -86,6 +110,13 @@ constexpr const char* kCounterNames[] = {
+@@ -86,6 +110,16 @@ constexpr const char* kCounterNames[] = {
      "uploads_for_textures",
      "uploads_after_textures",
      "draws_in_transfer_passes",
@@ -2112,11 +2119,14 @@ index d3f26eb..d3e6356 100644
 +    "render_target_transfers_cut_out",
 +    "clears_as_load_actions",
 +    "resolves_to_textures",
++    "resolves_from_render_targets",
++    "render_passes_resumed_after_resolve",
++    "render_passes_resumed_after_native_resolve",
 +    "markers",
  };
  static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must match CounterId enum");
  
-@@ -94,6 +125,29 @@ static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must matc
+@@ -94,6 +128,29 @@ static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must matc
  constexpr bool kIsGauge[] = {
      false,  // kFrameTimeUs       (set each frame)
      false,  // kFps               (set each frame)
@@ -2146,7 +2156,7 @@ index d3f26eb..d3e6356 100644
      false,  // kDrawCalls
      false,  // kCommandBufferStalls
      false,  // kVerticesProcessed
-@@ -118,6 +172,7 @@ constexpr bool kIsGauge[] = {
+@@ -118,6 +175,7 @@ constexpr bool kIsGauge[] = {
      false,  // kHostGpuWaits
      false,  // kHostGpuWaitUs
      false,  // kMemexportReadbacks
@@ -2154,7 +2164,7 @@ index d3f26eb..d3e6356 100644
      false,  // kResolves
      false,  // kRenderPassEndsTargetChange
      false,  // kRenderPassEndsDrawBarriers
-@@ -134,6 +189,13 @@ constexpr bool kIsGauge[] = {
+@@ -134,6 +192,16 @@ constexpr bool kIsGauge[] = {
      false,  // kUploadsForTextures
      false,  // kUploadsAfterTextures
      false,  // kDrawsInTransferPasses
@@ -2164,6 +2174,9 @@ index d3f26eb..d3e6356 100644
 +    false,  // kRenderTargetTransfersCutOut
 +    false,  // kClearsAsLoadActions
 +    false,  // kResolvesToTextures
++    false,  // kResolvesFromRenderTargets
++    false,  // kRenderPassesResumedAfterResolve
++    false,  // kRenderPassesResumedAfterNativeResolve
 +    false,  // kMarkers
  };
  static_assert(std::size(kIsGauge) == kNumCounters, "kIsGauge must match CounterId enum");
@@ -2586,10 +2599,10 @@ index 8f2fcb0..b0f3cb4 100644
  
 diff --git a/src/graphics/metal/metal_command_processor.h b/src/graphics/metal/metal_command_processor.h
 new file mode 100644
-index 0000000..b7f4ef7
+index 0000000..14c9140
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.h
-@@ -0,0 +1,387 @@
+@@ -0,0 +1,395 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.h
 + * @brief       Xenos command processing with Metal
@@ -2680,6 +2693,9 @@ index 0000000..b7f4ef7
 +  // Runs the handler when the GPU completes the current submission's command buffer (opening the
 +  // submission if needed).
 +  void AddCompletedHandler(MTLCommandBufferHandler handler);
++  // Set while a resolve written from the render target (gfx = hle) gets its encoder, so a render
++  // pass it ends is told apart in the perf counters.
++  void SetInNativeResolve(bool in_native_resolve) { in_native_resolve_ = in_native_resolve; }
 +
 +  ScratchBuffer AcquireScratchBuffer(size_t size);
 +  UploadAllocation RequestUpload(size_t size, size_t alignment = 256);
@@ -2940,6 +2956,11 @@ index 0000000..b7f4ef7
 +  id<MTLComputeCommandEncoder> compute_encoder_ = nil;
 +  id<MTLBlitCommandEncoder> blit_encoder_ = nil;
 +  MetalRenderPass current_render_pass_;
++  // The attachments of the render pass the last resolve ended, until the next render pass begins
++  // (for kRenderPassesResumedAfterResolve).
++  MetalRenderPass render_pass_ended_by_resolve_;
++  bool render_pass_ended_by_native_resolve_ = false;
++  bool in_native_resolve_ = false;
 +  RenderEncoderState render_encoder_state_;
 +  std::vector<PendingClear> pending_clears_;
 +  std::vector<PendingClear> clears_to_verify_;
@@ -2979,10 +3000,10 @@ index 0000000..b7f4ef7
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_command_processor.mm b/src/graphics/metal/metal_command_processor.mm
 new file mode 100644
-index 0000000..1108a40
+index 0000000..7354a0c
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.mm
-@@ -0,0 +1,2845 @@
+@@ -0,0 +1,2856 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.mm
 + * @brief       Xenos command processing with Metal
@@ -4217,6 +4238,10 @@ index 0000000..1108a40
 +    case EncoderType::kRender:
 +      [render_encoder_ endEncoding];
 +      render_encoder_ = nil;
++      if (render_pass_end_reason == rex::perf::CounterId::kRenderPassEndsResolve) {
++        render_pass_ended_by_resolve_ = current_render_pass_;
++        render_pass_ended_by_native_resolve_ = in_native_resolve_;
++      }
 +      current_render_pass_ = MetalRenderPass();
 +#ifdef REXGLUE_ENABLE_PERF_COUNTERS
 +      rex::perf::IncrementCounter(render_pass_end_reason);
@@ -4336,6 +4361,13 @@ index 0000000..1108a40
 +  current_render_pass_ = render_pass;
 +  render_encoder_state_ = RenderEncoderState();
 +  PERF_counter_inc(kHostRenderPasses);
++  if (has_attachments && render_pass == render_pass_ended_by_resolve_) {
++    PERF_counter_inc(kRenderPassesResumedAfterResolve);
++    if (render_pass_ended_by_native_resolve_) {
++      PERF_counter_inc(kRenderPassesResumedAfterNativeResolve);
++    }
++  }
++  render_pass_ended_by_resolve_ = MetalRenderPass();
 +  return render_encoder_;
 +}
 +
@@ -8505,10 +8537,10 @@ index 0000000..d717bea
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_render_target_cache.h b/src/graphics/metal/metal_render_target_cache.h
 new file mode 100644
-index 0000000..2fb022d
+index 0000000..23882ed
 --- /dev/null
 +++ b/src/graphics/metal/metal_render_target_cache.h
-@@ -0,0 +1,583 @@
+@@ -0,0 +1,602 @@
 +/**
 + * @file        graphics/metal/metal_render_target_cache.h
 + * @brief       EDRAM emulation with sample-space host render targets for the Metal backend
@@ -9002,6 +9034,8 @@ index 0000000..2fb022d
 +  static constexpr uint32_t kComputeBufferEdram = 0;
 +  static constexpr uint32_t kComputeBufferDest = 1;
 +  static constexpr uint32_t kComputeBufferConstants = 2;
++  // The mismatch counts of the resolves written from render targets, when verifying them.
++  static constexpr uint32_t kComputeBufferVerifyResult = 3;
 +  static constexpr uint32_t kComputeTextureSource = 0;
 +  static constexpr uint32_t kComputeTextureSourceStencil = 1;
 +
@@ -9055,6 +9089,23 @@ index 0000000..2fb022d
 +  // At a draw resolution scale, reduces resolves of data (kDataTargetMaxSize) from the scaled
 +  // resolve buffer to the guest memory.
 +  ComputePipeline resolve_reduce_pipeline_;
++  // gfx = hle: resolves written to memory straight from a render target (32 bits per pixel), read
++  // through a floating-point view (8_8_8_8) or an integer one (16_16_FLOAT, 32_FLOAT).
++  ComputePipeline resolve_from_render_target_float_pipeline_;
++  ComputePipeline resolve_from_render_target_uint_pipeline_;
++
++  // gfx = hle: the render target that alone holds the whole source of a 1x, 32 bits per pixel
++  // color resolve that copies it with no format conversion (8_8_8_8, 16_16_FLOAT or 32_FLOAT, no
++  // exponent bias, endianness at most 16 in 32, a red and blue swap only for 8_8_8_8), at the
++  // resolve's base, pitch and format; nullptr otherwise.
++  MetalRenderTarget* GetNativeResolveSource(const draw_util::ResolveInfo& resolve_info) const;
++  // Writes a resolve's destination in the shared memory straight from its native source (see
++  // GetNativeResolveSource), as the fast 32bpp resolve copy would from the EDRAM dump. With
++  // verify, nothing is written: the values already in the memory (written by the usual path) are
++  // compared with the ones the native path computes, and a mismatch is logged.
++  void ResolveFromRenderTarget(const draw_util::ResolveInfo& resolve_info,
++                               MetalRenderTarget& source, MetalSharedMemory& shared_memory,
++                               bool verify);
 +
 +  id<MTLFunction> transfer_vertex_function_ = nil;
 +  std::unordered_map<TransferShaderKey, id<MTLFunction>, TransferShaderKey::Hasher>
@@ -9094,10 +9145,10 @@ index 0000000..2fb022d
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_render_target_cache.mm b/src/graphics/metal/metal_render_target_cache.mm
 new file mode 100644
-index 0000000..49e7c7e
+index 0000000..0c37c6c
 --- /dev/null
 +++ b/src/graphics/metal/metal_render_target_cache.mm
-@@ -0,0 +1,4034 @@
+@@ -0,0 +1,4287 @@
 +/**
 + * @file        graphics/metal/metal_render_target_cache.mm
 + * @brief       EDRAM emulation with sample-space host render targets for the Metal backend
@@ -9113,6 +9164,8 @@ index 0000000..49e7c7e
 +#include <cstddef>
 +#include <cstdint>
 +#include <cstring>
++#include <mutex>
++#include <set>
 +#include <string>
 +#include <utility>
 +#include <vector>
@@ -9265,7 +9318,111 @@ index 0000000..49e7c7e
 +  }
 +  dest[dword_index] = value;
 +}
++// Writes a resolve to memory straight from the render target, a pixel per thread: the pixel is
++// packed as the EDRAM holds it (as the dump does), red and blue and the bytes are swapped as the
++// resolve asks (as the fast 32bpp resolve copy does), and it is stored at its 2D tiled address in
++// the destination. With verify, the value already in the memory is compared instead, and the
++// mismatches are counted in result (with the first one's address, memory value and value).
++struct ResolveFromRenderTargetConstants {
++  uint source_x;
++  uint source_y;
++  uint width;
++  uint height;
++  uint dest_x;
++  uint dest_y;
++  // In pixels, a multiple of 32.
++  uint dest_pitch;
++  // In bytes.
++  uint dest_base;
++  // 0: 8_8_8_8 from normalized values, 1: two 16-bit integers, 2: one 32-bit integer.
++  uint packing;
++  // xenos::Endian128, at most 3 (16 in 32).
++  uint endian;
++  uint swap_red_blue;
++  uint verify;
++};
++// texture_util::GetTiledOffset2D for 4 bytes per block.
++int resolve_tiled_offset_2d_32bpp(int x, int y, uint pitch) {
++  int macro_offset = ((x >> 5) + (y >> 5) * int(pitch >> 5)) << 9;
++  int micro_offset = ((x & 7) + ((y & 0xE) << 2)) << 2;
++  int offset = macro_offset + ((micro_offset & ~0xF) << 1) + (micro_offset & 0xF) +
++               ((y & 1) << 4);
++  return ((offset & ~0x1FF) << 3) + ((y & 16) << 7) + ((offset & 0x1C0) << 2) +
++         (((((y & 8) >> 2) + (x >> 3)) & 3) << 6) + (offset & 0x3F);
++}
++void resolve_store_32bpp(uint2 pixel, uint value, device uint* dest, device atomic_uint* result,
++                         constant ResolveFromRenderTargetConstants& constants) {
++  if (constants.swap_red_blue != 0u) {
++    value = (value & 0xFF00FF00u) | ((value >> 16) & 0xFFu) | ((value & 0xFFu) << 16);
++  }
++  if (constants.endian == 1u) {
++    value = ((value & 0x00FF00FFu) << 8) | ((value >> 8) & 0x00FF00FFu);
++  } else if (constants.endian == 2u) {
++    value = (value << 24) | ((value & 0xFF00u) << 8) | ((value >> 8) & 0xFF00u) | (value >> 24);
++  } else if (constants.endian == 3u) {
++    value = (value << 16) | (value >> 16);
++  }
++  uint address = constants.dest_base +
++                 uint(resolve_tiled_offset_2d_32bpp(int(constants.dest_x + pixel.x),
++                                                    int(constants.dest_y + pixel.y),
++                                                    constants.dest_pitch));
++  if (constants.verify == 0u) {
++    dest[address >> 2] = value;
++    return;
++  }
++  uint memory_value = dest[address >> 2];
++  if (memory_value != value &&
++      atomic_fetch_add_explicit(result, 1u, memory_order_relaxed) == 0u) {
++    device uint* first_mismatch = (device uint*)result;
++    first_mismatch[1] = address;
++    first_mismatch[2] = memory_value;
++    first_mismatch[3] = value;
++  }
++}
++kernel void resolve_from_render_target_float(
++    uint2 pixel [[thread_position_in_grid]],
++    texture2d<float, access::read> source [[texture(0)]],
++    device uint* dest [[buffer(1)]],
++    constant ResolveFromRenderTargetConstants& constants [[buffer(2)]],
++    device atomic_uint* result [[buffer(3)]]) {
++  if (pixel.x >= constants.width || pixel.y >= constants.height) {
++    return;
++  }
++  float4 color = source.read(uint2(constants.source_x, constants.source_y) + pixel);
++  uint4 bytes = uint4(color * 255.0 + 0.5);
++  resolve_store_32bpp(pixel, bytes.x | (bytes.y << 8) | (bytes.z << 16) | (bytes.w << 24), dest,
++                      result, constants);
++}
++kernel void resolve_from_render_target_uint(
++    uint2 pixel [[thread_position_in_grid]],
++    texture2d<uint, access::read> source [[texture(0)]],
++    device uint* dest [[buffer(1)]],
++    constant ResolveFromRenderTargetConstants& constants [[buffer(2)]],
++    device atomic_uint* result [[buffer(3)]]) {
++  if (pixel.x >= constants.width || pixel.y >= constants.height) {
++    return;
++  }
++  uint4 texel = source.read(uint2(constants.source_x, constants.source_y) + pixel);
++  uint value = constants.packing == 1u ? (texel.x & 0xFFFFu) | (texel.y << 16) : texel.x;
++  resolve_store_32bpp(pixel, value, dest, result, constants);
++}
 +)MSL";
++
++// The constants of resolve_from_render_target_* in kRenderTargetShaderSource.
++struct ResolveFromRenderTargetConstants {
++  uint32_t source_x;
++  uint32_t source_y;
++  uint32_t width;
++  uint32_t height;
++  uint32_t dest_x;
++  uint32_t dest_y;
++  uint32_t dest_pitch;
++  uint32_t dest_base;
++  uint32_t packing;
++  uint32_t endian;
++  uint32_t swap_red_blue;
++  uint32_t verify;
++};
 +
 +}  // namespace
 +
@@ -9433,6 +9590,26 @@ index 0000000..49e7c7e
 +    }
 +    resolve_reduce_pipeline_.threads_per_threadgroup = MTLSizeMake(64, 1, 1);
 +  }
++  // Resolves straight from render targets (gfx = hle).
++  if (hle::HleGraphicsEnabled()) {
++    std::pair<ComputePipeline*, NSString*> resolve_from_render_target_pipelines[] = {
++        {&resolve_from_render_target_float_pipeline_, @"resolve_from_render_target_float"},
++        {&resolve_from_render_target_uint_pipeline_, @"resolve_from_render_target_uint"},
++    };
++    for (const auto& [pipeline, name] : resolve_from_render_target_pipelines) {
++      pipeline->pipeline =
++          [device newComputePipelineStateWithFunction:[library newFunctionWithName:name]
++                                                error:&error];
++      if (!pipeline->pipeline) {
++        REXGPU_ERROR("MetalRenderTargetCache: Failed to create the {} pipeline: {}",
++                     name.UTF8String,
++                     error ? error.localizedDescription.UTF8String : "unknown error");
++        Shutdown();
++        return false;
++      }
++      pipeline->threads_per_threadgroup = MTLSizeMake(8, 8, 1);
++    }
++  }
 +
 +  // Depth transfers write depth and, through stencil export, stencil.
 +  {
@@ -9493,6 +9670,8 @@ index 0000000..49e7c7e
 +  clear_fragment_function_uint_ = nil;
 +  host_depth_store_pipeline_ = ComputePipeline();
 +  resolve_reduce_pipeline_ = ComputePipeline();
++  resolve_from_render_target_float_pipeline_ = ComputePipeline();
++  resolve_from_render_target_uint_pipeline_ = ComputePipeline();
 +  for (ComputePipeline& pipeline : resolve_copy_pipelines_) {
 +    pipeline = ComputePipeline();
 +  }
@@ -9681,75 +9860,172 @@ index 0000000..49e7c7e
 +}
 +
 +
-+uint32_t MetalRenderTargetCache::UpdateResolvedTextures(const draw_util::ResolveInfo& resolve_info,
-+                                                       MetalTextureCache& texture_cache) {
-+  if (!hle::HleGraphicsEnabled() ||
-+      !(REXCVAR_GET(hle_native_resolves) || REXCVAR_GET(hle_verify_resolves)) ||
-+      IsDrawResolutionScaled() || resolve_info.IsCopyingDepth()) {
-+    return 0;
++MetalRenderTargetCache::MetalRenderTarget* MetalRenderTargetCache::GetNativeResolveSource(
++    const draw_util::ResolveInfo& resolve_info) const {
++  if (!hle::HleGraphicsEnabled() || IsDrawResolutionScaled() || resolve_info.IsCopyingDepth()) {
++    return nullptr;
 +  }
 +  draw_util::ResolveEdramInfo edram_info = resolve_info.color_edram_info;
 +  reg::RB_COPY_DEST_INFO dest_info = resolve_info.copy_dest_info;
 +  if (edram_info.msaa_samples != xenos::MsaaSamples::k1X || edram_info.format_is_64bpp ||
 +      dest_info.copy_dest_exp_bias ||
-+      resolve_info.copy_dest_coordinate_info.offset_x_div_8 ||
-+      resolve_info.copy_dest_coordinate_info.offset_y_div_8 ||
 +      uint32_t(dest_info.copy_dest_endian) > uint32_t(xenos::Endian::k16in32)) {
-+    return 0;
++    return nullptr;
 +  }
-+  // Render target formats whose host texture holds what the texture of the same guest format
-+  // holds after loading, with no conversion in the copy (verified by hle_verify_resolves).
++  // Render target formats whose resolve copies the EDRAM bits unchanged to a texture of the same
++  // format.
 +  auto render_target_format = xenos::ColorRenderTargetFormat(edram_info.format);
 +  xenos::TextureFormat texture_format;
-+  xenos::SurfaceNumberFormat number_format;
 +  switch (render_target_format) {
 +    case xenos::ColorRenderTargetFormat::k_8_8_8_8:
 +      texture_format = xenos::TextureFormat::k_8_8_8_8;
-+      number_format = xenos::SurfaceNumberFormat::kUnsignedRepeatingFraction;
 +      break;
 +    case xenos::ColorRenderTargetFormat::k_16_16_FLOAT:
 +      texture_format = xenos::TextureFormat::k_16_16_FLOAT;
-+      number_format = xenos::SurfaceNumberFormat::kFloat;
 +      break;
 +    case xenos::ColorRenderTargetFormat::k_32_FLOAT:
 +      texture_format = xenos::TextureFormat::k_32_FLOAT;
-+      number_format = xenos::SurfaceNumberFormat::kFloat;
 +      break;
 +    default:
-+      return 0;
++      return nullptr;
 +  }
-+  // A red and blue swap is handled by the texture's views, for the 4-channel 8-bit format only.
 +  if (xenos::TextureFormat(dest_info.copy_dest_format) != texture_format ||
-+      dest_info.copy_dest_number != number_format ||
 +      (dest_info.copy_dest_swap &&
 +       render_target_format != xenos::ColorRenderTargetFormat::k_8_8_8_8)) {
-+    return 0;
++    return nullptr;
 +  }
 +  // One render target must hold the whole source, at the resolve's base, pitch and format.
 +  uint32_t span_base, span_row_length, span_rows, span_pitch;
 +  resolve_info.GetCopyEdramTileSpan(span_base, span_row_length, span_rows, span_pitch);
 +  if (!span_rows) {
-+    return 0;
++    return nullptr;
 +  }
 +  RenderTarget* owner =
 +      GetRangeSoleOwner(span_base, span_base + (span_rows - 1) * span_pitch + span_row_length);
 +  if (!owner) {
-+    return 0;
++    return nullptr;
 +  }
 +  RenderTargetKey owner_key = owner->key();
 +  if (owner_key.is_depth || owner_key.base_tiles != edram_info.base_tiles ||
 +      owner_key.msaa_samples != xenos::MsaaSamples::k1X ||
 +      owner_key.pitch_tiles_at_32bpp != edram_info.pitch_tiles ||
 +      owner_key.GetColorFormat() != render_target_format) {
++    return nullptr;
++  }
++  return static_cast<MetalRenderTarget*>(owner);
++}
++
++uint32_t MetalRenderTargetCache::UpdateResolvedTextures(const draw_util::ResolveInfo& resolve_info,
++                                                       MetalTextureCache& texture_cache) {
++  if (!(REXCVAR_GET(hle_native_resolves) || REXCVAR_GET(hle_verify_resolves))) {
++    return 0;
++  }
++  MetalRenderTarget* source = GetNativeResolveSource(resolve_info);
++  reg::RB_COPY_DEST_INFO dest_info = resolve_info.copy_dest_info;
++  // The texture cache's host format for the destination holds the render target's data with no
++  // conversion for these number formats (verified by hle_verify_resolves). A texture starts at the
++  // destination base, so the copy must too.
++  if (!source || resolve_info.copy_dest_coordinate_info.offset_x_div_8 ||
++      resolve_info.copy_dest_coordinate_info.offset_y_div_8 ||
++      dest_info.copy_dest_number !=
++          (xenos::TextureFormat(dest_info.copy_dest_format) == xenos::TextureFormat::k_8_8_8_8
++               ? xenos::SurfaceNumberFormat::kUnsignedRepeatingFraction
++               : xenos::SurfaceNumberFormat::kFloat)) {
 +    return 0;
 +  }
 +  return texture_cache.UpdateTexturesFromResolve(
 +      resolve_info.copy_dest_base, resolve_info.coordinate_info.width_div_8 << 3,
-+      resolve_info.height_div_8 << 3, texture_format,
++      resolve_info.height_div_8 << 3, xenos::TextureFormat(dest_info.copy_dest_format),
 +      xenos::Endian(uint32_t(dest_info.copy_dest_endian)), dest_info.copy_dest_swap != 0,
-+      static_cast<MetalRenderTarget*>(owner)->texture(),
-+      resolve_info.coordinate_info.edram_offset_x_div_8 << 3,
++      source->texture(), resolve_info.coordinate_info.edram_offset_x_div_8 << 3,
 +      resolve_info.coordinate_info.edram_offset_y_div_8 << 3);
++}
++
++void MetalRenderTargetCache::ResolveFromRenderTarget(const draw_util::ResolveInfo& resolve_info,
++                                                     MetalRenderTarget& source,
++                                                     MetalSharedMemory& shared_memory,
++                                                     bool verify) {
++  id<MTLTexture> source_view = source.transfer_view();
++  ResolveFromRenderTargetConstants constants = {};
++  const ComputePipeline* pipeline;
++  switch (source_view.pixelFormat) {
++    case MTLPixelFormatRGBA8Unorm:
++      pipeline = &resolve_from_render_target_float_pipeline_;
++      constants.packing = 0;
++      break;
++    case MTLPixelFormatRG16Uint:
++      pipeline = &resolve_from_render_target_uint_pipeline_;
++      constants.packing = 1;
++      break;
++    case MTLPixelFormatR32Uint:
++      pipeline = &resolve_from_render_target_uint_pipeline_;
++      constants.packing = 2;
++      break;
++    default:
++      assert_always();
++      return;
++  }
++  constants.source_x = resolve_info.coordinate_info.edram_offset_x_div_8 << 3;
++  constants.source_y = resolve_info.coordinate_info.edram_offset_y_div_8 << 3;
++  constants.width = resolve_info.coordinate_info.width_div_8 << 3;
++  constants.height = resolve_info.height_div_8 << 3;
++  constants.dest_x = resolve_info.copy_dest_coordinate_info.offset_x_div_8 << 3;
++  constants.dest_y = resolve_info.copy_dest_coordinate_info.offset_y_div_8 << 3;
++  constants.dest_pitch = resolve_info.copy_dest_coordinate_info.pitch_aligned_div_32 << 5;
++  constants.dest_base = resolve_info.copy_dest_base;
++  constants.endian = uint32_t(resolve_info.copy_dest_info.copy_dest_endian);
++  constants.swap_red_blue = resolve_info.copy_dest_info.copy_dest_swap;
++  constants.verify = verify;
++
++  // The mismatch count, then the first mismatch's address, memory value and computed value.
++  id<MTLBuffer> result = nil;
++  if (verify) {
++    result = [command_processor_.device() newBufferWithLength:4 * sizeof(uint32_t)
++                                                      options:MTLResourceStorageModeShared];
++    std::memset(result.contents, 0, result.length);
++  }
++  command_processor_.SetInNativeResolve(!verify);
++  id<MTLComputeCommandEncoder> compute =
++      command_processor_.GetComputeEncoder(rex::perf::CounterId::kRenderPassEndsResolve);
++  command_processor_.SetInNativeResolve(false);
++  [compute setComputePipelineState:pipeline->pipeline];
++  [compute setTexture:source_view atIndex:kComputeTextureSource];
++  [compute setBuffer:shared_memory.buffer() offset:0 atIndex:kComputeBufferDest];
++  [compute setBytes:&constants length:sizeof(constants) atIndex:kComputeBufferConstants];
++  // Unused without verify, but every buffer the kernel declares is bound.
++  [compute setBuffer:verify ? result : shared_memory.buffer()
++              offset:0
++             atIndex:kComputeBufferVerifyResult];
++  [compute dispatchThreads:MTLSizeMake(constants.width, constants.height, 1)
++      threadsPerThreadgroup:pipeline->threads_per_threadgroup];
++  PERF_counter_inc(kHostDispatches);
++  if (!verify) {
++    PERF_counter_inc(kResolvesFromRenderTargets);
++    return;
++  }
++
++  std::string what = fmt::format(
++      "render target format {} {}x{} to format {} endianness {}{}{}",
++      uint32_t(source.key().resource_format), constants.width, constants.height,
++      uint32_t(resolve_info.copy_dest_info.copy_dest_format), constants.endian,
++      constants.swap_red_blue ? " red/blue swapped" : "",
++      constants.dest_x || constants.dest_y ? " at an offset" : "");
++  command_processor_.AddCompletedHandler(^(id<MTLCommandBuffer>) {
++    const uint32_t* values = static_cast<const uint32_t*>(result.contents);
++    static std::mutex mutex;
++    static std::set<std::string> logged;
++    std::lock_guard<std::mutex> lock(mutex);
++    if (logged.insert(fmt::format("{} {}", values[0] == 0, what)).second) {
++      if (!values[0]) {
++        REXGPU_INFO("HLE resolve check: {} written from the render target matches the memory",
++                    what);
++      } else {
++        REXGPU_WARN("HLE resolve check: {} written from the render target differs in {} pixels, "
++                    "first at 0x{:08X}: memory {:08X}, render target {:08X}",
++                    what, values[0], values[1], values[2], values[3]);
++      }
++    }
++  });
 +}
 +
 +bool MetalRenderTargetCache::Resolve(const memory::Memory& memory,
@@ -9782,16 +10058,32 @@ index 0000000..49e7c7e
 +                                   copy_shader_constants, copy_group_count_x, copy_group_count_y);
 +    assert_true(copy_group_count_x && copy_group_count_y);
 +    if (copy_shader != draw_util::ResolveCopyShaderIndex::kUnknown) {
++      // gfx = hle: a resolve that copies the bits of one render target unchanged is written to
++      // memory straight from it (hle_resolve_from_render_targets), or, with hle_verify_resolves,
++      // the usual path's result is compared with what that would write.
++      MetalRenderTarget* native_source = nullptr;
++      if ((REXCVAR_GET(hle_native_resolves) && REXCVAR_GET(hle_resolve_from_render_targets)) ||
++          REXCVAR_GET(hle_verify_resolves)) {
++        if (copy_shader == draw_util::ResolveCopyShaderIndex::kFast32bpp1x2xMSAA &&
++            !resolve_info.copy_dest_info.copy_dest_array) {
++          native_source = GetNativeResolveSource(resolve_info);
++        }
++      }
++      bool verify_native = native_source && REXCVAR_GET(hle_verify_resolves);
++      bool from_render_target = native_source && !verify_native;
++
 +      // Dump the current contents of the render targets owning the affected range to the EDRAM
 +      // buffer.
-+      uint32_t dump_base;
-+      uint32_t dump_row_length_used;
-+      uint32_t dump_rows;
-+      uint32_t dump_pitch;
-+      resolve_info.GetCopyEdramTileSpan(dump_base, dump_row_length_used, dump_rows, dump_pitch);
-+      if (!DumpRenderTargets(dump_base, dump_row_length_used, dump_rows, dump_pitch)) {
-+        REXGPU_ERROR("MetalRenderTargetCache: Failed to dump host render targets for resolve");
-+        return false;
++      if (!from_render_target) {
++        uint32_t dump_base;
++        uint32_t dump_row_length_used;
++        uint32_t dump_rows;
++        uint32_t dump_pitch;
++        resolve_info.GetCopyEdramTileSpan(dump_base, dump_row_length_used, dump_rows, dump_pitch);
++        if (!DumpRenderTargets(dump_base, dump_row_length_used, dump_rows, dump_pitch)) {
++          REXGPU_ERROR("MetalRenderTargetCache: Failed to dump host render targets for resolve");
++          return false;
++        }
 +      }
 +
 +      // Make sure there is memory to write to. At a draw resolution scale, resolves go to the
@@ -9816,6 +10108,14 @@ index 0000000..49e7c7e
 +        REXGPU_ERROR("MetalRenderTargetCache: Failed to obtain the resolve destination memory "
 +                     "region (base 0x{:08X}, length 0x{:08X})",
 +                     resolve_info.copy_dest_base, copy_dest_range_unscaled);
++      } else if (from_render_target) {
++        ResolveFromRenderTarget(resolve_info, *native_source, shared_memory, false);
++        texture_cache.MarkRangeAsResolved(resolve_info.copy_dest_extent_start,
++                                          resolve_info.copy_dest_extent_length);
++        UpdateResolvedTextures(resolve_info, texture_cache);
++        written_address_out = resolve_info.copy_dest_extent_start;
++        written_length_out = resolve_info.copy_dest_extent_length;
++        copied = true;
 +      } else {
 +        const ComputePipeline& pipeline = resolve_copy_pipelines_[size_t(copy_shader)];
 +        id<MTLComputeCommandEncoder> compute =
@@ -9886,6 +10186,10 @@ index 0000000..49e7c7e
 +                         "to the guest resolution",
 +                         resolve_width, resolve_height, resolve_info.copy_dest_base);
 +          }
++        }
++
++        if (verify_native) {
++          ResolveFromRenderTarget(resolve_info, *native_source, shared_memory, true);
 +        }
 +
 +        // Invalidate textures and mark the range as written by the GPU.
