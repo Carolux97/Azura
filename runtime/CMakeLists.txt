@@ -50,6 +50,7 @@ set(AZURA_SOURCES
     src/script_hooks.cpp
     src/class_dump.cpp
     src/render_queue.cpp
+    src/hle_gfx/frame_capture.cpp
     src/hle_gfx/hooks.cpp
     src/hle_gfx/planner.cpp
     src/gpu_list.cpp
@@ -67,6 +68,7 @@ set(AZURA_SOURCES
     src/input/install_player_assignment.cpp
     src/input/mouse_look.cpp
     src/input/player_assignment.cpp
+    src/input/scripted_pad.cpp
     src/menu/menu_patches.cpp
     src/menu/pc_options.cpp
     src/prompts/button_prompts.cpp
