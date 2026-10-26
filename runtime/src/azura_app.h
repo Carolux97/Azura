@@ -124,6 +124,8 @@ class AzuraApp : public rex::ReXApp {
     if (!config.graphics && !config.gpu_plugin.empty()) {
       config.graphics = rex::system::LoadGpuPlugin(config.gpu_plugin);
     }
+    // Before the presenter creates its swapchain, which picks the presentation mode.
+    azura::menu::ApplyPresentMode();
     azura::menu::ApplyRenderResolution();
     azura::menu::ApplyUpscalingSharpness(false);
   }

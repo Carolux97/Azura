@@ -1155,6 +1155,31 @@ void ApplyFrameRateLimit() {
               frames * 2);
 }
 
+void ApplyPresentMode() {
+#if defined(_WIN32)
+  // azura.default.toml keeps presentation in step with the display (FIFO) on every platform. On
+  // Windows, FIFO holds the game at a third of the display's refresh (20 FPS at 60 Hz) although
+  // its frames take far less, while mailbox, which also never tears, lets it reach its frame rate
+  // limit. A value in the player's azura.toml, which the runtime loads after this, still wins: it
+  // is set here only when that file does not mention it, since a value set from code outranks the
+  // settings files.
+  constexpr const char* kMailbox = "vulkan_allow_present_mode_mailbox";
+  std::filesystem::path config_path;
+  {
+    std::lock_guard lock(g_mutex);
+    config_path = g_config_path;
+  }
+  if (!config_path.empty() && !ReadTomlValue(config_path, kMailbox).empty()) {
+    return;
+  }
+  if (rex::cvar::SetFlagByName(kMailbox, "true")) {
+    REXLOG_INFO("[Azura options] Mailbox presentation allowed (Windows)");
+  } else {
+    REXLOG_WARN("[Azura options] Cannot allow the mailbox presentation mode");
+  }
+#endif
+}
+
 namespace {
 
 // Resolution scale "auto" stands for, as the launcher's Automatic (launcher/src/graphics.js): 2 on
