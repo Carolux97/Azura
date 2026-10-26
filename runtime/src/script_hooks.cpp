@@ -33,6 +33,12 @@
 // the menu's bytecode is patched where it would refuse to show Video and Keyboard and mouse as
 // lists. The layouts and bytecode involved are in docs/reverse-engineering.md.
 //
+// Field of view: just before a gameplay camera mode answers GetDesiredFOV, its FOVAngle is set to
+// the mode's own value scaled by the Video menu's field_of_view (see "Field of view" below).
+//
+// Film grain: as each player's input runs, the grain of the post-process effects that player can
+// be drawn with is turned off or back on with the Video menu's film_grain (see "Film grain").
+//
 // To keep the hooks cheap, script functions are matched by FName index; the indices are found by
 // scanning new GNames entries every so often until they appear.
 
@@ -76,6 +82,8 @@ REXCVAR_DEFINE_STRING(script_dump_classes, "", "Azura/Debug",
                       "Comma-separated script classes whose functions and properties are logged once loaded");
 REXCVAR_DEFINE_BOOL(script_dump_code, false, "Azura/Debug",
                     "With script_dump_classes: also log a rough listing of each function's bytecode");
+REXCVAR_DECLARE(double, field_of_view);
+REXCVAR_DECLARE(bool, film_grain);
 
 extern "C" void __imp__sub_822DF4D0(PPCContext& __restrict ctx, uint8_t* base);
 extern "C" void __imp__sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base);
@@ -266,6 +274,7 @@ enum WatchedName {
   kPopulateOptionsMenu,      // UIScene_Options: the Options menu opens (its list of categories)
   kOnClose,                  // a menu scene closes (UIScene_Options: the Options menu)
   kWidgetInitialized,        // a menu scene sets up a widget (the main menu's scene, for the title screen)
+  kGetDesiredFOV,            // a camera mode: the field of view it wants this frame
   kWatchedNameCount,
 };
 constexpr const char* kWatchedNames[kWatchedNameCount] = {
@@ -280,7 +289,8 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "MatineeCancelled",      "GetCallbackForOptionPSID", "Callback_TVTypeWasChanged",
     "Callback_GammaWasChanged", "Callback_SelectStorageLocation", "ShouldOptionBeDisabled",
     "PlayerInput",           "Callback_ViewController", "Callback_ResetTutorials",
-    "PopulateOptionsMenu",   "OnClose",     "WidgetInitialized"};
+    "PopulateOptionsMenu",   "OnClose",     "WidgetInitialized",
+    "GetDesiredFOV"};
 
 // FName index of each watched name, -1 until found (0 is a valid index: None).
 std::atomic<int32_t> g_names[kWatchedNameCount];
@@ -349,6 +359,11 @@ bool IsEnginePlayerInput(const uint8_t* base, uint32_t function) {
   return true;
 }
 
+// Offset of POV.FOV in a Camera's CameraCache (TCameraCache: float TimeStamp, then TPOV: vector
+// Location, rotator Rotation, float FOV; the 32 bytes between CameraCache and LastFrameCameraCache
+// in the dump of Camera match).
+constexpr uint32_t kCameraCachePovFov = 4 + 12 + 12;
+
 // Property offsets per class, found by name the first time a class is seen.
 std::mutex g_mouse_look_mutex;
 std::unordered_map<uint64_t, int32_t> g_class_offsets;
@@ -382,6 +397,8 @@ std::atomic<uint32_t> g_front_end_scene{0};
 // chose a main menu option.
 std::atomic<int32_t> g_front_end_controller{0};
 
+void ApplyFilmGrain(uint8_t* base, uint32_t controller, uint32_t local_player);
+
 void ApplyMouseLookFor(uint8_t* base, uint32_t player_input) {
   std::lock_guard lock(g_mouse_look_mutex);
   const uint32_t input_class = LoadU32(base, player_input + kObjectClass);
@@ -397,6 +414,7 @@ void ApplyMouseLookFor(uint8_t* base, uint32_t player_input) {
   if (controller_id < 0) return;
   const uint32_t user = LoadU32(base, local_player + static_cast<uint32_t>(controller_id));
   if (user >= 4) return;
+  ApplyFilmGrain(base, controller, local_player);
   g_player_controllers[user].store(controller, std::memory_order_relaxed);
   g_guest_base.store(base, std::memory_order_relaxed);
   if (user == 0) {
@@ -417,9 +435,24 @@ void ApplyMouseLookFor(uint8_t* base, uint32_t player_input) {
       REXLOG_INFO("[Azura menus] Player 1 {} the front end ({})", front_end ? "is in" : "left", controller_name);
     }
   }
-  azura::input::ApplyMouseLook(base, user,
-                               {player_input + static_cast<uint32_t>(mouse_x), player_input + static_cast<uint32_t>(mouse_y),
-                                player_input + static_cast<uint32_t>(sensitivity)});
+  azura::input::MouseLookTarget target{player_input + static_cast<uint32_t>(mouse_x),
+                                       player_input + static_cast<uint32_t>(mouse_y),
+                                       player_input + static_cast<uint32_t>(sensitivity)};
+  // The view angle PlayerInput's FOVScale is about to read: GetFOVAngle answers the player
+  // camera's CameraCache.POV.FOV (TCameraCache: TimeStamp, then TPOV: Location, Rotation, FOV).
+  const int32_t camera_at = CachedOffset(base, LoadU32(base, controller + kObjectClass), 11, "PlayerCamera");
+  const uint32_t camera = camera_at >= 0 ? LoadU32(base, controller + static_cast<uint32_t>(camera_at)) : 0;
+  if (camera) {
+    const int32_t cache_at = CachedOffset(base, LoadU32(base, camera + kObjectClass), 12, "CameraCache");
+    if (cache_at >= 0) {
+      const uint32_t bits = LoadU32(base, camera + static_cast<uint32_t>(cache_at) + kCameraCachePovFov);
+      float fov;
+      std::memcpy(&fov, &bits, 4);
+      if (fov > 1.0f && fov < 170.0f) target.view_fov = fov;
+    }
+  }
+  target.base_fov = static_cast<float>(REXCVAR_GET(field_of_view));
+  azura::input::ApplyMouseLook(base, user, target);
 }
 
 // Whether the frame about to run is the main menu choosing the Quit Game option.
@@ -581,6 +614,191 @@ void ShowPcOptionValue(uint8_t* base, uint32_t caller) {
   StoreU32(base, address, bits);
   REXLOG_DEBUG("[Azura options] Row {} of category {} shows {}", LoadU32(base, locals + kPopulateRow),
                CurrentMode(base, LoadU32(base, caller + kFrameObject)), value);
+}
+
+// --- Field of view ---
+//
+// GearGameplayCamera keeps one camera mode object per situation (GameplayCam_Default, _Cover,
+// _Targeting, _RoadieRun, ...), each with its own FOVAngle from GearCamera.ini: 80 by default, 95
+// in cover, 50 aiming, 105 roadie running. The mode in use answers GetDesiredFOV(ViewedPawn) from
+// its FOVAngle, through the weapon's GetAdjustedFOV or GetTargetingFOV when there is one
+// (docs/reverse-engineering.md, "Field of view"). Just before that function runs, FOVAngle is set
+// to the mode's own value times field_of_view / 80, so every mode keeps its proportion to the base
+// camera and a change in the menu shows on the next frame. Cinematics (Matinee) and a forced field
+// of view (Kismet's Set Camera FOV) do not take it from the modes.
+
+// The base camera's field of view in the game (GameplayCam_Default.FOVAngle), which
+// field_of_view replaces.
+constexpr float kGameFieldOfView = 80.0f;
+
+// A camera mode whose FOVAngle the hook has written: its class, the value the game gave it, and
+// the bits written, to tell when the game (or a new mode at a recycled address) has set it again.
+struct ScaledFieldOfView {
+  uint32_t mode_class;
+  float original;
+  uint32_t written;
+};
+std::mutex g_fov_mutex;
+std::unordered_map<uint32_t, ScaledFieldOfView> g_scaled_fov;  // by camera mode object
+// Offset of FOVAngle by class; -1 for a class that is not a camera mode.
+std::unordered_map<uint32_t, int32_t> g_fov_offsets;
+
+// Offset of FOVAngle in objects of `cls` when it derives from the engine's
+// GameThirdPersonCameraMode (the gameplay camera modes), else -1.
+int32_t CameraModeFovOffset(const uint8_t* base, uint32_t cls) {
+  for (uint32_t owner = cls; owner; owner = LoadU32(base, owner + kStructSuper)) {
+    if (ObjectName(base, owner) == "GameThirdPersonCameraMode") return ClassPropertyOffset(base, cls, "FOVAngle");
+  }
+  return -1;
+}
+
+// As GetDesiredFOV starts on `mode`: scales its FOVAngle by field_of_view.
+void ApplyFieldOfView(uint8_t* base, uint32_t mode) {
+  const uint32_t mode_class = LoadU32(base, mode + kObjectClass);
+  std::lock_guard lock(g_fov_mutex);
+  auto offset = g_fov_offsets.find(mode_class);
+  if (offset == g_fov_offsets.end()) {
+    offset = g_fov_offsets.emplace(mode_class, CameraModeFovOffset(base, mode_class)).first;
+    if (offset->second >= 0) {
+      REXLOG_INFO("[Azura fov] Camera mode {}: FOVAngle at +{}", ObjectName(base, mode_class), offset->second);
+    }
+  }
+  if (offset->second < 0) return;
+  const uint32_t address = mode + static_cast<uint32_t>(offset->second);
+  const uint32_t current = LoadU32(base, address);
+  auto [entry, added] = g_scaled_fov.try_emplace(mode);
+  ScaledFieldOfView& scaled = entry->second;
+  // A mode seen for the first time, or one whose FOVAngle is not what was written last: the value
+  // there now is the game's own.
+  if (added || scaled.mode_class != mode_class || scaled.written != current) {
+    scaled.mode_class = mode_class;
+    std::memcpy(&scaled.original, &current, 4);
+  }
+  const float scale = static_cast<float>(REXCVAR_GET(field_of_view)) / kGameFieldOfView;
+  scaled.written = FloatBits(scaled.original * scale);
+  if (scaled.written != current) StoreU32(base, address, scaled.written);
+}
+
+// As the engine's PlayerInput.PlayerInput returns on `player_input`: undoes field_of_view's share
+// of the turn. That function multiplies the right stick's aTurn and aLookUp, and the mouse axes it
+// then adds to them, by FOVScale, GetFOVAngle() * 0.01111 (docs/reverse-engineering.md, Mouse
+// look), so a wider view would turn faster. Dividing both by field_of_view / 80 leaves the turn
+// the player gets for a given mouse motion or stick deflection as with the game's field of view,
+// while the slower turn when aiming or zoomed, which comes from those modes' own narrower angles,
+// stays. The stick's deceleration keeps its state (LastaTurn, LastaLookup) before FOVScale is
+// applied, so scaling the result does not feed back into the next frame.
+void CompensateFieldOfView(uint8_t* base, uint32_t player_input) {
+  const float scale = static_cast<float>(REXCVAR_GET(field_of_view)) / kGameFieldOfView;
+  if (scale == 1.0f) return;
+  int32_t turn;
+  int32_t look_up;
+  {
+    std::lock_guard lock(g_mouse_look_mutex);
+    const uint32_t input_class = LoadU32(base, player_input + kObjectClass);
+    turn = CachedOffset(base, input_class, 9, "aTurn");
+    look_up = CachedOffset(base, input_class, 10, "aLookUp");
+  }
+  if (turn < 0 || look_up < 0) return;
+  for (const int32_t offset : {turn, look_up}) {
+    const uint32_t address = player_input + static_cast<uint32_t>(offset);
+    const uint32_t bits = LoadU32(base, address);
+    float value;
+    std::memcpy(&value, &bits, 4);
+    StoreU32(base, address, FloatBits(value / scale));
+  }
+}
+
+// --- Film grain ---
+//
+// The game's film grain is drawn by the UberPostProcessEffect of the post-process chain: the
+// player's own (LocalPlayer.PlayerPostProcess, the one drawn, a copy of the engine's with one more
+// effect), the engine's default (GearEngine.DefaultPostProcess, War_PostProcess.
+// DefaultScenePostProcess) and a level's (WorldInfo.WorldPostProcessChain, when it has one). The
+// game ships it with bEnableImageGrain set and SceneImageGrainScale 0.0125, and no script reads or
+// writes it (docs/reverse-engineering.md, "Film grain"). With film_grain off, bEnableImageGrain is
+// cleared in every one of those effects each frame; on, each effect gets back the value the game
+// gave it.
+
+// UBoolProperty::BitMask: the bit of its 32-bit word a bool property is (read from the game: the
+// first bool declared in a word is 0x80000000, the next 0x40000000, ...).
+constexpr uint32_t kBoolPropertyBitMask = 104;
+
+// An UberPostProcessEffect the hook has seen: its class, to tell a new object at a recycled
+// address, and whether the game had its grain on.
+struct GrainEffect {
+  uint32_t effect_class;
+  bool original;
+};
+// Guarded by g_mouse_look_mutex, like the offsets: ApplyFilmGrain runs from ApplyMouseLookFor.
+std::unordered_map<uint32_t, GrainEffect> g_grain_effects;  // by effect object
+// The UberPostProcessEffect class and its bEnableImageGrain (word offset and bit), once found.
+uint32_t g_grain_class = 0;
+int32_t g_grain_offset = -1;
+uint32_t g_grain_mask = 0;
+
+// Whether `cls` is UberPostProcessEffect; the first time it is, finds bEnableImageGrain in it.
+bool IsGrainEffectClass(const uint8_t* base, uint32_t cls) {
+  if (g_grain_class) return cls == g_grain_class;
+  if (ObjectName(base, cls) != "UberPostProcessEffect") return false;
+  g_grain_class = cls;
+  for (uint32_t field = LoadU32(base, cls + kStructChildren); field; field = LoadU32(base, field + kFieldNext)) {
+    if (ObjectName(base, field) != "bEnableImageGrain") continue;
+    const uint32_t mask = LoadU32(base, field + kBoolPropertyBitMask);
+    // A bool's mask has exactly one bit set; anything else means the layout is not the one read.
+    if (mask && !(mask & (mask - 1))) {
+      g_grain_offset = static_cast<int32_t>(LoadU32(base, field + kPropertyOffset));
+      g_grain_mask = mask;
+    }
+  }
+  REXLOG_INFO("[Azura grain] UberPostProcessEffect.bEnableImageGrain at +{}, bit 0x{:08X}", g_grain_offset,
+              g_grain_mask);
+  return true;
+}
+
+void ApplyFilmGrainToChain(uint8_t* base, uint32_t chain, bool enabled) {
+  if (!chain) return;
+  const int32_t effects_at = CachedOffset(base, LoadU32(base, chain + kObjectClass), 13, "Effects");
+  if (effects_at < 0) return;
+  const uint32_t data = LoadU32(base, chain + static_cast<uint32_t>(effects_at));
+  const uint32_t count = std::min<uint32_t>(LoadU32(base, chain + static_cast<uint32_t>(effects_at) + 4), 64);
+  for (uint32_t i = 0; i < count; ++i) {
+    const uint32_t effect = LoadU32(base, data + i * 4);
+    if (!effect) continue;
+    const uint32_t effect_class = LoadU32(base, effect + kObjectClass);
+    if (!IsGrainEffectClass(base, effect_class) || g_grain_offset < 0) continue;
+    const uint32_t address = effect + static_cast<uint32_t>(g_grain_offset);
+    const uint32_t word = LoadU32(base, address);
+    const bool on = (word & g_grain_mask) != 0;
+    auto [entry, added] = g_grain_effects.try_emplace(effect, GrainEffect{effect_class, on});
+    if (!added && entry->second.effect_class != effect_class) entry->second = {effect_class, on};
+    const bool wanted = enabled && entry->second.original;
+    if (on != wanted) StoreU32(base, address, wanted ? word | g_grain_mask : word & ~g_grain_mask);
+  }
+}
+
+// Applies film_grain to the post-process chains `controller` (with its LocalPlayer `local_player`)
+// can be drawn with. Called with g_mouse_look_mutex held.
+void ApplyFilmGrain(uint8_t* base, uint32_t controller, uint32_t local_player) {
+  const bool enabled = REXCVAR_GET(film_grain);
+  const uint32_t player_class = LoadU32(base, local_player + kObjectClass);
+  const int32_t player_chain_at = CachedOffset(base, player_class, 15, "PlayerPostProcess");
+  if (player_chain_at >= 0) {
+    ApplyFilmGrainToChain(base, LoadU32(base, local_player + static_cast<uint32_t>(player_chain_at)), enabled);
+  }
+  const int32_t world_at = CachedOffset(base, LoadU32(base, controller + kObjectClass), 7, "WorldInfo");
+  const uint32_t world = world_at >= 0 ? LoadU32(base, controller + static_cast<uint32_t>(world_at)) : 0;
+  if (world) {
+    const int32_t chain_at = CachedOffset(base, LoadU32(base, world + kObjectClass), 14, "WorldPostProcessChain");
+    if (chain_at >= 0) ApplyFilmGrainToChain(base, LoadU32(base, world + static_cast<uint32_t>(chain_at)), enabled);
+  }
+  // The engine is the outer of the player's viewport client (GearGameViewportClient in GearEngine).
+  const int32_t viewport_at = CachedOffset(base, player_class, 16, "ViewportClient");
+  const uint32_t viewport = viewport_at >= 0 ? LoadU32(base, local_player + static_cast<uint32_t>(viewport_at)) : 0;
+  const uint32_t engine = viewport ? LoadU32(base, viewport + kObjectOuter) : 0;
+  if (engine) {
+    const int32_t chain_at = CachedOffset(base, LoadU32(base, engine + kObjectClass), 17, "DefaultPostProcess");
+    if (chain_at >= 0) ApplyFilmGrainToChain(base, LoadU32(base, engine + static_cast<uint32_t>(chain_at)), enabled);
+  }
 }
 
 // --- Brightness calibration from the Video list ---
@@ -1299,8 +1517,15 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   const uint32_t function = LoadU32(base, ctx.r4.u32 + kFrameNode);
   // Before it runs: it reads aMouseX and aMouseY.
   if (function && IsEnginePlayerInput(base, function)) {
-    ApplyMouseLookFor(base, ctx.r3.u32);
+    const uint32_t player_input = ctx.r3.u32;
+    ApplyMouseLookFor(base, player_input);
+    __imp__sub_822DF9E0(ctx, base);
+    // After it: it has scaled the look input by the field of view.
+    CompensateFieldOfView(base, player_input);
+    return;
   }
+  // Before it runs: it reads FOVAngle.
+  if (Is(base, function, kGetDesiredFOV)) ApplyFieldOfView(base, ctx.r3.u32);
   if (REXCVAR_GET(script_trace) &&
       (Is(base, function, kPawnDied) || Is(base, function, kShouldDeathCauseFailure) ||
        Is(base, function, kGetDeathGameOverReason) || Is(base, function, kGameOverPlayer) ||

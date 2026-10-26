@@ -24,6 +24,12 @@ struct MouseLookTarget {
   uint32_t mouse_x;      // PlayerInput.aMouseX (float)
   uint32_t mouse_y;      // PlayerInput.aMouseY (float)
   uint32_t sensitivity;  // PlayerInput.MouseSensitivity (float)
+  // The player's view angle as of the last frame (the camera's CameraCache.POV.FOV), 0 when
+  // unknown, and the base camera's angle (field_of_view): while aiming, the turn per pixel is
+  // scaled by base_fov / view_fov, so that the game's turn scaling by the view angle (FOVScale)
+  // leaves aiming turning as the base camera does.
+  float view_fov = 0.0f;
+  float base_fov = 0.0f;
 };
 
 // Sets the input system the mouse motion comes from; nullptr turns mouse look off.
