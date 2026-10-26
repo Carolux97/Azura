@@ -1,9 +1,9 @@
 diff --git a/include/rex/graphics/hle/markers.h b/include/rex/graphics/hle/markers.h
 new file mode 100644
-index 0000000..e16192c
+index 0000000..7e51210
 --- /dev/null
 +++ b/include/rex/graphics/hle/markers.h
-@@ -0,0 +1,108 @@
+@@ -0,0 +1,111 @@
 +/**
 + * @file        graphics/hle/markers.h
 + * @brief       Markers that describe the guest's graphics API calls inside its command stream
@@ -50,6 +50,9 @@ index 0000000..e16192c
 +// With hle_native_resolves: a resolve that copies a render target to memory with no conversion
 +// writes the memory straight from the render target, without the EDRAM dump.
 +REXCVAR_DECLARE(bool, hle_resolve_from_render_targets);
++// With hle_resolve_from_render_targets, on Metal: a resolve whose render target is attached to the
++// open render pass is written by a tile function inside that pass, which then goes on. Experimental.
++REXCVAR_DECLARE(bool, hle_resolve_in_render_pass);
 +// Debugging aid for hle_native_resolves: resolves and texture loads work as before, and what the
 +// native path would have written (to the textures, and to the memory) is compared with what they
 +// wrote; mismatches are logged.
@@ -114,10 +117,10 @@ index 0000000..e16192c
 +}  // namespace rex::graphics::hle
 diff --git a/src/system/hle_markers.cpp b/src/system/hle_markers.cpp
 new file mode 100644
-index 0000000..3d4103d
+index 0000000..5596c6d
 --- /dev/null
 +++ b/src/system/hle_markers.cpp
-@@ -0,0 +1,137 @@
+@@ -0,0 +1,142 @@
 +/**
 + * @file        system/hle_markers.cpp
 + * @brief       The gfx option and the dispatch of the HLE graphics markers
@@ -159,6 +162,11 @@ index 0000000..3d4103d
 +REXCVAR_DEFINE_BOOL(hle_resolve_from_render_targets, true, "GPU",
 +                    "With hle_native_resolves, write a resolve that needs no conversion to memory "
 +                    "straight from the render target, without dumping it to the EDRAM buffer first")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++REXCVAR_DEFINE_BOOL(hle_resolve_in_render_pass, false, "GPU",
++                    "Experimental, Metal: with hle_resolve_from_render_targets, write a resolve "
++                    "whose render target is attached to the open render pass from a tile function "
++                    "inside the pass, without ending it")
 +    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 +REXCVAR_DEFINE_BOOL(hle_verify_resolves, false, "GPU",
 +                    "Debugging aid for hle_native_resolves: resolve and load textures as before, "
