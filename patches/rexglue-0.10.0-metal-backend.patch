@@ -1284,7 +1284,7 @@ index 0000000..a146aa8
 +
 +}  // namespace rex::input
 diff --git a/include/rex/perf/counter.h b/include/rex/perf/counter.h
-index 83f0dff..d8a865c 100644
+index 83f0dff..755d87f 100644
 --- a/include/rex/perf/counter.h
 +++ b/include/rex/perf/counter.h
 @@ -10,6 +10,7 @@
@@ -1347,7 +1347,7 @@ index 83f0dff..d8a865c 100644
    kResolves,              // Guest resolves (EDRAM to memory copies)
    // Why the open render pass was ended (each ended pass adds to one of these)
    kRenderPassEndsTargetChange,  // A draw to other render targets
-@@ -81,6 +120,30 @@ enum class CounterId : uint16_t {
+@@ -81,6 +120,32 @@ enum class CounterId : uint16_t {
    // Guest draws that continue a render pass begun for a render target transfer
    kDrawsInTransferPasses,
  
@@ -1370,6 +1370,8 @@ index 83f0dff..d8a865c 100644
 +  kRenderPassesResumedAfterResolve,
 +  // The same, where the resolve was written from the render target (gfx = hle, C2)
 +  kRenderPassesResumedAfterNativeResolve,
++  // Resolves written by a tile function inside the render pass (gfx = hle, C4)
++  kResolvesInRenderPass,
 +
 +  // Marks the player sets with a key while playing (the runtime's bind_perf_marker key), to find the
 +  // frames they noticed in the CSV
@@ -1378,7 +1380,7 @@ index 83f0dff..d8a865c 100644
    kCount  // sentinel -- must be last
  };
  
-@@ -162,6 +225,29 @@ class Profiler {
+@@ -162,6 +227,29 @@ class Profiler {
    }
  };
  
@@ -2068,7 +2070,7 @@ index b52bf39..13f51dc 100644
  
  void* MapFileView(FileMappingHandle handle, void* base_address, size_t length, PageAccess access,
 diff --git a/src/core/perf/counter.cpp b/src/core/perf/counter.cpp
-index d3f26eb..f77133e 100644
+index d3f26eb..4328521 100644
 --- a/src/core/perf/counter.cpp
 +++ b/src/core/perf/counter.cpp
 @@ -46,6 +46,29 @@ std::array<std::atomic<int64_t>, kNumCounters> g_snapshot{};
@@ -2109,7 +2111,7 @@ index d3f26eb..f77133e 100644
      "resolves",
      "pass_ends_target_change",
      "pass_ends_draw_barriers",
-@@ -86,6 +110,16 @@ constexpr const char* kCounterNames[] = {
+@@ -86,6 +110,17 @@ constexpr const char* kCounterNames[] = {
      "uploads_for_textures",
      "uploads_after_textures",
      "draws_in_transfer_passes",
@@ -2122,11 +2124,12 @@ index d3f26eb..f77133e 100644
 +    "resolves_from_render_targets",
 +    "render_passes_resumed_after_resolve",
 +    "render_passes_resumed_after_native_resolve",
++    "resolves_in_render_pass",
 +    "markers",
  };
  static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must match CounterId enum");
  
-@@ -94,6 +128,29 @@ static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must matc
+@@ -94,6 +129,29 @@ static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must matc
  constexpr bool kIsGauge[] = {
      false,  // kFrameTimeUs       (set each frame)
      false,  // kFps               (set each frame)
@@ -2156,7 +2159,7 @@ index d3f26eb..f77133e 100644
      false,  // kDrawCalls
      false,  // kCommandBufferStalls
      false,  // kVerticesProcessed
-@@ -118,6 +175,7 @@ constexpr bool kIsGauge[] = {
+@@ -118,6 +176,7 @@ constexpr bool kIsGauge[] = {
      false,  // kHostGpuWaits
      false,  // kHostGpuWaitUs
      false,  // kMemexportReadbacks
@@ -2164,7 +2167,7 @@ index d3f26eb..f77133e 100644
      false,  // kResolves
      false,  // kRenderPassEndsTargetChange
      false,  // kRenderPassEndsDrawBarriers
-@@ -134,6 +192,16 @@ constexpr bool kIsGauge[] = {
+@@ -134,6 +193,17 @@ constexpr bool kIsGauge[] = {
      false,  // kUploadsForTextures
      false,  // kUploadsAfterTextures
      false,  // kDrawsInTransferPasses
@@ -2177,6 +2180,7 @@ index d3f26eb..f77133e 100644
 +    false,  // kResolvesFromRenderTargets
 +    false,  // kRenderPassesResumedAfterResolve
 +    false,  // kRenderPassesResumedAfterNativeResolve
++    false,  // kResolvesInRenderPass
 +    false,  // kMarkers
  };
  static_assert(std::size(kIsGauge) == kNumCounters, "kIsGauge must match CounterId enum");
@@ -2599,10 +2603,10 @@ index 8f2fcb0..b0f3cb4 100644
  
 diff --git a/src/graphics/metal/metal_command_processor.h b/src/graphics/metal/metal_command_processor.h
 new file mode 100644
-index 0000000..14c9140
+index 0000000..728a7d8
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.h
-@@ -0,0 +1,395 @@
+@@ -0,0 +1,402 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.h
 + * @brief       Xenos command processing with Metal
@@ -2696,6 +2700,13 @@ index 0000000..14c9140
 +  // Set while a resolve written from the render target (gfx = hle) gets its encoder, so a render
 +  // pass it ends is told apart in the perf counters.
 +  void SetInNativeResolve(bool in_native_resolve) { in_native_resolve_ = in_native_resolve; }
++  // The open render pass's encoder when the texture is one of its color attachments (its index in
++  // index_out), or nil. The caller's work in it changes the state the guest draws track, which is
++  // set again for the next draw.
++  id<MTLRenderCommandEncoder> GetOpenRenderEncoderWithColor(id<MTLTexture> texture,
++                                                            uint32_t& index_out);
++  // The attachments of the open render pass (empty when none is open).
++  const MetalRenderPass& current_render_pass() const { return current_render_pass_; }
 +
 +  ScratchBuffer AcquireScratchBuffer(size_t size);
 +  UploadAllocation RequestUpload(size_t size, size_t alignment = 256);
@@ -3000,10 +3011,10 @@ index 0000000..14c9140
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_command_processor.mm b/src/graphics/metal/metal_command_processor.mm
 new file mode 100644
-index 0000000..7354a0c
+index 0000000..721423e
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.mm
-@@ -0,0 +1,2856 @@
+@@ -0,0 +1,2871 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.mm
 + * @brief       Xenos command processing with Metal
@@ -4384,6 +4395,21 @@ index 0000000..7354a0c
 +  // The backend's own draws change the state that the guest draws track.
 +  render_encoder_state_.valid = false;
 +  return encoder;
++}
++
++id<MTLRenderCommandEncoder> MetalCommandProcessor::GetOpenRenderEncoderWithColor(
++    id<MTLTexture> texture, uint32_t& index_out) {
++  if (encoder_type_ != EncoderType::kRender || !texture) {
++    return nil;
++  }
++  for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
++    if (current_render_pass_.color[i] == texture) {
++      index_out = i;
++      render_encoder_state_.valid = false;
++      return render_encoder_;
++    }
++  }
++  return nil;
 +}
 +
 +void MetalCommandProcessor::AddCompletedHandler(MTLCommandBufferHandler handler) {
@@ -8537,10 +8563,10 @@ index 0000000..d717bea
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_render_target_cache.h b/src/graphics/metal/metal_render_target_cache.h
 new file mode 100644
-index 0000000..23882ed
+index 0000000..3dba3dd
 --- /dev/null
 +++ b/src/graphics/metal/metal_render_target_cache.h
-@@ -0,0 +1,602 @@
+@@ -0,0 +1,629 @@
 +/**
 + * @file        graphics/metal/metal_render_target_cache.h
 + * @brief       EDRAM emulation with sample-space host render targets for the Metal backend
@@ -8631,6 +8657,7 @@ index 0000000..23882ed
 +  // memory, when the resolve copies a whole 1x render target of a format that needs no conversion.
 +  // Returns the textures updated.
 +  uint32_t UpdateResolvedTextures(const draw_util::ResolveInfo& resolve_info,
++                                  draw_util::ResolveCopyShaderIndex copy_shader,
 +                                  MetalTextureCache& texture_cache);
 +
 +  bool Resolve(const memory::Memory& memory, MetalSharedMemory& shared_memory,
@@ -9036,6 +9063,8 @@ index 0000000..23882ed
 +  static constexpr uint32_t kComputeBufferConstants = 2;
 +  // The mismatch counts of the resolves written from render targets, when verifying them.
 +  static constexpr uint32_t kComputeBufferVerifyResult = 3;
++  // The scratch copy resolve_compare compares the memory with.
++  static constexpr uint32_t kComputeBufferVerifyScratch = 4;
 +  static constexpr uint32_t kComputeTextureSource = 0;
 +  static constexpr uint32_t kComputeTextureSourceStencil = 1;
 +
@@ -9093,19 +9122,43 @@ index 0000000..23882ed
 +  // through a floating-point view (8_8_8_8) or an integer one (16_16_FLOAT, 32_FLOAT).
 +  ComputePipeline resolve_from_render_target_float_pipeline_;
 +  ComputePipeline resolve_from_render_target_uint_pipeline_;
++  // 16_16_16_16 and 16_16_16_16_FLOAT, with the conversions of the full 64bpp resolve copy.
++  ComputePipeline resolve_from_render_target_64bpp_pipeline_;
++  // hle_verify_resolves with hle_resolve_in_render_pass: compares the in-pass scratch copy.
++  ComputePipeline resolve_compare_pipeline_;
++  // Tile pipelines of ResolveInRenderPass, by packing, color index and the pass's color formats
++  // (nil when one failed to build).
++  std::unordered_map<uint64_t, id<MTLRenderPipelineState>> resolve_in_render_pass_pipelines_;
 +
-+  // gfx = hle: the render target that alone holds the whole source of a 1x, 32 bits per pixel
-+  // color resolve that copies it with no format conversion (8_8_8_8, 16_16_FLOAT or 32_FLOAT, no
-+  // exponent bias, endianness at most 16 in 32, a red and blue swap only for 8_8_8_8), at the
-+  // resolve's base, pitch and format; nullptr otherwise.
-+  MetalRenderTarget* GetNativeResolveSource(const draw_util::ResolveInfo& resolve_info) const;
++  // gfx = hle: the render target that alone holds the whole source of a 1x color resolve of
++  // sample 0 the native path handles, at the resolve's base, pitch and format; nullptr otherwise.
++  // Handled: the bitwise copies (the fast 32bpp copy) of 8_8_8_8 (with or without a red and blue
++  // swap), 2_10_10_10, 16_16_FLOAT and 32_FLOAT to the same format, and the conversions (the full
++  // 64bpp copy) of 16_16_16_16 and 16_16_16_16_FLOAT to 16_16_16_16 or 16_16_16_16_FLOAT, with any
++  // exponent bias and swap; endianness at most 16 in 32, no array destination.
++  MetalRenderTarget* GetNativeResolveSource(const draw_util::ResolveInfo& resolve_info,
++                                            draw_util::ResolveCopyShaderIndex copy_shader) const;
 +  // Writes a resolve's destination in the shared memory straight from its native source (see
-+  // GetNativeResolveSource), as the fast 32bpp resolve copy would from the EDRAM dump. With
++  // GetNativeResolveSource), as the resolve copy would from the EDRAM dump. With
 +  // verify, nothing is written: the values already in the memory (written by the usual path) are
 +  // compared with the ones the native path computes, and a mismatch is logged.
 +  void ResolveFromRenderTarget(const draw_util::ResolveInfo& resolve_info,
 +                               MetalRenderTarget& source, MetalSharedMemory& shared_memory,
 +                               bool verify);
++  // gfx = hle (hle_resolve_in_render_pass): writes a resolve of a native source (see
++  // GetNativeResolveSource) with a tile function inside the open render pass, when the source is
++  // one of the pass's color attachments; false, with nothing done, otherwise. dest is the shared
++  // memory, or a scratch buffer written at the destination addresses minus dest_bias.
++  bool ResolveInRenderPass(const draw_util::ResolveInfo& resolve_info, MetalRenderTarget& source,
++                           id<MTLBuffer> dest, uint32_t dest_bias);
++  // The tile pipeline of ResolveInRenderPass for the open pass's color formats, or nil.
++  id<MTLRenderPipelineState> GetResolveInRenderPassPipeline(uint32_t packing,
++                                                            uint32_t color_index);
++  // hle_verify_resolves: compares a scratch copy ResolveInRenderPass wrote (with dest_bias the
++  // resolve's extent start) with what the usual path wrote to the memory, and logs mismatches.
++  void CompareResolveInRenderPass(const draw_util::ResolveInfo& resolve_info,
++                                  MetalRenderTarget& source, MetalSharedMemory& shared_memory,
++                                  id<MTLBuffer> scratch);
 +
 +  id<MTLFunction> transfer_vertex_function_ = nil;
 +  std::unordered_map<TransferShaderKey, id<MTLFunction>, TransferShaderKey::Hasher>
@@ -9145,10 +9198,10 @@ index 0000000..23882ed
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_render_target_cache.mm b/src/graphics/metal/metal_render_target_cache.mm
 new file mode 100644
-index 0000000..0c37c6c
+index 0000000..a6cab44
 --- /dev/null
 +++ b/src/graphics/metal/metal_render_target_cache.mm
-@@ -0,0 +1,4287 @@
+@@ -0,0 +1,4701 @@
 +/**
 + * @file        graphics/metal/metal_render_target_cache.mm
 + * @brief       EDRAM emulation with sample-space host render targets for the Metal backend
@@ -9160,6 +9213,7 @@ index 0000000..0c37c6c
 +#include "metal_render_target_cache.h"
 +
 +#include <algorithm>
++#include <cmath>
 +#include <array>
 +#include <cstddef>
 +#include <cstdint>
@@ -9334,38 +9388,45 @@ index 0000000..0c37c6c
 +  uint dest_pitch;
 +  // In bytes.
 +  uint dest_base;
-+  // 0: 8_8_8_8 from normalized values, 1: two 16-bit integers, 2: one 32-bit integer.
++  // 32 bits per pixel, bits copied: 0: 8_8_8_8 from normalized values, 1: two 16-bit integers,
++  // 2: one 32-bit integer, 3: 2_10_10_10 from normalized values.
++  // 64 bits per pixel, converted (as the full 64bpp resolve copy does): 4: 16_16_16_16 (-32...32
++  // in the EDRAM), 5: 16_16_16_16_FLOAT.
 +  uint packing;
 +  // xenos::Endian128, at most 3 (16 in 32).
 +  uint endian;
 +  uint swap_red_blue;
 +  uint verify;
++  // The exponent bias as a factor, for the converting packings.
++  float exp_scale;
++  // The destination xenos::ColorFormat for the converting packings: 26 (16_16_16_16) or 32
++  // (16_16_16_16_FLOAT).
++  uint dest_format;
++  // resolve_compare: the address the scratch copy starts at.
++  uint scratch_base;
 +};
-+// texture_util::GetTiledOffset2D for 4 bytes per block.
-+int resolve_tiled_offset_2d_32bpp(int x, int y, uint pitch) {
-+  int macro_offset = ((x >> 5) + (y >> 5) * int(pitch >> 5)) << 9;
-+  int micro_offset = ((x & 7) + ((y & 0xE) << 2)) << 2;
++// texture_util::GetTiledOffset2D.
++int resolve_tiled_offset_2d(int x, int y, uint pitch, int bytes_per_block_log2) {
++  int macro_offset = ((x >> 5) + (y >> 5) * int(pitch >> 5)) << (bytes_per_block_log2 + 7);
++  int micro_offset = ((x & 7) + ((y & 0xE) << 2)) << bytes_per_block_log2;
 +  int offset = macro_offset + ((micro_offset & ~0xF) << 1) + (micro_offset & 0xF) +
 +               ((y & 1) << 4);
 +  return ((offset & ~0x1FF) << 3) + ((y & 16) << 7) + ((offset & 0x1C0) << 2) +
 +         (((((y & 8) >> 2) + (x >> 3)) & 3) << 6) + (offset & 0x3F);
 +}
-+void resolve_store_32bpp(uint2 pixel, uint value, device uint* dest, device atomic_uint* result,
-+                         constant ResolveFromRenderTargetConstants& constants) {
-+  if (constants.swap_red_blue != 0u) {
-+    value = (value & 0xFF00FF00u) | ((value >> 16) & 0xFFu) | ((value & 0xFFu) << 16);
-+  }
-+  if (constants.endian == 1u) {
++uint resolve_swap_endian(uint value, uint endian) {
++  if (endian == 1u) {
 +    value = ((value & 0x00FF00FFu) << 8) | ((value >> 8) & 0x00FF00FFu);
-+  } else if (constants.endian == 2u) {
++  } else if (endian == 2u) {
 +    value = (value << 24) | ((value & 0xFF00u) << 8) | ((value >> 8) & 0xFF00u) | (value >> 24);
-+  } else if (constants.endian == 3u) {
++  } else if (endian == 3u) {
 +    value = (value << 16) | (value >> 16);
 +  }
-+  uint address = constants.dest_base +
-+                 uint(resolve_tiled_offset_2d_32bpp(int(constants.dest_x + pixel.x),
-+                                                    int(constants.dest_y + pixel.y),
-+                                                    constants.dest_pitch));
++  return value;
++}
++// Stores (or, with verify, compares) one dword of the destination.
++void resolve_store_dword(uint address, uint value, device uint* dest, device atomic_uint* result,
++                         constant ResolveFromRenderTargetConstants& constants) {
 +  if (constants.verify == 0u) {
 +    dest[address >> 2] = value;
 +    return;
@@ -9379,6 +9440,21 @@ index 0000000..0c37c6c
 +    first_mismatch[3] = value;
 +  }
 +}
++uint resolve_dest_address(uint2 pixel, int bytes_per_block_log2,
++                          constant ResolveFromRenderTargetConstants& constants) {
++  return constants.dest_base +
++         uint(resolve_tiled_offset_2d(int(constants.dest_x + pixel.x),
++                                      int(constants.dest_y + pixel.y), constants.dest_pitch,
++                                      bytes_per_block_log2));
++}
++void resolve_store_32bpp(uint2 pixel, uint value, device uint* dest, device atomic_uint* result,
++                         constant ResolveFromRenderTargetConstants& constants) {
++  if (constants.swap_red_blue != 0u) {
++    value = (value & 0xFF00FF00u) | ((value >> 16) & 0xFFu) | ((value & 0xFFu) << 16);
++  }
++  resolve_store_dword(resolve_dest_address(pixel, 2, constants),
++                      resolve_swap_endian(value, constants.endian), dest, result, constants);
++}
 +kernel void resolve_from_render_target_float(
 +    uint2 pixel [[thread_position_in_grid]],
 +    texture2d<float, access::read> source [[texture(0)]],
@@ -9389,9 +9465,15 @@ index 0000000..0c37c6c
 +    return;
 +  }
 +  float4 color = source.read(uint2(constants.source_x, constants.source_y) + pixel);
-+  uint4 bytes = uint4(color * 255.0 + 0.5);
-+  resolve_store_32bpp(pixel, bytes.x | (bytes.y << 8) | (bytes.z << 16) | (bytes.w << 24), dest,
-+                      result, constants);
++  uint value;
++  if (constants.packing == 3u) {
++    uint4 components = uint4(color * float4(1023.0, 1023.0, 1023.0, 3.0) + 0.5);
++    value = components.x | (components.y << 10) | (components.z << 20) | (components.w << 30);
++  } else {
++    uint4 bytes = uint4(color * 255.0 + 0.5);
++    value = bytes.x | (bytes.y << 8) | (bytes.z << 16) | (bytes.w << 24);
++  }
++  resolve_store_32bpp(pixel, value, dest, result, constants);
 +}
 +kernel void resolve_from_render_target_uint(
 +    uint2 pixel [[thread_position_in_grid]],
@@ -9405,6 +9487,75 @@ index 0000000..0c37c6c
 +  uint4 texel = source.read(uint2(constants.source_x, constants.source_y) + pixel);
 +  uint value = constants.packing == 1u ? (texel.x & 0xFFFFu) | (texel.y << 16) : texel.x;
 +  resolve_store_32bpp(pixel, value, dest, result, constants);
++}
++// The conversion and store of the full 64bpp resolve copy, from the unpacked color.
++void resolve_store_64bpp(uint2 pixel, float4 color, device uint* dest, device atomic_uint* result,
++                         constant ResolveFromRenderTargetConstants& constants) {
++  color *= constants.exp_scale;
++  if (constants.swap_red_blue != 0u) {
++    color = color.zyxw;
++  }
++  uint2 value;
++  if (constants.dest_format == 26u) {
++    uint4 components = uint4(clamp(color, float4(0.0), float4(1.0)) * 65535.0 + 0.5);
++    value = uint2(components.x | (components.y << 16), components.z | (components.w << 16));
++  } else {
++    value = uint2(as_type<uint>(half2(color.xy)), as_type<uint>(half2(color.zw)));
++  }
++  uint address = resolve_dest_address(pixel, 3, constants);
++  resolve_store_dword(address, resolve_swap_endian(value.x, constants.endian), dest, result,
++                      constants);
++  resolve_store_dword(address + 4u, resolve_swap_endian(value.y, constants.endian), dest, result,
++                      constants);
++}
++// 64 bits per pixel with a conversion: the 16-bit components (the render target's bits, through
++// an integer view) are unpacked as the EDRAM holds them, scaled by the exponent bias, swapped,
++// and packed in the destination format.
++kernel void resolve_from_render_target_64bpp(
++    uint2 pixel [[thread_position_in_grid]],
++    texture2d<uint, access::read> source [[texture(0)]],
++    device uint* dest [[buffer(1)]],
++    constant ResolveFromRenderTargetConstants& constants [[buffer(2)]],
++    device atomic_uint* result [[buffer(3)]]) {
++  if (pixel.x >= constants.width || pixel.y >= constants.height) {
++    return;
++  }
++  uint4 texel = source.read(uint2(constants.source_x, constants.source_y) + pixel);
++  float4 color;
++  if (constants.packing == 4u) {
++    color = max(float4(-1.0), float4(int4(texel << 16) >> 16) * 0.0009765923023223876953125);
++  } else {
++    color = float4(float2(as_type<half2>((texel.x & 0xFFFFu) | (texel.y << 16))),
++                   float2(as_type<half2>((texel.z & 0xFFFFu) | (texel.w << 16))));
++  }
++  resolve_store_64bpp(pixel, color, dest, result, constants);
++}
++// Compares the destination a resolve wrote with a copy made elsewhere (scratch, starting at the
++// address scratch_base), at the addresses of the resolve's pixels; the mismatches are counted in
++// result as in resolve_store_dword.
++kernel void resolve_compare(
++    uint2 pixel [[thread_position_in_grid]],
++    device uint* dest [[buffer(1)]],
++    constant ResolveFromRenderTargetConstants& constants [[buffer(2)]],
++    device atomic_uint* result [[buffer(3)]],
++    const device uint* scratch [[buffer(4)]]) {
++  if (pixel.x >= constants.width || pixel.y >= constants.height) {
++    return;
++  }
++  bool is_64bpp = constants.packing >= 4u;
++  uint address = resolve_dest_address(pixel, is_64bpp ? 3 : 2, constants);
++  for (uint i = 0u; i < (is_64bpp ? 2u : 1u); ++i) {
++    uint dword_address = address + i * 4u;
++    uint memory_value = dest[dword_address >> 2];
++    uint scratch_value = scratch[(dword_address - constants.scratch_base) >> 2];
++    if (memory_value != scratch_value &&
++        atomic_fetch_add_explicit(result, 1u, memory_order_relaxed) == 0u) {
++      device uint* first_mismatch = (device uint*)result;
++      first_mismatch[1] = dword_address;
++      first_mismatch[2] = memory_value;
++      first_mismatch[3] = scratch_value;
++    }
++  }
 +}
 +)MSL";
 +
@@ -9422,7 +9573,115 @@ index 0000000..0c37c6c
 +  uint32_t endian;
 +  uint32_t swap_red_blue;
 +  uint32_t verify;
++  float exp_scale;
++  uint32_t dest_format;
++  uint32_t scratch_base;
 +};
++
++// The tile function of a resolve inside the render pass (appended to kRenderTargetShaderSource):
++// %TYPE% is the type the attachment reads as, %INDEX% its color index, %BODY% packs c (the pixel
++// of the source) and stores it like the resolve_from_render_target_* kernels.
++NSString* const kResolveInRenderPassSource = @R"MSL(
++struct ResolveTileAttachment {
++  %TYPE% color [[color(%INDEX%)]];
++};
++kernel void resolve_in_render_pass(
++    imageblock<ResolveTileAttachment, imageblock_layout_implicit> block,
++    ushort2 lid [[thread_position_in_threadgroup]],
++    ushort2 tile [[threadgroup_position_in_grid]],
++    ushort2 tile_size [[threads_per_threadgroup]],
++    device uint* dest [[buffer(1)]],
++    constant ResolveFromRenderTargetConstants& constants [[buffer(2)]],
++    device atomic_uint* result [[buffer(3)]]) {
++  uint2 position = uint2(tile) * uint2(tile_size) + uint2(lid);
++  uint2 origin = uint2(constants.source_x, constants.source_y);
++  if (any(position < origin)) {
++    return;
++  }
++  uint2 pixel = position - origin;
++  if (pixel.x >= constants.width || pixel.y >= constants.height) {
++    return;
++  }
++  %TYPE% c = block.read(lid).color;
++  %BODY%
++}
++)MSL";
++
++// The constants of a resolve written from its render target (see
++// MetalRenderTargetCache::GetNativeResolveSource), or false for a render target format the native
++// path does not handle.
++bool GetResolveFromRenderTargetConstants(const draw_util::ResolveInfo& resolve_info,
++                                         xenos::ColorRenderTargetFormat format,
++                                         ResolveFromRenderTargetConstants& constants) {
++  constants = {};
++  switch (format) {
++    case xenos::ColorRenderTargetFormat::k_8_8_8_8:
++      constants.packing = 0;
++      break;
++    case xenos::ColorRenderTargetFormat::k_16_16_FLOAT:
++      constants.packing = 1;
++      break;
++    case xenos::ColorRenderTargetFormat::k_32_FLOAT:
++      constants.packing = 2;
++      break;
++    case xenos::ColorRenderTargetFormat::k_2_10_10_10:
++      constants.packing = 3;
++      break;
++    case xenos::ColorRenderTargetFormat::k_16_16_16_16:
++      constants.packing = 4;
++      break;
++    case xenos::ColorRenderTargetFormat::k_16_16_16_16_FLOAT:
++      constants.packing = 5;
++      break;
++    default:
++      return false;
++  }
++  constants.source_x = resolve_info.coordinate_info.edram_offset_x_div_8 << 3;
++  constants.source_y = resolve_info.coordinate_info.edram_offset_y_div_8 << 3;
++  constants.width = resolve_info.coordinate_info.width_div_8 << 3;
++  constants.height = resolve_info.height_div_8 << 3;
++  constants.dest_x = resolve_info.copy_dest_coordinate_info.offset_x_div_8 << 3;
++  constants.dest_y = resolve_info.copy_dest_coordinate_info.offset_y_div_8 << 3;
++  constants.dest_pitch = resolve_info.copy_dest_coordinate_info.pitch_aligned_div_32 << 5;
++  constants.dest_base = resolve_info.copy_dest_base;
++  constants.endian = uint32_t(resolve_info.copy_dest_info.copy_dest_endian);
++  constants.swap_red_blue = resolve_info.copy_dest_info.copy_dest_swap;
++  constants.exp_scale = std::ldexp(1.0f, int(resolve_info.copy_dest_info.copy_dest_exp_bias));
++  constants.dest_format = uint32_t(resolve_info.copy_dest_info.copy_dest_format);
++  return true;
++}
++
++// The attachment type and the packing of kResolveInRenderPassSource for each packing of
++// ResolveFromRenderTargetConstants (the render target's own pixel format, read in the pass).
++struct ResolveInRenderPassVariant {
++  NSString* type;
++  NSString* body;
++};
++ResolveInRenderPassVariant GetResolveInRenderPassVariant(uint32_t packing) {
++  switch (packing) {
++    case 0:
++      return {@"float4",
++              @"uint4 bytes = uint4(c * 255.0 + 0.5);\n"
++              @"  resolve_store_32bpp(pixel, bytes.x | (bytes.y << 8) | (bytes.z << 16) | "
++              @"(bytes.w << 24), dest, result, constants);"};
++    case 1:
++      return {@"half2", @"resolve_store_32bpp(pixel, as_type<uint>(c), dest, result, constants);"};
++    case 2:
++      return {@"float", @"resolve_store_32bpp(pixel, as_type<uint>(c), dest, result, constants);"};
++    case 3:
++      return {@"float4",
++              @"uint4 components = uint4(c * float4(1023.0, 1023.0, 1023.0, 3.0) + 0.5);\n"
++              @"  resolve_store_32bpp(pixel, components.x | (components.y << 10) | "
++              @"(components.z << 20) | (components.w << 30), dest, result, constants);"};
++    case 4:
++      // The normalized value read back to the render target's 16-bit integers.
++      return {@"float4",
++              @"resolve_store_64bpp(pixel, max(float4(-1.0), float4(int4(rint(c * 32767.0))) * "
++              @"0.0009765923023223876953125), dest, result, constants);"};
++    default:
++      return {@"half4", @"resolve_store_64bpp(pixel, float4(c), dest, result, constants);"};
++  }
++}
 +
 +}  // namespace
 +
@@ -9595,6 +9854,8 @@ index 0000000..0c37c6c
 +    std::pair<ComputePipeline*, NSString*> resolve_from_render_target_pipelines[] = {
 +        {&resolve_from_render_target_float_pipeline_, @"resolve_from_render_target_float"},
 +        {&resolve_from_render_target_uint_pipeline_, @"resolve_from_render_target_uint"},
++        {&resolve_from_render_target_64bpp_pipeline_, @"resolve_from_render_target_64bpp"},
++        {&resolve_compare_pipeline_, @"resolve_compare"},
 +    };
 +    for (const auto& [pipeline, name] : resolve_from_render_target_pipelines) {
 +      pipeline->pipeline =
@@ -9672,6 +9933,9 @@ index 0000000..0c37c6c
 +  resolve_reduce_pipeline_ = ComputePipeline();
 +  resolve_from_render_target_float_pipeline_ = ComputePipeline();
 +  resolve_from_render_target_uint_pipeline_ = ComputePipeline();
++  resolve_from_render_target_64bpp_pipeline_ = ComputePipeline();
++  resolve_compare_pipeline_ = ComputePipeline();
++  resolve_in_render_pass_pipelines_.clear();
 +  for (ComputePipeline& pipeline : resolve_copy_pipelines_) {
 +    pipeline = ComputePipeline();
 +  }
@@ -9861,38 +10125,59 @@ index 0000000..0c37c6c
 +
 +
 +MetalRenderTargetCache::MetalRenderTarget* MetalRenderTargetCache::GetNativeResolveSource(
-+    const draw_util::ResolveInfo& resolve_info) const {
++    const draw_util::ResolveInfo& resolve_info,
++    draw_util::ResolveCopyShaderIndex copy_shader) const {
 +  if (!hle::HleGraphicsEnabled() || IsDrawResolutionScaled() || resolve_info.IsCopyingDepth()) {
 +    return nullptr;
 +  }
 +  draw_util::ResolveEdramInfo edram_info = resolve_info.color_edram_info;
 +  reg::RB_COPY_DEST_INFO dest_info = resolve_info.copy_dest_info;
-+  if (edram_info.msaa_samples != xenos::MsaaSamples::k1X || edram_info.format_is_64bpp ||
-+      dest_info.copy_dest_exp_bias ||
++  // At 1x, a sample select other than sample 0 reads a neighbouring pixel.
++  if (edram_info.msaa_samples != xenos::MsaaSamples::k1X ||
++      resolve_info.copy_dest_coordinate_info.copy_sample_select != xenos::CopySampleSelect::k0 ||
++      dest_info.copy_dest_array ||
 +      uint32_t(dest_info.copy_dest_endian) > uint32_t(xenos::Endian::k16in32)) {
 +    return nullptr;
 +  }
-+  // Render target formats whose resolve copies the EDRAM bits unchanged to a texture of the same
-+  // format.
 +  auto render_target_format = xenos::ColorRenderTargetFormat(edram_info.format);
-+  xenos::TextureFormat texture_format;
++  auto dest_format = xenos::ColorFormat(dest_info.copy_dest_format);
 +  switch (render_target_format) {
++    // The bits are copied unchanged (the fast 32bpp copy): a red and blue swap only for 8_8_8_8.
 +    case xenos::ColorRenderTargetFormat::k_8_8_8_8:
-+      texture_format = xenos::TextureFormat::k_8_8_8_8;
++      if (copy_shader != draw_util::ResolveCopyShaderIndex::kFast32bpp1x2xMSAA ||
++          dest_format != xenos::ColorFormat::k_8_8_8_8) {
++        return nullptr;
++      }
++      break;
++    case xenos::ColorRenderTargetFormat::k_2_10_10_10:
++      if (copy_shader != draw_util::ResolveCopyShaderIndex::kFast32bpp1x2xMSAA ||
++          dest_format != xenos::ColorFormat::k_2_10_10_10 || dest_info.copy_dest_swap) {
++        return nullptr;
++      }
 +      break;
 +    case xenos::ColorRenderTargetFormat::k_16_16_FLOAT:
-+      texture_format = xenos::TextureFormat::k_16_16_FLOAT;
++      if (copy_shader != draw_util::ResolveCopyShaderIndex::kFast32bpp1x2xMSAA ||
++          dest_format != xenos::ColorFormat::k_16_16_FLOAT || dest_info.copy_dest_swap) {
++        return nullptr;
++      }
 +      break;
 +    case xenos::ColorRenderTargetFormat::k_32_FLOAT:
-+      texture_format = xenos::TextureFormat::k_32_FLOAT;
++      if (copy_shader != draw_util::ResolveCopyShaderIndex::kFast32bpp1x2xMSAA ||
++          dest_format != xenos::ColorFormat::k_32_FLOAT || dest_info.copy_dest_swap) {
++        return nullptr;
++      }
++      break;
++    // Converted (the full 64bpp copy), with the exponent bias and the swap.
++    case xenos::ColorRenderTargetFormat::k_16_16_16_16:
++    case xenos::ColorRenderTargetFormat::k_16_16_16_16_FLOAT:
++      if (copy_shader != draw_util::ResolveCopyShaderIndex::kFull64bpp ||
++          (dest_format != xenos::ColorFormat::k_16_16_16_16 &&
++           dest_format != xenos::ColorFormat::k_16_16_16_16_FLOAT)) {
++        return nullptr;
++      }
 +      break;
 +    default:
 +      return nullptr;
-+  }
-+  if (xenos::TextureFormat(dest_info.copy_dest_format) != texture_format ||
-+      (dest_info.copy_dest_swap &&
-+       render_target_format != xenos::ColorRenderTargetFormat::k_8_8_8_8)) {
-+    return nullptr;
 +  }
 +  // One render target must hold the whole source, at the resolve's base, pitch and format.
 +  uint32_t span_base, span_row_length, span_rows, span_pitch;
@@ -9908,7 +10193,7 @@ index 0000000..0c37c6c
 +  RenderTargetKey owner_key = owner->key();
 +  if (owner_key.is_depth || owner_key.base_tiles != edram_info.base_tiles ||
 +      owner_key.msaa_samples != xenos::MsaaSamples::k1X ||
-+      owner_key.pitch_tiles_at_32bpp != edram_info.pitch_tiles ||
++      owner_key.GetPitchTiles() != edram_info.pitch_tiles ||
 +      owner_key.GetColorFormat() != render_target_format) {
 +    return nullptr;
 +  }
@@ -9916,16 +10201,22 @@ index 0000000..0c37c6c
 +}
 +
 +uint32_t MetalRenderTargetCache::UpdateResolvedTextures(const draw_util::ResolveInfo& resolve_info,
++                                                       draw_util::ResolveCopyShaderIndex copy_shader,
 +                                                       MetalTextureCache& texture_cache) {
 +  if (!(REXCVAR_GET(hle_native_resolves) || REXCVAR_GET(hle_verify_resolves))) {
 +    return 0;
 +  }
-+  MetalRenderTarget* source = GetNativeResolveSource(resolve_info);
++  MetalRenderTarget* source = GetNativeResolveSource(resolve_info, copy_shader);
 +  reg::RB_COPY_DEST_INFO dest_info = resolve_info.copy_dest_info;
 +  // The texture cache's host format for the destination holds the render target's data with no
-+  // conversion for these number formats (verified by hle_verify_resolves). A texture starts at the
-+  // destination base, so the copy must too.
-+  if (!source || resolve_info.copy_dest_coordinate_info.offset_x_div_8 ||
++  // conversion for these formats and number formats (verified by hle_verify_resolves). A texture
++  // starts at the destination base, so the copy must too.
++  auto render_target_format = xenos::ColorRenderTargetFormat(resolve_info.color_edram_info.format);
++  if (!source ||
++      (render_target_format != xenos::ColorRenderTargetFormat::k_8_8_8_8 &&
++       render_target_format != xenos::ColorRenderTargetFormat::k_16_16_FLOAT &&
++       render_target_format != xenos::ColorRenderTargetFormat::k_32_FLOAT) ||
++      resolve_info.copy_dest_coordinate_info.offset_x_div_8 ||
 +      resolve_info.copy_dest_coordinate_info.offset_y_div_8 ||
 +      dest_info.copy_dest_number !=
 +          (xenos::TextureFormat(dest_info.copy_dest_format) == xenos::TextureFormat::k_8_8_8_8
@@ -9946,35 +10237,38 @@ index 0000000..0c37c6c
 +                                                     MetalSharedMemory& shared_memory,
 +                                                     bool verify) {
 +  id<MTLTexture> source_view = source.transfer_view();
-+  ResolveFromRenderTargetConstants constants = {};
++  ResolveFromRenderTargetConstants constants;
++  if (!GetResolveFromRenderTargetConstants(resolve_info, source.key().GetColorFormat(),
++                                           constants)) {
++    assert_always();
++    return;
++  }
++  // The integer views are those of GetColorOwnershipTransferMetalFormat.
 +  const ComputePipeline* pipeline;
-+  switch (source_view.pixelFormat) {
-+    case MTLPixelFormatRGBA8Unorm:
++  MTLPixelFormat expected_view_format;
++  switch (constants.packing) {
++    case 0:
++    case 3:
 +      pipeline = &resolve_from_render_target_float_pipeline_;
-+      constants.packing = 0;
++      expected_view_format = MTLPixelFormatRGBA8Unorm;
 +      break;
-+    case MTLPixelFormatRG16Uint:
++    case 1:
 +      pipeline = &resolve_from_render_target_uint_pipeline_;
-+      constants.packing = 1;
++      expected_view_format = MTLPixelFormatRG16Uint;
 +      break;
-+    case MTLPixelFormatR32Uint:
++    case 2:
 +      pipeline = &resolve_from_render_target_uint_pipeline_;
-+      constants.packing = 2;
++      expected_view_format = MTLPixelFormatR32Uint;
 +      break;
 +    default:
-+      assert_always();
-+      return;
++      pipeline = &resolve_from_render_target_64bpp_pipeline_;
++      expected_view_format = MTLPixelFormatRGBA16Uint;
++      break;
 +  }
-+  constants.source_x = resolve_info.coordinate_info.edram_offset_x_div_8 << 3;
-+  constants.source_y = resolve_info.coordinate_info.edram_offset_y_div_8 << 3;
-+  constants.width = resolve_info.coordinate_info.width_div_8 << 3;
-+  constants.height = resolve_info.height_div_8 << 3;
-+  constants.dest_x = resolve_info.copy_dest_coordinate_info.offset_x_div_8 << 3;
-+  constants.dest_y = resolve_info.copy_dest_coordinate_info.offset_y_div_8 << 3;
-+  constants.dest_pitch = resolve_info.copy_dest_coordinate_info.pitch_aligned_div_32 << 5;
-+  constants.dest_base = resolve_info.copy_dest_base;
-+  constants.endian = uint32_t(resolve_info.copy_dest_info.copy_dest_endian);
-+  constants.swap_red_blue = resolve_info.copy_dest_info.copy_dest_swap;
++  if (source_view.pixelFormat != expected_view_format) {
++    assert_always();
++    return;
++  }
 +  constants.verify = verify;
 +
 +  // The mismatch count, then the first mismatch's address, memory value and computed value.
@@ -10005,9 +10299,10 @@ index 0000000..0c37c6c
 +  }
 +
 +  std::string what = fmt::format(
-+      "render target format {} {}x{} to format {} endianness {}{}{}",
++      "render target format {} {}x{} to format {} exponent bias {} endianness {}{}{}",
 +      uint32_t(source.key().resource_format), constants.width, constants.height,
-+      uint32_t(resolve_info.copy_dest_info.copy_dest_format), constants.endian,
++      uint32_t(resolve_info.copy_dest_info.copy_dest_format),
++      int32_t(resolve_info.copy_dest_info.copy_dest_exp_bias), constants.endian,
 +      constants.swap_red_blue ? " red/blue swapped" : "",
 +      constants.dest_x || constants.dest_y ? " at an offset" : "");
 +  command_processor_.AddCompletedHandler(^(id<MTLCommandBuffer>) {
@@ -10022,6 +10317,156 @@ index 0000000..0c37c6c
 +      } else {
 +        REXGPU_WARN("HLE resolve check: {} written from the render target differs in {} pixels, "
 +                    "first at 0x{:08X}: memory {:08X}, render target {:08X}",
++                    what, values[0], values[1], values[2], values[3]);
++      }
++    }
++  });
++}
++
++id<MTLRenderPipelineState> MetalRenderTargetCache::GetResolveInRenderPassPipeline(
++    uint32_t packing, uint32_t color_index) {
++  // The tile pipeline is made for the open pass's color formats.
++  const MetalRenderPass& render_pass = command_processor_.current_render_pass();
++  uint64_t key = uint64_t(packing) | (uint64_t(color_index) << 3);
++  for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
++    MTLPixelFormat format =
++        render_pass.color[i] ? render_pass.color[i].pixelFormat : MTLPixelFormatInvalid;
++    assert_true(uint64_t(format) < 1024);
++    key |= uint64_t(format) << (5 + 10 * i);
++  }
++  auto it = resolve_in_render_pass_pipelines_.find(key);
++  if (it != resolve_in_render_pass_pipelines_.end()) {
++    return it->second;
++  }
++  ResolveInRenderPassVariant variant = GetResolveInRenderPassVariant(packing);
++  NSString* tile_source =
++      [[[kResolveInRenderPassSource stringByReplacingOccurrencesOfString:@"%TYPE%"
++                                                               withString:variant.type]
++          stringByReplacingOccurrencesOfString:@"%INDEX%"
++                                    withString:[NSString stringWithFormat:@"%u", color_index]]
++          stringByReplacingOccurrencesOfString:@"%BODY%"
++                                    withString:variant.body];
++  id<MTLDevice> device = command_processor_.device();
++  NSError* error = nil;
++  id<MTLLibrary> library =
++      [device newLibraryWithSource:[kRenderTargetShaderSource stringByAppendingString:tile_source]
++                           options:nil
++                             error:&error];
++  id<MTLRenderPipelineState> pipeline = nil;
++  if (library) {
++    MTLTileRenderPipelineDescriptor* descriptor = [MTLTileRenderPipelineDescriptor new];
++    descriptor.tileFunction = [library newFunctionWithName:@"resolve_in_render_pass"];
++    descriptor.rasterSampleCount = 1;
++    descriptor.threadgroupSizeMatchesTileSize = YES;
++    for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
++      if (render_pass.color[i]) {
++        descriptor.colorAttachments[i].pixelFormat = render_pass.color[i].pixelFormat;
++      }
++    }
++    pipeline = [device newRenderPipelineStateWithTileDescriptor:descriptor
++                                                        options:MTLPipelineOptionNone
++                                                     reflection:nil
++                                                          error:&error];
++  }
++  if (!pipeline) {
++    REXGPU_ERROR("MetalRenderTargetCache: Failed to create the resolve tile pipeline (packing {}, "
++                 "color {}): {}",
++                 packing, color_index,
++                 error ? error.localizedDescription.UTF8String : "unknown error");
++  }
++  // A failure is remembered too, so the resolves go through the compute path.
++  resolve_in_render_pass_pipelines_.emplace(key, pipeline);
++  return pipeline;
++}
++
++bool MetalRenderTargetCache::ResolveInRenderPass(const draw_util::ResolveInfo& resolve_info,
++                                                 MetalRenderTarget& source, id<MTLBuffer> dest,
++                                                 uint32_t dest_bias) {
++  ResolveFromRenderTargetConstants constants;
++  if (!GetResolveFromRenderTargetConstants(resolve_info, source.key().GetColorFormat(),
++                                           constants)) {
++    return false;
++  }
++  // Only the open pass's attachments can be read from its tiles (no pass is open when the
++  // attachments are empty).
++  uint32_t color_index = 0;
++  bool attached = false;
++  for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
++    if (command_processor_.current_render_pass().color[i] == source.texture()) {
++      color_index = i;
++      attached = true;
++      break;
++    }
++  }
++  if (!attached) {
++    return false;
++  }
++  id<MTLRenderPipelineState> pipeline = GetResolveInRenderPassPipeline(constants.packing,
++                                                                       color_index);
++  if (!pipeline) {
++    return false;
++  }
++  uint32_t encoder_color_index;
++  id<MTLRenderCommandEncoder> encoder =
++      command_processor_.GetOpenRenderEncoderWithColor(source.texture(), encoder_color_index);
++  if (!encoder) {
++    return false;
++  }
++  constants.dest_base -= dest_bias;
++  [encoder setRenderPipelineState:pipeline];
++  [encoder setTileBuffer:dest offset:0 atIndex:kComputeBufferDest];
++  [encoder setTileBytes:&constants length:sizeof(constants) atIndex:kComputeBufferConstants];
++  // Unused (no verify), but every buffer the function declares is bound.
++  [encoder setTileBuffer:dest offset:0 atIndex:kComputeBufferVerifyResult];
++  [encoder dispatchThreadsPerTile:MTLSizeMake(encoder.tileWidth, encoder.tileHeight, 1)];
++  // Later draws of the pass may read what the tiles wrote (as vertex data, for instance).
++  [encoder memoryBarrierWithScope:MTLBarrierScopeBuffers
++                      afterStages:MTLRenderStageTile
++                     beforeStages:MTLRenderStageVertex | MTLRenderStageFragment];
++  if (!dest_bias) {
++    PERF_counter_inc(kResolvesInRenderPass);
++  }
++  return true;
++}
++
++void MetalRenderTargetCache::CompareResolveInRenderPass(const draw_util::ResolveInfo& resolve_info,
++                                                        MetalRenderTarget& source,
++                                                        MetalSharedMemory& shared_memory,
++                                                        id<MTLBuffer> scratch) {
++  ResolveFromRenderTargetConstants constants;
++  if (!GetResolveFromRenderTargetConstants(resolve_info, source.key().GetColorFormat(),
++                                           constants)) {
++    return;
++  }
++  constants.scratch_base = resolve_info.copy_dest_extent_start;
++  id<MTLBuffer> result = [command_processor_.device() newBufferWithLength:4 * sizeof(uint32_t)
++                                                                  options:MTLResourceStorageModeShared];
++  std::memset(result.contents, 0, result.length);
++  id<MTLComputeCommandEncoder> compute =
++      command_processor_.GetComputeEncoder(rex::perf::CounterId::kRenderPassEndsResolve);
++  [compute setComputePipelineState:resolve_compare_pipeline_.pipeline];
++  [compute setBuffer:shared_memory.buffer() offset:0 atIndex:kComputeBufferDest];
++  [compute setBytes:&constants length:sizeof(constants) atIndex:kComputeBufferConstants];
++  [compute setBuffer:result offset:0 atIndex:kComputeBufferVerifyResult];
++  [compute setBuffer:scratch offset:0 atIndex:kComputeBufferVerifyScratch];
++  [compute dispatchThreads:MTLSizeMake(constants.width, constants.height, 1)
++      threadsPerThreadgroup:resolve_compare_pipeline_.threads_per_threadgroup];
++  std::string what = fmt::format(
++      "render target format {} {}x{} to format {} exponent bias {} endianness {}{}",
++      uint32_t(source.key().resource_format), constants.width, constants.height,
++      constants.dest_format, int32_t(resolve_info.copy_dest_info.copy_dest_exp_bias),
++      constants.endian, constants.swap_red_blue ? " red/blue swapped" : "");
++  command_processor_.AddCompletedHandler(^(id<MTLCommandBuffer>) {
++    const uint32_t* values = static_cast<const uint32_t*>(result.contents);
++    static std::mutex mutex;
++    static std::set<std::string> logged;
++    std::lock_guard<std::mutex> lock(mutex);
++    if (logged.insert(fmt::format("{} {}", values[0] == 0, what)).second) {
++      if (!values[0]) {
++        REXGPU_INFO("HLE resolve check: {} written in the render pass matches the memory", what);
++      } else {
++        REXGPU_WARN("HLE resolve check: {} written in the render pass differs in {} dwords, "
++                    "first at 0x{:08X}: memory {:08X}, render pass {:08X}",
 +                    what, values[0], values[1], values[2], values[3]);
 +      }
 +    }
@@ -10064,13 +10509,23 @@ index 0000000..0c37c6c
 +      MetalRenderTarget* native_source = nullptr;
 +      if ((REXCVAR_GET(hle_native_resolves) && REXCVAR_GET(hle_resolve_from_render_targets)) ||
 +          REXCVAR_GET(hle_verify_resolves)) {
-+        if (copy_shader == draw_util::ResolveCopyShaderIndex::kFast32bpp1x2xMSAA &&
-+            !resolve_info.copy_dest_info.copy_dest_array) {
-+          native_source = GetNativeResolveSource(resolve_info);
-+        }
++        native_source = GetNativeResolveSource(resolve_info, copy_shader);
 +      }
 +      bool verify_native = native_source && REXCVAR_GET(hle_verify_resolves);
 +      bool from_render_target = native_source && !verify_native;
++      // hle_resolve_in_render_pass with hle_verify_resolves: the tile function writes a scratch
++      // copy while the pass is still open, compared with the usual path's result afterwards.
++      id<MTLBuffer> in_render_pass_scratch = nil;
++      if (verify_native && REXCVAR_GET(hle_resolve_in_render_pass) &&
++          resolve_info.copy_dest_extent_length) {
++        in_render_pass_scratch =
++            [command_processor_.device() newBufferWithLength:resolve_info.copy_dest_extent_length
++                                                     options:MTLResourceStorageModeShared];
++        if (!ResolveInRenderPass(resolve_info, *native_source, in_render_pass_scratch,
++                                 resolve_info.copy_dest_extent_start)) {
++          in_render_pass_scratch = nil;
++        }
++      }
 +
 +      // Dump the current contents of the render targets owning the affected range to the EDRAM
 +      // buffer.
@@ -10109,10 +10564,18 @@ index 0000000..0c37c6c
 +                     "region (base 0x{:08X}, length 0x{:08X})",
 +                     resolve_info.copy_dest_base, copy_dest_range_unscaled);
 +      } else if (from_render_target) {
-+        ResolveFromRenderTarget(resolve_info, *native_source, shared_memory, false);
-+        texture_cache.MarkRangeAsResolved(resolve_info.copy_dest_extent_start,
-+                                          resolve_info.copy_dest_extent_length);
-+        UpdateResolvedTextures(resolve_info, texture_cache);
++        // Inside the open render pass, the textures are not updated by a copy either (a copy would
++        // end the pass): they load from memory as usual.
++        if (REXCVAR_GET(hle_resolve_in_render_pass) &&
++            ResolveInRenderPass(resolve_info, *native_source, shared_memory.buffer(), 0)) {
++          texture_cache.MarkRangeAsResolved(resolve_info.copy_dest_extent_start,
++                                            resolve_info.copy_dest_extent_length);
++        } else {
++          ResolveFromRenderTarget(resolve_info, *native_source, shared_memory, false);
++          texture_cache.MarkRangeAsResolved(resolve_info.copy_dest_extent_start,
++                                            resolve_info.copy_dest_extent_length);
++          UpdateResolvedTextures(resolve_info, copy_shader, texture_cache);
++        }
 +        written_address_out = resolve_info.copy_dest_extent_start;
 +        written_length_out = resolve_info.copy_dest_extent_length;
 +        copied = true;
@@ -10190,6 +10653,10 @@ index 0000000..0c37c6c
 +
 +        if (verify_native) {
 +          ResolveFromRenderTarget(resolve_info, *native_source, shared_memory, true);
++          if (in_render_pass_scratch) {
++            CompareResolveInRenderPass(resolve_info, *native_source, shared_memory,
++                                       in_render_pass_scratch);
++          }
 +        }
 +
 +        // Invalidate textures and mark the range as written by the GPU.
@@ -10198,7 +10665,7 @@ index 0000000..0c37c6c
 +        } else {
 +          texture_cache.MarkRangeAsResolved(written_start, written_length);
 +          // gfx = hle: textures with exactly the resolve's key take the render target's data.
-+          UpdateResolvedTextures(resolve_info, texture_cache);
++          UpdateResolvedTextures(resolve_info, copy_shader, texture_cache);
 +        }
 +        written_address_out = written_start;
 +        written_length_out = written_length;

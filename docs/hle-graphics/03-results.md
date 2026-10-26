@@ -421,7 +421,7 @@ frames):
 | 16_16_16_16 (fixed) 328x184 to 16_16_16_16, exponent bias -5, endianness 8 in 16 | 12.6 | No: 64 bits per pixel, and the bias scales the values |
 | 16_16_FLOAT 640x360 to 16_16_FLOAT, endianness 8 in 32 | 4 | Yes (C2) |
 | 16_16_16_16 (fixed) 192x96, as the first row | 1 | No |
-| 2_10_10_10 1280x720 to 2_10_10_10, no bias | 1 | No: format not in the list, though the copy is bitwise |
+| 2_10_10_10 1280x720 to 2_10_10_10, no bias | 1 | No: its EDRAM belongs to a 2_10_10_10_FLOAT target (see below) |
 | 2_10_10_10_FLOAT_AS_16_16_16_16 1280x720 to 2_10_10_10, exponent bias -5 | 1 | No: converts |
 
 The repeated small 16_16_16_16 resolves (a chain of passes on a 328x184 target, likely a blur or
@@ -431,6 +431,65 @@ can do them, the native resolve has to handle 64-bit pixels and the exponent bia
 What this does not say: what a pass break on a 328x184 target costs. Its attachments are small
 (about 470 KB at 64 bits per pixel), so storing and loading them is cheap; the fixed cost of a
 render pass on this GPU was not measured.
+
+## Native resolves, C2 extended: 64-bit conversions
+
+The conversions of the full 64bpp resolve copy were read from its SPIR-V (decompiled with
+SPIRV-Cross; the shader is the SDK's own) and done in `resolve_from_render_target_64bpp`: each
+16-bit component of a 16_16_16_16 target is the EDRAM's -32...32 value (`max(-1, x * 32 / 32767)`,
+the copy's own clamp), a 16_16_16_16_FLOAT one is a half; both are scaled by 2 to the exponent
+bias, swapped, and packed as 16_16_16_16 (unsigned normalized) or 16_16_16_16_FLOAT. 2_10_10_10 was
+added to the bitwise copies. Only sample 0 is handled (at 1x, the other sample selects read a
+neighbouring pixel), and the EDRAM pitch of 64-bit targets is compared in 64-bit tiles.
+
+**Checked** with `hle_verify_resolves`, every pixel: 16_16_16_16 to 16_16_16_16 with bias -5 at
+192x96, 328x184 and 640x360, and 16_16_16_16 to 16_16_16_16_FLOAT at 640x360, besides the earlier
+kinds.
+
+The 2_10_10_10 resolve of these scenes is still not native: the EDRAM it reads belongs to a
+2_10_10_10_FLOAT render target, so the game reinterprets float bits as fixed-point ones, which
+needs the float 7e3 packing (as does the 2_10_10_10_FLOAT_AS_16_16_16_16 resolve). One of each per
+frame.
+
+| Per frame (title / menu, one 100-second run each) | C1 only | C1 and C2 extended |
+| --- | --- | --- |
+| Resolves written from the render target | 0 / 0 | 26 / 26 |
+| Passes resumed after a resolve, of them after a native one | 19 / 20, 0 | 19 / 20, 17 / 18 |
+| Host compute dispatches | 106 / 106 | 80 / 80 |
+
+## Native resolves, step C4 spike: the resolve inside the render pass
+
+With `hle_resolve_in_render_pass` (experimental, off), a native resolve whose render target is a
+color attachment of the open render pass is written by a tile function inside that pass
+(`dispatchThreadsPerTile`, reading the attachment through an implicit imageblock), and the pass
+goes on. The textures it updates are not copied from the render target (a copy would end the
+pass): they load from memory as before.
+
+**Checked** with `hle_verify_resolves`: the tile function writes a scratch copy while the pass is
+open, and a compute shader compares it with what the usual path wrote, dword by dword. Every kind
+in the scenes matches (8_8_8_8 1280x720 and 16x512, 16_16_FLOAT 640x360, and the three
+16_16_16_16 kinds).
+
+**Measured** (uncapped, one 100-second run each):
+
+| Per frame (title / menu) | C2 extended | C4 spike |
+| --- | --- | --- |
+| Pass ends by a resolve | 28 / 29 | 4 / 4 |
+| Pass ends by a texture load | 10 / 10 | 27 / 28 |
+| Render passes | 58 / 61 | 54 / 57 |
+| Host compute dispatches | 80 / 80 | 58 / 57 |
+| GPU ms | 5.8 / 6.2 | 12.9 / 13.2 |
+| Images, % of pixels over 16 from the `pm4` capture (median / worst) | 1.4 / 6.3, 1.5 / 2.5 | 4.2 / 7.1, 4.9 / 5.7 |
+
+The spike removes the resolve breaks, but not the passes: the draws after a resolve sample the
+textures it wrote, which now load from memory in compute and end the pass instead (only 4 passes
+per frame fewer). And the GPU time doubles. Why was not measured; a likely cause (not verified) is
+that `dispatchThreadsPerTile` runs over every tile of the pass, not only the resolve's rectangle,
+26 times per frame, and waits for the pass's fragment work each time.
+
+For C4 to pay, the tile function would also have to write the textures the next draws sample (the
+texture cache's textures are not writable today, and the draws would need a barrier after the
+tile stage), and its cost per dispatch has to be found and cut. Until then the option stays off.
 
 ## Success criteria
 
