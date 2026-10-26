@@ -611,7 +611,14 @@ title and the menu match `pm4` (0.9 and 1.9% median of pixels over 16, one run e
 ## Next steps
 
 1. Measure a heavy scene with a person playing both modes, uncapped, where a GPU-time saving
-   becomes frame rate.
-2. The larger HLE piece left: resolves still end the render pass and go through EDRAM dumps (37
-   of 82 pass ends at the campaign start); resolving straight from the host texture and planning
-   passes across resolves is where the remaining render pass count is.
+   becomes frame rate (most of all at 1440p and 4K, where the native resolves save the most).
+2. The wrong textures at 3840x2160, which `pm4` shows too (separate Trello card).
+3. A full HLE without emulated EDRAM: render targets as the game's D3D surfaces instead of EDRAM
+   tile ranges, conversions only where the game reinterprets EDRAM on purpose. It is the only way
+   to a non-integer resolution such as 1080p (the EDRAM emulation needs a whole number of host
+   pixels per guest sample). Design document first (`04-full-hle-design.md`), no code before it is
+   approved.
+4. Resolves still end the render pass (37 of 82 pass ends at the campaign start). The in-pass spike
+   shows that pays only once the textures the next draws sample are written in the pass too, and
+   the tile dispatch's cost is understood.
+5. A handoff document for a Vulkan equivalent of the native resolves (Linux, Windows).
