@@ -119,6 +119,7 @@
     "compilerManual": "Ou exécutez ceci dans un terminal :",
     "compilerManualSteamOS": "Sur un Steam Deck, exécutez-la dans Konsole en mode Bureau. sudo demande le mot de passe de l'utilisateur deck : s'il n'en a pas encore, définissez-en un d'abord avec passwd. Une mise à jour de SteamOS supprime le compilateur : exécutez-la de nouveau après chaque mise à jour.",
     "runtimeNotBuilt": "Pas encore construit : la première construction à partir de votre copie du jeu prend quelques minutes.",
+    "runtimeNeedsCompiler": "Installez d'abord le compilateur (plus bas).",
     "runtimeUpdateLink": "Une mise à jour est prête : elle s'installe en quelques secondes.",
     "runtimeUpdateBuild": "Une mise à jour demande de reconstruire le jeu : environ deux minutes."
   },
