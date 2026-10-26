@@ -117,6 +117,7 @@
     "compilerWaitingApple": "Kövesd az Apple ablakát a Command Line Tools telepítéséhez. A launcher a telepítés után magától folytatja.",
     "compilerCheckAgain": "Ellenőrzés újra",
     "compilerManual": "Vagy futtasd ezt egy terminálban:",
+    "compilerManualSteamOS": "Steam Decken futtasd a Konsole-ban, asztali módban. A sudo a deck felhasználó jelszavát kéri: ha még nincs, előbb állíts be egyet a passwd paranccsal. A SteamOS frissítése eltávolítja a fordítót, ezért minden frissítés után futtasd újra.",
     "runtimeNotBuilt": "Még nincs felépítve: az első építés a játékpéldányodból néhány percig tart.",
     "runtimeUpdateLink": "Frissítés érhető el: néhány másodperc alatt települ.",
     "runtimeUpdateBuild": "A frissítéshez újra kell építeni a játékot: körülbelül két perc."

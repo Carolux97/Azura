@@ -195,7 +195,15 @@ the player only what the operating system requires:
   - openSUSE: `zypper install -y clang gcc-c++`.
 
   Image-based systems (ostree ones such as Bazzite, and SteamOS) cannot install packages that way
-  and get manual instructions instead (`rpm-ostree`, or a distrobox container). A compiler
+  and get manual instructions instead, which install on the system itself: the launcher looks for
+  the compiler on the host's PATH and the game links with the host's libraries, so a compiler in a
+  container (distrobox) is never found. Bazzite: `rpm-ostree install clang gcc-c++`, then restart.
+  SteamOS: `steamos-readonly disable`, `pacman-key --init`, `pacman-key --populate archlinux holo`,
+  `pacman -Sy clang glibc linux-api-headers gcc` (glibc, linux-api-headers and gcc again for their
+  headers, which SteamOS' image leaves out) and `steamos-readonly enable`, in Konsole in Desktop
+  Mode, with a password set for the deck user. SteamOS' repositories have clang 18.1.8 in 3.7,
+  20.1.8 in 3.8 and 22.1.8 in 3.9 (Valve's package mirror, `extra-3.x`). An update of SteamOS
+  replaces the system image and removes them, so the commands are run again after one. A compiler
   downloaded by the launcher (option 4) waits until it is known what those systems have
   (section 10).
 - **Windows.** Present when `clang++.exe` (on the PATH, or in `Program Files\LLVM\bin`, where

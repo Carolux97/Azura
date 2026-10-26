@@ -871,6 +871,11 @@ const renderCompiler = () => {
   document.getElementById("recheck-compiler").disabled = action !== "";
   manual.hidden = ready || !status?.manual;
   document.getElementById("compiler-manual-command").textContent = status?.manual ?? "";
+  // Where and how to run the manual command on systems that need more than the command itself.
+  const note = document.getElementById("compiler-manual-note");
+  const noteKey = { steamos: "install.compilerManualSteamOS" }[status?.manualNote];
+  note.hidden = manual.hidden || !noteKey;
+  note.textContent = noteKey ? t(noteKey) : "";
 };
 
 /** Checks the compiler again and redraws what shows it. */

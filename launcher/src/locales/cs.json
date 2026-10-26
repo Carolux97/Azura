@@ -117,6 +117,7 @@
     "compilerWaitingApple": "Postupujte podle okna Applu a nainstalujte Command Line Tools. Launcher po instalaci sám pokračuje.",
     "compilerCheckAgain": "Zkontrolovat znovu",
     "compilerManual": "Nebo spusťte v terminálu:",
+    "compilerManualSteamOS": "Na Steam Decku to spusťte v Konsole v režimu plochy. sudo se zeptá na heslo uživatele deck: pokud ho ještě nemá, nejdřív ho nastavte příkazem passwd. Aktualizace SteamOS kompilátor odstraní, takže to po každé aktualizaci spusťte znovu.",
     "runtimeNotBuilt": "Zatím nesestaveno: první sestavení z vaší kopie hry trvá několik minut.",
     "runtimeUpdateLink": "Je připravena aktualizace: nainstaluje se za pár sekund.",
     "runtimeUpdateBuild": "Aktualizace vyžaduje znovu sestavit hru: asi dvě minuty."

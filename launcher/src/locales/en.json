@@ -117,6 +117,7 @@
     "compilerWaitingApple": "Follow Apple's window to install the Command Line Tools. The launcher goes on by itself once they are installed.",
     "compilerCheckAgain": "Check again",
     "compilerManual": "Or run this in a terminal:",
+    "compilerManualSteamOS": "On a Steam Deck, run it in Konsole in Desktop Mode. sudo asks for the password of the deck user: if it has none yet, set one first with passwd. A SteamOS update removes the compiler, so run it again after each update.",
     "runtimeNotBuilt": "Not built yet: the first build from your copy of the game takes a few minutes.",
     "runtimeUpdateLink": "An update is ready: it installs in a few seconds.",
     "runtimeUpdateBuild": "An update needs the game to be built again: about two minutes."
