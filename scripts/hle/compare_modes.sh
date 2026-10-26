@@ -27,8 +27,9 @@ RUNTIME_DIR="${ROOT}/runtime/out/build/mac-arm64-sdk-source/RelWithDebInfo"
 GAME_DIR="$(awk -F'"' '/^game_data_root/{print $2; exit}' \
   "${HOME}/Library/Application Support/com.gears3azura.launcher/runtime/azura.toml")"
 # Start (twice, in case the title takes input late), Campaign, Standard, New, then accept the screens
-# up to the chapter. Timed for a run that compiles its shaders from scratch.
-PAD_SCRIPT="55:start,59:start,68:a,78:a,86:down,88:a,96:a,103:a,110:a,117:a,124:a"
+# up to the chapter. Timed for a run that compiles its shaders from scratch. PAD_SCRIPT replaces it,
+# for example with a run recorded by hand (AZURA_RECORD_PAD, runtime/src/input/scripted_pad.cpp).
+PAD_SCRIPT="${PAD_SCRIPT:-55:start,59:start,68:a,78:a,86:down,88:a,96:a,103:a,110:a,117:a,124:a}"
 
 [[ -x "${RUNTIME_DIR}/azura" ]] || { echo "No runtime in ${RUNTIME_DIR}: build it first" >&2; exit 1; }
 [[ -d "${GAME_DIR}" ]] || { echo "No game folder (${GAME_DIR})" >&2; exit 1; }

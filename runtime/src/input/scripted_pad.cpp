@@ -3,14 +3,21 @@
 // environment variable AZURA_SCRIPTED_PAD is set, to a comma-separated list of
 // "seconds:button" presses counted from start, for example "45:start,50:a,55:a". Buttons: a, b, x,
 // y, start, back, up, down, left, right. Each press is held for a fifth of a second.
+//
+// AZURA_RECORD_PAD, set to a file path, records the presses of player 1 (whatever controller or
+// keyboard drives it) to that file in the same format, timed from the same moment, so a run played
+// by hand can be replayed with AZURA_SCRIPTED_PAD.
 
 #include "input/scripted_pad.h"
 
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <memory>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <rex/input/input_driver.h>
@@ -117,9 +124,53 @@ class ScriptedPadDriver final : public rex::input::InputDriver {
   uint32_t packet_number_ = 0;
 };
 
+constexpr std::pair<const char*, uint16_t> kButtonNames[] = {
+    {"a", rex::input::X_INPUT_GAMEPAD_A},          {"b", rex::input::X_INPUT_GAMEPAD_B},
+    {"x", rex::input::X_INPUT_GAMEPAD_X},          {"y", rex::input::X_INPUT_GAMEPAD_Y},
+    {"start", rex::input::X_INPUT_GAMEPAD_START},  {"back", rex::input::X_INPUT_GAMEPAD_BACK},
+    {"up", rex::input::X_INPUT_GAMEPAD_DPAD_UP},   {"down", rex::input::X_INPUT_GAMEPAD_DPAD_DOWN},
+    {"left", rex::input::X_INPUT_GAMEPAD_DPAD_LEFT},
+    {"right", rex::input::X_INPUT_GAMEPAD_DPAD_RIGHT},
+};
+
+// Polls player 1's state every 10 ms and appends each new press to the file as "seconds:button,".
+void StartPadRecorder(rex::input::InputSystem* input, const char* path) {
+  auto file = std::make_shared<std::ofstream>(path, std::ios::trunc);
+  if (!*file) {
+    REXLOG_ERROR("[Azura input] Cannot write the pad recording to {}", path);
+    return;
+  }
+  REXLOG_INFO("[Azura input] Recording player 1's presses to {}", path);
+  std::thread([input, file, start = Clock::now()] {
+    uint16_t last_buttons = 0;
+    for (;;) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      rex::input::X_INPUT_STATE state = {};
+      uint16_t buttons =
+          input->GetState(0, &state) == X_ERROR_SUCCESS ? uint16_t(state.gamepad.buttons) : 0;
+      uint16_t pressed = buttons & ~last_buttons;
+      last_buttons = buttons;
+      if (!pressed) {
+        continue;
+      }
+      double seconds = std::chrono::duration<double>(Clock::now() - start).count();
+      for (const auto& [name, button] : kButtonNames) {
+        if (pressed & button) {
+          *file << fmt::format("{:.1f}:{},", seconds, name);
+        }
+      }
+      file->flush();
+    }
+  }).detach();
+}
+
 }  // namespace
 
 void InstallScriptedPad(rex::input::InputSystem* input) {
+  const char* record_path = std::getenv("AZURA_RECORD_PAD");
+  if (input && record_path && *record_path) {
+    StartPadRecorder(input, record_path);
+  }
   const char* script = std::getenv("AZURA_SCRIPTED_PAD");
   if (!input || !script || !*script) {
     return;
