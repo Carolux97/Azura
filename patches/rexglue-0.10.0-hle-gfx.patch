@@ -117,10 +117,10 @@ index 0000000..7e51210
 +}  // namespace rex::graphics::hle
 diff --git a/src/system/hle_markers.cpp b/src/system/hle_markers.cpp
 new file mode 100644
-index 0000000..5596c6d
+index 0000000..129a2a6
 --- /dev/null
 +++ b/src/system/hle_markers.cpp
-@@ -0,0 +1,142 @@
+@@ -0,0 +1,148 @@
 +/**
 + * @file        system/hle_markers.cpp
 + * @brief       The gfx option and the dispatch of the HLE graphics markers
@@ -140,10 +140,16 @@ index 0000000..5596c6d
 +
 +#include <rex/cvar.h>
 +
-+REXCVAR_DEFINE_STRING(gfx, "pm4", "GPU",
++// The HLE path is the default on macOS (Metal), where it is measured; pm4 elsewhere.
++#if defined(__APPLE__)
++#define REX_GFX_DEFAULT "hle"
++#else
++#define REX_GFX_DEFAULT "pm4"
++#endif
++REXCVAR_DEFINE_STRING(gfx, REX_GFX_DEFAULT, "GPU",
 +                      "Graphics path: pm4 (render targets in emulated EDRAM, as the console) or hle "
 +                      "(render targets as host textures, driven by the game's D3D calls through "
-+                      "the markers in rex/graphics/hle/markers.h)")
++                      "the markers in rex/graphics/hle/markers.h); hle by default on macOS")
 +    .allowed({"pm4", "hle"})
 +    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 +REXCVAR_DEFINE_BOOL(hle_clear_load_actions, true, "GPU",
