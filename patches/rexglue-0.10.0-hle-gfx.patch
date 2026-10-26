@@ -1,0 +1,136 @@
+diff --git a/include/rex/graphics/hle/markers.h b/include/rex/graphics/hle/markers.h
+new file mode 100644
+index 0000000..65b3a8b
+--- /dev/null
++++ b/include/rex/graphics/hle/markers.h
+@@ -0,0 +1,69 @@
++/**
++ * @file        graphics/hle/markers.h
++ * @brief       Markers that describe the guest's graphics API calls inside its command stream
++ *
++ * @license     BSD 3-Clause License
++ *              See LICENSE file in the project root for full license text.
++ *
++ * @remarks     The game's D3D library writes PM4 packets; the HLE graphics path (gfx = hle) also
++ *              needs to know what the game meant by them: which surface is bound, where a clear or
++ *              a resolve starts and ends, where a frame starts and ends. Hooks on the guest's D3D
++ *              functions (in the game's runtime) write that as markers into the command buffer,
++ *              at the point of the call, so they reach the command processor in order with the
++ *              packets around them, including inside recorded command buffers.
++ *
++ *              A marker is a type-3 NOP packet, which the GPU and the PM4 path skip, whose first
++ *              payload word is kMarkerMagic and whose second is the event; the arguments follow.
++ *              The command processor passes the payload of every such NOP to the handler set with
++ *              SetMarkerHandler, and skips other NOPs as before.
++ */
++
++#pragma once
++
++#include <cstdint>
++#include <string>
++
++#include <rex/cvar.h>
++
++// Graphics path: pm4 (render targets in emulated EDRAM) or hle (host render targets driven by the
++// markers). Defined in the runtime library, read by the GPU backends and the game's runtime.
++REXCVAR_DECLARE(std::string, gfx);
++
++namespace rex::graphics::hle {
++
++// First payload word of a marker ("AZHL").
++constexpr uint32_t kMarkerMagic = 0x415A484C;
++// Most payload words a marker carries, magic and event included.
++constexpr uint32_t kMaxMarkerWords = 12;
++
++enum class MarkerEvent : uint32_t {
++  // SetRenderTarget(index, surface): index, surface address, the surface's RB_COLOR_INFO value,
++  // its second header word (+32). The surface address is 0 when the slot is unbound.
++  kSetRenderTarget = 1,
++  // SetDepthStencilSurface(surface): surface address, its RB_DEPTH_INFO value, second word.
++  kSetDepthStencil = 2,
++  // Clear: the packets up to kClearEnd are the guest's clear. Arguments: the call's integer
++  // arguments (r4-r9) and the depth value's bits.
++  kClearBegin = 3,
++  kClearEnd = 4,
++  // Resolve: the packets up to kResolveEnd are the guest's resolve. Arguments: the call's integer
++  // arguments (r4-r10).
++  kResolveBegin = 5,
++  kResolveEnd = 6,
++  // Start and end of a frame: frame number.
++  kFrameBegin = 7,
++  kFrameEnd = 8,
++};
++
++// Called on the command processor thread with the marker's payload (words[0] is kMarkerMagic,
++// words[1] the event), in stream order.
++using MarkerHandler = void (*)(const uint32_t* words, uint32_t count, void* user);
++
++// Sets the handler (nullptr to remove it). Markers arriving with no handler are skipped.
++void SetMarkerHandler(MarkerHandler handler, void* user);
++
++// Called by the command processor for a NOP packet's payload; returns false if it is not a
++// marker.
++bool DispatchMarker(const uint32_t* words, uint32_t count);
++
++}  // namespace rex::graphics::hle
+diff --git a/src/system/hle_markers.cpp b/src/system/hle_markers.cpp
+new file mode 100644
+index 0000000..987bf44
+--- /dev/null
++++ b/src/system/hle_markers.cpp
+@@ -0,0 +1,55 @@
++/**
++ * @file        system/hle_markers.cpp
++ * @brief       The gfx option and the dispatch of the HLE graphics markers
++ *              (rex/graphics/hle/markers.h)
++ *
++ * @license     BSD 3-Clause License
++ *              See LICENSE file in the project root for full license text.
++ *
++ * @remarks     In the runtime library rather than the GPU plugin: both the command processor and
++ *              the game's runtime (whose hooks write the markers) use them.
++ */
++
++#include <rex/graphics/hle/markers.h>
++
++#include <atomic>
++
++#include <rex/cvar.h>
++
++REXCVAR_DEFINE_STRING(gfx, "pm4", "GPU",
++                      "Graphics path: pm4 (render targets in emulated EDRAM, as the console) or hle "
++                      "(render targets as host textures, driven by the game's D3D calls through "
++                      "the markers in rex/graphics/hle/markers.h)")
++    .allowed({"pm4", "hle"})
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++
++namespace rex::graphics::hle {
++
++namespace {
++
++struct Handler {
++  MarkerHandler function;
++  void* user;
++};
++
++// Set once at start-up, before the guest runs, and read on the command processor thread.
++std::atomic<Handler*> g_handler{nullptr};
++
++}  // namespace
++
++void SetMarkerHandler(MarkerHandler handler, void* user) {
++  // The previous handler is kept alive: the command processor may still be using it.
++  g_handler.store(handler ? new Handler{handler, user} : nullptr, std::memory_order_release);
++}
++
++bool DispatchMarker(const uint32_t* words, uint32_t count) {
++  if (count < 2 || words[0] != kMarkerMagic) {
++    return false;
++  }
++  if (const Handler* handler = g_handler.load(std::memory_order_acquire)) {
++    handler->function(words, count, handler->user);
++  }
++  return true;
++}
++
++}  // namespace rex::graphics::hle

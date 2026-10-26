@@ -9,7 +9,11 @@
 #   generator did not find, its differential bench, and the code generator changes they need (the
 #   files in INTERP_PATHS);
 # - patches/rexglue-0.10.0-codegen-stamp.patch: codegen re-running when the generator itself
-#   changes (the files in STAMP_PATHS).
+#   changes (the files in STAMP_PATHS);
+# - patches/rexglue-0.10.0-hle-gfx.patch: the new files of the HLE graphics path
+#   (docs/hle-graphics/02-design.md; the files in HLE_PATHS). Its small changes to existing files
+#   (the gfx option's use, the marker hook in the command processor) go with the patch that already
+#   holds each of those files.
 # Each changed file goes to exactly one patch, so the patches apply in any order. The base is the
 # SDK commit with the patches that come before them, rebuilt in a temporary folder, so nothing
 # outside the repository is needed. Every patch is checked to apply in reverse to the working tree
@@ -30,6 +34,12 @@ XSC_PATCH="${ROOT}/patches/rexglue-0.10.0-xenos-shader-compiler.patch"
 XSC_DIR="src/graphics/pipeline/shader/xsc"
 INTERP_PATCH="${ROOT}/patches/rexglue-0.10.0-ppc-interpreter.patch"
 STAMP_PATCH="${ROOT}/patches/rexglue-0.10.0-codegen-stamp.patch"
+HLE_PATCH="${ROOT}/patches/rexglue-0.10.0-hle-gfx.patch"
+# Files and folders of the HLE graphics patch.
+HLE_PATHS=(
+  include/rex/graphics/hle
+  src/system/hle_markers.cpp
+)
 # Files of the codegen stamp patch.
 STAMP_PATHS=(
   resources/templates/init/rexglue_cmake.inja
@@ -89,7 +99,8 @@ changed=$({ diff -rq "${WORK}/base" "${SDK}" -x .git -x out -x thirdparty -x bui
   sed -n "s|^Files ${WORK}/base/\(.*\) and .* differ$|\1|p; s|^Only in ${SDK}/\(.*\): \(.*\)$|\1/\2|p" | \
   sed 's|^/||')
 mkdir -p "${WORK}/metal/a" "${WORK}/metal/b" "${WORK}/xsc/a" "${WORK}/xsc/b" \
-  "${WORK}/interp/a" "${WORK}/interp/b" "${WORK}/stamp/a" "${WORK}/stamp/b"
+  "${WORK}/interp/a" "${WORK}/interp/b" "${WORK}/stamp/a" "${WORK}/stamp/b" \
+  "${WORK}/hle/a" "${WORK}/hle/b"
 # Whether $1 is one of the files or folders given after it.
 in_paths() {
   local file="$1" path
@@ -108,6 +119,8 @@ for f in ${changed}; do
     side="${WORK}/interp"
   elif in_paths "${f}" "${STAMP_PATHS[@]}"; then
     side="${WORK}/stamp"
+  elif in_paths "${f}" "${HLE_PATHS[@]}"; then
+    side="${WORK}/hle"
   else
     side="${WORK}/metal"
   fi
@@ -126,19 +139,23 @@ done
 (cd "${WORK}/xsc" && git diff --no-index --no-prefix a b > "${XSC_PATCH}" || true)
 (cd "${WORK}/interp" && git diff --no-index --no-prefix a b > "${INTERP_PATCH}" || true)
 (cd "${WORK}/stamp" && git diff --no-index --no-prefix a b > "${STAMP_PATCH}" || true)
+(cd "${WORK}/hle" && git diff --no-index --no-prefix a b > "${HLE_PATCH}" || true)
 # git diff --no-index names new files "b/<path>"; the patches use plain paths like the others.
 sed -i.bak 's|^diff --git b/|diff --git a/|' "${METAL_PATCH}" "${XSC_PATCH}" "${INTERP_PATCH}" \
-  "${STAMP_PATCH}"
-rm -f "${METAL_PATCH}.bak" "${XSC_PATCH}.bak" "${INTERP_PATCH}.bak" "${STAMP_PATCH}.bak"
+  "${STAMP_PATCH}" "${HLE_PATCH}"
+rm -f "${METAL_PATCH}.bak" "${XSC_PATCH}.bak" "${INTERP_PATCH}.bak" "${STAMP_PATCH}.bak" \
+  "${HLE_PATCH}.bak"
 
 git -C "${SDK}" apply --reverse --check "${METAL_PATCH}"
 git -C "${SDK}" apply --reverse --check "${XSC_PATCH}"
 git -C "${SDK}" apply --reverse --check "${INTERP_PATCH}"
 git -C "${SDK}" apply --reverse --check "${STAMP_PATCH}"
+git -C "${SDK}" apply --reverse --check "${HLE_PATCH}"
 echo "==> metal backend patch: $(grep -c '^diff --git' "${METAL_PATCH}") files"
 echo "==> xenos shader compiler patch: $(grep -c '^diff --git' "${XSC_PATCH}") files"
 echo "==> ppc interpreter patch: $(grep -c '^diff --git' "${INTERP_PATCH}") files"
 echo "==> codegen stamp patch: $(grep -c '^diff --git' "${STAMP_PATCH}") files"
+echo "==> hle graphics patch: $(grep -c '^diff --git' "${HLE_PATCH}") files"
 # The tree is the whole stack of patches (they were just made from it), which build.sh then need
 # not check one by one.
 sdk_patches_hash > "${SDK_PATCHES_STAMP}"

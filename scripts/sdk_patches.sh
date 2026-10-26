@@ -15,6 +15,7 @@ SDK_PATCHES=(
   "${SDK_SRC}|${ROOT}/patches/rexglue-0.10.0-xenos-shader-compiler.patch"
   "${SDK_SRC}|${ROOT}/patches/rexglue-0.10.0-ppc-interpreter.patch"
   "${SDK_SRC}|${ROOT}/patches/rexglue-0.10.0-codegen-stamp.patch"
+  "${SDK_SRC}|${ROOT}/patches/rexglue-0.10.0-hle-gfx.patch"
   "${SDK_SRC}/thirdparty/utfcpp|${ROOT}/patches/rexglue-0.10.0-utfcpp.patch"
   # The SDK builds MoltenVK from this tree on macOS, so its fixes go here too, or a build of the SDK
   # (ours, or the player kit's) ships the MoltenVK without them.
