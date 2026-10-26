@@ -46,6 +46,9 @@ PER_FRAME = [
     ("draws in transfer passes", "draws_in_transfer_passes", 1),
     ("clears as load actions", "clears_as_load_actions", 1),
     ("resolves to textures", "resolves_to_textures", 1),
+    ("resolves from render targets", "resolves_from_render_targets", 1),
+    ("passes resumed after resolve", "render_passes_resumed_after_resolve", 1),
+    ("  of them after a native one", "render_passes_resumed_after_native_resolve", 1),
     ("pass ends: texture load", "pass_ends_texture_load", 1),
     ("host dispatches", "host_dispatches", 1),
 ]

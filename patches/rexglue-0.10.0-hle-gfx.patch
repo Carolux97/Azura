@@ -1,9 +1,9 @@
 diff --git a/include/rex/graphics/hle/markers.h b/include/rex/graphics/hle/markers.h
 new file mode 100644
-index 0000000..f57d262
+index 0000000..e16192c
 --- /dev/null
 +++ b/include/rex/graphics/hle/markers.h
-@@ -0,0 +1,104 @@
+@@ -0,0 +1,108 @@
 +/**
 + * @file        graphics/hle/markers.h
 + * @brief       Markers that describe the guest's graphics API calls inside its command stream
@@ -47,8 +47,12 @@ index 0000000..f57d262
 +// copies the render target into that texture, which is then not loaded back from memory (the
 +// memory is still written). Off until verified on the backends that support it.
 +REXCVAR_DECLARE(bool, hle_native_resolves);
-+// Debugging aid for hle_native_resolves: textures still load from memory, and what the render
-+// target copy would have put in them is compared with the loaded texels; mismatches are logged.
++// With hle_native_resolves: a resolve that copies a render target to memory with no conversion
++// writes the memory straight from the render target, without the EDRAM dump.
++REXCVAR_DECLARE(bool, hle_resolve_from_render_targets);
++// Debugging aid for hle_native_resolves: resolves and texture loads work as before, and what the
++// native path would have written (to the textures, and to the memory) is compared with what they
++// wrote; mismatches are logged.
 +REXCVAR_DECLARE(bool, hle_verify_resolves);
 +
 +namespace rex::graphics::hle {
@@ -110,10 +114,10 @@ index 0000000..f57d262
 +}  // namespace rex::graphics::hle
 diff --git a/src/system/hle_markers.cpp b/src/system/hle_markers.cpp
 new file mode 100644
-index 0000000..3368380
+index 0000000..3d4103d
 --- /dev/null
 +++ b/src/system/hle_markers.cpp
-@@ -0,0 +1,133 @@
+@@ -0,0 +1,137 @@
 +/**
 + * @file        system/hle_markers.cpp
 + * @brief       The gfx option and the dispatch of the HLE graphics markers
@@ -152,9 +156,13 @@ index 0000000..3368380
 +                    "texture cache holds for the resolve's destination, instead of loading it back "
 +                    "from memory")
 +    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++REXCVAR_DEFINE_BOOL(hle_resolve_from_render_targets, true, "GPU",
++                    "With hle_native_resolves, write a resolve that needs no conversion to memory "
++                    "straight from the render target, without dumping it to the EDRAM buffer first")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 +REXCVAR_DEFINE_BOOL(hle_verify_resolves, false, "GPU",
-+                    "Debugging aid for hle_native_resolves: load textures from memory as before "
-+                    "and log where the render target copy would have differed")
++                    "Debugging aid for hle_native_resolves: resolve and load textures as before, "
++                    "and log where the render target copies would have differed")
 +    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 +REXCVAR_DEFINE_BOOL(hle_verify_clears, false, "GPU",
 +                    "Debugging aid for hle_clear_load_actions: draw clears as before and log where "

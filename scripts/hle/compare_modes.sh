@@ -4,10 +4,11 @@
 # VARIANTS lists what to compare as "name:runtime options" separated by "|" (names without "_";
 # default "pm4:--gfx=pm4|hle:--gfx=hle"), for example to compare an HLE option on and off.
 #
-# Each run starts the built runtime muted (audio_mute), with a fresh saves folder outside ~/Documents, the scripted
-# controller (AZURA_SCRIPTED_PAD) that reaches the campaign start, periodic captures
-# (AZURA_CAPTURE_DIR) and the per-frame counters (perf_log_csv), and stops it after SECONDS. The
-# output is the game's and stays local: OUT_DIR defaults to captures/compare (ignored by git).
+# Each run starts the built runtime muted (audio_mute), with a fresh saves folder outside
+# ~/Documents, the scripted controller (AZURA_SCRIPTED_PAD) that reaches the campaign start,
+# periodic captures (AZURA_CAPTURE_DIR) and the per-frame counters (perf_log_csv), and stops it
+# after SECONDS. The output is the game's and stays local: OUT_DIR defaults to captures/compare
+# (ignored by git).
 #
 # Usage: scripts/hle/compare_modes.sh [ROUNDS] [SECONDS] [OUT_DIR] [extra runtime options...]
 #   (default: 3 rounds of 240 seconds, Metal; pass --gpu_backend=vulkan for Vulkan)
@@ -40,6 +41,26 @@ mkdir -p "${OUT_DIR}"
 VARIANTS="${VARIANTS:-pm4:--gfx=pm4|hle:--gfx=hle}"
 IFS='|' read -r -a VARIANT_LIST <<< "${VARIANTS}"
 
+# A whole comparison is kept short (MAX_MINUTES, 10 by default); each run also takes about 15 s to
+# start and stop.
+MAX_MINUTES="${MAX_MINUTES:-10}"
+estimated_s=$(( ROUNDS * ${#VARIANT_LIST[@]} * (SECONDS_PER_RUN + 15) ))
+if (( estimated_s > MAX_MINUTES * 60 )); then
+  echo "About $(( (estimated_s + 59) / 60 )) minutes, over MAX_MINUTES (${MAX_MINUTES}):" \
+    "use fewer rounds, variants or seconds" >&2
+  exit 1
+fi
+
+# Stopping the comparison (Ctrl-C) stops the game it is running too.
+game_pid=""
+stop_game() {
+  if [[ -n "${game_pid}" ]] && kill -0 "${game_pid}" 2>/dev/null; then
+    kill "${game_pid}" 2>/dev/null || true
+  fi
+  exit 130
+}
+trap stop_game INT TERM
+
 run() {
   local mode="$1" round="$2" options="$3"
   shift 3
@@ -59,6 +80,7 @@ run() {
     "--cache_root=${work}/cache" "--log_file=${work}/run.log" --log_max_file_size_mb=4000 \
     "--perf_log_csv=${work}/perf.csv" --audio_mute=true ${options} "$@" >/dev/null 2>&1) &
   local pid=$!
+  game_pid="${pid}"
   local end=$((SECONDS + SECONDS_PER_RUN))
   while kill -0 "${pid}" 2>/dev/null && (( SECONDS < end )); do
     sleep 1
