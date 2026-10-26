@@ -1,9 +1,9 @@
 diff --git a/include/rex/graphics/hle/markers.h b/include/rex/graphics/hle/markers.h
 new file mode 100644
-index 0000000..65b3a8b
+index 0000000..51d8f45
 --- /dev/null
 +++ b/include/rex/graphics/hle/markers.h
-@@ -0,0 +1,69 @@
+@@ -0,0 +1,79 @@
 +/**
 + * @file        graphics/hle/markers.h
 + * @brief       Markers that describe the guest's graphics API calls inside its command stream
@@ -48,8 +48,9 @@ index 0000000..65b3a8b
 +  kSetRenderTarget = 1,
 +  // SetDepthStencilSurface(surface): surface address, its RB_DEPTH_INFO value, second word.
 +  kSetDepthStencil = 2,
-+  // Clear: the packets up to kClearEnd are the guest's clear. Arguments: the call's integer
-+  // arguments (r4-r9) and the depth value's bits.
++  // ClearF(flags, rectangle, colour, depth, stencil): the packets up to kClearEnd are the
++  // guest's clear. Arguments: the call's integer arguments (r4-r9; r5 is the rectangle, 0 for
++  // the whole surface) and the depth value's bits.
 +  kClearBegin = 3,
 +  kClearEnd = 4,
 +  // Resolve: the packets up to kResolveEnd are the guest's resolve. Arguments: the call's integer
@@ -72,13 +73,22 @@ index 0000000..65b3a8b
 +// marker.
 +bool DispatchMarker(const uint32_t* words, uint32_t count);
 +
++// Whether the command processor is between a clear's or a resolve's markers. Only meaningful on
++// the command processor thread.
++bool InClear();
++bool InResolve();
++// Whether the clear in progress covers whole surfaces (the game passed no rectangle), so a target
++// it writes completely (every channel, no blending; depth and stencil both written) needs nothing
++// of its old contents.
++bool InWholeSurfaceClear();
++
 +}  // namespace rex::graphics::hle
 diff --git a/src/system/hle_markers.cpp b/src/system/hle_markers.cpp
 new file mode 100644
-index 0000000..987bf44
+index 0000000..55ce71c
 --- /dev/null
 +++ b/src/system/hle_markers.cpp
-@@ -0,0 +1,55 @@
+@@ -0,0 +1,85 @@
 +/**
 + * @file        system/hle_markers.cpp
 + * @brief       The gfx option and the dispatch of the HLE graphics markers
@@ -116,6 +126,13 @@ index 0000000..987bf44
 +// Set once at start-up, before the guest runs, and read on the command processor thread.
 +std::atomic<Handler*> g_handler{nullptr};
 +
++// Whether the stream is inside a clear or a resolve, from the markers dispatched so far (only the
++// command processor thread dispatches markers and asks).
++bool g_in_clear = false;
++bool g_in_resolve = false;
++// The clear in progress has no rectangle (ClearF's second argument, payload word 3).
++bool g_whole_surface_clear = false;
++
 +}  // namespace
 +
 +void SetMarkerHandler(MarkerHandler handler, void* user) {
@@ -127,10 +144,33 @@ index 0000000..987bf44
 +  if (count < 2 || words[0] != kMarkerMagic) {
 +    return false;
 +  }
++  switch (static_cast<MarkerEvent>(words[1])) {
++    case MarkerEvent::kClearBegin:
++      g_in_clear = true;
++      g_whole_surface_clear = count > 3 && words[3] == 0;
++      break;
++    case MarkerEvent::kClearEnd:
++      g_in_clear = false;
++      break;
++    case MarkerEvent::kResolveBegin:
++      g_in_resolve = true;
++      break;
++    case MarkerEvent::kResolveEnd:
++      g_in_resolve = false;
++      break;
++    default:
++      break;
++  }
 +  if (const Handler* handler = g_handler.load(std::memory_order_acquire)) {
 +    handler->function(words, count, handler->user);
 +  }
 +  return true;
 +}
++
++bool InClear() { return g_in_clear; }
++
++bool InResolve() { return g_in_resolve; }
++
++bool InWholeSurfaceClear() { return g_in_clear && g_whole_surface_clear; }
 +
 +}  // namespace rex::graphics::hle
