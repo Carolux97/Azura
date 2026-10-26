@@ -553,11 +553,31 @@ resolve with bias -5, every pixel.
 
 | Per frame, 1280x720 (one run) | Resolves | Native |
 | --- | --- | --- |
-| Title screen, main menu | 30 | 27, before the 7e3 conversion (28 with it) |
+| Title screen, main menu | 30 | 27, before the 7e3 conversion (one more expected with it, not counted) |
 | Campaign start | 38 | 33, before the 7e3 conversion |
 
-Still through the EDRAM dump: depth resolves of D24FS8 targets (float 20e4 depth), and resolves
-whose source several render targets share (some 640x360 8_8_8_8 and 16_16_FLOAT ones).
+**Every resolve kind, any owner.** D24FS8 depth is packed as float 20e4 (the dump's
+PreClampedDepthTo20e4 with depth_float24_round). A source several render targets share is read
+the way the dump places them: each host pixel finds its EDRAM tile, the render target owning that
+tile, and its pixel in that target (one dispatch per owner, `RenderTargetCache::GetRangeOwners`);
+with one owner at the resolve's base and pitch this is the same pixel as before.
+
+Checked with `hle_verify_resolves`, every pixel, no mismatch: at 1280x720 through the campaign
+start (35 resolve kinds, among them 26 depth sizes, D24FS8 and the 2_10_10_10_FLOAT ones), and at
+3840x2160 (29 kinds, with depth). No resolve of these scenes goes through the EDRAM dump any more.
+
+**4K, uncapped, one 100-second run each:**
+
+| 3840x2160 | pm4 | hle (defaults) |
+| --- | --- | --- |
+| Native resolves per frame (title, menu) | 0 of 30 | 30 of 30 |
+| GPU ms, title screen | 58.2 | 49.3 (-15%) |
+| GPU ms, main menu | 65.5 | 49.7 (-24%) |
+| Host compute dispatches | 114 | 80 |
+
+The image comparison of this run says nothing (the two runs were at different points of the intro
+video), and the user saw artifacts while it ran, not located yet: the resolves are byte-exact, so
+they come from somewhere else (to investigate before trusting these figures).
 
 ## gfx = hle by default on macOS
 

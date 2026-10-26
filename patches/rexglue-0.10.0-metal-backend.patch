@@ -351,7 +351,7 @@ index ac6b056..8ef1ee8 100644
  
  }  // namespace rex::graphics
 diff --git a/include/rex/graphics/pipeline/render_target/cache.h b/include/rex/graphics/pipeline/render_target/cache.h
-index b246319..47a84e3 100644
+index b246319..3a9e059 100644
 --- a/include/rex/graphics/pipeline/render_target/cache.h
 +++ b/include/rex/graphics/pipeline/render_target/cache.h
 @@ -194,6 +194,34 @@ class RenderTargetCache {
@@ -389,7 +389,7 @@ index b246319..47a84e3 100644
    virtual bool Update(bool is_rasterization_done, reg::RB_DEPTHCONTROL normalized_depth_control,
                        uint32_t normalized_color_mask, const Shader& vertex_shader);
  
-@@ -510,6 +538,26 @@ class RenderTargetCache {
+@@ -510,6 +538,35 @@ class RenderTargetCache {
    // false).
    virtual bool IsHostDepthEncodingDifferent(xenos::DepthRenderTargetFormat format) const = 0;
  
@@ -407,6 +407,15 @@ index b246319..47a84e3 100644
 +  // The render target owning every tile from start_tiles to end_tiles (not wrapping around the
 +  // EDRAM), or nullptr if the range has several owners or none.
 +  RenderTarget* GetRangeSoleOwner(uint32_t start_tiles, uint32_t end_tiles) const;
++  // The render targets owning the EDRAM tiles [start_tiles, end_tiles) (not wrapping), each with
++  // the part of the range it owns, in order; false if a part of the range has no owner.
++  struct RangeOwner {
++    RenderTarget* render_target;
++    uint32_t start_tiles;
++    uint32_t end_tiles;
++  };
++  bool GetRangeOwners(uint32_t start_tiles, uint32_t end_tiles,
++                      std::vector<RangeOwner>& owners_out) const;
 +
 +  // The render target the last successful update's draw uses (0 depth, 1 + i color i), or
 +  // nullptr.
@@ -416,7 +425,7 @@ index b246319..47a84e3 100644
    void ResetAccumulatedRenderTargets() { are_accumulated_render_targets_valid_ = false; }
    RenderTarget* const* last_update_accumulated_render_targets() const {
      assert_true(GetPath() == Path::kHostRenderTargets);
-@@ -666,6 +714,11 @@ class RenderTargetCache {
+@@ -666,6 +723,11 @@ class RenderTargetCache {
    bool WouldOwnershipChangeRequireTransfers(RenderTargetKey dest,
                                              uint32_t start_tiles_base_relative,
                                              uint32_t length_tiles) const;
@@ -428,7 +437,7 @@ index b246319..47a84e3 100644
    // Updates ownership_ranges_, adds the transfers needed for the ownership
    // change to transfers_append_out if it's not null.
    void ChangeOwnership(RenderTargetKey dest, uint32_t start_tiles_base_relative,
-@@ -688,6 +741,12 @@ class RenderTargetCache {
+@@ -688,6 +750,12 @@ class RenderTargetCache {
    // update. 0 is depth, color starting from 1, nullptr if not bound.
    // Only valid for non-pixel-shader-interlock paths.
    RenderTarget* last_update_used_render_targets_[1 + xenos::kMaxColorRenderTargets];
@@ -8563,10 +8572,10 @@ index 0000000..d717bea
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_render_target_cache.h b/src/graphics/metal/metal_render_target_cache.h
 new file mode 100644
-index 0000000..2dadd26
+index 0000000..e9f8fbe
 --- /dev/null
 +++ b/src/graphics/metal/metal_render_target_cache.h
-@@ -0,0 +1,635 @@
+@@ -0,0 +1,641 @@
 +/**
 + * @file        graphics/metal/metal_render_target_cache.h
 + * @brief       EDRAM emulation with sample-space host render targets for the Metal backend
@@ -9126,7 +9135,7 @@ index 0000000..2dadd26
 +  ComputePipeline resolve_from_render_target_64bpp_pipeline_;
 +  // hle_verify_resolves with hle_resolve_in_render_pass: compares the in-pass scratch copy.
 +  ComputePipeline resolve_compare_pipeline_;
-+  // D24S8 depth targets, for depth resolves and bitwise color resolves of their EDRAM.
++  // Depth targets (D24S8 and D24FS8), for depth resolves and bitwise color resolves of their EDRAM.
 +  ComputePipeline resolve_from_render_target_depth_pipeline_;
 +  // Tile pipelines of ResolveInRenderPass, by packing, color index and the pass's color formats
 +  // (nil when one failed to build).
@@ -9136,20 +9145,26 @@ index 0000000..2dadd26
 +  // sample 0 the native path handles, at the resolve's base, pitch and format; nullptr otherwise.
 +  // Handled: the bitwise copies (the fast 32bpp copy) of 8_8_8_8 (with or without a red and blue
 +  // swap), 2_10_10_10, 16_16_FLOAT and 32_FLOAT to the same format, from a render target of any of
-+  // those formats, 2_10_10_10_FLOAT or D24S8 depth (the EDRAM bits it holds), depth copies of a
-+  // D24S8 target, and the conversions (the full
++  // those formats, 2_10_10_10_FLOAT or a depth format (the EDRAM bits it holds), depth copies of a
++  // depth target, and the conversions (the full
 +  // 64bpp copy) of 16_16_16_16 and 16_16_16_16_FLOAT to 16_16_16_16 or 16_16_16_16_FLOAT, with any
 +  // exponent bias and swap; endianness at most 16 in 32, no array destination.
 +  MetalRenderTarget* GetNativeResolveSource(const draw_util::ResolveInfo& resolve_info,
 +                                            draw_util::ResolveCopyShaderIndex copy_shader) const;
-+  // Writes a resolve's destination straight from its native source (see GetNativeResolveSource),
-+  // as the resolve copy would from the EDRAM dump: to dest bound at dest_offset, with dest_base the
++  // The render targets owning the source of a resolve the native path handles (the formats of
++  // GetNativeResolveSource), each with the EDRAM tiles of the source it owns; false (and none)
++  // otherwise. Owners may have other bases and pitches than the resolve.
++  bool GetNativeResolveOwners(const draw_util::ResolveInfo& resolve_info,
++                              draw_util::ResolveCopyShaderIndex copy_shader,
++                              std::vector<RangeOwner>& owners_out) const;
++  // Writes the pixels of a resolve's destination whose EDRAM tiles one native owner holds (see
++  // GetNativeResolveOwners) straight from it, as the resolve copy would from the EDRAM dump: to dest bound at dest_offset, with dest_base the
 +  // destination's address in it (the shared memory, or at a draw resolution scale the scaled
 +  // resolve buffer bound at the destination's scaled base, with dest_base 0). With
 +  // verify, nothing is written: the values already in the memory (written by the usual path) are
 +  // compared with the ones the native path computes, and a mismatch is logged.
 +  void ResolveFromRenderTarget(const draw_util::ResolveInfo& resolve_info,
-+                               MetalRenderTarget& source, id<MTLBuffer> dest,
++                               const RangeOwner& owner, id<MTLBuffer> dest,
 +                               NSUInteger dest_offset, uint32_t dest_base, bool verify);
 +  // gfx = hle (hle_resolve_in_render_pass): writes a resolve of a native source (see
 +  // GetNativeResolveSource) with a tile function inside the open render pass, when the source is
@@ -9204,10 +9219,10 @@ index 0000000..2dadd26
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_render_target_cache.mm b/src/graphics/metal/metal_render_target_cache.mm
 new file mode 100644
-index 0000000..8c7872e
+index 0000000..9fc2e49
 --- /dev/null
 +++ b/src/graphics/metal/metal_render_target_cache.mm
-@@ -0,0 +1,4916 @@
+@@ -0,0 +1,5026 @@
 +/**
 + * @file        graphics/metal/metal_render_target_cache.mm
 + * @brief       EDRAM emulation with sample-space host render targets for the Metal backend
@@ -9400,7 +9415,8 @@ index 0000000..8c7872e
 +  // in the EDRAM), 5: 16_16_16_16_FLOAT.
 +  // 32 bits per pixel, bits copied: 6: 2_10_10_10_FLOAT as float 7e3 (from a float view), 7: D24S8
 +  // depth and stencil. Converted (the full 32bpp copy): 8: 2_10_10_10_FLOAT to 2_10_10_10 (dest
-+  // format 7) or 8_8_8_8 (6), with the exponent bias and the swap.
++  // format 7) or 8_8_8_8 (6), with the exponent bias and the swap. 9 and 10: D24FS8 depth and
++  // stencil, the depth rounded towards zero or to the nearest even.
 +  uint packing;
 +  // xenos::Endian128, at most 3 (16 in 32).
 +  uint endian;
@@ -9421,6 +9437,17 @@ index 0000000..8c7872e
 +  // (ResolveEdramInfo::fill_half_pixel_offset).
 +  uint fill_x;
 +  uint fill_y;
++  // The EDRAM tiles: the resolve's base and pitch (its edram_info), the size of a tile in host
++  // pixels, and the render target read (its base and pitch) with the tiles of the resolve it owns
++  // ([range_start, range_end), not wrapping): the others are left to the other owners' dispatches.
++  uint edram_base;
++  uint edram_pitch;
++  uint tile_width;
++  uint tile_height;
++  uint owner_base;
++  uint owner_pitch;
++  uint range_start;
++  uint range_end;
 +};
 +// texture_util::GetTiledOffset2D.
 +int resolve_tiled_offset_2d(int x, int y, uint pitch, int bytes_per_block_log2) {
@@ -9510,10 +9537,24 @@ index 0000000..8c7872e
 +           (host.x & ((1u << pixels_per_block_log2) - 1u)))
 +          << uint(bytes_per_block_log2));
 +}
-+// The render target pixel a host pixel of the resolve reads.
-+uint2 resolve_source_pixel(uint2 pixel, constant ResolveFromRenderTargetConstants& constants) {
-+  return uint2(constants.source_x, constants.source_y) +
-+         max(pixel, uint2(constants.fill_x, constants.fill_y));
++// The pixel of the render target read that a host pixel of the resolve reads, through the EDRAM
++// tile it is in (as the dump places the render targets in the EDRAM), or false when another
++// render target owns that tile.
++bool resolve_source_pixel(uint2 pixel, constant ResolveFromRenderTargetConstants& constants,
++                          thread uint2& source_pixel) {
++  uint2 edram = uint2(constants.source_x, constants.source_y) +
++                max(pixel, uint2(constants.fill_x, constants.fill_y));
++  uint2 tile_size = uint2(constants.tile_width, constants.tile_height);
++  uint2 tile = edram / tile_size;
++  uint tile_index = constants.edram_base + tile.y * constants.edram_pitch + tile.x;
++  if (tile_index < constants.range_start || tile_index >= constants.range_end) {
++    return false;
++  }
++  uint owner_tile = tile_index - constants.owner_base;
++  source_pixel = uint2(owner_tile % constants.owner_pitch, owner_tile / constants.owner_pitch) *
++                     tile_size +
++                 edram % tile_size;
++  return true;
 +}
 +void resolve_store_32bpp(uint2 pixel, uint value, device uint* dest, device atomic_uint* result,
 +                         constant ResolveFromRenderTargetConstants& constants) {
@@ -9532,7 +9573,11 @@ index 0000000..8c7872e
 +  if (pixel.x >= constants.width || pixel.y >= constants.height) {
 +    return;
 +  }
-+  float4 color = source.read(resolve_source_pixel(pixel, constants));
++  uint2 source_pixel;
++  if (!resolve_source_pixel(pixel, constants, source_pixel)) {
++    return;
++  }
++  float4 color = source.read(source_pixel);
 +  uint value;
 +  if (constants.packing == 3u) {
 +    uint4 components = uint4(color * float4(1023.0, 1023.0, 1023.0, 3.0) + 0.5);
@@ -9574,12 +9619,17 @@ index 0000000..8c7872e
 +  if (pixel.x >= constants.width || pixel.y >= constants.height) {
 +    return;
 +  }
-+  uint4 texel = source.read(resolve_source_pixel(pixel, constants));
++  uint2 source_pixel;
++  if (!resolve_source_pixel(pixel, constants, source_pixel)) {
++    return;
++  }
++  uint4 texel = source.read(source_pixel);
 +  uint value = constants.packing == 1u ? (texel.x & 0xFFFFu) | (texel.y << 16) : texel.x;
 +  resolve_store_32bpp(pixel, value, dest, result, constants);
 +}
-+// A D24S8 depth target's EDRAM bits, as the dump packs them (the 24-bit depth rounded to the
-+// nearest even above the 8-bit stencil), copied bitwise as the resolve's format.
++// A depth target's EDRAM bits, as the dump packs them (the 24-bit depth, unsigned normalized for
++// D24S8 or float 20e4 for D24FS8, above the 8-bit stencil), copied bitwise as the resolve's
++// format.
 +kernel void resolve_from_render_target_depth(
 +    uint2 pixel [[thread_position_in_grid]],
 +    depth2d<float, access::read> source [[texture(0)]],
@@ -9590,8 +9640,26 @@ index 0000000..8c7872e
 +  if (pixel.x >= constants.width || pixel.y >= constants.height) {
 +    return;
 +  }
-+  uint2 source_pixel = resolve_source_pixel(pixel, constants);
-+  uint depth = uint(rint(source.read(source_pixel) * 16777215.0));
++  uint2 source_pixel;
++  if (!resolve_source_pixel(pixel, constants, source_pixel)) {
++    return;
++  }
++  float source_depth = source.read(source_pixel);
++  uint depth;
++  if (constants.packing == 7u) {
++    depth = uint(rint(source_depth * 16777215.0));
++  } else {
++    // D24FS8: SpirvShaderTranslator::PreClampedDepthTo20e4 remapping 0...1 to 0...0.5, rounded
++    // to the nearest even (packing 10) or towards zero (9).
++    uint bits = as_type<uint>(source_depth);
++    uint biased = bits < 0x38000000u
++                      ? ((bits & 0x7FFFFFu) | 0x800000u) >> min(112u - (bits >> 23), 24u)
++                      : bits - (111u << 23);
++    if (constants.packing == 10u) {
++      biased += 3u + ((biased >> 3) & 1u);
++    }
++    depth = (biased >> 3) & 0xFFFFFFu;
++  }
 +  uint stencil = source_stencil.read(source_pixel).r & 0xFFu;
 +  resolve_store_32bpp(pixel, (depth << 8) | stencil, dest, result, constants);
 +}
@@ -9627,7 +9695,11 @@ index 0000000..8c7872e
 +  if (pixel.x >= constants.width || pixel.y >= constants.height) {
 +    return;
 +  }
-+  uint4 texel = source.read(resolve_source_pixel(pixel, constants));
++  uint2 source_pixel;
++  if (!resolve_source_pixel(pixel, constants, source_pixel)) {
++    return;
++  }
++  uint4 texel = source.read(source_pixel);
 +  float4 color;
 +  if (constants.packing == 4u) {
 +    color = max(float4(-1.0), float4(int4(texel << 16) >> 16) * 0.0009765923023223876953125);
@@ -9687,6 +9759,14 @@ index 0000000..8c7872e
 +  uint32_t scale_y;
 +  uint32_t fill_x;
 +  uint32_t fill_y;
++  uint32_t edram_base;
++  uint32_t edram_pitch;
++  uint32_t tile_width;
++  uint32_t tile_height;
++  uint32_t owner_base;
++  uint32_t owner_pitch;
++  uint32_t range_start;
++  uint32_t range_end;
 +};
 +
 +// The tile function of a resolve inside the render pass (appended to kRenderTargetShaderSource):
@@ -9723,13 +9803,14 @@ index 0000000..8c7872e
 +// path does not handle.
 +bool GetResolveFromRenderTargetConstants(const draw_util::ResolveInfo& resolve_info,
 +                                         bool is_depth, uint32_t resource_format,
++                                         bool depth_float24_round,
 +                                         ResolveFromRenderTargetConstants& constants) {
 +  constants = {};
 +  if (is_depth) {
-+    if (xenos::DepthRenderTargetFormat(resource_format) != xenos::DepthRenderTargetFormat::kD24S8) {
-+      return false;
-+    }
-+    constants.packing = 7;
++    constants.packing =
++        xenos::DepthRenderTargetFormat(resource_format) == xenos::DepthRenderTargetFormat::kD24S8
++            ? 7
++            : (depth_float24_round ? 10 : 9);
 +  } else {
 +  switch (xenos::ColorRenderTargetFormat(resource_format)) {
 +    case xenos::ColorRenderTargetFormat::k_8_8_8_8:
@@ -9772,6 +9853,16 @@ index 0000000..8c7872e
 +    constants.fill_x = constants.scale_x >> 1;
 +    constants.fill_y = constants.scale_y >> 1;
 +  }
++  constants.edram_base = edram_info.base_tiles;
++  constants.edram_pitch = edram_info.pitch_tiles;
++  constants.tile_width =
++      (xenos::kEdramTileWidthSamples >> uint32_t(edram_info.format_is_64bpp != 0)) *
++      constants.scale_x;
++  constants.tile_height = xenos::kEdramTileHeightSamples * constants.scale_y;
++  constants.owner_base = edram_info.base_tiles;
++  constants.owner_pitch = edram_info.pitch_tiles;
++  constants.range_start = 0;
++  constants.range_end = UINT32_MAX;
 +  constants.source_x = (resolve_info.coordinate_info.edram_offset_x_div_8 << 3) * constants.scale_x;
 +  constants.source_y = (resolve_info.coordinate_info.edram_offset_y_div_8 << 3) * constants.scale_y;
 +  constants.width = (resolve_info.coordinate_info.width_div_8 << 3) * constants.scale_x;
@@ -10266,11 +10357,12 @@ index 0000000..8c7872e
 +}
 +
 +
-+MetalRenderTargetCache::MetalRenderTarget* MetalRenderTargetCache::GetNativeResolveSource(
-+    const draw_util::ResolveInfo& resolve_info,
-+    draw_util::ResolveCopyShaderIndex copy_shader) const {
++bool MetalRenderTargetCache::GetNativeResolveOwners(const draw_util::ResolveInfo& resolve_info,
++                                                    draw_util::ResolveCopyShaderIndex copy_shader,
++                                                    std::vector<RangeOwner>& owners_out) const {
++  owners_out.clear();
 +  if (!hle::HleGraphicsEnabled()) {
-+    return nullptr;
++    return false;
 +  }
 +  bool is_depth = resolve_info.IsCopyingDepth();
 +  draw_util::ResolveEdramInfo edram_info =
@@ -10281,14 +10373,14 @@ index 0000000..8c7872e
 +      resolve_info.copy_dest_coordinate_info.copy_sample_select != xenos::CopySampleSelect::k0 ||
 +      dest_info.copy_dest_array ||
 +      uint32_t(dest_info.copy_dest_endian) > uint32_t(xenos::Endian::k16in32)) {
-+    return nullptr;
++    return false;
 +  }
 +  auto render_target_format = xenos::ColorRenderTargetFormat(edram_info.format);
 +  auto dest_format = xenos::ColorFormat(dest_info.copy_dest_format);
-+  // A depth copy is bitwise (the fast 32bpp copy), of a D24S8 target only (below).
++  // A depth copy is bitwise (the fast 32bpp copy), of a depth target only (below).
 +  if (is_depth) {
 +    if (copy_shader != draw_util::ResolveCopyShaderIndex::kFast32bpp1x2xMSAA) {
-+      return nullptr;
++      return false;
 +    }
 +  } else
 +  switch (render_target_format) {
@@ -10296,25 +10388,25 @@ index 0000000..8c7872e
 +    case xenos::ColorRenderTargetFormat::k_8_8_8_8:
 +      if (copy_shader != draw_util::ResolveCopyShaderIndex::kFast32bpp1x2xMSAA ||
 +          dest_format != xenos::ColorFormat::k_8_8_8_8) {
-+        return nullptr;
++        return false;
 +      }
 +      break;
 +    case xenos::ColorRenderTargetFormat::k_2_10_10_10:
 +      if (copy_shader != draw_util::ResolveCopyShaderIndex::kFast32bpp1x2xMSAA ||
 +          dest_format != xenos::ColorFormat::k_2_10_10_10 || dest_info.copy_dest_swap) {
-+        return nullptr;
++        return false;
 +      }
 +      break;
 +    case xenos::ColorRenderTargetFormat::k_16_16_FLOAT:
 +      if (copy_shader != draw_util::ResolveCopyShaderIndex::kFast32bpp1x2xMSAA ||
 +          dest_format != xenos::ColorFormat::k_16_16_FLOAT || dest_info.copy_dest_swap) {
-+        return nullptr;
++        return false;
 +      }
 +      break;
 +    case xenos::ColorRenderTargetFormat::k_32_FLOAT:
 +      if (copy_shader != draw_util::ResolveCopyShaderIndex::kFast32bpp1x2xMSAA ||
 +          dest_format != xenos::ColorFormat::k_32_FLOAT || dest_info.copy_dest_swap) {
-+        return nullptr;
++        return false;
 +      }
 +      break;
 +    // Converted (the full 32bpp copy), with the exponent bias and the swap.
@@ -10323,7 +10415,7 @@ index 0000000..8c7872e
 +      if (copy_shader != draw_util::ResolveCopyShaderIndex::kFull32bpp ||
 +          (dest_format != xenos::ColorFormat::k_2_10_10_10 &&
 +           dest_format != xenos::ColorFormat::k_8_8_8_8)) {
-+        return nullptr;
++        return false;
 +      }
 +      break;
 +    // Converted (the full 64bpp copy), with the exponent bias and the swap.
@@ -10332,60 +10424,78 @@ index 0000000..8c7872e
 +      if (copy_shader != draw_util::ResolveCopyShaderIndex::kFull64bpp ||
 +          (dest_format != xenos::ColorFormat::k_16_16_16_16 &&
 +           dest_format != xenos::ColorFormat::k_16_16_16_16_FLOAT)) {
-+        return nullptr;
++        return false;
 +      }
 +      break;
 +    default:
-+      return nullptr;
++      return false;
 +  }
-+  // One render target must hold the whole source, at the resolve's base, pitch and format.
++  // The render targets owning the source, each read through the EDRAM tiles it owns.
 +  uint32_t span_base, span_row_length, span_rows, span_pitch;
 +  resolve_info.GetCopyEdramTileSpan(span_base, span_row_length, span_rows, span_pitch);
-+  if (!span_rows) {
++  if (!span_rows ||
++      !GetRangeOwners(span_base, span_base + (span_rows - 1) * span_pitch + span_row_length,
++                      owners_out)) {
++    return false;
++  }
++  for (const RangeOwner& owner : owners_out) {
++    RenderTargetKey owner_key = owner.render_target->key();
++    if (owner_key.msaa_samples != xenos::MsaaSamples::k1X ||
++        owner_key.base_tiles > owner.start_tiles || !owner_key.GetPitchTiles()) {
++      owners_out.clear();
++      return false;
++    }
++    // A depth owner: its depth and stencil bits, for a depth copy or a bitwise color copy of them.
++    if (owner_key.is_depth) {
++      if (copy_shader != draw_util::ResolveCopyShaderIndex::kFast32bpp1x2xMSAA) {
++        owners_out.clear();
++        return false;
++      }
++      continue;
++    }
++    if (is_depth) {
++      owners_out.clear();
++      return false;
++    }
++    // A bitwise copy copies the EDRAM bits whatever 32bpp format wrote them (the game may resolve
++    // a surface as another format of the same size); a conversion needs the resolve's own format.
++    if (owner_key.GetColorFormat() != xenos::GetStorageColorFormat(render_target_format)) {
++      bool owner_packed;
++      switch (owner_key.GetColorFormat()) {
++        case xenos::ColorRenderTargetFormat::k_8_8_8_8:
++        case xenos::ColorRenderTargetFormat::k_2_10_10_10:
++        case xenos::ColorRenderTargetFormat::k_2_10_10_10_FLOAT:
++        case xenos::ColorRenderTargetFormat::k_16_16_FLOAT:
++        case xenos::ColorRenderTargetFormat::k_32_FLOAT:
++          owner_packed = true;
++          break;
++        default:
++          owner_packed = false;
++      }
++      if (!owner_packed || copy_shader != draw_util::ResolveCopyShaderIndex::kFast32bpp1x2xMSAA) {
++        owners_out.clear();
++        return false;
++      }
++    }
++  }
++  return true;
++}
++
++MetalRenderTargetCache::MetalRenderTarget* MetalRenderTargetCache::GetNativeResolveSource(
++    const draw_util::ResolveInfo& resolve_info,
++    draw_util::ResolveCopyShaderIndex copy_shader) const {
++  std::vector<RangeOwner> owners;
++  if (!GetNativeResolveOwners(resolve_info, copy_shader, owners) || owners.size() != 1) {
 +    return nullptr;
 +  }
-+  RenderTarget* owner =
-+      GetRangeSoleOwner(span_base, span_base + (span_rows - 1) * span_pitch + span_row_length);
-+  if (!owner) {
-+    return nullptr;
-+  }
-+  RenderTargetKey owner_key = owner->key();
++  const draw_util::ResolveEdramInfo& edram_info =
++      resolve_info.IsCopyingDepth() ? resolve_info.depth_edram_info : resolve_info.color_edram_info;
++  RenderTargetKey owner_key = owners[0].render_target->key();
 +  if (owner_key.base_tiles != edram_info.base_tiles ||
-+      owner_key.msaa_samples != xenos::MsaaSamples::k1X ||
 +      owner_key.GetPitchTiles() != edram_info.pitch_tiles) {
 +    return nullptr;
 +  }
-+  // A depth owner: its D24S8 bits, for a depth copy or a bitwise color copy of them.
-+  if (owner_key.is_depth) {
-+    if (owner_key.GetDepthFormat() != xenos::DepthRenderTargetFormat::kD24S8 ||
-+        copy_shader != draw_util::ResolveCopyShaderIndex::kFast32bpp1x2xMSAA) {
-+      return nullptr;
-+    }
-+    return static_cast<MetalRenderTarget*>(owner);
-+  }
-+  if (is_depth) {
-+    return nullptr;
-+  }
-+  // A bitwise copy copies the EDRAM bits whatever 32bpp format wrote them (the game may resolve
-+  // a surface as another format of the same size); a conversion needs the resolve's own format.
-+  if (owner_key.GetColorFormat() != xenos::GetStorageColorFormat(render_target_format)) {
-+    bool owner_packed;
-+    switch (owner_key.GetColorFormat()) {
-+      case xenos::ColorRenderTargetFormat::k_8_8_8_8:
-+      case xenos::ColorRenderTargetFormat::k_2_10_10_10:
-+      case xenos::ColorRenderTargetFormat::k_2_10_10_10_FLOAT:
-+      case xenos::ColorRenderTargetFormat::k_16_16_FLOAT:
-+      case xenos::ColorRenderTargetFormat::k_32_FLOAT:
-+        owner_packed = true;
-+        break;
-+      default:
-+        owner_packed = false;
-+    }
-+    if (!owner_packed || copy_shader != draw_util::ResolveCopyShaderIndex::kFast32bpp1x2xMSAA) {
-+      return nullptr;
-+    }
-+  }
-+  return static_cast<MetalRenderTarget*>(owner);
++  return static_cast<MetalRenderTarget*>(owners[0].render_target);
 +}
 +
 +uint32_t MetalRenderTargetCache::UpdateResolvedTextures(const draw_util::ResolveInfo& resolve_info,
@@ -10424,13 +10534,14 @@ index 0000000..8c7872e
 +}
 +
 +void MetalRenderTargetCache::ResolveFromRenderTarget(const draw_util::ResolveInfo& resolve_info,
-+                                                     MetalRenderTarget& source, id<MTLBuffer> dest,
++                                                     const RangeOwner& owner, id<MTLBuffer> dest,
 +                                                     NSUInteger dest_offset, uint32_t dest_base,
 +                                                     bool verify) {
++  MetalRenderTarget& source = *static_cast<MetalRenderTarget*>(owner.render_target);
 +  id<MTLTexture> source_view = source.transfer_view();
 +  ResolveFromRenderTargetConstants constants;
 +  if (!GetResolveFromRenderTargetConstants(resolve_info, source.key().is_depth,
-+                                           source.key().resource_format,
++                                           source.key().resource_format, depth_float24_round(),
 +                                           constants)) {
 +    assert_always();
 +    return;
@@ -10450,6 +10561,8 @@ index 0000000..8c7872e
 +      expected_view_format = MTLPixelFormatRGBA16Float;
 +      break;
 +    case 7:
++    case 9:
++    case 10:
 +      pipeline = &resolve_from_render_target_depth_pipeline_;
 +      expected_view_format = MTLPixelFormatDepth32Float_Stencil8;
 +      break;
@@ -10472,6 +10585,10 @@ index 0000000..8c7872e
 +  }
 +  constants.verify = verify;
 +  constants.dest_base = dest_base;
++  constants.owner_base = source.key().base_tiles;
++  constants.owner_pitch = source.key().GetPitchTiles();
++  constants.range_start = owner.start_tiles;
++  constants.range_end = owner.end_tiles;
 +
 +  // The mismatch count, then the first mismatch's address, memory value and computed value.
 +  id<MTLBuffer> result = nil;
@@ -10486,7 +10603,7 @@ index 0000000..8c7872e
 +  command_processor_.SetInNativeResolve(false);
 +  [compute setComputePipelineState:pipeline->pipeline];
 +  [compute setTexture:source_view atIndex:kComputeTextureSource];
-+  if (constants.packing == 7) {
++  if (pipeline == &resolve_from_render_target_depth_pipeline_) {
 +    [compute setTexture:source.stencil_view() atIndex:kComputeTextureSourceStencil];
 +  }
 +  [compute setBuffer:dest offset:dest_offset atIndex:kComputeBufferDest];
@@ -10497,7 +10614,6 @@ index 0000000..8c7872e
 +      threadsPerThreadgroup:pipeline->threads_per_threadgroup];
 +  PERF_counter_inc(kHostDispatches);
 +  if (!verify) {
-+    PERF_counter_inc(kResolvesFromRenderTargets);
 +    return;
 +  }
 +
@@ -10592,7 +10708,8 @@ index 0000000..8c7872e
 +  // The tile function packs color attachments copied bitwise or converted at 64bpp only.
 +  if (source.key().is_depth ||
 +      !GetResolveFromRenderTargetConstants(resolve_info, source.key().is_depth,
-+                                           source.key().resource_format, constants) ||
++                                           source.key().resource_format, depth_float24_round(),
++                                           constants) ||
 +      constants.packing == 8) {
 +    return false;
 +  }
@@ -10644,7 +10761,7 @@ index 0000000..8c7872e
 +                                                        id<MTLBuffer> scratch) {
 +  ResolveFromRenderTargetConstants constants;
 +  if (!GetResolveFromRenderTargetConstants(resolve_info, source.key().is_depth,
-+                                           source.key().resource_format,
++                                           source.key().resource_format, depth_float24_round(),
 +                                           constants)) {
 +    return;
 +  }
@@ -10716,17 +10833,21 @@ index 0000000..8c7872e
 +      // gfx = hle: a resolve that copies the bits of one render target unchanged is written to
 +      // memory straight from it (hle_resolve_from_render_targets), or, with hle_verify_resolves,
 +      // the usual path's result is compared with what that would write.
++      // The render targets the source is read from, one dispatch each, and the sole one at the
++      // resolve's own base and pitch (for the in-pass spike).
++      std::vector<RangeOwner> native_owners;
 +      MetalRenderTarget* native_source = nullptr;
 +      if ((REXCVAR_GET(hle_native_resolves) && REXCVAR_GET(hle_resolve_from_render_targets)) ||
 +          REXCVAR_GET(hle_verify_resolves)) {
++        GetNativeResolveOwners(resolve_info, copy_shader, native_owners);
 +        native_source = GetNativeResolveSource(resolve_info, copy_shader);
 +      }
-+      bool verify_native = native_source && REXCVAR_GET(hle_verify_resolves);
-+      bool from_render_target = native_source && !verify_native;
++      bool verify_native = !native_owners.empty() && REXCVAR_GET(hle_verify_resolves);
++      bool from_render_target = !native_owners.empty() && !verify_native;
 +      // hle_resolve_in_render_pass with hle_verify_resolves: the tile function writes a scratch
 +      // copy while the pass is still open, compared with the usual path's result afterwards.
 +      id<MTLBuffer> in_render_pass_scratch = nil;
-+      if (verify_native && REXCVAR_GET(hle_resolve_in_render_pass) &&
++      if (verify_native && native_source && REXCVAR_GET(hle_resolve_in_render_pass) &&
 +          !IsDrawResolutionScaled() && resolve_info.copy_dest_extent_length) {
 +        in_render_pass_scratch =
 +            [command_processor_.device() newBufferWithLength:resolve_info.copy_dest_extent_length
@@ -10783,14 +10904,17 @@ index 0000000..8c7872e
 +        NSUInteger dest_offset = draw_resolution_scaled ? NSUInteger(copy_dest_base_scaled) : 0;
 +        uint32_t dest_base = draw_resolution_scaled ? 0 : resolve_info.copy_dest_base;
 +        bool in_render_pass =
-+            from_render_target && !draw_resolution_scaled &&
++            from_render_target && native_source && !draw_resolution_scaled &&
 +            REXCVAR_GET(hle_resolve_in_render_pass) &&
 +            ResolveInRenderPass(resolve_info, *native_source, shared_memory.buffer(), 0);
 +        id<MTLComputeCommandEncoder> compute = nil;
 +        if (from_render_target) {
 +          if (!in_render_pass) {
-+            ResolveFromRenderTarget(resolve_info, *native_source, dest_buffer, dest_offset,
-+                                    dest_base, false);
++            for (const RangeOwner& owner : native_owners) {
++              ResolveFromRenderTarget(resolve_info, owner, dest_buffer, dest_offset, dest_base,
++                                      false);
++            }
++            PERF_counter_inc(kResolvesFromRenderTargets);
 +          }
 +        } else {
 +          const ComputePipeline& pipeline = resolve_copy_pipelines_[size_t(copy_shader)];
@@ -10870,8 +10994,9 @@ index 0000000..8c7872e
 +        }
 +
 +        if (verify_native) {
-+          ResolveFromRenderTarget(resolve_info, *native_source, dest_buffer, dest_offset, dest_base,
-+                                  true);
++          for (const RangeOwner& owner : native_owners) {
++            ResolveFromRenderTarget(resolve_info, owner, dest_buffer, dest_offset, dest_base, true);
++          }
 +          if (in_render_pass_scratch) {
 +            CompareResolveInRenderPass(resolve_info, *native_source, shared_memory,
 +                                       in_render_pass_scratch);
@@ -16810,7 +16935,7 @@ index 0000000..b9bc2fb
 +
 +#undef CAMetalLayer
 diff --git a/src/graphics/pipeline/render_target/cache.cpp b/src/graphics/pipeline/render_target/cache.cpp
-index bd0019c..5a74503 100644
+index bd0019c..876f6f8 100644
 --- a/src/graphics/pipeline/render_target/cache.cpp
 +++ b/src/graphics/pipeline/render_target/cache.cpp
 @@ -13,6 +13,10 @@
@@ -17046,7 +17171,7 @@ index bd0019c..5a74503 100644
    }
  
    if (interlock_barrier_only) {
-@@ -1254,6 +1441,131 @@ bool RenderTargetCache::WouldOwnershipChangeRequireTransfers(RenderTargetKey des
+@@ -1254,6 +1441,166 @@ bool RenderTargetCache::WouldOwnershipChangeRequireTransfers(RenderTargetKey des
    return false;
  }
  
@@ -17175,10 +17300,45 @@ index bd0019c..5a74503 100644
 +  return nullptr;
 +}
 +
++bool RenderTargetCache::GetRangeOwners(uint32_t start_tiles, uint32_t end_tiles,
++                                       std::vector<RangeOwner>& owners_out) const {
++  owners_out.clear();
++  if (start_tiles >= end_tiles || end_tiles > xenos::kEdramTileCount) {
++    return false;
++  }
++  auto it = ownership_ranges_.upper_bound(start_tiles);
++  if (it == ownership_ranges_.begin()) {
++    return false;
++  }
++  --it;
++  uint32_t covered = start_tiles;
++  for (; it != ownership_ranges_.end() && it->first < end_tiles; ++it) {
++    if (it->first > covered || it->second.end_tiles <= covered) {
++      return false;
++    }
++    RenderTargetKey owner = it->second.render_target;
++    auto render_target_it = owner.IsEmpty() ? render_targets_.end() : render_targets_.find(owner);
++    if (render_target_it == render_targets_.end()) {
++      return false;
++    }
++    uint32_t range_end = std::min(it->second.end_tiles, end_tiles);
++    if (!owners_out.empty() && owners_out.back().render_target == render_target_it->second) {
++      owners_out.back().end_tiles = range_end;
++    } else {
++      owners_out.push_back({render_target_it->second, covered, range_end});
++    }
++    covered = range_end;
++    if (covered >= end_tiles) {
++      return true;
++    }
++  }
++  return false;
++}
++
  void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_tiles_base_relative,
                                          uint32_t length_tiles,
                                          std::vector<Transfer>* transfers_append_out,
-@@ -1335,6 +1647,8 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
+@@ -1335,6 +1682,8 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
                       transfer_host_depth_source)) {
                // Extend the last transfer if, for example, transferring color,
                // but host depth is different.
@@ -17187,7 +17347,7 @@ index bd0019c..5a74503 100644
                transfers_append_out->back().end_tiles = transfer_end_tiles;
              } else {
                auto transfer_source_rt_it = render_targets_.find(transfer_source);
-@@ -1353,6 +1667,7 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
+@@ -1353,6 +1702,7 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
                        transfer_host_depth_source_rt_it != render_targets_.end()
                            ? transfer_host_depth_source_rt_it->second
                            : nullptr);
