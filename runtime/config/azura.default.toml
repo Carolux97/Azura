@@ -48,6 +48,11 @@ render_resolution = "auto"
 # Extra sharpening of AMD CAS and AMD FSR 1, from 0.0 (the effect's own) to 1.0 (the most): the
 # Video menu's Sharpness. It applies while the game runs.
 upscaling_sharpness = 0.0
+# The Video menu's Field of view: the base camera's horizontal angle in degrees, 80 (the game's),
+# 85, 90, 95 or 100. Every gameplay camera mode is scaled in proportion. It applies while the game runs.
+field_of_view = 80.0
+# The Video menu's Film grain: the game's film grain noise. It applies while the game runs.
+film_grain = true
 # The Video menu's Performance overlay: off, fps for the game's frame rate in a corner of the game,
 # detailed to add the game's CPU and GPU use, or advanced to add its memory use, a graph of frame
 # times, the average frame rate and the 1% low.
