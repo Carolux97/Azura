@@ -16,6 +16,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ROUNDS="${1:-3}"
 SECONDS_PER_RUN="${2:-240}"
 OUT_DIR="${3:-${ROOT}/captures/compare}"
+# Absolute: the game runs from the runtime folder.
+mkdir -p "${OUT_DIR}"
+OUT_DIR="$(cd "${OUT_DIR}" && pwd)"
 shift $(( $# < 3 ? $# : 3 ))
 RUNTIME_DIR="${ROOT}/runtime/out/build/mac-arm64-sdk-source/RelWithDebInfo"
 GAME_DIR="$(awk -F'"' '/^game_data_root/{print $2; exit}' \
