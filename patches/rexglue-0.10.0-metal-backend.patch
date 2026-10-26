@@ -351,27 +351,33 @@ index ac6b056..8ef1ee8 100644
  
  }  // namespace rex::graphics
 diff --git a/include/rex/graphics/pipeline/render_target/cache.h b/include/rex/graphics/pipeline/render_target/cache.h
-index b246319..3343e05 100644
+index b246319..bf36d8d 100644
 --- a/include/rex/graphics/pipeline/render_target/cache.h
 +++ b/include/rex/graphics/pipeline/render_target/cache.h
-@@ -194,6 +194,16 @@ class RenderTargetCache {
+@@ -194,6 +194,22 @@ class RenderTargetCache {
  
    virtual void BeginFrame();
  
 +  // Of the render targets a draw uses (bit 0 depth, 1 + i color i), those the guest's clear of
-+  // whole surfaces writes completely with the current state, so their old contents are not needed
++  // whole surfaces writes completely with the current state over the range that changes
++  // ownership (pitch_pixels wide, height_used tall), so their old contents are not needed
 +  // (gfx = hle).
 +  uint32_t GetRenderTargetsOverwrittenByClear(uint32_t depth_and_color_rts_used_bits,
 +                                              reg::RB_DEPTHCONTROL normalized_depth_control,
-+                                              uint32_t normalized_color_mask) const;
++                                              uint32_t normalized_color_mask, uint32_t pitch_pixels,
++                                              uint32_t height_used) const;
++  // Whether the clear in progress writes the whole range that changes ownership: from column 0 to
++  // the pitch and from row 0 to height_used.
++  bool ClearCoversRange(uint32_t pitch_pixels, uint32_t height_used) const;
 +  // Logs, once per reason, why the guest's clear still needs a render target's old contents.
 +  void LogClearKeepingContents(uint32_t rt_bit_index, reg::RB_DEPTHCONTROL normalized_depth_control,
-+                               uint32_t normalized_color_mask) const;
++                               uint32_t normalized_color_mask, uint32_t pitch_pixels,
++                               uint32_t height_used) const;
 +
    virtual bool Update(bool is_rasterization_done, reg::RB_DEPTHCONTROL normalized_depth_control,
                        uint32_t normalized_color_mask, const Shader& vertex_shader);
  
-@@ -666,6 +676,11 @@ class RenderTargetCache {
+@@ -666,6 +682,11 @@ class RenderTargetCache {
    bool WouldOwnershipChangeRequireTransfers(RenderTargetKey dest,
                                              uint32_t start_tiles_base_relative,
                                              uint32_t length_tiles) const;
@@ -15009,7 +15015,7 @@ index 0000000..b9bc2fb
 +
 +#undef CAMetalLayer
 diff --git a/src/graphics/pipeline/render_target/cache.cpp b/src/graphics/pipeline/render_target/cache.cpp
-index bd0019c..461f916 100644
+index bd0019c..f84e8c8 100644
 --- a/src/graphics/pipeline/render_target/cache.cpp
 +++ b/src/graphics/pipeline/render_target/cache.cpp
 @@ -13,6 +13,10 @@
@@ -15039,15 +15045,40 @@ index bd0019c..461f916 100644
  
  REXCVAR_DEFINE_BOOL(mrt_edram_used_range_clamp_to_min, true, "GPU",
                      "Clamp MRT EDRAM used range to minimum");
-@@ -407,6 +413,80 @@ void RenderTargetCache::BeginFrame() {
+@@ -407,6 +413,108 @@ void RenderTargetCache::BeginFrame() {
    ResetAccumulatedRenderTargets();
  }
  
++bool RenderTargetCache::ClearCoversRange(uint32_t pitch_pixels, uint32_t height_used) const {
++  const RegisterFile& regs = register_file();
++  // The clear draws a rectangle over the viewport (within the scissor), while ownership changes
++  // whole rows of tiles, the surface pitch wide, down to height_used. Only when the rectangle
++  // covers all of that are the tiles' old contents fully replaced; a narrower viewport leaves
++  // columns the clear does not write, whose contents another target may still need.
++  draw_util::Scissor scissor;
++  draw_util::GetScissor(regs, scissor);
++  if (scissor.offset[0] || scissor.offset[1] || scissor.extent[0] < pitch_pixels ||
++      scissor.extent[1] < height_used) {
++    return false;
++  }
++  float viewport_x = regs.Get<float>(XE_GPU_REG_PA_CL_VPORT_XOFFSET);
++  float viewport_half_width = std::abs(regs.Get<float>(XE_GPU_REG_PA_CL_VPORT_XSCALE));
++  float viewport_y = regs.Get<float>(XE_GPU_REG_PA_CL_VPORT_YOFFSET);
++  float viewport_half_height = std::abs(regs.Get<float>(XE_GPU_REG_PA_CL_VPORT_YSCALE));
++  return viewport_x - viewport_half_width <= 0.5f &&
++         viewport_x + viewport_half_width >= float(pitch_pixels) - 0.5f &&
++         viewport_y - viewport_half_height <= 0.5f &&
++         viewport_y + viewport_half_height >= float(height_used) - 0.5f;
++}
++
 +uint32_t RenderTargetCache::GetRenderTargetsOverwrittenByClear(
 +    uint32_t depth_and_color_rts_used_bits, reg::RB_DEPTHCONTROL normalized_depth_control,
-+    uint32_t normalized_color_mask) const {
++    uint32_t normalized_color_mask, uint32_t pitch_pixels, uint32_t height_used) const {
 +  const RegisterFile& regs = register_file();
 +  uint32_t overwritten_bits = 0;
++  if (!ClearCoversRange(pitch_pixels, height_used)) {
++    return 0;
++  }
 +  // Depth and stencil: both written everywhere the clear draws, whatever was there.
 +  if (depth_and_color_rts_used_bits & 1) {
 +    auto stencil_ref_mask = regs.Get<reg::RB_STENCILREFMASK>();
@@ -15087,13 +15118,16 @@ index bd0019c..461f916 100644
 +
 +void RenderTargetCache::LogClearKeepingContents(uint32_t rt_bit_index,
 +                                                reg::RB_DEPTHCONTROL normalized_depth_control,
-+                                                uint32_t normalized_color_mask) const {
++                                                uint32_t normalized_color_mask,
++                                                uint32_t pitch_pixels, uint32_t height_used) const {
 +  // Why the guest's clear still needs the target's old contents, logged once per reason: the cases
 +  // the HLE path does not handle yet.
 +  const RegisterFile& regs = register_file();
 +  const char* reason;
 +  if (!hle::InWholeSurfaceClear()) {
 +    reason = "the clear has a rectangle";
++  } else if (!ClearCoversRange(pitch_pixels, height_used)) {
++    reason = "the viewport or scissor is smaller than the rows that change owner";
 +  } else if (rt_bit_index == 0) {
 +    bool depth_written = normalized_depth_control.z_enable &&
 +                         normalized_depth_control.z_write_enable &&
@@ -15120,7 +15154,7 @@ index bd0019c..461f916 100644
  bool RenderTargetCache::Update(bool is_rasterization_done,
                                 reg::RB_DEPTHCONTROL normalized_depth_control,
                                 uint32_t normalized_color_mask, const Shader& vertex_shader) {
-@@ -693,11 +773,31 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
+@@ -693,11 +801,32 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
    // draw with whatever contents currently are in the render target in this
    // case).
  
@@ -15129,9 +15163,9 @@ index bd0019c..461f916 100644
 +  // its tiles without the transfers that would copy the old contents in.
 +  uint32_t rts_overwritten_bits = 0;
 +  if (!interlock_barrier_only && hle::InWholeSurfaceClear()) {
-+    rts_overwritten_bits = GetRenderTargetsOverwrittenByClear(depth_and_color_rts_used_bits,
-+                                                              normalized_depth_control,
-+                                                              normalized_color_mask);
++    rts_overwritten_bits = GetRenderTargetsOverwrittenByClear(
++        depth_and_color_rts_used_bits, normalized_depth_control, normalized_color_mask,
++        pitch_pixels, height_used);
 +  }
 +
    for (uint32_t i = 0; i < edram_bases_sorted_count; ++i) {
@@ -15142,7 +15176,8 @@ index bd0019c..461f916 100644
 +    if (!interlock_barrier_only && hle::InClear() &&
 +        WouldOwnershipChangeRequireTransfers(rt_keys[rt_bit_index], 0, rt_lengths_tiles[i])) {
 +      if (transfers_needed) {
-+        LogClearKeepingContents(rt_bit_index, normalized_depth_control, normalized_color_mask);
++        LogClearKeepingContents(rt_bit_index, normalized_depth_control, normalized_color_mask,
++                                pitch_pixels, height_used);
 +      } else {
 +        PERF_counter_inc(kRenderTargetTransfersSkipped);
 +      }
@@ -15153,7 +15188,7 @@ index bd0019c..461f916 100644
    }
  
    if (interlock_barrier_only) {
-@@ -1254,6 +1354,104 @@ bool RenderTargetCache::WouldOwnershipChangeRequireTransfers(RenderTargetKey des
+@@ -1254,6 +1383,104 @@ bool RenderTargetCache::WouldOwnershipChangeRequireTransfers(RenderTargetKey des
    return false;
  }
  
@@ -15258,7 +15293,7 @@ index bd0019c..461f916 100644
  void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_tiles_base_relative,
                                          uint32_t length_tiles,
                                          std::vector<Transfer>* transfers_append_out,
-@@ -1335,6 +1533,8 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
+@@ -1335,6 +1562,8 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
                       transfer_host_depth_source)) {
                // Extend the last transfer if, for example, transferring color,
                // but host depth is different.
@@ -15267,7 +15302,7 @@ index bd0019c..461f916 100644
                transfers_append_out->back().end_tiles = transfer_end_tiles;
              } else {
                auto transfer_source_rt_it = render_targets_.find(transfer_source);
-@@ -1353,6 +1553,7 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
+@@ -1353,6 +1582,7 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
                        transfer_host_depth_source_rt_it != render_targets_.end()
                            ? transfer_host_depth_source_rt_it->second
                            : nullptr);
