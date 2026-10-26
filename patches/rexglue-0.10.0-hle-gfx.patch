@@ -1,9 +1,9 @@
 diff --git a/include/rex/graphics/hle/markers.h b/include/rex/graphics/hle/markers.h
 new file mode 100644
-index 0000000..51d8f45
+index 0000000..55c410b
 --- /dev/null
 +++ b/include/rex/graphics/hle/markers.h
-@@ -0,0 +1,79 @@
+@@ -0,0 +1,91 @@
 +/**
 + * @file        graphics/hle/markers.h
 + * @brief       Markers that describe the guest's graphics API calls inside its command stream
@@ -34,13 +34,19 @@ index 0000000..51d8f45
 +// Graphics path: pm4 (render targets in emulated EDRAM) or hle (host render targets driven by the
 +// markers). Defined in the runtime library, read by the GPU backends and the game's runtime.
 +REXCVAR_DECLARE(std::string, gfx);
++// With gfx = hle: the guest's clears of whole surfaces become the load action of the next render
++// pass on their targets instead of a full-screen draw (on backends that support it).
++REXCVAR_DECLARE(bool, hle_clear_load_actions);
++// Debugging aid for hle_clear_load_actions: clears are drawn as before, and the value the load
++// action would have written is compared with what the draw wrote; mismatches are logged.
++REXCVAR_DECLARE(bool, hle_verify_clears);
 +
 +namespace rex::graphics::hle {
 +
 +// First payload word of a marker ("AZHL").
 +constexpr uint32_t kMarkerMagic = 0x415A484C;
 +// Most payload words a marker carries, magic and event included.
-+constexpr uint32_t kMaxMarkerWords = 12;
++constexpr uint32_t kMaxMarkerWords = 16;
 +
 +enum class MarkerEvent : uint32_t {
 +  // SetRenderTarget(index, surface): index, surface address, the surface's RB_COLOR_INFO value,
@@ -50,7 +56,8 @@ index 0000000..51d8f45
 +  kSetDepthStencil = 2,
 +  // ClearF(flags, rectangle, colour, depth, stencil): the packets up to kClearEnd are the
 +  // guest's clear. Arguments: the call's integer arguments (r4-r9; r5 is the rectangle, 0 for
-+  // the whole surface) and the depth value's bits.
++  // the whole surface, r6 the colour's address), the depth value's bits, then the four colour
++  // components (red, green, blue, alpha as float bits) read from r6, or zeros without a colour.
 +  kClearBegin = 3,
 +  kClearEnd = 4,
 +  // Resolve: the packets up to kResolveEnd are the guest's resolve. Arguments: the call's integer
@@ -81,14 +88,19 @@ index 0000000..51d8f45
 +// it writes completely (every channel, no blending; depth and stencil both written) needs nothing
 +// of its old contents.
 +bool InWholeSurfaceClear();
++// The clear in progress's depth and colour (red, green, blue, alpha), from its marker.
++float ClearDepth();
++const float* ClearColor();
++// Counts a draw of the clear in progress and returns how many came before it in that clear.
++uint32_t NoteDrawInClear();
 +
 +}  // namespace rex::graphics::hle
 diff --git a/src/system/hle_markers.cpp b/src/system/hle_markers.cpp
 new file mode 100644
-index 0000000..55ce71c
+index 0000000..59fb53d
 --- /dev/null
 +++ b/src/system/hle_markers.cpp
-@@ -0,0 +1,85 @@
+@@ -0,0 +1,115 @@
 +/**
 + * @file        system/hle_markers.cpp
 + * @brief       The gfx option and the dispatch of the HLE graphics markers
@@ -104,6 +116,7 @@ index 0000000..55ce71c
 +#include <rex/graphics/hle/markers.h>
 +
 +#include <atomic>
++#include <cstring>
 +
 +#include <rex/cvar.h>
 +
@@ -112,6 +125,14 @@ index 0000000..55ce71c
 +                      "(render targets as host textures, driven by the game's D3D calls through "
 +                      "the markers in rex/graphics/hle/markers.h)")
 +    .allowed({"pm4", "hle"})
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++REXCVAR_DEFINE_BOOL(hle_clear_load_actions, true, "GPU",
++                    "With gfx = hle, turn the game's clears of whole surfaces into the load action "
++                    "of the next render pass on their targets instead of a full-screen draw")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++REXCVAR_DEFINE_BOOL(hle_verify_clears, false, "GPU",
++                    "Debugging aid for hle_clear_load_actions: draw clears as before and log where "
++                    "the load action would have written another value")
 +    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 +
 +namespace rex::graphics::hle {
@@ -132,6 +153,16 @@ index 0000000..55ce71c
 +bool g_in_resolve = false;
 +// The clear in progress has no rectangle (ClearF's second argument, payload word 3).
 +bool g_whole_surface_clear = false;
++// Its depth (payload word 8) and colour (words 9 to 12), and the draws it made so far.
++float g_clear_depth = 0.0f;
++float g_clear_color[4] = {};
++uint32_t g_clear_draws = 0;
++
++float WordAsFloat(uint32_t word) {
++  float value;
++  std::memcpy(&value, &word, sizeof(value));
++  return value;
++}
 +
 +}  // namespace
 +
@@ -148,6 +179,11 @@ index 0000000..55ce71c
 +    case MarkerEvent::kClearBegin:
 +      g_in_clear = true;
 +      g_whole_surface_clear = count > 3 && words[3] == 0;
++      g_clear_depth = count > 8 ? WordAsFloat(words[8]) : 0.0f;
++      for (uint32_t i = 0; i < 4; ++i) {
++        g_clear_color[i] = count > 9 + i ? WordAsFloat(words[9 + i]) : 0.0f;
++      }
++      g_clear_draws = 0;
 +      break;
 +    case MarkerEvent::kClearEnd:
 +      g_in_clear = false;
@@ -172,5 +208,11 @@ index 0000000..55ce71c
 +bool InResolve() { return g_in_resolve; }
 +
 +bool InWholeSurfaceClear() { return g_in_clear && g_whole_surface_clear; }
++
++float ClearDepth() { return g_clear_depth; }
++
++const float* ClearColor() { return g_clear_color; }
++
++uint32_t NoteDrawInClear() { return g_clear_draws++; }
 +
 +}  // namespace rex::graphics::hle

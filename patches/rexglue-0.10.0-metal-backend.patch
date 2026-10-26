@@ -351,10 +351,10 @@ index ac6b056..8ef1ee8 100644
  
  }  // namespace rex::graphics
 diff --git a/include/rex/graphics/pipeline/render_target/cache.h b/include/rex/graphics/pipeline/render_target/cache.h
-index b246319..bf36d8d 100644
+index b246319..b0890ed 100644
 --- a/include/rex/graphics/pipeline/render_target/cache.h
 +++ b/include/rex/graphics/pipeline/render_target/cache.h
-@@ -194,6 +194,22 @@ class RenderTargetCache {
+@@ -194,6 +194,29 @@ class RenderTargetCache {
  
    virtual void BeginFrame();
  
@@ -365,19 +365,38 @@ index b246319..bf36d8d 100644
 +  uint32_t GetRenderTargetsOverwrittenByClear(uint32_t depth_and_color_rts_used_bits,
 +                                              reg::RB_DEPTHCONTROL normalized_depth_control,
 +                                              uint32_t normalized_color_mask, uint32_t pitch_pixels,
-+                                              uint32_t height_used) const;
++                                              uint32_t height_used, const Shader& vertex_shader);
++  // Of the render targets the last successful update's draw uses, those the guest's clear of whole
++  // surfaces writes completely (same bits as GetRenderTargetsOverwrittenByClear), 0 when the draw
++  // is not such a clear.
++  uint32_t last_update_overwritten_by_clear() const { return last_update_overwritten_by_clear_; }
++  // The depth that clear's vertices write, from them run on the CPU (NaN if unknown or not the
++  // same at every vertex).
++  float last_update_clear_vertex_depth() const { return last_update_clear_vertex_depth_; }
 +  // Whether the clear in progress writes the whole range that changes ownership: from column 0 to
-+  // the pitch and from row 0 to height_used.
-+  bool ClearCoversRange(uint32_t pitch_pixels, uint32_t height_used) const;
++  // the pitch and from row 0 to height_used (its rectangle from its vertices run on the CPU).
++  bool ClearCoversRange(uint32_t pitch_pixels, uint32_t height_used, const Shader& vertex_shader);
 +  // Logs, once per reason, why the guest's clear still needs a render target's old contents.
 +  void LogClearKeepingContents(uint32_t rt_bit_index, reg::RB_DEPTHCONTROL normalized_depth_control,
 +                               uint32_t normalized_color_mask, uint32_t pitch_pixels,
-+                               uint32_t height_used) const;
++                               uint32_t height_used, const Shader& vertex_shader);
 +
    virtual bool Update(bool is_rasterization_done, reg::RB_DEPTHCONTROL normalized_depth_control,
                        uint32_t normalized_color_mask, const Shader& vertex_shader);
  
-@@ -666,6 +682,11 @@ class RenderTargetCache {
+@@ -510,6 +533,11 @@ class RenderTargetCache {
+   // false).
+   virtual bool IsHostDepthEncodingDifferent(xenos::DepthRenderTargetFormat format) const = 0;
+ 
++  // The render target the last successful update's draw uses (0 depth, 1 + i color i), or
++  // nullptr.
++  RenderTarget* last_update_used_render_target(uint32_t index) const {
++    return last_update_used_render_targets_[index];
++  }
+   void ResetAccumulatedRenderTargets() { are_accumulated_render_targets_valid_ = false; }
+   RenderTarget* const* last_update_accumulated_render_targets() const {
+     assert_true(GetPath() == Path::kHostRenderTargets);
+@@ -666,6 +694,11 @@ class RenderTargetCache {
    bool WouldOwnershipChangeRequireTransfers(RenderTargetKey dest,
                                              uint32_t start_tiles_base_relative,
                                              uint32_t length_tiles) const;
@@ -389,6 +408,16 @@ index b246319..bf36d8d 100644
    // Updates ownership_ranges_, adds the transfers needed for the ownership
    // change to transfers_append_out if it's not null.
    void ChangeOwnership(RenderTargetKey dest, uint32_t start_tiles_base_relative,
+@@ -688,6 +721,9 @@ class RenderTargetCache {
+   // update. 0 is depth, color starting from 1, nullptr if not bound.
+   // Only valid for non-pixel-shader-interlock paths.
+   RenderTarget* last_update_used_render_targets_[1 + xenos::kMaxColorRenderTargets];
++  // See last_update_overwritten_by_clear() and last_update_clear_vertex_depth().
++  uint32_t last_update_overwritten_by_clear_ = 0;
++  float last_update_clear_vertex_depth_ = 0.0f;
+   // Render targets used by the draw call with the last successful update or
+   // previous updates, unless a different or a totally new one was bound (or
+   // surface info was changed), to avoid unneeded render target switching (which
 diff --git a/include/rex/graphics/pipeline/shader/spirv.h b/include/rex/graphics/pipeline/shader/spirv.h
 index dd90ef7..6169777 100644
 --- a/include/rex/graphics/pipeline/shader/spirv.h
@@ -566,6 +595,27 @@ index 65a24ed..3d76067 100644
  
  // Converts normalized_color_mask to a 4-bit bitmask of bound RTs.
  // normalized_color_mask contains 4 bits per RT (RGBA).
+diff --git a/include/rex/graphics/util/draw_extent_estimator.h b/include/rex/graphics/util/draw_extent_estimator.h
+index e5e4908..d003128 100644
+--- a/include/rex/graphics/util/draw_extent_estimator.h
++++ b/include/rex/graphics/util/draw_extent_estimator.h
+@@ -31,6 +31,16 @@ class DrawExtentEstimator {
+   uint32_t EstimateVertexMaxY(const Shader& vertex_shader);
+   uint32_t EstimateMaxY(bool try_to_estimate_vertex_max_y, const Shader& vertex_shader);
+ 
++  // The screen rectangle a small draw without vertex fetches from memory covers (a clear's
++  // rectangle), from its vertices run on the CPU: left, top, right and bottom in pixels, with the
++  // viewport transform, the half-pixel offset and the window offset applied as the rasterizer
++  // would. Immediate indices are taken as 0, 1, 2 and so on. False when it cannot tell (too many
++  // vertices, indices from memory, a shader the interpreter cannot run, a missing position).
++  // depth_out is the depth the vertices write after the viewport's depth transform when every
++  // vertex has the same, NaN otherwise.
++  bool EstimateVertexRectangle(const Shader& vertex_shader, float& left, float& top, float& right,
++                               float& bottom, float* depth_out = nullptr);
++
+  private:
+   class PositionYExportSink : public ShaderInterpreter::ExportSink {
+    public:
 diff --git a/include/rex/graphics/vulkan/command_processor.h b/include/rex/graphics/vulkan/command_processor.h
 index 373f8dd..66c8df7 100644
 --- a/include/rex/graphics/vulkan/command_processor.h
@@ -1189,7 +1239,7 @@ index 0000000..a146aa8
 +
 +}  // namespace rex::input
 diff --git a/include/rex/perf/counter.h b/include/rex/perf/counter.h
-index 83f0dff..4a312bb 100644
+index 83f0dff..0d862e9 100644
 --- a/include/rex/perf/counter.h
 +++ b/include/rex/perf/counter.h
 @@ -10,6 +10,7 @@
@@ -1252,7 +1302,7 @@ index 83f0dff..4a312bb 100644
    kResolves,              // Guest resolves (EDRAM to memory copies)
    // Why the open render pass was ended (each ended pass adds to one of these)
    kRenderPassEndsTargetChange,  // A draw to other render targets
-@@ -81,6 +120,17 @@ enum class CounterId : uint16_t {
+@@ -81,6 +120,19 @@ enum class CounterId : uint16_t {
    // Guest draws that continue a render pass begun for a render target transfer
    kDrawsInTransferPasses,
  
@@ -1262,6 +1312,8 @@ index 83f0dff..4a312bb 100644
 +  kRenderTargetTransfersInResolves,
 +  // Transfers left out because the guest's clear overwrites their destination completely (gfx = hle)
 +  kRenderTargetTransfersSkipped,
++  // Guest clear draws turned into render pass load actions (gfx = hle)
++  kClearsAsLoadActions,
 +
 +  // Marks the player sets with a key while playing (the runtime's bind_perf_marker key), to find the
 +  // frames they noticed in the CSV
@@ -1270,7 +1322,7 @@ index 83f0dff..4a312bb 100644
    kCount  // sentinel -- must be last
  };
  
-@@ -162,6 +212,29 @@ class Profiler {
+@@ -162,6 +214,29 @@ class Profiler {
    }
  };
  
@@ -1960,7 +2012,7 @@ index b52bf39..13f51dc 100644
  
  void* MapFileView(FileMappingHandle handle, void* base_address, size_t length, PageAccess access,
 diff --git a/src/core/perf/counter.cpp b/src/core/perf/counter.cpp
-index d3f26eb..5e5a2a9 100644
+index d3f26eb..6031d2c 100644
 --- a/src/core/perf/counter.cpp
 +++ b/src/core/perf/counter.cpp
 @@ -46,6 +46,29 @@ std::array<std::atomic<int64_t>, kNumCounters> g_snapshot{};
@@ -2001,18 +2053,19 @@ index d3f26eb..5e5a2a9 100644
      "resolves",
      "pass_ends_target_change",
      "pass_ends_draw_barriers",
-@@ -86,6 +110,10 @@ constexpr const char* kCounterNames[] = {
+@@ -86,6 +110,11 @@ constexpr const char* kCounterNames[] = {
      "uploads_for_textures",
      "uploads_after_textures",
      "draws_in_transfer_passes",
 +    "render_target_transfers_in_clears",
 +    "render_target_transfers_in_resolves",
 +    "render_target_transfers_skipped",
++    "clears_as_load_actions",
 +    "markers",
  };
  static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must match CounterId enum");
  
-@@ -94,6 +122,29 @@ static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must matc
+@@ -94,6 +123,29 @@ static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must matc
  constexpr bool kIsGauge[] = {
      false,  // kFrameTimeUs       (set each frame)
      false,  // kFps               (set each frame)
@@ -2042,7 +2095,7 @@ index d3f26eb..5e5a2a9 100644
      false,  // kDrawCalls
      false,  // kCommandBufferStalls
      false,  // kVerticesProcessed
-@@ -118,6 +169,7 @@ constexpr bool kIsGauge[] = {
+@@ -118,6 +170,7 @@ constexpr bool kIsGauge[] = {
      false,  // kHostGpuWaits
      false,  // kHostGpuWaitUs
      false,  // kMemexportReadbacks
@@ -2050,13 +2103,14 @@ index d3f26eb..5e5a2a9 100644
      false,  // kResolves
      false,  // kRenderPassEndsTargetChange
      false,  // kRenderPassEndsDrawBarriers
-@@ -134,6 +186,10 @@ constexpr bool kIsGauge[] = {
+@@ -134,6 +187,11 @@ constexpr bool kIsGauge[] = {
      false,  // kUploadsForTextures
      false,  // kUploadsAfterTextures
      false,  // kDrawsInTransferPasses
 +    false,  // kRenderTargetTransfersInClears
 +    false,  // kRenderTargetTransfersInResolves
 +    false,  // kRenderTargetTransfersSkipped
++    false,  // kClearsAsLoadActions
 +    false,  // kMarkers
  };
  static_assert(std::size(kIsGauge) == kNumCounters, "kIsGauge must match CounterId enum");
@@ -2479,10 +2533,10 @@ index 8f2fcb0..b0f3cb4 100644
  
 diff --git a/src/graphics/metal/metal_command_processor.h b/src/graphics/metal/metal_command_processor.h
 new file mode 100644
-index 0000000..b432d7c
+index 0000000..4d96e5a
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.h
-@@ -0,0 +1,353 @@
+@@ -0,0 +1,383 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.h
 + * @brief       Xenos command processing with Metal
@@ -2499,6 +2553,7 @@ index 0000000..b432d7c
 +#include <deque>
 +#include <memory>
 +#include <mutex>
++#include <unordered_map>
 +#include <vector>
 +
 +#include <rex/graphics/command_processor.h>
@@ -2674,6 +2729,31 @@ index 0000000..b432d7c
 +  id<MTLRenderCommandEncoder> BeginRenderPass(const MetalRenderPass& render_pass,
 +                                              rex::perf::CounterId end_reason);
 +
++  // The guest's clears as render pass load actions (hle_clear_load_actions, gfx = hle).
++  // A clear of one render target texture, waiting for the next render pass on it.
++  struct PendingClear {
++    id<MTLTexture> texture = nil;
++    bool is_depth = false;
++    MTLClearColor color = {};
++    double depth = 0.0;
++    uint32_t stencil = 0;
++  };
++  // The load action clears of the last update's draw if it is the guest's clear of whole surfaces
++  // and every target it writes can be cleared that way, appended to clears_out; false otherwise.
++  bool GetGuestClearLoadActions(reg::RB_DEPTHCONTROL normalized_depth_control,
++                                std::vector<PendingClear>& clears_out) const;
++  // Makes the last update's draw, a guest clear, a pending clear of its targets instead of a
++  // draw, if possible (not in the middle of a render pass on the same targets). Returns whether it
++  // did; then the draw is skipped.
++  bool DeferGuestClear(const MetalRenderPass& render_pass,
++                       reg::RB_DEPTHCONTROL normalized_depth_control);
++  // Clears every pending clear's texture in a render pass of its own: before anything reads the
++  // render targets outside a render pass on them. Ends the open encoder first.
++  void ApplyPendingClears(rex::perf::CounterId end_reason);
++  // hle_verify_clears: compares the first texel of each target the guest's clear just drew with
++  // what its load action would have written (clears_to_verify_), and logs mismatches.
++  void VerifyGuestClears();
++
 +  void UpdateDynamicState(id<MTLRenderCommandEncoder> encoder,
 +                          const draw_util::ViewportInfo& viewport_info, bool primitive_polygonal,
 +                          reg::RB_DEPTHCONTROL normalized_depth_control,
@@ -2804,6 +2884,10 @@ index 0000000..b432d7c
 +  id<MTLBlitCommandEncoder> blit_encoder_ = nil;
 +  MetalRenderPass current_render_pass_;
 +  RenderEncoderState render_encoder_state_;
++  std::vector<PendingClear> pending_clears_;
++  std::vector<PendingClear> clears_to_verify_;
++  // hle_verify_clears: 1x1 textures cleared with the expected values, by pixel format.
++  std::unordered_map<NSUInteger, id<MTLTexture>> clear_verify_textures_;
 +
 +  // Constants.
 +  SpirvShaderTranslator::SystemConstants system_constants_;
@@ -2838,10 +2922,10 @@ index 0000000..b432d7c
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_command_processor.mm b/src/graphics/metal/metal_command_processor.mm
 new file mode 100644
-index 0000000..b17c2d6
+index 0000000..c594950
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.mm
-@@ -0,0 +1,2497 @@
+@@ -0,0 +1,2840 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.mm
 + * @brief       Xenos command processing with Metal
@@ -2855,17 +2939,21 @@ index 0000000..b17c2d6
 +#include <algorithm>
 +#include <chrono>
 +#include <cstdio>
++#include <cstring>
 +#include <ctime>
 +#include <filesystem>
-+#include <cstring>
 +#include <functional>
 +#include <mutex>
++#include <set>
++#include <string>
 +#include <utility>
++#include <vector>
 +
 +#include <rex/assert.h>
 +#include <rex/bit.h>
 +#include <rex/cvar.h>
 +#include <rex/graphics/flags.h>
++#include <rex/graphics/hle/markers.h>
 +#include <rex/graphics/registers.h>
 +#include <rex/graphics/xenos.h>
 +#include <rex/kernel/xboxkrnl/video.h>
@@ -3557,6 +3645,7 @@ index 0000000..b17c2d6
 +  }
 +
 +  if (submission_open_) {
++    ApplyPendingClears(rex::perf::CounterId::kRenderPassEndsOther);
 +    EndEncoder(rex::perf::CounterId::kRenderPassEndsOther);
 +    if (accurate_fences_ || occlusion_buffer_) {
 +      uint64_t submission = submission_current_;
@@ -4095,6 +4184,8 @@ index 0000000..b17c2d6
 +id<MTLComputeCommandEncoder> MetalCommandProcessor::GetComputeEncoder(
 +    rex::perf::CounterId end_reason) {
 +  BeginSubmission(false);
++  // Compute work may read the render targets: pending clears go first.
++  ApplyPendingClears(end_reason);
 +  if (encoder_type_ == EncoderType::kCompute) {
 +    return compute_encoder_;
 +  }
@@ -4108,6 +4199,8 @@ index 0000000..b17c2d6
 +
 +id<MTLBlitCommandEncoder> MetalCommandProcessor::GetBlitEncoder(rex::perf::CounterId end_reason) {
 +  BeginSubmission(false);
++  // Copies may read the render targets: pending clears go first.
++  ApplyPendingClears(end_reason);
 +  if (encoder_type_ == EncoderType::kBlit) {
 +    return blit_encoder_;
 +  }
@@ -4148,6 +4241,28 @@ index 0000000..b17c2d6
 +    descriptor.stencilAttachment.storeAction = MTLStoreActionStore;
 +    has_attachments = true;
 +  }
++  // Pending guest clears of these attachments become their load actions.
++  for (auto it = pending_clears_.begin(); it != pending_clears_.end();) {
++    bool applied = false;
++    if (it->is_depth) {
++      if (render_pass.depth_stencil == it->texture) {
++        descriptor.depthAttachment.loadAction = MTLLoadActionClear;
++        descriptor.depthAttachment.clearDepth = it->depth;
++        descriptor.stencilAttachment.loadAction = MTLLoadActionClear;
++        descriptor.stencilAttachment.clearStencil = it->stencil;
++        applied = true;
++      }
++    } else {
++      for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
++        if (render_pass.color[i] == it->texture) {
++          descriptor.colorAttachments[i].loadAction = MTLLoadActionClear;
++          descriptor.colorAttachments[i].clearColor = it->color;
++          applied = true;
++        }
++      }
++    }
++    it = applied ? pending_clears_.erase(it) : it + 1;
++  }
 +  descriptor.renderTargetWidth = render_pass.width;
 +  descriptor.renderTargetHeight = render_pass.height;
 +  // Each pass counts into a slot of its own, written at the end of the pass (the default,
@@ -4169,6 +4284,8 @@ index 0000000..b17c2d6
 +
 +id<MTLRenderCommandEncoder> MetalCommandProcessor::BeginExternalRenderPass(
 +    const MetalRenderPass& render_pass, rex::perf::CounterId end_reason) {
++  // The backend's own passes (transfers) may sample the render targets: pending clears go first.
++  ApplyPendingClears(end_reason);
 +  id<MTLRenderCommandEncoder> encoder = BeginRenderPass(render_pass, end_reason);
 +  if (encoder.label == nil) {
 +    encoder.label = GetEncoderLabel(end_reason);
@@ -4198,6 +4315,304 @@ index 0000000..b17c2d6
 +    allocation.mapping = static_cast<uint8_t*>(allocation.buffer.contents) + allocation.offset;
 +  }
 +  return allocation;
++}
++
++bool MetalCommandProcessor::GetGuestClearLoadActions(reg::RB_DEPTHCONTROL normalized_depth_control,
++                                                     std::vector<PendingClear>& clears_out) const {
++  (void)normalized_depth_control;
++  if (!REXCVAR_GET(hle_clear_load_actions) || !hle::InWholeSurfaceClear()) {
++    return false;
++  }
++  // Only a draw that writes every target it uses completely (the transfers into them were skipped
++  // for the same reason) can become load actions.
++  uint32_t overwritten = render_target_cache_->last_update_overwritten_by_clear();
++  if (!overwritten) {
++    return false;
++  }
++  const RegisterFile& regs = *register_file_;
++  size_t first = clears_out.size();
++  auto fail = [&clears_out, first] {
++    clears_out.resize(first);
++    return false;
++  };
++  for (uint32_t i = 0; i < 1 + xenos::kMaxColorRenderTargets; ++i) {
++    id<MTLTexture> texture = render_target_cache_->GetLastUpdateUsedTexture(i);
++    if (!texture) {
++      continue;
++    }
++    if (!(overwritten & (uint32_t(1) << i))) {
++      return fail();
++    }
++    PendingClear clear;
++    clear.texture = texture;
++    if (i == 0) {
++      // Host depth is 32-bit float: it holds any 24-bit fixed-point depth the clear writes, and
++      // the 0 and 1 of 24-bit floating-point depth exactly (other values would need the guest's
++      // rounding).
++      // What the clear's vertices write (its depth argument may go through the viewport's depth
++      // transform first).
++      float depth = render_target_cache_->last_update_clear_vertex_depth();
++      if (!(depth >= 0.0f && depth <= 1.0f) ||
++          (regs.Get<reg::RB_DEPTH_INFO>().depth_format == xenos::DepthRenderTargetFormat::kD24FS8 &&
++           depth != 0.0f && depth != 1.0f)) {
++        return fail();
++      }
++      clear.is_depth = true;
++      clear.depth = depth;
++      // The clear replaces the stencil with the reference value.
++      clear.stencil = regs.Get<reg::RB_STENCILREFMASK>().stencilref;
++    } else {
++      const float* color = hle::ClearColor();
++      bool zero = color[0] == 0.0f && color[1] == 0.0f && color[2] == 0.0f && color[3] == 0.0f;
++      switch (regs.Get<reg::RB_COLOR_INFO>(reg::RB_COLOR_INFO::rt_register_indices[i - 1])
++                  .color_format) {
++        // Host formats that store what the pixel shader writes as is.
++        case xenos::ColorRenderTargetFormat::k_8_8_8_8:
++        case xenos::ColorRenderTargetFormat::k_16_16_FLOAT:
++        case xenos::ColorRenderTargetFormat::k_16_16_16_16_FLOAT:
++        case xenos::ColorRenderTargetFormat::k_32_FLOAT:
++        case xenos::ColorRenderTargetFormat::k_32_32_FLOAT:
++          break;
++        // Signed normalized on the host with a scale (-32 to 32 in -1 to 1, unless
++        // snorm16_render_target_full_range): only 0 is the same value in both.
++        case xenos::ColorRenderTargetFormat::k_16_16:
++        case xenos::ColorRenderTargetFormat::k_16_16_16_16:
++          if (!zero) {
++            return fail();
++          }
++          break;
++        // Gamma and the 2_10_10_10 formats go through conversions in the pixel shader.
++        default:
++          return fail();
++      }
++      clear.color = MTLClearColorMake(color[0], color[1], color[2], color[3]);
++    }
++    clears_out.push_back(clear);
++  }
++  return clears_out.size() > first;
++}
++
++bool MetalCommandProcessor::DeferGuestClear(const MetalRenderPass& render_pass,
++                                            reg::RB_DEPTHCONTROL normalized_depth_control) {
++  if (REXCVAR_GET(hle_verify_clears)) {
++    // Draw as before; VerifyGuestClears checks the result against these after the draw.
++    clears_to_verify_.clear();
++    GetGuestClearLoadActions(normalized_depth_control, clears_to_verify_);
++    return false;
++  }
++  size_t first = pending_clears_.size();
++  if (!GetGuestClearLoadActions(normalized_depth_control, pending_clears_)) {
++    return false;
++  }
++  // In the middle of a render pass on the same targets, the draw keeps the pass going: a load
++  // action would need a new pass.
++  if (encoder_type_ == EncoderType::kRender && current_render_pass_ == render_pass) {
++    pending_clears_.resize(first);
++    return false;
++  }
++  // An open pass with any of these textures ends here (as before, since this draw needed another
++  // pass), so that the next pass on them starts with the clear.
++  if (encoder_type_ == EncoderType::kRender) {
++    for (size_t i = first; i < pending_clears_.size(); ++i) {
++      id<MTLTexture> texture = pending_clears_[i].texture;
++      bool attached = current_render_pass_.depth_stencil == texture;
++      for (id<MTLTexture> color : current_render_pass_.color) {
++        attached |= color == texture;
++      }
++      if (attached) {
++        EndEncoder(rex::perf::CounterId::kRenderPassEndsTargetChange);
++        break;
++      }
++    }
++  }
++  // A newer clear of a texture replaces its pending one.
++  for (size_t i = first; i < pending_clears_.size(); ++i) {
++    for (size_t j = 0; j < first; ++j) {
++      if (pending_clears_[j].texture == pending_clears_[i].texture) {
++        pending_clears_[j].texture = nil;
++      }
++    }
++  }
++  pending_clears_.erase(std::remove_if(pending_clears_.begin(), pending_clears_.end(),
++                                       [](const PendingClear& clear) { return !clear.texture; }),
++                        pending_clears_.end());
++  PERF_counter_inc(kClearsAsLoadActions);
++  return true;
++}
++
++void MetalCommandProcessor::ApplyPendingClears(rex::perf::CounterId end_reason) {
++  if (pending_clears_.empty()) {
++    return;
++  }
++  EndEncoder(end_reason);
++  for (const PendingClear& clear : pending_clears_) {
++    MTLRenderPassDescriptor* descriptor = [MTLRenderPassDescriptor renderPassDescriptor];
++    if (clear.is_depth) {
++      descriptor.depthAttachment.texture = clear.texture;
++      descriptor.depthAttachment.loadAction = MTLLoadActionClear;
++      descriptor.depthAttachment.storeAction = MTLStoreActionStore;
++      descriptor.depthAttachment.clearDepth = clear.depth;
++      descriptor.stencilAttachment.texture = clear.texture;
++      descriptor.stencilAttachment.loadAction = MTLLoadActionClear;
++      descriptor.stencilAttachment.storeAction = MTLStoreActionStore;
++      descriptor.stencilAttachment.clearStencil = clear.stencil;
++    } else {
++      descriptor.colorAttachments[0].texture = clear.texture;
++      descriptor.colorAttachments[0].loadAction = MTLLoadActionClear;
++      descriptor.colorAttachments[0].storeAction = MTLStoreActionStore;
++      descriptor.colorAttachments[0].clearColor = clear.color;
++    }
++    descriptor.renderTargetWidth = clear.texture.width;
++    descriptor.renderTargetHeight = clear.texture.height;
++    id<MTLRenderCommandEncoder> encoder =
++        [command_buffer_ renderCommandEncoderWithDescriptor:descriptor];
++    encoder.label = @"Guest clear";
++    [encoder endEncoding];
++    PERF_counter_inc(kHostRenderPasses);
++#ifdef REXGLUE_ENABLE_PERF_COUNTERS
++    rex::perf::IncrementCounter(end_reason);
++#endif
++  }
++  submission_has_work_ = true;
++  pending_clears_.clear();
++}
++
++namespace {
++
++// Bytes of one texel of the render target formats a guest clear can become a load action of.
++size_t ClearVerifyTexelBytes(MTLPixelFormat format) {
++  switch (format) {
++    case MTLPixelFormatRGBA8Unorm:
++    case MTLPixelFormatRG16Float:
++    case MTLPixelFormatR32Float:
++    case MTLPixelFormatRG16Snorm:
++      return 4;
++    case MTLPixelFormatRGBA16Float:
++    case MTLPixelFormatRG32Float:
++    case MTLPixelFormatRGBA16Snorm:
++      return 8;
++    default:
++      return 0;
++  }
++}
++
++}  // namespace
++
++void MetalCommandProcessor::VerifyGuestClears() {
++  std::vector<PendingClear> clears;
++  clears.swap(clears_to_verify_);
++  EndEncoder(rex::perf::CounterId::kRenderPassEndsOther);
++  // Per clear, the first texel of the target (what the draw wrote) and of a 1x1 texture of the
++  // same format cleared with the load action's values, in 16-byte slots; depth and stencil
++  // separately.
++  struct Check {
++    std::string what;
++    size_t actual;
++    size_t expected;
++    size_t size;
++  };
++  constexpr size_t kSlot = 16;
++  std::vector<Check> checks;
++  size_t slots = 0;
++  for (const PendingClear& clear : clears) {
++    slots += (clear.is_depth ? 4 : 2) * 2;
++  }
++  id<MTLBuffer> readback = [device_ newBufferWithLength:std::max(slots, size_t(1)) * kSlot
++                                                options:MTLResourceStorageModeShared];
++  size_t slot = 0;
++  for (const PendingClear& clear : clears) {
++    MTLPixelFormat format = clear.texture.pixelFormat;
++    id<MTLTexture> expected = clear_verify_textures_[NSUInteger(format)];
++    if (!expected) {
++      MTLTextureDescriptor* texture_descriptor =
++          [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format
++                                                             width:1
++                                                            height:1
++                                                         mipmapped:NO];
++      texture_descriptor.usage = MTLTextureUsageRenderTarget;
++      texture_descriptor.storageMode = MTLStorageModePrivate;
++      expected = [device_ newTextureWithDescriptor:texture_descriptor];
++      clear_verify_textures_[NSUInteger(format)] = expected;
++    }
++    MTLRenderPassDescriptor* descriptor = [MTLRenderPassDescriptor renderPassDescriptor];
++    if (clear.is_depth) {
++      descriptor.depthAttachment.texture = expected;
++      descriptor.depthAttachment.loadAction = MTLLoadActionClear;
++      descriptor.depthAttachment.storeAction = MTLStoreActionStore;
++      descriptor.depthAttachment.clearDepth = clear.depth;
++      descriptor.stencilAttachment.texture = expected;
++      descriptor.stencilAttachment.loadAction = MTLLoadActionClear;
++      descriptor.stencilAttachment.storeAction = MTLStoreActionStore;
++      descriptor.stencilAttachment.clearStencil = clear.stencil;
++    } else {
++      descriptor.colorAttachments[0].texture = expected;
++      descriptor.colorAttachments[0].loadAction = MTLLoadActionClear;
++      descriptor.colorAttachments[0].storeAction = MTLStoreActionStore;
++      descriptor.colorAttachments[0].clearColor = clear.color;
++    }
++    [[command_buffer_ renderCommandEncoderWithDescriptor:descriptor] endEncoding];
++    id<MTLBlitCommandEncoder> blit = [command_buffer_ blitCommandEncoder];
++    // The texel in the top left corner and one inside the surface.
++    for (uint32_t texel : {0u, 8u}) {
++    auto copy = [&](id<MTLTexture> texture, size_t bytes, MTLBlitOption options) {
++      uint32_t at = texture == expected ? 0 : texel;
++      [blit copyFromTexture:texture
++                       sourceSlice:0
++                       sourceLevel:0
++                      sourceOrigin:MTLOriginMake(at, at, 0)
++                        sourceSize:MTLSizeMake(1, 1, 1)
++                          toBuffer:readback
++                 destinationOffset:slot * kSlot
++            destinationBytesPerRow:bytes
++          destinationBytesPerImage:bytes
++                           options:options];
++      return slot++ * kSlot;
++    };
++    if (clear.is_depth) {
++      size_t actual = copy(clear.texture, 4, MTLBlitOptionDepthFromDepthStencil);
++      checks.push_back({fmt::format("texel {} depth {} (argument {})", texel, clear.depth,
++                                    hle::ClearDepth()),
++                        actual,
++                        copy(expected, 4, MTLBlitOptionDepthFromDepthStencil), 4});
++      actual = copy(clear.texture, 1, MTLBlitOptionStencilFromDepthStencil);
++      checks.push_back({fmt::format("texel {} stencil {}", texel, clear.stencil), actual,
++                        copy(expected, 1, MTLBlitOptionStencilFromDepthStencil), 1});
++    } else if (size_t bytes = ClearVerifyTexelBytes(format)) {
++      size_t actual = copy(clear.texture, bytes, MTLBlitOptionNone);
++      checks.push_back({fmt::format("texel {} color format {} ({} {} {} {})", texel, uint32_t(format),
++                                    clear.color.red, clear.color.green, clear.color.blue,
++                                    clear.color.alpha),
++                        actual, copy(expected, bytes, MTLBlitOptionNone), bytes});
++    }
++    }
++    [blit endEncoding];
++  }
++  submission_has_work_ = true;
++  [command_buffer_ addCompletedHandler:^(id<MTLCommandBuffer>) {
++    const uint8_t* data = static_cast<const uint8_t*>(readback.contents);
++    static std::mutex mutex;
++    static std::set<std::string> logged;
++    std::lock_guard<std::mutex> lock(mutex);
++    for (const Check& check : checks) {
++      bool match = !std::memcmp(data + check.actual, data + check.expected, check.size);
++      std::string bytes;
++      for (size_t i = 0; i < check.size; ++i) {
++        bytes += fmt::format("{:02X}", data[check.actual + i]);
++      }
++      std::string expected_bytes;
++      for (size_t i = 0; i < check.size; ++i) {
++        expected_bytes += fmt::format("{:02X}", data[check.expected + i]);
++      }
++      if (logged.insert(fmt::format("{} {}", match, check.what)).second) {
++        if (match) {
++          REXGPU_INFO("HLE clear check: {} matches the draw ({})", check.what, bytes);
++        } else {
++          REXGPU_WARN("HLE clear check: {} differs: the draw wrote {}, the load action {}",
++                      check.what, bytes, expected_bytes);
++        }
++      }
++    }
++  }];
 +}
 +
 +bool MetalCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t index_count,
@@ -4362,6 +4777,12 @@ index 0000000..b17c2d6
 +  }
 +  const MetalRenderPass& render_pass = render_target_cache_->last_update_render_pass();
 +
++  // gfx = hle: the guest's clear of whole surfaces becomes the load action of the next render pass
++  // on its targets instead of this full-screen draw.
++  if (DeferGuestClear(render_pass, normalized_depth_control)) {
++    return true;
++  }
++
 +  // Create the pipeline, or skip the draw while it is made (pipeline_async above).
 +  id<MTLRenderPipelineState> pipeline;
 +  MetalDrawState draw_state;
@@ -4378,6 +4799,8 @@ index 0000000..b17c2d6
 +  }
 +  if (pipeline_pending) {
 +    PERF_counter_inc(kDrawsSkippedForPipelines);
++    // A clear skipped this way wrote nothing to compare.
++    clears_to_verify_.clear();
 +    return true;
 +  }
 +
@@ -4568,6 +4991,10 @@ index 0000000..b17c2d6
 +                                       : MTLIndexTypeUInt32
 +                       indexBuffer:index_buffer.first
 +                 indexBufferOffset:index_buffer.second];
++  }
++
++  if (!clears_to_verify_.empty()) {
++    VerifyGuestClears();
 +  }
 +
 +  if (pixel_history_state_ == PixelHistoryState::kRecording) {
@@ -8016,10 +8443,10 @@ index 0000000..d717bea
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_render_target_cache.h b/src/graphics/metal/metal_render_target_cache.h
 new file mode 100644
-index 0000000..240c09f
+index 0000000..552106b
 --- /dev/null
 +++ b/src/graphics/metal/metal_render_target_cache.h
-@@ -0,0 +1,572 @@
+@@ -0,0 +1,576 @@
 +/**
 + * @file        graphics/metal/metal_render_target_cache.h
 + * @brief       EDRAM emulation with sample-space host render targets for the Metal backend
@@ -8136,6 +8563,10 @@ index 0000000..240c09f
 +  bool depth_float24_convert_in_pixel_shader() const {
 +    return depth_float24_convert_in_pixel_shader_;
 +  }
++
++  // The texture of the render target the last successful update's draw uses (0 depth, 1 + i
++  // color i), or nil.
++  id<MTLTexture> GetLastUpdateUsedTexture(uint32_t index) const;
 +
 +  MTLPixelFormat GetDepthMetalFormat(xenos::DepthRenderTargetFormat format) const;
 +  MTLPixelFormat GetColorMetalFormat(xenos::ColorRenderTargetFormat format) const;
@@ -8594,10 +9025,10 @@ index 0000000..240c09f
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_render_target_cache.mm b/src/graphics/metal/metal_render_target_cache.mm
 new file mode 100644
-index 0000000..63f97c0
+index 0000000..ecf09a5
 --- /dev/null
 +++ b/src/graphics/metal/metal_render_target_cache.mm
-@@ -0,0 +1,3951 @@
+@@ -0,0 +1,3956 @@
 +/**
 + * @file        graphics/metal/metal_render_target_cache.mm
 + * @brief       EDRAM emulation with sample-space host render targets for the Metal backend
@@ -9015,6 +9446,11 @@ index 0000000..63f97c0
 +  // Apple GPUs have no 24-bit depth.
 +  (void)format;
 +  return MTLPixelFormatDepth32Float_Stencil8;
++}
++
++id<MTLTexture> MetalRenderTargetCache::GetLastUpdateUsedTexture(uint32_t index) const {
++  const RenderTarget* render_target = last_update_used_render_target(index);
++  return render_target ? static_cast<const MetalRenderTarget*>(render_target)->texture() : nil;
 +}
 +
 +MTLPixelFormat MetalRenderTargetCache::GetColorMetalFormat(
@@ -15026,7 +15462,7 @@ index 0000000..b9bc2fb
 +
 +#undef CAMetalLayer
 diff --git a/src/graphics/pipeline/render_target/cache.cpp b/src/graphics/pipeline/render_target/cache.cpp
-index bd0019c..f84e8c8 100644
+index bd0019c..c6130d9 100644
 --- a/src/graphics/pipeline/render_target/cache.cpp
 +++ b/src/graphics/pipeline/render_target/cache.cpp
 @@ -13,6 +13,10 @@
@@ -15056,38 +15492,39 @@ index bd0019c..f84e8c8 100644
  
  REXCVAR_DEFINE_BOOL(mrt_edram_used_range_clamp_to_min, true, "GPU",
                      "Clamp MRT EDRAM used range to minimum");
-@@ -407,6 +413,108 @@ void RenderTargetCache::BeginFrame() {
+@@ -407,11 +413,117 @@ void RenderTargetCache::BeginFrame() {
    ResetAccumulatedRenderTargets();
  }
  
-+bool RenderTargetCache::ClearCoversRange(uint32_t pitch_pixels, uint32_t height_used) const {
++bool RenderTargetCache::ClearCoversRange(uint32_t pitch_pixels, uint32_t height_used,
++                                         const Shader& vertex_shader) {
 +  const RegisterFile& regs = register_file();
-+  // The clear draws a rectangle over the viewport (within the scissor), while ownership changes
-+  // whole rows of tiles, the surface pitch wide, down to height_used. Only when the rectangle
-+  // covers all of that are the tiles' old contents fully replaced; a narrower viewport leaves
-+  // columns the clear does not write, whose contents another target may still need.
++  // Ownership changes whole rows of tiles, the surface pitch wide, down to height_used: only when
++  // the clear's rectangle (within the scissor) covers all of that are the tiles' old contents fully
++  // replaced. The rectangle comes from the clear's vertices run on the CPU: with the viewport
++  // transform off, as Direct3D draws its clears, the viewport registers may belong to another draw.
 +  draw_util::Scissor scissor;
 +  draw_util::GetScissor(regs, scissor);
 +  if (scissor.offset[0] || scissor.offset[1] || scissor.extent[0] < pitch_pixels ||
 +      scissor.extent[1] < height_used) {
 +    return false;
 +  }
-+  float viewport_x = regs.Get<float>(XE_GPU_REG_PA_CL_VPORT_XOFFSET);
-+  float viewport_half_width = std::abs(regs.Get<float>(XE_GPU_REG_PA_CL_VPORT_XSCALE));
-+  float viewport_y = regs.Get<float>(XE_GPU_REG_PA_CL_VPORT_YOFFSET);
-+  float viewport_half_height = std::abs(regs.Get<float>(XE_GPU_REG_PA_CL_VPORT_YSCALE));
-+  return viewport_x - viewport_half_width <= 0.5f &&
-+         viewport_x + viewport_half_width >= float(pitch_pixels) - 0.5f &&
-+         viewport_y - viewport_half_height <= 0.5f &&
-+         viewport_y + viewport_half_height >= float(height_used) - 0.5f;
++  float left, top, right, bottom;
++  if (!draw_extent_estimator_.EstimateVertexRectangle(vertex_shader, left, top, right, bottom,
++                                                      &last_update_clear_vertex_depth_)) {
++    return false;
++  }
++  return left <= 0.0f && top <= 0.0f && right >= float(pitch_pixels) &&
++         bottom >= float(height_used);
 +}
 +
 +uint32_t RenderTargetCache::GetRenderTargetsOverwrittenByClear(
 +    uint32_t depth_and_color_rts_used_bits, reg::RB_DEPTHCONTROL normalized_depth_control,
-+    uint32_t normalized_color_mask, uint32_t pitch_pixels, uint32_t height_used) const {
++    uint32_t normalized_color_mask, uint32_t pitch_pixels, uint32_t height_used,
++    const Shader& vertex_shader) {
 +  const RegisterFile& regs = register_file();
 +  uint32_t overwritten_bits = 0;
-+  if (!ClearCoversRange(pitch_pixels, height_used)) {
++  if (!ClearCoversRange(pitch_pixels, height_used, vertex_shader)) {
 +    return 0;
 +  }
 +  // Depth and stencil: both written everywhere the clear draws, whatever was there.
@@ -15130,15 +15567,16 @@ index bd0019c..f84e8c8 100644
 +void RenderTargetCache::LogClearKeepingContents(uint32_t rt_bit_index,
 +                                                reg::RB_DEPTHCONTROL normalized_depth_control,
 +                                                uint32_t normalized_color_mask,
-+                                                uint32_t pitch_pixels, uint32_t height_used) const {
++                                                uint32_t pitch_pixels, uint32_t height_used,
++                                                const Shader& vertex_shader) {
 +  // Why the guest's clear still needs the target's old contents, logged once per reason: the cases
 +  // the HLE path does not handle yet.
 +  const RegisterFile& regs = register_file();
 +  const char* reason;
 +  if (!hle::InWholeSurfaceClear()) {
 +    reason = "the clear has a rectangle";
-+  } else if (!ClearCoversRange(pitch_pixels, height_used)) {
-+    reason = "the viewport or scissor is smaller than the rows that change owner";
++  } else if (!ClearCoversRange(pitch_pixels, height_used, vertex_shader)) {
++    reason = "the clear's rectangle or scissor is smaller than the rows that change owner";
 +  } else if (rt_bit_index == 0) {
 +    bool depth_written = normalized_depth_control.z_enable &&
 +                         normalized_depth_control.z_write_enable &&
@@ -15165,7 +15603,14 @@ index bd0019c..f84e8c8 100644
  bool RenderTargetCache::Update(bool is_rasterization_done,
                                 reg::RB_DEPTHCONTROL normalized_depth_control,
                                 uint32_t normalized_color_mask, const Shader& vertex_shader) {
-@@ -693,11 +801,32 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
+   const RegisterFile& regs = register_file();
+   bool interlock_barrier_only = GetPath() == Path::kPixelShaderInterlock;
++  last_update_overwritten_by_clear_ = 0;
++  last_update_clear_vertex_depth_ = NAN;
+ 
+   auto rb_surface_info = regs.Get<reg::RB_SURFACE_INFO>();
+   xenos::MsaaSamples msaa_samples = rb_surface_info.msaa_samples;
+@@ -693,11 +805,33 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
    // draw with whatever contents currently are in the render target in this
    // case).
  
@@ -15176,7 +15621,8 @@ index bd0019c..f84e8c8 100644
 +  if (!interlock_barrier_only && hle::InWholeSurfaceClear()) {
 +    rts_overwritten_bits = GetRenderTargetsOverwrittenByClear(
 +        depth_and_color_rts_used_bits, normalized_depth_control, normalized_color_mask,
-+        pitch_pixels, height_used);
++        pitch_pixels, height_used, vertex_shader);
++    last_update_overwritten_by_clear_ = rts_overwritten_bits;
 +  }
 +
    for (uint32_t i = 0; i < edram_bases_sorted_count; ++i) {
@@ -15188,7 +15634,7 @@ index bd0019c..f84e8c8 100644
 +        WouldOwnershipChangeRequireTransfers(rt_keys[rt_bit_index], 0, rt_lengths_tiles[i])) {
 +      if (transfers_needed) {
 +        LogClearKeepingContents(rt_bit_index, normalized_depth_control, normalized_color_mask,
-+                                pitch_pixels, height_used);
++                                pitch_pixels, height_used, vertex_shader);
 +      } else {
 +        PERF_counter_inc(kRenderTargetTransfersSkipped);
 +      }
@@ -15199,7 +15645,7 @@ index bd0019c..f84e8c8 100644
    }
  
    if (interlock_barrier_only) {
-@@ -1254,6 +1383,104 @@ bool RenderTargetCache::WouldOwnershipChangeRequireTransfers(RenderTargetKey des
+@@ -1254,6 +1388,104 @@ bool RenderTargetCache::WouldOwnershipChangeRequireTransfers(RenderTargetKey des
    return false;
  }
  
@@ -15304,7 +15750,7 @@ index bd0019c..f84e8c8 100644
  void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_tiles_base_relative,
                                          uint32_t length_tiles,
                                          std::vector<Transfer>* transfers_append_out,
-@@ -1335,6 +1562,8 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
+@@ -1335,6 +1567,8 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
                       transfer_host_depth_source)) {
                // Extend the last transfer if, for example, transferring color,
                // but host depth is different.
@@ -15313,7 +15759,7 @@ index bd0019c..f84e8c8 100644
                transfers_append_out->back().end_tiles = transfer_end_tiles;
              } else {
                auto transfer_source_rt_it = render_targets_.find(transfer_source);
-@@ -1353,6 +1582,7 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
+@@ -1353,6 +1587,7 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
                        transfer_host_depth_source_rt_it != render_targets_.end()
                            ? transfer_host_depth_source_rt_it->second
                            : nullptr);
@@ -15947,6 +16393,150 @@ index ec756d3..6e16b00 100644
  #if REX_HAS_D3D12
    if (backend == "any" || backend == "d3d12") {
      return new rex::graphics::d3d12::D3D12GraphicsSystem();
+diff --git a/src/graphics/util/draw_extent_estimator.cpp b/src/graphics/util/draw_extent_estimator.cpp
+index 3027dc8..42b4c9c 100644
+--- a/src/graphics/util/draw_extent_estimator.cpp
++++ b/src/graphics/util/draw_extent_estimator.cpp
+@@ -11,6 +11,7 @@
+ 
+ #include <algorithm>
+ #include <cfloat>
++#include <cmath>
+ #include <cstdint>
+ 
+ #include <rex/assert.h>
+@@ -250,6 +251,131 @@ uint32_t DrawExtentEstimator::EstimateVertexMaxY(const Shader& vertex_shader) {
+          8;
+ }
+ 
++namespace {
++
++// The position a vertex shader exports, for EstimateVertexRectangle.
++class PositionExportSink : public ShaderInterpreter::ExportSink {
++ public:
++  void Export(ucode::ExportRegister export_register, const float* value,
++              uint32_t value_mask) override {
++    if (export_register == ucode::ExportRegister::kVSPosition) {
++      for (uint32_t i = 0; i < 4; ++i) {
++        if (value_mask & (uint32_t(1) << i)) {
++          position_[i] = value[i];
++          written_ |= uint32_t(1) << i;
++        }
++      }
++    }
++  }
++  void Reset() { written_ = 0; }
++  bool has(uint32_t mask) const { return (written_ & mask) == mask; }
++  float operator[](uint32_t i) const { return position_[i]; }
++
++ private:
++  float position_[4] = {};
++  uint32_t written_ = 0;
++};
++
++}  // namespace
++
++bool DrawExtentEstimator::EstimateVertexRectangle(const Shader& vertex_shader, float& left,
++                                                  float& top, float& right, float& bottom,
++                                                  float* depth_out) {
++  const RegisterFile& regs = register_file_;
++  auto vgt_draw_initiator = regs.Get<reg::VGT_DRAW_INITIATOR>();
++  // A clear is a rectangle of 3 vertices or a quad of 4; more is not what this is for.
++  constexpr uint32_t kMaxVertices = 8;
++  if (!vgt_draw_initiator.num_indices || vgt_draw_initiator.num_indices > kMaxVertices ||
++      vgt_draw_initiator.source_select == xenos::SourceSelect::kDMA) {
++    return false;
++  }
++  if (xenos::IsMajorModeExplicit(vgt_draw_initiator.major_mode, vgt_draw_initiator.prim_type) &&
++      regs.Get<reg::VGT_OUTPUT_PATH_CNTL>().path_select ==
++          xenos::VGTOutputPath::kTessellationEnable) {
++    return false;
++  }
++  if (!vertex_shader.is_ucode_analyzed() || !ShaderInterpreter::CanInterpretShader(vertex_shader)) {
++    return false;
++  }
++
++  auto pa_cl_vte_cntl = regs.Get<reg::PA_CL_VTE_CNTL>();
++  float scale[] = {
++      pa_cl_vte_cntl.vport_x_scale_ena ? regs.Get<float>(XE_GPU_REG_PA_CL_VPORT_XSCALE) : 1.0f,
++      pa_cl_vte_cntl.vport_y_scale_ena ? regs.Get<float>(XE_GPU_REG_PA_CL_VPORT_YSCALE) : 1.0f,
++  };
++  float offset[] = {
++      pa_cl_vte_cntl.vport_x_offset_ena ? regs.Get<float>(XE_GPU_REG_PA_CL_VPORT_XOFFSET) : 0.0f,
++      pa_cl_vte_cntl.vport_y_offset_ena ? regs.Get<float>(XE_GPU_REG_PA_CL_VPORT_YOFFSET) : 0.0f,
++  };
++  if (regs.Get<reg::PA_SU_VTX_CNTL>().pix_center == xenos::PixelCenter::kD3DZero) {
++    offset[0] += 0.5f;
++    offset[1] += 0.5f;
++  }
++  if (regs.Get<reg::PA_SU_SC_MODE_CNTL>().vtx_window_offset_enable) {
++    auto pa_sc_window_offset = regs.Get<reg::PA_SC_WINDOW_OFFSET>();
++    offset[0] += float(pa_sc_window_offset.window_x_offset);
++    offset[1] += float(pa_sc_window_offset.window_y_offset);
++  }
++  float scale_z =
++      pa_cl_vte_cntl.vport_z_scale_ena ? regs.Get<float>(XE_GPU_REG_PA_CL_VPORT_ZSCALE) : 1.0f;
++  float offset_z =
++      pa_cl_vte_cntl.vport_z_offset_ena ? regs.Get<float>(XE_GPU_REG_PA_CL_VPORT_ZOFFSET) : 0.0f;
++  float depth = NAN;
++  bool depth_same = true;
++  uint32_t index_offset = regs.Get<reg::VGT_INDX_OFFSET>().indx_offset;
++  uint32_t min_index = regs.Get<reg::VGT_MIN_VTX_INDX>().min_indx;
++  uint32_t max_index = regs.Get<reg::VGT_MAX_VTX_INDX>().max_indx;
++
++  left = top = FLT_MAX;
++  right = bottom = -FLT_MAX;
++  shader_interpreter_.SetShader(vertex_shader);
++  PositionExportSink sink;
++  shader_interpreter_.SetExportSink(&sink);
++  bool complete = true;
++  for (uint32_t i = 0; i < vgt_draw_initiator.num_indices; ++i) {
++    uint32_t vertex_index = std::min(max_index, std::max(min_index, (i + index_offset) & 0xFFFFFF));
++    sink.Reset();
++    shader_interpreter_.temp_registers()[0] = float(vertex_index);
++    shader_interpreter_.Execute();
++    if (!sink.has(0b0011) || (!pa_cl_vte_cntl.vtx_xy_fmt && !sink.has(0b1000))) {
++      complete = false;
++      break;
++    }
++    float position[] = {sink[0], sink[1]};
++    for (uint32_t axis = 0; axis < 2; ++axis) {
++      if (!pa_cl_vte_cntl.vtx_xy_fmt) {
++        position[axis] /= sink[3];
++      }
++      position[axis] = position[axis] * scale[axis] + offset[axis];
++    }
++    if (!std::isfinite(position[0]) || !std::isfinite(position[1])) {
++      complete = false;
++      break;
++    }
++    if (depth_out) {
++      float z = sink.has(0b0100) ? sink[2] : NAN;
++      if (!pa_cl_vte_cntl.vtx_z_fmt && sink.has(0b1000)) {
++        z /= sink[3];
++      }
++      z = z * scale_z + offset_z;
++      if (i == 0) {
++        depth = z;
++      } else if (!(z == depth)) {
++        depth_same = false;
++      }
++    }
++    left = std::min(left, position[0]);
++    right = std::max(right, position[0]);
++    top = std::min(top, position[1]);
++    bottom = std::max(bottom, position[1]);
++  }
++  shader_interpreter_.SetExportSink(nullptr);
++  if (depth_out) {
++    *depth_out = depth_same ? depth : NAN;
++  }
++  return complete;
++}
++
+ uint32_t DrawExtentEstimator::EstimateMaxY(bool try_to_estimate_vertex_max_y,
+                                            const Shader& vertex_shader) {
+   SCOPE_profile_cpu_f("gpu");
 diff --git a/src/graphics/vulkan/command_processor.cpp b/src/graphics/vulkan/command_processor.cpp
 index 34330f6..f55a137 100644
 --- a/src/graphics/vulkan/command_processor.cpp

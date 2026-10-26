@@ -42,6 +42,7 @@ PER_FRAME = [
     ("pass ends: transfer", "pass_ends_transfer", 1),
     ("pass ends: resolve", "pass_ends_resolve", 1),
     ("draws in transfer passes", "draws_in_transfer_passes", 1),
+    ("clears as load actions", "clears_as_load_actions", 1),
 ]
 SPIKE_US = 50000
 # Windows of the captures (one every 4 seconds), in seconds since start, for the scripted

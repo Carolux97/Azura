@@ -82,7 +82,7 @@ void WriteMarker(PPCContext& ctx, uint8_t* base, uint32_t device, MarkerEvent ev
   Store32(base, device + kCursorOffset, cursor);
 }
 
-// The two header words a surface marker carries, or zeros for no surface.
+// A word of a guest structure (a surface's header, a clear's colour), or zero without one.
 uint32_t SurfaceWord(const uint8_t* base, uint32_t surface, uint32_t offset) {
   return surface ? Load32(base, surface + offset) : 0;
 }
@@ -126,18 +126,21 @@ REX_HOOK_RAW(sub_82AED028) {
   }
 }
 
-// Clear: the packets between the two markers are the guest's clear.
+// ClearF(device, flags, rectangle, colour, depth, stencil): the packets between the two markers
+// are the guest's clear. The colour is four floats (red, green, blue, alpha) at r6.
 REX_HOOK_RAW(sub_82AF1D50) {
   const uint32_t device = ctx.r3.u32;
   if (Enabled()) {
+    const float depth = static_cast<float>(ctx.f1.f64);
+    uint32_t depth_bits;
+    std::memcpy(&depth_bits, &depth, sizeof(depth_bits));
+    const uint32_t color = ctx.r6.u32;
     WriteMarker(ctx, base, device, MarkerEvent::kClearBegin,
-                {ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32, ctx.r9.u32,
-                 [&] {
-                   const float depth = static_cast<float>(ctx.f1.f64);
-                   uint32_t bits;
-                   std::memcpy(&bits, &depth, sizeof(bits));
-                   return bits;
-                 }()});
+                {ctx.r4.u32, ctx.r5.u32, color, ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, depth_bits,
+                 azura::hle_gfx::SurfaceWord(base, color, 0),
+                 azura::hle_gfx::SurfaceWord(base, color, 4),
+                 azura::hle_gfx::SurfaceWord(base, color, 8),
+                 azura::hle_gfx::SurfaceWord(base, color, 12)});
   }
   __imp__sub_82AF1D50(ctx, base);
   if (Enabled()) {
