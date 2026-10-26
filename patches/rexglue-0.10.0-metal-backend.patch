@@ -8563,10 +8563,10 @@ index 0000000..d717bea
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_render_target_cache.h b/src/graphics/metal/metal_render_target_cache.h
 new file mode 100644
-index 0000000..1205da3
+index 0000000..2dadd26
 --- /dev/null
 +++ b/src/graphics/metal/metal_render_target_cache.h
-@@ -0,0 +1,632 @@
+@@ -0,0 +1,635 @@
 +/**
 + * @file        graphics/metal/metal_render_target_cache.h
 + * @brief       EDRAM emulation with sample-space host render targets for the Metal backend
@@ -9126,15 +9126,18 @@ index 0000000..1205da3
 +  ComputePipeline resolve_from_render_target_64bpp_pipeline_;
 +  // hle_verify_resolves with hle_resolve_in_render_pass: compares the in-pass scratch copy.
 +  ComputePipeline resolve_compare_pipeline_;
++  // D24S8 depth targets, for depth resolves and bitwise color resolves of their EDRAM.
++  ComputePipeline resolve_from_render_target_depth_pipeline_;
 +  // Tile pipelines of ResolveInRenderPass, by packing, color index and the pass's color formats
 +  // (nil when one failed to build).
 +  std::unordered_map<uint64_t, id<MTLRenderPipelineState>> resolve_in_render_pass_pipelines_;
 +
-+  // gfx = hle: the render target that alone holds the whole source of a 1x color resolve of
++  // gfx = hle: the render target that alone holds the whole source of a 1x resolve of
 +  // sample 0 the native path handles, at the resolve's base, pitch and format; nullptr otherwise.
 +  // Handled: the bitwise copies (the fast 32bpp copy) of 8_8_8_8 (with or without a red and blue
 +  // swap), 2_10_10_10, 16_16_FLOAT and 32_FLOAT to the same format, from a render target of any of
-+  // those formats or 2_10_10_10_FLOAT (the EDRAM bits it holds), and the conversions (the full
++  // those formats, 2_10_10_10_FLOAT or D24S8 depth (the EDRAM bits it holds), depth copies of a
++  // D24S8 target, and the conversions (the full
 +  // 64bpp copy) of 16_16_16_16 and 16_16_16_16_FLOAT to 16_16_16_16 or 16_16_16_16_FLOAT, with any
 +  // exponent bias and swap; endianness at most 16 in 32, no array destination.
 +  MetalRenderTarget* GetNativeResolveSource(const draw_util::ResolveInfo& resolve_info,
@@ -9201,10 +9204,10 @@ index 0000000..1205da3
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_render_target_cache.mm b/src/graphics/metal/metal_render_target_cache.mm
 new file mode 100644
-index 0000000..37d156d
+index 0000000..8c7872e
 --- /dev/null
 +++ b/src/graphics/metal/metal_render_target_cache.mm
-@@ -0,0 +1,4797 @@
+@@ -0,0 +1,4916 @@
 +/**
 + * @file        graphics/metal/metal_render_target_cache.mm
 + * @brief       EDRAM emulation with sample-space host render targets for the Metal backend
@@ -9395,7 +9398,9 @@ index 0000000..37d156d
 +  // 2: one 32-bit integer, 3: 2_10_10_10 from normalized values.
 +  // 64 bits per pixel, converted (as the full 64bpp resolve copy does): 4: 16_16_16_16 (-32...32
 +  // in the EDRAM), 5: 16_16_16_16_FLOAT.
-+  // 32 bits per pixel, bits copied: 6: 2_10_10_10_FLOAT as float 7e3 (from a float view).
++  // 32 bits per pixel, bits copied: 6: 2_10_10_10_FLOAT as float 7e3 (from a float view), 7: D24S8
++  // depth and stencil. Converted (the full 32bpp copy): 8: 2_10_10_10_FLOAT to 2_10_10_10 (dest
++  // format 7) or 8_8_8_8 (6), with the exponent bias and the swap.
 +  uint packing;
 +  // xenos::Endian128, at most 3 (16 in 32).
 +  uint endian;
@@ -9439,6 +9444,26 @@ index 0000000..37d156d
 +  return resolve_float_to_7e3(color.r) | (resolve_float_to_7e3(color.g) << 10) |
 +         (resolve_float_to_7e3(color.b) << 20) |
 +         (uint(clamp(color.a, 0.0, 1.0) * 3.0 + 0.5) << 30);
++}
++// The full 32bpp resolve copy's unpacking of a 2_10_10_10_FLOAT pixel (float 7e3 color, 2-bit
++// alpha).
++float resolve_7e3_to_float(uint f10) {
++  if (f10 == 0u) {
++    return 0.0;
++  }
++  uint mantissa = f10 & 127u;
++  uint exponent = f10 >> 7;
++  if (exponent == 0u) {
++    uint msb = uint(31 - clz(mantissa));
++    exponent = msb - 6u;
++    mantissa = (mantissa << (7u - msb)) & 127u;
++  }
++  return as_type<float>(((exponent + 124u) << 23) | (mantissa << 16));
++}
++float4 resolve_unpack_2_10_10_10_float(uint packed) {
++  return float4(resolve_7e3_to_float(packed & 1023u), resolve_7e3_to_float((packed >> 10) & 1023u),
++                resolve_7e3_to_float((packed >> 20) & 1023u),
++                float(packed >> 30) * 0.3333333432674407958984375);
 +}
 +uint resolve_swap_endian(uint value, uint endian) {
 +  if (endian == 1u) {
@@ -9514,6 +9539,26 @@ index 0000000..37d156d
 +    value = components.x | (components.y << 10) | (components.z << 20) | (components.w << 30);
 +  } else if (constants.packing == 6u) {
 +    value = resolve_pack_2_10_10_10_float(color);
++  } else if (constants.packing == 8u) {
++    // The full 32bpp copy: the EDRAM's 7e3 bits unpacked, scaled, swapped and packed as the
++    // destination format (2_10_10_10 or 8_8_8_8). The swap is done here, not in the store.
++    float4 converted = resolve_unpack_2_10_10_10_float(resolve_pack_2_10_10_10_float(color)) *
++                       constants.exp_scale;
++    if (constants.swap_red_blue != 0u) {
++      converted = converted.zyxw;
++    }
++    if (constants.dest_format == 7u) {
++      uint4 components =
++          uint4(clamp(converted, float4(0.0), float4(1.0)) * float4(1023.0, 1023.0, 1023.0, 3.0) +
++                0.5);
++      value = components.x | (components.y << 10) | (components.z << 20) | (components.w << 30);
++    } else {
++      uint4 bytes = uint4(clamp(converted, float4(0.0), float4(1.0)) * 255.0 + 0.5);
++      value = bytes.x | (bytes.y << 8) | (bytes.z << 16) | (bytes.w << 24);
++    }
++    resolve_store_dword(resolve_dest_address(pixel, 2, constants),
++                        resolve_swap_endian(value, constants.endian), dest, result, constants);
++    return;
 +  } else {
 +    uint4 bytes = uint4(color * 255.0 + 0.5);
 +    value = bytes.x | (bytes.y << 8) | (bytes.z << 16) | (bytes.w << 24);
@@ -9532,6 +9577,23 @@ index 0000000..37d156d
 +  uint4 texel = source.read(resolve_source_pixel(pixel, constants));
 +  uint value = constants.packing == 1u ? (texel.x & 0xFFFFu) | (texel.y << 16) : texel.x;
 +  resolve_store_32bpp(pixel, value, dest, result, constants);
++}
++// A D24S8 depth target's EDRAM bits, as the dump packs them (the 24-bit depth rounded to the
++// nearest even above the 8-bit stencil), copied bitwise as the resolve's format.
++kernel void resolve_from_render_target_depth(
++    uint2 pixel [[thread_position_in_grid]],
++    depth2d<float, access::read> source [[texture(0)]],
++    texture2d<uint, access::read> source_stencil [[texture(1)]],
++    device uint* dest [[buffer(1)]],
++    constant ResolveFromRenderTargetConstants& constants [[buffer(2)]],
++    device atomic_uint* result [[buffer(3)]]) {
++  if (pixel.x >= constants.width || pixel.y >= constants.height) {
++    return;
++  }
++  uint2 source_pixel = resolve_source_pixel(pixel, constants);
++  uint depth = uint(rint(source.read(source_pixel) * 16777215.0));
++  uint stencil = source_stencil.read(source_pixel).r & 0xFFu;
++  resolve_store_32bpp(pixel, (depth << 8) | stencil, dest, result, constants);
 +}
 +// The conversion and store of the full 64bpp resolve copy, from the unpacked color.
 +void resolve_store_64bpp(uint2 pixel, float4 color, device uint* dest, device atomic_uint* result,
@@ -9660,10 +9722,16 @@ index 0000000..37d156d
 +// MetalRenderTargetCache::GetNativeResolveSource), or false for a render target format the native
 +// path does not handle.
 +bool GetResolveFromRenderTargetConstants(const draw_util::ResolveInfo& resolve_info,
-+                                         xenos::ColorRenderTargetFormat format,
++                                         bool is_depth, uint32_t resource_format,
 +                                         ResolveFromRenderTargetConstants& constants) {
 +  constants = {};
-+  switch (format) {
++  if (is_depth) {
++    if (xenos::DepthRenderTargetFormat(resource_format) != xenos::DepthRenderTargetFormat::kD24S8) {
++      return false;
++    }
++    constants.packing = 7;
++  } else {
++  switch (xenos::ColorRenderTargetFormat(resource_format)) {
 +    case xenos::ColorRenderTargetFormat::k_8_8_8_8:
 +      constants.packing = 0;
 +      break;
@@ -9683,14 +9751,24 @@ index 0000000..37d156d
 +      constants.packing = 5;
 +      break;
 +    case xenos::ColorRenderTargetFormat::k_2_10_10_10_FLOAT:
-+      constants.packing = 6;
++      // Bitwise, or the full copy's conversion of the 7e3 bits.
++      constants.packing =
++          resolve_info.copy_dest_info.copy_dest_exp_bias ||
++                  !xenos::IsColorResolveFormatBitwiseEquivalent(
++                      xenos::ColorRenderTargetFormat(resolve_info.color_edram_info.format),
++                      xenos::ColorFormat(resolve_info.copy_dest_info.copy_dest_format))
++              ? 8
++              : 6;
 +      break;
 +    default:
 +      return false;
 +  }
++  }
++  const draw_util::ResolveEdramInfo& edram_info =
++      resolve_info.IsCopyingDepth() ? resolve_info.depth_edram_info : resolve_info.color_edram_info;
 +  constants.scale_x = std::max(uint32_t(resolve_info.coordinate_info.draw_resolution_scale_x), 1u);
 +  constants.scale_y = std::max(uint32_t(resolve_info.coordinate_info.draw_resolution_scale_y), 1u);
-+  if (resolve_info.color_edram_info.fill_half_pixel_offset) {
++  if (edram_info.fill_half_pixel_offset) {
 +    constants.fill_x = constants.scale_x >> 1;
 +    constants.fill_y = constants.scale_y >> 1;
 +  }
@@ -9918,6 +9996,7 @@ index 0000000..37d156d
 +        {&resolve_from_render_target_uint_pipeline_, @"resolve_from_render_target_uint"},
 +        {&resolve_from_render_target_64bpp_pipeline_, @"resolve_from_render_target_64bpp"},
 +        {&resolve_compare_pipeline_, @"resolve_compare"},
++        {&resolve_from_render_target_depth_pipeline_, @"resolve_from_render_target_depth"},
 +    };
 +    for (const auto& [pipeline, name] : resolve_from_render_target_pipelines) {
 +      pipeline->pipeline =
@@ -9997,6 +10076,7 @@ index 0000000..37d156d
 +  resolve_from_render_target_uint_pipeline_ = ComputePipeline();
 +  resolve_from_render_target_64bpp_pipeline_ = ComputePipeline();
 +  resolve_compare_pipeline_ = ComputePipeline();
++  resolve_from_render_target_depth_pipeline_ = ComputePipeline();
 +  resolve_in_render_pass_pipelines_.clear();
 +  for (ComputePipeline& pipeline : resolve_copy_pipelines_) {
 +    pipeline = ComputePipeline();
@@ -10189,10 +10269,12 @@ index 0000000..37d156d
 +MetalRenderTargetCache::MetalRenderTarget* MetalRenderTargetCache::GetNativeResolveSource(
 +    const draw_util::ResolveInfo& resolve_info,
 +    draw_util::ResolveCopyShaderIndex copy_shader) const {
-+  if (!hle::HleGraphicsEnabled() || resolve_info.IsCopyingDepth()) {
++  if (!hle::HleGraphicsEnabled()) {
 +    return nullptr;
 +  }
-+  draw_util::ResolveEdramInfo edram_info = resolve_info.color_edram_info;
++  bool is_depth = resolve_info.IsCopyingDepth();
++  draw_util::ResolveEdramInfo edram_info =
++      is_depth ? resolve_info.depth_edram_info : resolve_info.color_edram_info;
 +  reg::RB_COPY_DEST_INFO dest_info = resolve_info.copy_dest_info;
 +  // At 1x, a sample select other than sample 0 reads a neighbouring pixel.
 +  if (edram_info.msaa_samples != xenos::MsaaSamples::k1X ||
@@ -10203,6 +10285,12 @@ index 0000000..37d156d
 +  }
 +  auto render_target_format = xenos::ColorRenderTargetFormat(edram_info.format);
 +  auto dest_format = xenos::ColorFormat(dest_info.copy_dest_format);
++  // A depth copy is bitwise (the fast 32bpp copy), of a D24S8 target only (below).
++  if (is_depth) {
++    if (copy_shader != draw_util::ResolveCopyShaderIndex::kFast32bpp1x2xMSAA) {
++      return nullptr;
++    }
++  } else
 +  switch (render_target_format) {
 +    // The bits are copied unchanged (the fast 32bpp copy): a red and blue swap only for 8_8_8_8.
 +    case xenos::ColorRenderTargetFormat::k_8_8_8_8:
@@ -10226,6 +10314,15 @@ index 0000000..37d156d
 +    case xenos::ColorRenderTargetFormat::k_32_FLOAT:
 +      if (copy_shader != draw_util::ResolveCopyShaderIndex::kFast32bpp1x2xMSAA ||
 +          dest_format != xenos::ColorFormat::k_32_FLOAT || dest_info.copy_dest_swap) {
++        return nullptr;
++      }
++      break;
++    // Converted (the full 32bpp copy), with the exponent bias and the swap.
++    case xenos::ColorRenderTargetFormat::k_2_10_10_10_FLOAT:
++    case xenos::ColorRenderTargetFormat::k_2_10_10_10_FLOAT_AS_16_16_16_16:
++      if (copy_shader != draw_util::ResolveCopyShaderIndex::kFull32bpp ||
++          (dest_format != xenos::ColorFormat::k_2_10_10_10 &&
++           dest_format != xenos::ColorFormat::k_8_8_8_8)) {
 +        return nullptr;
 +      }
 +      break;
@@ -10253,14 +10350,25 @@ index 0000000..37d156d
 +    return nullptr;
 +  }
 +  RenderTargetKey owner_key = owner->key();
-+  if (owner_key.is_depth || owner_key.base_tiles != edram_info.base_tiles ||
++  if (owner_key.base_tiles != edram_info.base_tiles ||
 +      owner_key.msaa_samples != xenos::MsaaSamples::k1X ||
 +      owner_key.GetPitchTiles() != edram_info.pitch_tiles) {
 +    return nullptr;
 +  }
++  // A depth owner: its D24S8 bits, for a depth copy or a bitwise color copy of them.
++  if (owner_key.is_depth) {
++    if (owner_key.GetDepthFormat() != xenos::DepthRenderTargetFormat::kD24S8 ||
++        copy_shader != draw_util::ResolveCopyShaderIndex::kFast32bpp1x2xMSAA) {
++      return nullptr;
++    }
++    return static_cast<MetalRenderTarget*>(owner);
++  }
++  if (is_depth) {
++    return nullptr;
++  }
 +  // A bitwise copy copies the EDRAM bits whatever 32bpp format wrote them (the game may resolve
 +  // a surface as another format of the same size); a conversion needs the resolve's own format.
-+  if (owner_key.GetColorFormat() != render_target_format) {
++  if (owner_key.GetColorFormat() != xenos::GetStorageColorFormat(render_target_format)) {
 +    bool owner_packed;
 +    switch (owner_key.GetColorFormat()) {
 +      case xenos::ColorRenderTargetFormat::k_8_8_8_8:
@@ -10294,7 +10402,8 @@ index 0000000..37d156d
 +  // conversion for these formats and number formats (verified by hle_verify_resolves). A texture
 +  // starts at the destination base, so the copy must too.
 +  auto render_target_format = xenos::ColorRenderTargetFormat(resolve_info.color_edram_info.format);
-+  if (!source || source->key().GetColorFormat() != render_target_format ||
++  if (!source || resolve_info.IsCopyingDepth() || source->key().is_depth ||
++      source->key().GetColorFormat() != render_target_format ||
 +      (render_target_format != xenos::ColorRenderTargetFormat::k_8_8_8_8 &&
 +       render_target_format != xenos::ColorRenderTargetFormat::k_16_16_FLOAT &&
 +       render_target_format != xenos::ColorRenderTargetFormat::k_32_FLOAT) ||
@@ -10320,7 +10429,8 @@ index 0000000..37d156d
 +                                                     bool verify) {
 +  id<MTLTexture> source_view = source.transfer_view();
 +  ResolveFromRenderTargetConstants constants;
-+  if (!GetResolveFromRenderTargetConstants(resolve_info, source.key().GetColorFormat(),
++  if (!GetResolveFromRenderTargetConstants(resolve_info, source.key().is_depth,
++                                           source.key().resource_format,
 +                                           constants)) {
 +    assert_always();
 +    return;
@@ -10335,8 +10445,13 @@ index 0000000..37d156d
 +      expected_view_format = MTLPixelFormatRGBA8Unorm;
 +      break;
 +    case 6:
++    case 8:
 +      pipeline = &resolve_from_render_target_float_pipeline_;
 +      expected_view_format = MTLPixelFormatRGBA16Float;
++      break;
++    case 7:
++      pipeline = &resolve_from_render_target_depth_pipeline_;
++      expected_view_format = MTLPixelFormatDepth32Float_Stencil8;
 +      break;
 +    case 1:
 +      pipeline = &resolve_from_render_target_uint_pipeline_;
@@ -10371,6 +10486,9 @@ index 0000000..37d156d
 +  command_processor_.SetInNativeResolve(false);
 +  [compute setComputePipelineState:pipeline->pipeline];
 +  [compute setTexture:source_view atIndex:kComputeTextureSource];
++  if (constants.packing == 7) {
++    [compute setTexture:source.stencil_view() atIndex:kComputeTextureSourceStencil];
++  }
 +  [compute setBuffer:dest offset:dest_offset atIndex:kComputeBufferDest];
 +  [compute setBytes:&constants length:sizeof(constants) atIndex:kComputeBufferConstants];
 +  // Unused without verify, but every buffer the kernel declares is bound.
@@ -10471,8 +10589,11 @@ index 0000000..37d156d
 +                                                 MetalRenderTarget& source, id<MTLBuffer> dest,
 +                                                 uint32_t dest_bias) {
 +  ResolveFromRenderTargetConstants constants;
-+  if (!GetResolveFromRenderTargetConstants(resolve_info, source.key().GetColorFormat(),
-+                                           constants)) {
++  // The tile function packs color attachments copied bitwise or converted at 64bpp only.
++  if (source.key().is_depth ||
++      !GetResolveFromRenderTargetConstants(resolve_info, source.key().is_depth,
++                                           source.key().resource_format, constants) ||
++      constants.packing == 8) {
 +    return false;
 +  }
 +  // Only the open pass's attachments can be read from its tiles (no pass is open when the
@@ -10522,7 +10643,8 @@ index 0000000..37d156d
 +                                                        MetalSharedMemory& shared_memory,
 +                                                        id<MTLBuffer> scratch) {
 +  ResolveFromRenderTargetConstants constants;
-+  if (!GetResolveFromRenderTargetConstants(resolve_info, source.key().GetColorFormat(),
++  if (!GetResolveFromRenderTargetConstants(resolve_info, source.key().is_depth,
++                                           source.key().resource_format,
 +                                           constants)) {
 +    return;
 +  }
