@@ -351,7 +351,7 @@ index ac6b056..8ef1ee8 100644
  
  }  // namespace rex::graphics
 diff --git a/include/rex/graphics/pipeline/render_target/cache.h b/include/rex/graphics/pipeline/render_target/cache.h
-index b246319..3a9e059 100644
+index b246319..d4ab7c7 100644
 --- a/include/rex/graphics/pipeline/render_target/cache.h
 +++ b/include/rex/graphics/pipeline/render_target/cache.h
 @@ -194,6 +194,34 @@ class RenderTargetCache {
@@ -389,7 +389,7 @@ index b246319..3a9e059 100644
    virtual bool Update(bool is_rasterization_done, reg::RB_DEPTHCONTROL normalized_depth_control,
                        uint32_t normalized_color_mask, const Shader& vertex_shader);
  
-@@ -510,6 +538,35 @@ class RenderTargetCache {
+@@ -510,6 +538,52 @@ class RenderTargetCache {
    // false).
    virtual bool IsHostDepthEncodingDifferent(xenos::DepthRenderTargetFormat format) const = 0;
  
@@ -407,6 +407,19 @@ index b246319..3a9e059 100644
 +  // The render target owning every tile from start_tiles to end_tiles (not wrapping around the
 +  // EDRAM), or nullptr if the range has several owners or none.
 +  RenderTarget* GetRangeSoleOwner(uint32_t start_tiles, uint32_t end_tiles) const;
++
++  // Transfer audit (hle_audit_transfers): what happened to the data the last transfers into a
++  // render target copied, until its next transfers.
++  struct TransferAudit {
++    uint32_t transfers = 0;
++    bool read = false;
++    bool written = false;
++  };
++  std::unordered_map<RenderTarget*, TransferAudit> transfer_audits_;
++  void AuditDrawTransfers(uint32_t depth_and_color_rts_used_bits, RenderTarget* const* rts,
++                          reg::RB_DEPTHCONTROL normalized_depth_control,
++                          uint32_t normalized_color_mask);
++  void FinishTransferAudit(RenderTarget* render_target);
 +  // The render targets owning the EDRAM tiles [start_tiles, end_tiles) (not wrapping), each with
 +  // the part of the range it owns, in order; false if a part of the range has no owner.
 +  struct RangeOwner {
@@ -417,6 +430,10 @@ index b246319..3a9e059 100644
 +  bool GetRangeOwners(uint32_t start_tiles, uint32_t end_tiles,
 +                      std::vector<RangeOwner>& owners_out) const;
 +
++  // Transfer audit (hle_audit_transfers): the render targets owning [start_tiles, end_tiles) had
++  // their data read (by a resolve).
++  void NoteTransferAuditRangeRead(uint32_t start_tiles, uint32_t end_tiles);
++
 +  // The render target the last successful update's draw uses (0 depth, 1 + i color i), or
 +  // nullptr.
 +  RenderTarget* last_update_used_render_target(uint32_t index) const {
@@ -425,7 +442,7 @@ index b246319..3a9e059 100644
    void ResetAccumulatedRenderTargets() { are_accumulated_render_targets_valid_ = false; }
    RenderTarget* const* last_update_accumulated_render_targets() const {
      assert_true(GetPath() == Path::kHostRenderTargets);
-@@ -666,6 +723,11 @@ class RenderTargetCache {
+@@ -666,6 +740,11 @@ class RenderTargetCache {
    bool WouldOwnershipChangeRequireTransfers(RenderTargetKey dest,
                                              uint32_t start_tiles_base_relative,
                                              uint32_t length_tiles) const;
@@ -437,7 +454,7 @@ index b246319..3a9e059 100644
    // Updates ownership_ranges_, adds the transfers needed for the ownership
    // change to transfers_append_out if it's not null.
    void ChangeOwnership(RenderTargetKey dest, uint32_t start_tiles_base_relative,
-@@ -688,6 +750,12 @@ class RenderTargetCache {
+@@ -688,6 +767,12 @@ class RenderTargetCache {
    // update. 0 is depth, color starting from 1, nullptr if not bound.
    // Only valid for non-pixel-shader-interlock paths.
    RenderTarget* last_update_used_render_targets_[1 + xenos::kMaxColorRenderTargets];
@@ -1293,7 +1310,7 @@ index 0000000..a146aa8
 +
 +}  // namespace rex::input
 diff --git a/include/rex/perf/counter.h b/include/rex/perf/counter.h
-index 83f0dff..755d87f 100644
+index 83f0dff..b80eb1f 100644
 --- a/include/rex/perf/counter.h
 +++ b/include/rex/perf/counter.h
 @@ -10,6 +10,7 @@
@@ -1356,7 +1373,7 @@ index 83f0dff..755d87f 100644
    kResolves,              // Guest resolves (EDRAM to memory copies)
    // Why the open render pass was ended (each ended pass adds to one of these)
    kRenderPassEndsTargetChange,  // A draw to other render targets
-@@ -81,6 +120,32 @@ enum class CounterId : uint16_t {
+@@ -81,6 +120,40 @@ enum class CounterId : uint16_t {
    // Guest draws that continue a render pass begun for a render target transfer
    kDrawsInTransferPasses,
  
@@ -1381,6 +1398,14 @@ index 83f0dff..755d87f 100644
 +  kRenderPassesResumedAfterNativeResolve,
 +  // Resolves written by a tile function inside the render pass (gfx = hle, C4)
 +  kResolvesInRenderPass,
++  // Transfer audit (gfx = hle, hle_audit_transfers), per transfer when its destination gets its
++  // next transfer: its data was read (a draw blending, testing or keeping channels, a resolve, or a
++  // transfer from it), only written over, or not touched at all
++  kTransferAuditRead,
++  kTransferAuditWritten,
++  kTransferAuditUntouched,
++  // Transfers between render targets of different formats (reinterpreted EDRAM)
++  kTransfersReinterpreting,
 +
 +  // Marks the player sets with a key while playing (the runtime's bind_perf_marker key), to find the
 +  // frames they noticed in the CSV
@@ -1389,7 +1414,7 @@ index 83f0dff..755d87f 100644
    kCount  // sentinel -- must be last
  };
  
-@@ -162,6 +227,29 @@ class Profiler {
+@@ -162,6 +235,29 @@ class Profiler {
    }
  };
  
@@ -2079,7 +2104,7 @@ index b52bf39..13f51dc 100644
  
  void* MapFileView(FileMappingHandle handle, void* base_address, size_t length, PageAccess access,
 diff --git a/src/core/perf/counter.cpp b/src/core/perf/counter.cpp
-index d3f26eb..4328521 100644
+index d3f26eb..c674eb6 100644
 --- a/src/core/perf/counter.cpp
 +++ b/src/core/perf/counter.cpp
 @@ -46,6 +46,29 @@ std::array<std::atomic<int64_t>, kNumCounters> g_snapshot{};
@@ -2120,7 +2145,7 @@ index d3f26eb..4328521 100644
      "resolves",
      "pass_ends_target_change",
      "pass_ends_draw_barriers",
-@@ -86,6 +110,17 @@ constexpr const char* kCounterNames[] = {
+@@ -86,6 +110,21 @@ constexpr const char* kCounterNames[] = {
      "uploads_for_textures",
      "uploads_after_textures",
      "draws_in_transfer_passes",
@@ -2134,11 +2159,15 @@ index d3f26eb..4328521 100644
 +    "render_passes_resumed_after_resolve",
 +    "render_passes_resumed_after_native_resolve",
 +    "resolves_in_render_pass",
++    "transfer_audit_read",
++    "transfer_audit_written",
++    "transfer_audit_untouched",
++    "transfers_reinterpreting",
 +    "markers",
  };
  static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must match CounterId enum");
  
-@@ -94,6 +129,29 @@ static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must matc
+@@ -94,6 +133,29 @@ static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must matc
  constexpr bool kIsGauge[] = {
      false,  // kFrameTimeUs       (set each frame)
      false,  // kFps               (set each frame)
@@ -2168,7 +2197,7 @@ index d3f26eb..4328521 100644
      false,  // kDrawCalls
      false,  // kCommandBufferStalls
      false,  // kVerticesProcessed
-@@ -118,6 +176,7 @@ constexpr bool kIsGauge[] = {
+@@ -118,6 +180,7 @@ constexpr bool kIsGauge[] = {
      false,  // kHostGpuWaits
      false,  // kHostGpuWaitUs
      false,  // kMemexportReadbacks
@@ -2176,7 +2205,7 @@ index d3f26eb..4328521 100644
      false,  // kResolves
      false,  // kRenderPassEndsTargetChange
      false,  // kRenderPassEndsDrawBarriers
-@@ -134,6 +193,17 @@ constexpr bool kIsGauge[] = {
+@@ -134,6 +197,21 @@ constexpr bool kIsGauge[] = {
      false,  // kUploadsForTextures
      false,  // kUploadsAfterTextures
      false,  // kDrawsInTransferPasses
@@ -2190,6 +2219,10 @@ index d3f26eb..4328521 100644
 +    false,  // kRenderPassesResumedAfterResolve
 +    false,  // kRenderPassesResumedAfterNativeResolve
 +    false,  // kResolvesInRenderPass
++    false,  // kTransferAuditRead
++    false,  // kTransferAuditWritten
++    false,  // kTransferAuditUntouched
++    false,  // kTransfersReinterpreting
 +    false,  // kMarkers
  };
  static_assert(std::size(kIsGauge) == kNumCounters, "kIsGauge must match CounterId enum");
@@ -9219,10 +9252,10 @@ index 0000000..e9f8fbe
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_render_target_cache.mm b/src/graphics/metal/metal_render_target_cache.mm
 new file mode 100644
-index 0000000..9fc2e49
+index 0000000..388923e
 --- /dev/null
 +++ b/src/graphics/metal/metal_render_target_cache.mm
-@@ -0,0 +1,5026 @@
+@@ -0,0 +1,5035 @@
 +/**
 + * @file        graphics/metal/metal_render_target_cache.mm
 + * @brief       EDRAM emulation with sample-space host render targets for the Metal backend
@@ -10841,6 +10874,15 @@ index 0000000..9fc2e49
 +          REXCVAR_GET(hle_verify_resolves)) {
 +        GetNativeResolveOwners(resolve_info, copy_shader, native_owners);
 +        native_source = GetNativeResolveSource(resolve_info, copy_shader);
++      }
++      // hle_audit_transfers: the resolve reads its source's data.
++      {
++        uint32_t span_base, span_row_length, span_rows, span_pitch;
++        resolve_info.GetCopyEdramTileSpan(span_base, span_row_length, span_rows, span_pitch);
++        if (span_rows) {
++          NoteTransferAuditRangeRead(span_base,
++                                     span_base + (span_rows - 1) * span_pitch + span_row_length);
++        }
 +      }
 +      bool verify_native = !native_owners.empty() && REXCVAR_GET(hle_verify_resolves);
 +      bool from_render_target = !native_owners.empty() && !verify_native;
@@ -16935,7 +16977,7 @@ index 0000000..b9bc2fb
 +
 +#undef CAMetalLayer
 diff --git a/src/graphics/pipeline/render_target/cache.cpp b/src/graphics/pipeline/render_target/cache.cpp
-index bd0019c..876f6f8 100644
+index bd0019c..aa4af7e 100644
 --- a/src/graphics/pipeline/render_target/cache.cpp
 +++ b/src/graphics/pipeline/render_target/cache.cpp
 @@ -13,6 +13,10 @@
@@ -16965,7 +17007,15 @@ index bd0019c..876f6f8 100644
  
  REXCVAR_DEFINE_BOOL(mrt_edram_used_range_clamp_to_min, true, "GPU",
                      "Clamp MRT EDRAM used range to minimum");
-@@ -407,11 +413,151 @@ void RenderTargetCache::BeginFrame() {
+@@ -351,6 +357,7 @@ void RenderTargetCache::InitializeCommon() {
+ }
+ 
+ void RenderTargetCache::DestroyAllRenderTargets(bool shutting_down) {
++  transfer_audits_.clear();
+   ownership_ranges_.clear();
+   if (!shutting_down) {
+     ownership_ranges_.emplace(std::piecewise_construct, std::forward_as_tuple(uint32_t(0)),
+@@ -407,11 +414,151 @@ void RenderTargetCache::BeginFrame() {
    ResetAccumulatedRenderTargets();
  }
  
@@ -17117,7 +17167,7 @@ index bd0019c..876f6f8 100644
  
    auto rb_surface_info = regs.Get<reg::RB_SURFACE_INFO>();
    xenos::MsaaSamples msaa_samples = rb_surface_info.msaa_samples;
-@@ -693,11 +839,52 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
+@@ -693,11 +840,52 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
    // draw with whatever contents currently are in the render target in this
    // case).
  
@@ -17171,7 +17221,20 @@ index bd0019c..876f6f8 100644
    }
  
    if (interlock_barrier_only) {
-@@ -1254,6 +1441,166 @@ bool RenderTargetCache::WouldOwnershipChangeRequireTransfers(RenderTargetKey des
+@@ -705,6 +893,12 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
+     return true;
+   }
+ 
++  // gfx = hle, hle_audit_transfers: what this draw does with the data transfers copied in.
++  if (hle::HleGraphicsEnabled() && REXCVAR_GET(hle_audit_transfers)) {
++    AuditDrawTransfers(depth_and_color_rts_used_bits, rts, normalized_depth_control,
++                       normalized_color_mask);
++  }
++
+   // If everything succeeded, update the used render targets.
+   for (uint32_t i = 0; i < 1 + xenos::kMaxColorRenderTargets; ++i) {
+     last_update_used_render_targets_[i] =
+@@ -1254,6 +1448,281 @@ bool RenderTargetCache::WouldOwnershipChangeRequireTransfers(RenderTargetKey des
    return false;
  }
  
@@ -17300,6 +17363,121 @@ index bd0019c..876f6f8 100644
 +  return nullptr;
 +}
 +
++void RenderTargetCache::FinishTransferAudit(RenderTarget* render_target) {
++  auto it = transfer_audits_.find(render_target);
++  if (it == transfer_audits_.end()) {
++    return;
++  }
++  const TransferAudit& audit = it->second;
++  rex::perf::CounterId counter = audit.read      ? rex::perf::CounterId::kTransferAuditRead
++                                 : audit.written ? rex::perf::CounterId::kTransferAuditWritten
++                                                 : rex::perf::CounterId::kTransferAuditUntouched;
++#ifdef REXGLUE_ENABLE_PERF_COUNTERS
++  for (uint32_t i = 0; i < audit.transfers; ++i) {
++    rex::perf::IncrementCounter(counter);
++  }
++#else
++  (void)counter;
++#endif
++  transfer_audits_.erase(it);
++}
++
++void RenderTargetCache::AuditDrawTransfers(uint32_t depth_and_color_rts_used_bits,
++                                           RenderTarget* const* rts,
++                                           reg::RB_DEPTHCONTROL normalized_depth_control,
++                                           uint32_t normalized_color_mask) {
++  const RegisterFile& regs = register_file();
++  for (uint32_t i = 0; i < 1 + xenos::kMaxColorRenderTargets; ++i) {
++    RenderTarget* rt = (depth_and_color_rts_used_bits & (uint32_t(1) << i)) ? rts[i] : nullptr;
++    if (!rt) {
++      continue;
++    }
++    // New transfers into this target: the previous ones are settled, these are followed now. Their
++    // sources had their data read.
++    const std::vector<Transfer>& transfers = last_update_transfers_[i];
++    if (!transfers.empty()) {
++      FinishTransferAudit(rt);
++      TransferAudit& audit = transfer_audits_[rt];
++      audit.transfers = uint32_t(transfers.size());
++      for (const Transfer& transfer : transfers) {
++        if (!transfer.source) {
++          continue;
++        }
++        auto source_it = transfer_audits_.find(transfer.source);
++        if (source_it != transfer_audits_.end()) {
++          source_it->second.read = true;
++        }
++        if (transfer.source->key().is_depth != rt->key().is_depth ||
++            transfer.source->key().resource_format != rt->key().resource_format) {
++          PERF_counter_inc(kTransfersReinterpreting);
++        }
++        // Each pair of render targets once, to know what the transfers carry.
++        static std::unordered_set<std::string> logged_pairs;
++        std::string pair = fmt::format("{} -> {}", transfer.source->key().GetDebugName(),
++                                       rt->key().GetDebugName());
++        if (logged_pairs.insert(pair).second) {
++          REXGPU_INFO("HLE transfer audit: {}, tiles {}..{}", pair, transfer.start_tiles,
++                      transfer.end_tiles);
++        }
++      }
++    }
++    auto it = transfer_audits_.find(rt);
++    if (it == transfer_audits_.end()) {
++      continue;
++    }
++    bool reads, writes;
++    if (!i) {
++      bool depth_test = normalized_depth_control.z_enable &&
++                        normalized_depth_control.zfunc != xenos::CompareFunction::kAlways;
++      reads = depth_test || normalized_depth_control.stencil_enable;
++      writes = (normalized_depth_control.z_enable && normalized_depth_control.z_write_enable) ||
++               normalized_depth_control.stencil_enable;
++    } else {
++      uint32_t mask = (normalized_color_mask >> (4 * (i - 1))) & 0xF;
++      auto blend = regs.Get<reg::RB_BLENDCONTROL>(reg::RB_BLENDCONTROL::rt_register_indices[i - 1]);
++      auto reads_dest = [](xenos::BlendFactor factor) {
++        return factor == xenos::BlendFactor::kDstColor ||
++               factor == xenos::BlendFactor::kOneMinusDstColor ||
++               factor == xenos::BlendFactor::kDstAlpha ||
++               factor == xenos::BlendFactor::kOneMinusDstAlpha ||
++               factor == xenos::BlendFactor::kSrcAlphaSaturate;
++      };
++      bool blending =
++          blend.color_destblend != xenos::BlendFactor::kZero ||
++          blend.alpha_destblend != xenos::BlendFactor::kZero || reads_dest(blend.color_srcblend) ||
++          reads_dest(blend.alpha_srcblend) || blend.color_comb_fcn == xenos::BlendOp::kMin ||
++          blend.color_comb_fcn == xenos::BlendOp::kMax ||
++          blend.alpha_comb_fcn == xenos::BlendOp::kMin ||
++          blend.alpha_comb_fcn == xenos::BlendOp::kMax;
++      writes = mask != 0;
++      // Channels left out keep the old data, as does blending with it.
++      uint32_t format_mask = (uint32_t(1) << xenos::GetColorRenderTargetFormatComponentCount(
++                                  rt->key().GetColorFormat())) -
++                             1;
++      reads = writes && (blending || (mask & format_mask) != format_mask);
++    }
++    if (reads) {
++      it->second.read = true;
++    } else if (writes) {
++      it->second.written = true;
++    }
++  }
++}
++
++void RenderTargetCache::NoteTransferAuditRangeRead(uint32_t start_tiles, uint32_t end_tiles) {
++  if (transfer_audits_.empty()) {
++    return;
++  }
++  std::vector<RangeOwner> owners;
++  GetRangeOwners(start_tiles, end_tiles, owners);
++  for (const RangeOwner& owner : owners) {
++    auto it = transfer_audits_.find(owner.render_target);
++    if (it != transfer_audits_.end()) {
++      it->second.read = true;
++    }
++  }
++}
++
 +bool RenderTargetCache::GetRangeOwners(uint32_t start_tiles, uint32_t end_tiles,
 +                                       std::vector<RangeOwner>& owners_out) const {
 +  owners_out.clear();
@@ -17338,7 +17516,7 @@ index bd0019c..876f6f8 100644
  void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_tiles_base_relative,
                                          uint32_t length_tiles,
                                          std::vector<Transfer>* transfers_append_out,
-@@ -1335,6 +1682,8 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
+@@ -1335,6 +1804,8 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
                       transfer_host_depth_source)) {
                // Extend the last transfer if, for example, transferring color,
                // but host depth is different.
@@ -17347,7 +17525,7 @@ index bd0019c..876f6f8 100644
                transfers_append_out->back().end_tiles = transfer_end_tiles;
              } else {
                auto transfer_source_rt_it = render_targets_.find(transfer_source);
-@@ -1353,6 +1702,7 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
+@@ -1353,6 +1824,7 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
                        transfer_host_depth_source_rt_it != render_targets_.end()
                            ? transfer_host_depth_source_rt_it->second
                            : nullptr);

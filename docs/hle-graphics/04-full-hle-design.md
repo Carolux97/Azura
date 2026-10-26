@@ -1,6 +1,6 @@
 # HLE graphics: render targets without emulated EDRAM (design, for review)
 
-Status: proposal. No code until it is approved. Builds on option A of
+Status: proposal, revised after the phase 1 audit (below). No code until it is approved. Builds on option A of
 [02-design.md](02-design.md) and on what the native resolves found ([03-results.md](03-results.md)).
 
 ## Where we are
@@ -112,7 +112,57 @@ API-level HLE (option B of 02-design.md) is still not needed: the CPU is not the
 | Heavy gameplay paths not seen in the scripted scenes | unhandled cases | log-once fallbacks, as today; a played run before each milestone |
 | Size of the change | weeks, not days (an estimate, not measured) | phases 1 and 2 are useful alone (fewer transfers); 1080p comes at phase 4 |
 
+## Phase 1 results: the transfer audit
+
+`hle_audit_transfers` follows each transfer the cache makes until its destination gets the next
+one, and counts whether its data was read (a draw blending, testing depth or stencil or keeping
+channels, a resolve, or a transfer from it), only written over, or untouched; it also counts the
+transfers between different formats and logs each pair of render targets once. One run at 1280x720
+through the campaign start (`PAD_SCRIPT` recorded by hand):
+
+| Per frame | Transfers | Data read | Only written over | Untouched | Between different formats |
+| --- | --- | --- | --- | --- | --- |
+| Title screen, main menu | 14 | 14 | 0 | 0 | 11 |
+| Campaign start | 28 | 26 | 2 | 0 | 24 |
+
+"Read" is generous (a later blending or depth-tested draw on the target counts even if it does not
+touch the copied tiles), so the transfers really needed may be fewer, but not few. The pairs logged
+in that run (34) show how the game uses EDRAM:
+
+- **depth and colour share EDRAM both ways**: D24S8 to 8_8_8_8, 16_16_FLOAT, 16_16_16_16,
+  2_10_10_10_FLOAT and back, and D24S8 to D24FS8;
+- **64-bit and 32-bit targets share it**: 16_16_16_16 to and from 8_8_8_8 and 16_16_FLOAT;
+- **one EDRAM area is reused at several pitches**: base 1624 as pitch 1, 8, 10 and 16 tiles (the
+  post-processing chain), and base 1440 as pitch 7, 8 and 14 (depth).
+
+**What this means for the design.** Option 2 (no carries) is ruled out. And option 1's carries
+would have to reproduce, tile by tile, exactly what the EDRAM does when the game reinterprets it,
+pitch changes included: that is the EDRAM model again, keyed differently. Without EDRAM emulation
+this game renders wrong; with it, the surface model brings no gain at integer scales.
+
+**What is left of the motivation: other resolutions.** At a scale of 1.5 (1080p), an EDRAM tile of
+80x16 samples is **120x24 host pixels, a whole number**, and so are the 40-sample halves the depth
+layout swaps (60 pixels) and the 8-pixel alignment of resolves (12 pixels). The EDRAM model works
+on tiles, so a rational scale (3/2) may fit it, unlike a per-pixel one. Not verified; what breaks
+at 3/2 is what assumes a whole number of host pixels per guest pixel:
+
+- the scaled resolve buffer's layout (4 guest pixels as scale_x * scale_y blocks of 16 bytes) and
+  the texture cache's scaled textures that read it;
+- the per-pixel scale factors in the draw setup and the shader translators (integers today);
+- the half-pixel offset fill (scale / 2 host pixels).
+
+## Revised recommendation (option 4): rational scales in the EDRAM model
+
+Keep the EDRAM model (with everything the HLE path added) and let the draw resolution scale be a
+ratio, 3/2 first, with tile-granular mappings: render targets, transfers and resolves at the tile
+level, and resolved textures handed to the texture cache as host textures at their own scale
+(C1 generalised) instead of the integer-only scaled resolve buffer. Phases: (a) map every place
+that assumes an integer scale; (b) make the draw setup, shaders and render targets work at 3/2
+with resolves through host textures; (c) verify against 720p and 1440p. Same verification rules as
+before.
+
 ## What to decide
 
-1. The approach (option 1 recommended).
-2. Whether phase 1 starts now: it changes no behaviour and decides the rest with data.
+1. Option 1 was approved before the audit; the audit shows it would rebuild the EDRAM model. The
+   proposal now is option 4 (rational scales in the EDRAM model) for 1080p.
+2. Whether to start option 4's phase (a), the map of everything that assumes an integer scale.
