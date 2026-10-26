@@ -50,6 +50,8 @@ set(AZURA_SOURCES
     src/script_hooks.cpp
     src/class_dump.cpp
     src/render_queue.cpp
+    src/hle_gfx/hooks.cpp
+    src/hle_gfx/planner.cpp
     src/gpu_list.cpp
     src/relaunch.cpp
     src/perf_marker.cpp

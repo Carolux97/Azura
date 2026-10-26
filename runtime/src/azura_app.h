@@ -33,6 +33,7 @@
 #include "local_coop_menu.h"
 #include "local_coop_notices.h"
 #include "gpu_list.h"
+#include "hle_gfx/hle_gfx.h"
 #include "menu/menu_patches.h"
 #include "menu/pc_options.h"
 #include "perf_marker.h"
@@ -134,6 +135,8 @@ class AzuraApp : public rex::ReXApp {
   // and route Quit Game to a normal window close (OnClosing shuts the title down).
   void OnPreLaunchModule() override {
     REXLOG_INFO("[Azura] Active gamertag / user_name: '{}'", REXCVAR_GET(user_name));
+    // Before the game draws: the HLE graphics path's marker handler, when gfx = hle.
+    azura::hle_gfx::Install();
     // Before the game polls a controller: which controller plays which player (player_assignment.h).
     azura::input::InstallPlayerAssignment(runtime(), [this](std::function<void()> work) {
       app_context().CallInUIThread(std::move(work));
