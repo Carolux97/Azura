@@ -21,6 +21,7 @@ forbidden=(
   ':(icase,glob)**/*.iso'
   ':(icase,glob)**/*.gputrace'
   ':(icase,glob)**/*.gputrace/**'
+  ':(icase,glob)runtime/src/hle_gfx/*.gen.cpp'
 )
 
 matches="$(git ls-files -- "${forbidden[@]}")"

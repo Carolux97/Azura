@@ -22,6 +22,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # build without any game files.
 set(AZURA_REXGLUE_CMAKE ${CMAKE_CURRENT_SOURCE_DIR}/generated/rexglue.cmake)
 option(AZURA_KIT_PROBE "Configure the probes the player kit records its build commands from (scripts/build-kit.sh)" OFF)
+option(AZURA_PM4_TRACE "Trace which guest functions write PM4 commands (src/hle_gfx/pm4_trace.h); debug builds only" OFF)
 if(AZURA_KIT_PROBE)
     # The player kit is built against the patched SDK as installed, the form it ships in, and
     # never with generated code, even where codegen has run.
@@ -82,6 +83,14 @@ if(WIN32)
     # Keeps overlay programs' Vulkan layers that close the game out of it, and tells which guest
     # memory is committed (the button prompts scan it).
     list(APPEND AZURA_SOURCES src/platform_win.cpp)
+endif()
+if(AZURA_PM4_TRACE)
+    # The PM4 writer trace (src/hle_gfx/pm4_trace.h): debug builds only. Its pass-through hooks
+    # are generated from the player's game by scripts/hle/gen_pm4_trace_hooks.py.
+    if(NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/src/hle_gfx/pm4_trace_hooks.gen.cpp)
+        message(FATAL_ERROR "AZURA_PM4_TRACE needs src/hle_gfx/pm4_trace_hooks.gen.cpp: run scripts/hle/gen_pm4_trace_hooks.py first.")
+    endif()
+    list(APPEND AZURA_SOURCES src/hle_gfx/pm4_trace.cpp src/hle_gfx/pm4_trace_hooks.gen.cpp)
 endif()
 
 # Keep the build machine's folder names out of the binary (they would otherwise end up in the
