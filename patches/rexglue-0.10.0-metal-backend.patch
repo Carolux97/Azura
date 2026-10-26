@@ -351,7 +351,7 @@ index ac6b056..8ef1ee8 100644
  
  }  // namespace rex::graphics
 diff --git a/include/rex/graphics/pipeline/render_target/cache.h b/include/rex/graphics/pipeline/render_target/cache.h
-index b246319..6adcb6a 100644
+index b246319..47a84e3 100644
 --- a/include/rex/graphics/pipeline/render_target/cache.h
 +++ b/include/rex/graphics/pipeline/render_target/cache.h
 @@ -194,6 +194,34 @@ class RenderTargetCache {
@@ -389,7 +389,7 @@ index b246319..6adcb6a 100644
    virtual bool Update(bool is_rasterization_done, reg::RB_DEPTHCONTROL normalized_depth_control,
                        uint32_t normalized_color_mask, const Shader& vertex_shader);
  
-@@ -510,6 +538,22 @@ class RenderTargetCache {
+@@ -510,6 +538,26 @@ class RenderTargetCache {
    // false).
    virtual bool IsHostDepthEncodingDifferent(xenos::DepthRenderTargetFormat format) const = 0;
  
@@ -404,6 +404,10 @@ index b246319..6adcb6a 100644
 +  bool GetClearCutout(uint32_t pitch_pixels, const Shader& vertex_shader,
 +                      Transfer::Rectangle& cutout_out);
 +
++  // The render target owning every tile from start_tiles to end_tiles (not wrapping around the
++  // EDRAM), or nullptr if the range has several owners or none.
++  RenderTarget* GetRangeSoleOwner(uint32_t start_tiles, uint32_t end_tiles) const;
++
 +  // The render target the last successful update's draw uses (0 depth, 1 + i color i), or
 +  // nullptr.
 +  RenderTarget* last_update_used_render_target(uint32_t index) const {
@@ -412,7 +416,7 @@ index b246319..6adcb6a 100644
    void ResetAccumulatedRenderTargets() { are_accumulated_render_targets_valid_ = false; }
    RenderTarget* const* last_update_accumulated_render_targets() const {
      assert_true(GetPath() == Path::kHostRenderTargets);
-@@ -666,6 +710,11 @@ class RenderTargetCache {
+@@ -666,6 +714,11 @@ class RenderTargetCache {
    bool WouldOwnershipChangeRequireTransfers(RenderTargetKey dest,
                                              uint32_t start_tiles_base_relative,
                                              uint32_t length_tiles) const;
@@ -424,7 +428,7 @@ index b246319..6adcb6a 100644
    // Updates ownership_ranges_, adds the transfers needed for the ownership
    // change to transfers_append_out if it's not null.
    void ChangeOwnership(RenderTargetKey dest, uint32_t start_tiles_base_relative,
-@@ -688,6 +737,12 @@ class RenderTargetCache {
+@@ -688,6 +741,12 @@ class RenderTargetCache {
    // update. 0 is depth, color starting from 1, nullptr if not bound.
    // Only valid for non-pixel-shader-interlock paths.
    RenderTarget* last_update_used_render_targets_[1 + xenos::kMaxColorRenderTargets];
@@ -545,10 +549,18 @@ index 340ced5..67eafaa 100644
    // Handles the start of translation.
    // At this point the vertex and texture bindings have been gathered.
 diff --git a/include/rex/graphics/pipeline/texture/cache.h b/include/rex/graphics/pipeline/texture/cache.h
-index d26cd4f..1658019 100644
+index d26cd4f..d649134 100644
 --- a/include/rex/graphics/pipeline/texture/cache.h
 +++ b/include/rex/graphics/pipeline/texture/cache.h
-@@ -81,6 +81,9 @@ class TextureCache {
+@@ -13,6 +13,7 @@
+ #include <array>
+ #include <atomic>
+ #include <cstdint>
++#include <functional>
+ #include <cstring>
+ #include <memory>
+ #include <unordered_map>
+@@ -81,6 +82,9 @@ class TextureCache {
    virtual void BeginFrame();
  
    void MarkRangeAsResolved(uint32_t start_unscaled, uint32_t length_unscaled);
@@ -558,6 +570,20 @@ index d26cd4f..1658019 100644
    // Ensures the memory backing the range in the scaled resolve address space is
    // allocated and returns whether it is.
    virtual bool EnsureScaledResolveMemoryCommitted(uint32_t /*start_unscaled*/,
+@@ -514,6 +518,13 @@ class TextureCache {
+   // Returns nullptr not only if the key is not supported, but also if couldn't
+   // create the texture - if it's nullptr, occasionally a recreation attempt
+   // should be made.
++  // Calls function for each texture whose base level starts at the page, under the global lock
++  // (gfx = hle: textures updated from the render targets at resolves).
++  void ForEachTextureAtBasePage(
++      uint32_t base_page,
++      const std::function<void(Texture& texture,
++                               const std::unique_lock<std::recursive_mutex>& global_lock)>& function);
++
+   Texture* FindOrCreateTexture(TextureKey key);
+ 
+   static const LoadShaderInfo& GetLoadShaderInfo(LoadShaderIndex load_shader_index) {
 diff --git a/include/rex/graphics/pipeline/texture/events.h b/include/rex/graphics/pipeline/texture/events.h
 new file mode 100644
 index 0000000..0868eed
@@ -1258,7 +1284,7 @@ index 0000000..a146aa8
 +
 +}  // namespace rex::input
 diff --git a/include/rex/perf/counter.h b/include/rex/perf/counter.h
-index 83f0dff..ae59a34 100644
+index 83f0dff..3caf103 100644
 --- a/include/rex/perf/counter.h
 +++ b/include/rex/perf/counter.h
 @@ -10,6 +10,7 @@
@@ -1321,7 +1347,7 @@ index 83f0dff..ae59a34 100644
    kResolves,              // Guest resolves (EDRAM to memory copies)
    // Why the open render pass was ended (each ended pass adds to one of these)
    kRenderPassEndsTargetChange,  // A draw to other render targets
-@@ -81,6 +120,21 @@ enum class CounterId : uint16_t {
+@@ -81,6 +120,23 @@ enum class CounterId : uint16_t {
    // Guest draws that continue a render pass begun for a render target transfer
    kDrawsInTransferPasses,
  
@@ -1335,6 +1361,8 @@ index 83f0dff..ae59a34 100644
 +  kRenderTargetTransfersCutOut,
 +  // Guest clear draws turned into render pass load actions (gfx = hle)
 +  kClearsAsLoadActions,
++  // Textures updated from the render target at a resolve instead of loaded from memory (gfx = hle)
++  kResolvesToTextures,
 +
 +  // Marks the player sets with a key while playing (the runtime's bind_perf_marker key), to find the
 +  // frames they noticed in the CSV
@@ -1343,7 +1371,7 @@ index 83f0dff..ae59a34 100644
    kCount  // sentinel -- must be last
  };
  
-@@ -162,6 +216,29 @@ class Profiler {
+@@ -162,6 +218,29 @@ class Profiler {
    }
  };
  
@@ -2033,7 +2061,7 @@ index b52bf39..13f51dc 100644
  
  void* MapFileView(FileMappingHandle handle, void* base_address, size_t length, PageAccess access,
 diff --git a/src/core/perf/counter.cpp b/src/core/perf/counter.cpp
-index d3f26eb..11ae583 100644
+index d3f26eb..d3e6356 100644
 --- a/src/core/perf/counter.cpp
 +++ b/src/core/perf/counter.cpp
 @@ -46,6 +46,29 @@ std::array<std::atomic<int64_t>, kNumCounters> g_snapshot{};
@@ -2074,7 +2102,7 @@ index d3f26eb..11ae583 100644
      "resolves",
      "pass_ends_target_change",
      "pass_ends_draw_barriers",
-@@ -86,6 +110,12 @@ constexpr const char* kCounterNames[] = {
+@@ -86,6 +110,13 @@ constexpr const char* kCounterNames[] = {
      "uploads_for_textures",
      "uploads_after_textures",
      "draws_in_transfer_passes",
@@ -2083,11 +2111,12 @@ index d3f26eb..11ae583 100644
 +    "render_target_transfers_skipped",
 +    "render_target_transfers_cut_out",
 +    "clears_as_load_actions",
++    "resolves_to_textures",
 +    "markers",
  };
  static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must match CounterId enum");
  
-@@ -94,6 +124,29 @@ static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must matc
+@@ -94,6 +125,29 @@ static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must matc
  constexpr bool kIsGauge[] = {
      false,  // kFrameTimeUs       (set each frame)
      false,  // kFps               (set each frame)
@@ -2117,7 +2146,7 @@ index d3f26eb..11ae583 100644
      false,  // kDrawCalls
      false,  // kCommandBufferStalls
      false,  // kVerticesProcessed
-@@ -118,6 +171,7 @@ constexpr bool kIsGauge[] = {
+@@ -118,6 +172,7 @@ constexpr bool kIsGauge[] = {
      false,  // kHostGpuWaits
      false,  // kHostGpuWaitUs
      false,  // kMemexportReadbacks
@@ -2125,7 +2154,7 @@ index d3f26eb..11ae583 100644
      false,  // kResolves
      false,  // kRenderPassEndsTargetChange
      false,  // kRenderPassEndsDrawBarriers
-@@ -134,6 +188,12 @@ constexpr bool kIsGauge[] = {
+@@ -134,6 +189,13 @@ constexpr bool kIsGauge[] = {
      false,  // kUploadsForTextures
      false,  // kUploadsAfterTextures
      false,  // kDrawsInTransferPasses
@@ -2134,6 +2163,7 @@ index d3f26eb..11ae583 100644
 +    false,  // kRenderTargetTransfersSkipped
 +    false,  // kRenderTargetTransfersCutOut
 +    false,  // kClearsAsLoadActions
++    false,  // kResolvesToTextures
 +    false,  // kMarkers
  };
  static_assert(std::size(kIsGauge) == kNumCounters, "kIsGauge must match CounterId enum");
@@ -2556,10 +2586,10 @@ index 8f2fcb0..b0f3cb4 100644
  
 diff --git a/src/graphics/metal/metal_command_processor.h b/src/graphics/metal/metal_command_processor.h
 new file mode 100644
-index 0000000..4d96e5a
+index 0000000..b7f4ef7
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.h
-@@ -0,0 +1,383 @@
+@@ -0,0 +1,387 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.h
 + * @brief       Xenos command processing with Metal
@@ -2646,6 +2676,10 @@ index 0000000..4d96e5a
 +  // the next guest draw.
 +  id<MTLRenderCommandEncoder> BeginExternalRenderPass(const MetalRenderPass& render_pass,
 +                                                      rex::perf::CounterId end_reason);
++
++  // Runs the handler when the GPU completes the current submission's command buffer (opening the
++  // submission if needed).
++  void AddCompletedHandler(MTLCommandBufferHandler handler);
 +
 +  ScratchBuffer AcquireScratchBuffer(size_t size);
 +  UploadAllocation RequestUpload(size_t size, size_t alignment = 256);
@@ -2945,10 +2979,10 @@ index 0000000..4d96e5a
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_command_processor.mm b/src/graphics/metal/metal_command_processor.mm
 new file mode 100644
-index 0000000..c594950
+index 0000000..1108a40
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.mm
-@@ -0,0 +1,2840 @@
+@@ -0,0 +1,2845 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.mm
 + * @brief       Xenos command processing with Metal
@@ -4318,6 +4352,11 @@ index 0000000..c594950
 +  // The backend's own draws change the state that the guest draws track.
 +  render_encoder_state_.valid = false;
 +  return encoder;
++}
++
++void MetalCommandProcessor::AddCompletedHandler(MTLCommandBufferHandler handler) {
++  BeginSubmission(false);
++  [command_buffer_ addCompletedHandler:handler];
 +}
 +
 +MetalCommandProcessor::ScratchBuffer MetalCommandProcessor::AcquireScratchBuffer(size_t size) {
@@ -8466,10 +8505,10 @@ index 0000000..d717bea
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_render_target_cache.h b/src/graphics/metal/metal_render_target_cache.h
 new file mode 100644
-index 0000000..552106b
+index 0000000..2fb022d
 --- /dev/null
 +++ b/src/graphics/metal/metal_render_target_cache.h
-@@ -0,0 +1,576 @@
+@@ -0,0 +1,583 @@
 +/**
 + * @file        graphics/metal/metal_render_target_cache.h
 + * @brief       EDRAM emulation with sample-space host render targets for the Metal backend
@@ -8555,6 +8594,13 @@ index 0000000..552106b
 +
 +  // Performs the resolve to a shared memory area according to the current register values, and
 +  // also clears the render targets if needed.
++  // gfx = hle (hle_native_resolves): after a resolve, the textures the texture cache holds with
++  // exactly its destination's key take the render target's data instead of loading it back from
++  // memory, when the resolve copies a whole 1x render target of a format that needs no conversion.
++  // Returns the textures updated.
++  uint32_t UpdateResolvedTextures(const draw_util::ResolveInfo& resolve_info,
++                                  MetalTextureCache& texture_cache);
++
 +  bool Resolve(const memory::Memory& memory, MetalSharedMemory& shared_memory,
 +               MetalTextureCache& texture_cache, uint32_t& written_address_out,
 +               uint32_t& written_length_out);
@@ -9048,10 +9094,10 @@ index 0000000..552106b
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_render_target_cache.mm b/src/graphics/metal/metal_render_target_cache.mm
 new file mode 100644
-index 0000000..e935e41
+index 0000000..49e7c7e
 --- /dev/null
 +++ b/src/graphics/metal/metal_render_target_cache.mm
-@@ -0,0 +1,3960 @@
+@@ -0,0 +1,4034 @@
 +/**
 + * @file        graphics/metal/metal_render_target_cache.mm
 + * @brief       EDRAM emulation with sample-space host render targets for the Metal backend
@@ -9078,6 +9124,7 @@ index 0000000..e935e41
 +#include <rex/bit.h>
 +#include <rex/cvar.h>
 +#include <rex/graphics/flags.h>
++#include <rex/graphics/hle/markers.h>
 +#include <rex/graphics/pipeline/shader/spirv_builder.h>
 +#include <rex/graphics/pipeline/shader/spirv_translator.h>
 +#include <rex/graphics/pipeline/texture/info.h>
@@ -9634,6 +9681,77 @@ index 0000000..e935e41
 +}
 +
 +
++uint32_t MetalRenderTargetCache::UpdateResolvedTextures(const draw_util::ResolveInfo& resolve_info,
++                                                       MetalTextureCache& texture_cache) {
++  if (!hle::HleGraphicsEnabled() ||
++      !(REXCVAR_GET(hle_native_resolves) || REXCVAR_GET(hle_verify_resolves)) ||
++      IsDrawResolutionScaled() || resolve_info.IsCopyingDepth()) {
++    return 0;
++  }
++  draw_util::ResolveEdramInfo edram_info = resolve_info.color_edram_info;
++  reg::RB_COPY_DEST_INFO dest_info = resolve_info.copy_dest_info;
++  if (edram_info.msaa_samples != xenos::MsaaSamples::k1X || edram_info.format_is_64bpp ||
++      dest_info.copy_dest_exp_bias ||
++      resolve_info.copy_dest_coordinate_info.offset_x_div_8 ||
++      resolve_info.copy_dest_coordinate_info.offset_y_div_8 ||
++      uint32_t(dest_info.copy_dest_endian) > uint32_t(xenos::Endian::k16in32)) {
++    return 0;
++  }
++  // Render target formats whose host texture holds what the texture of the same guest format
++  // holds after loading, with no conversion in the copy (verified by hle_verify_resolves).
++  auto render_target_format = xenos::ColorRenderTargetFormat(edram_info.format);
++  xenos::TextureFormat texture_format;
++  xenos::SurfaceNumberFormat number_format;
++  switch (render_target_format) {
++    case xenos::ColorRenderTargetFormat::k_8_8_8_8:
++      texture_format = xenos::TextureFormat::k_8_8_8_8;
++      number_format = xenos::SurfaceNumberFormat::kUnsignedRepeatingFraction;
++      break;
++    case xenos::ColorRenderTargetFormat::k_16_16_FLOAT:
++      texture_format = xenos::TextureFormat::k_16_16_FLOAT;
++      number_format = xenos::SurfaceNumberFormat::kFloat;
++      break;
++    case xenos::ColorRenderTargetFormat::k_32_FLOAT:
++      texture_format = xenos::TextureFormat::k_32_FLOAT;
++      number_format = xenos::SurfaceNumberFormat::kFloat;
++      break;
++    default:
++      return 0;
++  }
++  // A red and blue swap is handled by the texture's views, for the 4-channel 8-bit format only.
++  if (xenos::TextureFormat(dest_info.copy_dest_format) != texture_format ||
++      dest_info.copy_dest_number != number_format ||
++      (dest_info.copy_dest_swap &&
++       render_target_format != xenos::ColorRenderTargetFormat::k_8_8_8_8)) {
++    return 0;
++  }
++  // One render target must hold the whole source, at the resolve's base, pitch and format.
++  uint32_t span_base, span_row_length, span_rows, span_pitch;
++  resolve_info.GetCopyEdramTileSpan(span_base, span_row_length, span_rows, span_pitch);
++  if (!span_rows) {
++    return 0;
++  }
++  RenderTarget* owner =
++      GetRangeSoleOwner(span_base, span_base + (span_rows - 1) * span_pitch + span_row_length);
++  if (!owner) {
++    return 0;
++  }
++  RenderTargetKey owner_key = owner->key();
++  if (owner_key.is_depth || owner_key.base_tiles != edram_info.base_tiles ||
++      owner_key.msaa_samples != xenos::MsaaSamples::k1X ||
++      owner_key.pitch_tiles_at_32bpp != edram_info.pitch_tiles ||
++      owner_key.GetColorFormat() != render_target_format) {
++    return 0;
++  }
++  return texture_cache.UpdateTexturesFromResolve(
++      resolve_info.copy_dest_base, resolve_info.coordinate_info.width_div_8 << 3,
++      resolve_info.height_div_8 << 3, texture_format,
++      xenos::Endian(uint32_t(dest_info.copy_dest_endian)), dest_info.copy_dest_swap != 0,
++      static_cast<MetalRenderTarget*>(owner)->texture(),
++      resolve_info.coordinate_info.edram_offset_x_div_8 << 3,
++      resolve_info.coordinate_info.edram_offset_y_div_8 << 3);
++}
++
 +bool MetalRenderTargetCache::Resolve(const memory::Memory& memory,
 +                                     MetalSharedMemory& shared_memory,
 +                                     MetalTextureCache& texture_cache,
@@ -9775,6 +9893,8 @@ index 0000000..e935e41
 +          texture_cache.MarkRangeAsResolvedUnscaled(written_start, written_length);
 +        } else {
 +          texture_cache.MarkRangeAsResolved(written_start, written_length);
++          // gfx = hle: textures with exactly the resolve's key take the render target's data.
++          UpdateResolvedTextures(resolve_info, texture_cache);
 +        }
 +        written_address_out = written_start;
 +        written_length_out = written_length;
@@ -13474,10 +13594,10 @@ index 0000000..c2d1f96
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_texture_cache.h b/src/graphics/metal/metal_texture_cache.h
 new file mode 100644
-index 0000000..3ce78d5
+index 0000000..02d626a
 --- /dev/null
 +++ b/src/graphics/metal/metal_texture_cache.h
-@@ -0,0 +1,237 @@
+@@ -0,0 +1,267 @@
 +/**
 + * @file        graphics/metal/metal_texture_cache.h
 + * @brief       Guest textures as Metal textures, loaded from the shared memory with compute shaders
@@ -13571,6 +13691,19 @@ index 0000000..3ce78d5
 +  // pages written or read are backed by physical memory (see InitializeScaledResolveBuffer).
 +  id<MTLBuffer> scaled_resolve_buffer() const { return scaled_resolve_buffer_; }
 +
++  // gfx = hle (hle_native_resolves): right after a resolve invalidated its destination, copies the
++  // resolved rectangle of the render target (source, at source_x and source_y) into each texture
++  // the cache holds whose base level is exactly the resolve's destination (2D, tiled, one level,
++  // same size, format and endianness, same host pixel format as the render target), and marks it
++  // up to date, so it is not loaded back from memory. With hle_verify_resolves, the textures are
++  // still loaded from memory and compared with that copy instead. Returns the textures updated.
++  // red_blue_swap: the resolve swaps red and blue (RB_COPY_DEST_INFO copy_dest_swap), which the
++  // texture's views then do instead of the copy.
++  uint32_t UpdateTexturesFromResolve(uint32_t dest_base, uint32_t width, uint32_t height,
++                                     xenos::TextureFormat format, xenos::Endian endianness,
++                                     bool red_blue_swap, id<MTLTexture> source, uint32_t source_x,
++                                     uint32_t source_y);
++
 + protected:
 +  bool IsSignedVersionSeparateForFormat(TextureKey key) const override;
 +  bool IsScaledResolveSupportedForFormat(TextureKey key) const override;
@@ -13621,6 +13754,12 @@ index 0000000..3ce78d5
 +
 +    id<MTLTexture> texture() const { return texture_; }
 +
++    // Whether the texture holds a render target's data with red and blue in the opposite order
++    // from what a load from memory gives (a resolve that swaps them, copied from the render target
++    // by hle_native_resolves): views then swap red and blue back.
++    bool red_blue_swapped() const { return red_blue_swapped_; }
++    void set_red_blue_swapped(bool swapped) { red_blue_swapped_ = swapped; }
++
 +    // A view with the format of the signedness and the host swizzle; 1D and 2D textures are 2D
 +    // arrays for guest shaders, a single 2D slice when is_array is false.
 +    id<MTLTexture> GetView(bool is_signed, uint32_t host_swizzle, bool is_array = true);
@@ -13629,6 +13768,7 @@ index 0000000..3ce78d5
 +
 +   private:
 +    id<MTLTexture> texture_;
++    bool red_blue_swapped_ = false;
 +    // Key: is_signed_separate_view (1 bit), host_swizzle (12 bits), is_array (1 bit).
 +    std::unordered_map<uint32_t, id<MTLTexture>> views_;
 +    std::unique_ptr<MetalTexture> texture_3d_as_2d_;
@@ -13671,6 +13811,16 @@ index 0000000..3ce78d5
 +  id<MTLTexture> CreateNullTexture(MTLTextureType type, const char* label);
 +
 +  MetalCommandProcessor& command_processor_;
++
++  // hle_verify_resolves: for each texture a resolve would have updated, the render target copy to
++  // compare with its next load from memory.
++  struct ResolveVerifyCopy {
++    id<MTLTexture> texture;
++    bool red_blue_swap;
++  };
++  std::unordered_map<const Texture*, ResolveVerifyCopy> resolve_verify_copies_;
++  // Compares a texture just loaded from memory with its resolve_verify_copies_ copy.
++  void VerifyResolvedTexture(const Texture& texture, id<MTLTexture> loaded);
 +
 +  static const HostFormatPair kBestHostFormats[64];
 +  static const HostFormatPair kHostFormatGBGRUnaligned;
@@ -13717,10 +13867,10 @@ index 0000000..3ce78d5
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_texture_cache.mm b/src/graphics/metal/metal_texture_cache.mm
 new file mode 100644
-index 0000000..a170afe
+index 0000000..b1b0942
 --- /dev/null
 +++ b/src/graphics/metal/metal_texture_cache.mm
-@@ -0,0 +1,1721 @@
+@@ -0,0 +1,1900 @@
 +/**
 + * @file        graphics/metal/metal_texture_cache.mm
 + * @brief       Guest textures as Metal textures, loaded from the shared memory with compute shaders
@@ -13736,6 +13886,9 @@ index 0000000..a170afe
 +#include <algorithm>
 +#include <cfloat>
 +#include <cstring>
++#include <mutex>
++#include <set>
++#include <string>
 +#include <utility>
 +#include <vector>
 +
@@ -13743,6 +13896,7 @@ index 0000000..a170afe
 +#include <rex/bit.h>
 +#include <rex/cvar.h>
 +#include <rex/graphics/flags.h>
++#include <rex/graphics/hle/markers.h>
 +#include <rex/graphics/pipeline/texture/info.h>
 +#include <rex/graphics/pipeline/texture/util.h>
 +#include <rex/logging.h>
@@ -14900,6 +15054,160 @@ index 0000000..a170afe
 +  return std::unique_ptr<Texture>(new MetalTexture(*this, key, texture));
 +}
 +
++uint32_t MetalTextureCache::UpdateTexturesFromResolve(uint32_t dest_base, uint32_t width,
++                                                      uint32_t height, xenos::TextureFormat format,
++                                                      xenos::Endian endianness, bool red_blue_swap,
++                                                      id<MTLTexture> source, uint32_t source_x,
++                                                      uint32_t source_y) {
++  bool verify = REXCVAR_GET(hle_verify_resolves);
++  uint32_t updated = 0;
++  ForEachTextureAtBasePage(
++      dest_base >> 12,
++      [&](Texture& texture, const std::unique_lock<std::recursive_mutex>& global_lock) {
++        const TextureKey& key = texture.key();
++        if (key.dimension != xenos::DataDimension::k2DOrStacked ||
++            key.depth_or_array_size_minus_1 || !key.tiled || key.packed_mips ||
++            key.mip_max_level || key.scaled_resolve || key.signed_separate ||
++            key.width_minus_1 + 1 != width || key.height_minus_1 + 1 != height ||
++            key.format != format || key.endianness != endianness) {
++          return;
++        }
++        // Only a texture this resolve just invalidated: one loaded before, now outdated.
++        if (!texture.base_outdated(global_lock)) {
++          return;
++        }
++        id<MTLTexture> dest = static_cast<MetalTexture&>(texture).texture();
++        if (!dest || dest.pixelFormat != source.pixelFormat || dest.mipmapLevelCount != 1) {
++          return;
++        }
++        id<MTLTexture> target = dest;
++        if (verify) {
++          // Copy into a texture of its own, compared with the next load from memory.
++          MTLTextureDescriptor* descriptor =
++              [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:dest.pixelFormat
++                                                                 width:width
++                                                                height:height
++                                                             mipmapped:NO];
++          descriptor.storageMode = MTLStorageModePrivate;
++          target = [command_processor_.device() newTextureWithDescriptor:descriptor];
++          resolve_verify_copies_[&texture] = {target, red_blue_swap};
++        }
++        id<MTLBlitCommandEncoder> blit =
++            command_processor_.GetBlitEncoder(rex::perf::CounterId::kRenderPassEndsResolve);
++        [blit copyFromTexture:source
++                  sourceSlice:0
++                  sourceLevel:0
++                 sourceOrigin:MTLOriginMake(source_x, source_y, 0)
++                   sourceSize:MTLSizeMake(width, height, 1)
++                    toTexture:target
++             destinationSlice:0
++             destinationLevel:0
++            destinationOrigin:MTLOriginMake(0, 0, 0)];
++        PERF_counter_inc(kHostCopies);
++        if (!verify) {
++          auto& metal_texture = static_cast<MetalTexture&>(texture);
++          if (metal_texture.red_blue_swapped() != red_blue_swap) {
++            metal_texture.set_red_blue_swapped(red_blue_swap);
++            // The bound views of the texture change.
++            TextureFetchConstantsWritten(0, 31);
++          }
++          texture.MakeUpToDateAndWatch(global_lock);
++          static_cast<MetalTexture&>(texture).MarkAsUsed();
++          PERF_counter_inc(kResolvesToTextures);
++          ++updated;
++        }
++      });
++  return updated;
++}
++
++void MetalTextureCache::VerifyResolvedTexture(const Texture& texture, id<MTLTexture> loaded) {
++  auto it = resolve_verify_copies_.find(&texture);
++  if (it == resolve_verify_copies_.end()) {
++    return;
++  }
++  id<MTLTexture> copy = it->second.texture;
++  bool red_blue_swap = it->second.red_blue_swap;
++  resolve_verify_copies_.erase(it);
++  if (red_blue_swap && copy.pixelFormat != MTLPixelFormatRGBA8Unorm) {
++    return;
++  }
++  // Bytes of a texel of the formats a resolve copies (the render target formats).
++  size_t bytes;
++  switch (copy.pixelFormat) {
++    case MTLPixelFormatRGBA8Unorm:
++    case MTLPixelFormatBGRA8Unorm:
++    case MTLPixelFormatRG16Float:
++    case MTLPixelFormatR32Float:
++    case MTLPixelFormatRGB10A2Unorm:
++      bytes = 4;
++      break;
++    case MTLPixelFormatRGBA16Float:
++    case MTLPixelFormatRG32Float:
++      bytes = 8;
++      break;
++    default:
++      return;
++  }
++  // A corner, the middle and a texel near the far corner.
++  const TextureKey& key = texture.key();
++  uint32_t width = key.width_minus_1 + 1, height = key.height_minus_1 + 1;
++  const MTLOrigin texels[] = {MTLOriginMake(0, 0, 0), MTLOriginMake(width / 2, height / 2, 0),
++                              MTLOriginMake(width - 1, height - 1, 0)};
++  constexpr size_t kSlot = 16;
++  constexpr size_t kTexels = sizeof(texels) / sizeof(texels[0]);
++  id<MTLBuffer> readback = [command_processor_.device() newBufferWithLength:kSlot * kTexels * 2
++                                                                    options:MTLResourceStorageModeShared];
++  id<MTLBlitCommandEncoder> blit =
++      command_processor_.GetBlitEncoder(rex::perf::CounterId::kRenderPassEndsTextureLoad);
++  for (size_t i = 0; i < kTexels; ++i) {
++    for (size_t j = 0; j < 2; ++j) {
++      [blit copyFromTexture:j ? copy : loaded
++                       sourceSlice:0
++                       sourceLevel:0
++                      sourceOrigin:texels[i]
++                        sourceSize:MTLSizeMake(1, 1, 1)
++                          toBuffer:readback
++                 destinationOffset:(i * 2 + j) * kSlot
++            destinationBytesPerRow:bytes
++          destinationBytesPerImage:bytes];
++    }
++  }
++  std::string what = fmt::format("format {} {}x{} endianness {}{}", uint32_t(key.format), width,
++                                 height, uint32_t(key.endianness),
++                                 red_blue_swap ? " red/blue swapped" : "");
++  command_processor_.AddCompletedHandler(^(id<MTLCommandBuffer>) {
++    uint8_t* data = static_cast<uint8_t*>(readback.contents);
++    if (red_blue_swap) {
++      // What the texture's views read from the copy: red and blue swapped back.
++      for (size_t i = 0; i < kTexels; ++i) {
++        std::swap(data[(i * 2 + 1) * kSlot], data[(i * 2 + 1) * kSlot + 2]);
++      }
++    }
++    bool match = true;
++    std::string loaded_bytes, copy_bytes;
++    for (size_t i = 0; i < kTexels; ++i) {
++      match &= !std::memcmp(data + i * 2 * kSlot, data + (i * 2 + 1) * kSlot, bytes);
++      for (size_t b = 0; b < bytes; ++b) {
++        loaded_bytes += fmt::format("{:02X}", data[i * 2 * kSlot + b]);
++        copy_bytes += fmt::format("{:02X}", data[(i * 2 + 1) * kSlot + b]);
++      }
++      loaded_bytes += ' ';
++      copy_bytes += ' ';
++    }
++    static std::mutex mutex;
++    static std::set<std::string> logged;
++    std::lock_guard<std::mutex> lock(mutex);
++    if (logged.insert(fmt::format("{} {}", match, what)).second) {
++      if (match) {
++        REXGPU_INFO("HLE resolve check: {} matches the load from memory", what);
++      } else {
++        REXGPU_WARN("HLE resolve check: {} differs: loaded {}, render target copy {}", what,
++                    loaded_bytes, copy_bytes);
++      }
++    }
++  });
++}
++
 +bool MetalTextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture, bool load_base,
 +                                                              bool load_mips) {
 +  MetalTexture& metal_texture = static_cast<MetalTexture&>(texture);
@@ -15209,6 +15517,14 @@ index 0000000..a170afe
 +    }
 +  }
 +  metal_texture.MarkAsUsed();
++  if (metal_texture.red_blue_swapped()) {
++    // Loaded from memory: the data is in the order the views expect again.
++    metal_texture.set_red_blue_swapped(false);
++    TextureFetchConstantsWritten(0, 31);
++  }
++  if (!resolve_verify_copies_.empty()) {
++    VerifyResolvedTexture(texture, host_texture);
++  }
 +  return true;
 +}
 +
@@ -15334,6 +15650,19 @@ index 0000000..a170afe
 +  // If the unsigned and the signed formats are the same, one view serves both.
 +  bool is_signed_separate_view =
 +      is_signed && host_format_pair.format_signed.format != host_format_pair.format_unsigned.format;
++  if (red_blue_swapped_) {
++    // Each component that reads red reads blue instead, and the other way around.
++    uint32_t swapped = host_swizzle;
++    for (uint32_t i = 0; i < 4; ++i) {
++      uint32_t source = (host_swizzle >> (3 * i)) & 0b111;
++      if (source == uint32_t(xenos::XE_GPU_TEXTURE_SWIZZLE_R) ||
++          source == uint32_t(xenos::XE_GPU_TEXTURE_SWIZZLE_B)) {
++        source ^= uint32_t(xenos::XE_GPU_TEXTURE_SWIZZLE_R) ^ uint32_t(xenos::XE_GPU_TEXTURE_SWIZZLE_B);
++        swapped = (swapped & ~(0b111u << (3 * i))) | (source << (3 * i));
++      }
++    }
++    host_swizzle = swapped;
++  }
 +  uint32_t view_key = uint32_t(is_signed_separate_view) | ((host_swizzle & 0xFFF) << 1) |
 +                      (uint32_t(is_array) << 13);
 +  auto it = views_.find(view_key);
@@ -15489,7 +15818,7 @@ index 0000000..b9bc2fb
 +
 +#undef CAMetalLayer
 diff --git a/src/graphics/pipeline/render_target/cache.cpp b/src/graphics/pipeline/render_target/cache.cpp
-index bd0019c..674d59f 100644
+index bd0019c..5a74503 100644
 --- a/src/graphics/pipeline/render_target/cache.cpp
 +++ b/src/graphics/pipeline/render_target/cache.cpp
 @@ -13,6 +13,10 @@
@@ -15725,7 +16054,7 @@ index bd0019c..674d59f 100644
    }
  
    if (interlock_barrier_only) {
-@@ -1254,6 +1441,104 @@ bool RenderTargetCache::WouldOwnershipChangeRequireTransfers(RenderTargetKey des
+@@ -1254,6 +1441,131 @@ bool RenderTargetCache::WouldOwnershipChangeRequireTransfers(RenderTargetKey des
    return false;
  }
  
@@ -15827,10 +16156,37 @@ index bd0019c..674d59f 100644
 +  stats = TransferStats();
 +}
 +
++RenderTargetCache::RenderTarget* RenderTargetCache::GetRangeSoleOwner(uint32_t start_tiles,
++                                                                    uint32_t end_tiles) const {
++  if (start_tiles >= end_tiles || end_tiles > xenos::kEdramTileCount) {
++    return nullptr;
++  }
++  // The range that starts at or before start_tiles.
++  auto it = ownership_ranges_.upper_bound(start_tiles);
++  if (it == ownership_ranges_.begin()) {
++    return nullptr;
++  }
++  --it;
++  RenderTargetKey owner = it->second.render_target;
++  if (owner.IsEmpty()) {
++    return nullptr;
++  }
++  for (; it != ownership_ranges_.end() && it->first < end_tiles; ++it) {
++    if (it->second.render_target != owner) {
++      return nullptr;
++    }
++    if (it->second.end_tiles >= end_tiles) {
++      auto render_target_it = render_targets_.find(owner);
++      return render_target_it != render_targets_.end() ? render_target_it->second : nullptr;
++    }
++  }
++  return nullptr;
++}
++
  void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_tiles_base_relative,
                                          uint32_t length_tiles,
                                          std::vector<Transfer>* transfers_append_out,
-@@ -1335,6 +1620,8 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
+@@ -1335,6 +1647,8 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
                       transfer_host_depth_source)) {
                // Extend the last transfer if, for example, transferring color,
                // but host depth is different.
@@ -15839,7 +16195,7 @@ index bd0019c..674d59f 100644
                transfers_append_out->back().end_tiles = transfer_end_tiles;
              } else {
                auto transfer_source_rt_it = render_targets_.find(transfer_source);
-@@ -1353,6 +1640,7 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
+@@ -1353,6 +1667,7 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
                        transfer_host_depth_source_rt_it != render_targets_.end()
                            ? transfer_host_depth_source_rt_it->second
                            : nullptr);
@@ -16333,7 +16689,7 @@ index e472251..21f81dc 100644
  
  void ShaderTranslator::TranslateControlFlowInstruction(const ControlFlowInstruction& cf) {
 diff --git a/src/graphics/pipeline/texture/cache.cpp b/src/graphics/pipeline/texture/cache.cpp
-index 76f5600..0e1e850 100644
+index 76f5600..ff0becf 100644
 --- a/src/graphics/pipeline/texture/cache.cpp
 +++ b/src/graphics/pipeline/texture/cache.cpp
 @@ -19,6 +19,7 @@
@@ -16384,7 +16740,7 @@ index 76f5600..0e1e850 100644
  uint32_t TextureCache::GuestToHostSwizzle(uint32_t guest_swizzle, uint32_t host_format_swizzle) {
    uint32_t host_swizzle = 0;
    for (uint32_t i = 0; i < 4; ++i) {
-@@ -877,6 +911,10 @@ TextureCache::Texture* TextureCache::FindOrCreateTexture(TextureKey key) {
+@@ -877,9 +911,25 @@ TextureCache::Texture* TextureCache::FindOrCreateTexture(TextureKey key) {
    }
    COUNT_profile_set("gpu/texture_cache/textures", textures_.size());
    texture->LogAction("Created");
@@ -16395,6 +16751,21 @@ index 76f5600..0e1e850 100644
    return texture;
  }
  
++void TextureCache::ForEachTextureAtBasePage(
++    uint32_t base_page,
++    const std::function<void(Texture& texture,
++                             const std::unique_lock<std::recursive_mutex>& global_lock)>& function) {
++  auto global_lock = global_critical_region_.Acquire();
++  for (auto& texture_pair : textures_) {
++    if (texture_pair.second && texture_pair.first.base_page == base_page) {
++      function(*texture_pair.second, global_lock);
++    }
++  }
++}
++
+ bool TextureCache::LoadTextureData(Texture& texture) {
+   PendingTextureLoad pending_load;
+   PendingSharedMemoryRange pending_ranges[2];
 diff --git a/src/graphics/pipeline/texture/events.cpp b/src/graphics/pipeline/texture/events.cpp
 new file mode 100644
 index 0000000..efa37e8

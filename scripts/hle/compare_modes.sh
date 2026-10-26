@@ -4,7 +4,7 @@
 # VARIANTS lists what to compare as "name:runtime options" separated by "|" (names without "_";
 # default "pm4:--gfx=pm4|hle:--gfx=hle"), for example to compare an HLE option on and off.
 #
-# Each run starts the built runtime with a fresh saves folder outside ~/Documents, the scripted
+# Each run starts the built runtime muted (audio_mute), with a fresh saves folder outside ~/Documents, the scripted
 # controller (AZURA_SCRIPTED_PAD) that reaches the campaign start, periodic captures
 # (AZURA_CAPTURE_DIR) and the per-frame counters (perf_log_csv), and stops it after SECONDS. The
 # output is the game's and stays local: OUT_DIR defaults to captures/compare (ignored by git).
@@ -57,7 +57,7 @@ run() {
   (cd "${RUNTIME_DIR}" && AZURA_SCRIPTED_PAD="${PAD_SCRIPT}" AZURA_CAPTURE_DIR="${work}/frames" \
     AZURA_CAPTURE_EVERY=4 exec ./azura "--game_data_root=${GAME_DIR}" "--user_data_root=${work}/saves" \
     "--cache_root=${work}/cache" "--log_file=${work}/run.log" --log_max_file_size_mb=4000 \
-    "--perf_log_csv=${work}/perf.csv" ${options} "$@" >/dev/null 2>&1) &
+    "--perf_log_csv=${work}/perf.csv" --audio_mute=true ${options} "$@" >/dev/null 2>&1) &
   local pid=$!
   local end=$((SECONDS + SECONDS_PER_RUN))
   while kill -0 "${pid}" 2>/dev/null && (( SECONDS < end )); do

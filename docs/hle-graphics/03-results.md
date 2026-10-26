@@ -304,6 +304,54 @@ texture loads, transfers, render passes; phase C) is where frame time can still 
 Revisit with a heavy scene played uncapped: if its frame time then exceeds its GPU time by a wide
 margin with the GPU idle between submissions, the CPU has become the limit.
 
+## Native resolves, step C1: resolved textures copied from the render target
+
+With `hle_native_resolves` (off by default, `gfx = hle` only), a resolve whose destination the
+texture cache already holds with exactly the resolve's key copies the render target's rectangle
+into that texture with a blit, and the texture is not loaded back from memory. The shared memory
+is still written as before, so anything else reading the range finds the same bytes
+(`resolves-plan.md`, C1).
+
+Which resolves qualify: 1x, 32 bits per pixel, no exponent bias, no destination offsets, formats
+8_8_8_8, 16_16_FLOAT and 32_FLOAT, one render target owning the whole source range with the same
+base, pitch and format, and a destination texture with one mip level and the same host pixel
+format. The 8_8_8_8 resolves swap red and blue (`copy_dest_swap`); the copy keeps the render
+target's order and the texture's views swap the two channels instead. Everything else goes
+through the usual path. The per-resolve bisection list of the plan (`hle_resolve_legacy`) is not
+built: no resolve needed it.
+
+**What the values are.** `hle_verify_resolves = true` loads the textures from memory as before
+and compares three texels of each with a copy made the C1 way. Every eligible resolve in the
+scripted scenes matches: 16_16_FLOAT 640x360 (endianness 2), and 8_8_8_8 1280x720 (endianness 0
+and 2, red and blue swapped).
+
+**Measured** (two rounds each, alternating, M4, muted):
+
+| Per frame, at the cap | pm4 | hle | hle with native resolves |
+| --- | --- | --- | --- |
+| Resolves to textures (title, menu / campaign start) | 0 / 0 | 0 / 0 | 3 / 2 |
+| Pass ends by a texture load (title, menu / campaign start) | 10 / 13 | 11 / 13 | 10 / 13 |
+| Render passes (title / menu / campaign start) | 58 / 60 / 84 | 58 / 61 / 83 | 58 / 61 / 83 |
+| Host compute dispatches (title / campaign start) | 113 / 142 | 109 / 139 | 106 / 137 |
+
+| Uncapped, frame ms / GPU ms per frame, each run | hle | hle with native resolves |
+| --- | --- | --- |
+| Title screen | 6.77 / 6.43, 8.06 / 6.91 | 6.66 / 6.05, 6.43 / 6.41 |
+| Main menu | 6.84 / 6.37, 6.76 / 6.30 | 6.73 / 6.35, 6.49 / 6.45 |
+| Campaign start | 11.10 / 9.53, 11.02 / 9.42 | 11.03 / 9.73, 9.12 / 9.13 |
+
+Images match `pm4` like `hle` does at the title and the campaign start (median 0.3 and 5.8% of
+pixels over 16, against `pm4`'s own 10.7 and 5.5). One `hle` run and one `hle` with native
+resolves run left the main menu up to a minute earlier than the `pm4` runs, so their menu
+captures show the loading screen and the opening cutscene. Those captures match `pm4`'s captures
+of the same screens (the cutscene at a slightly different camera position), so the difference is
+pacing, not rendering.
+
+C1 is correct but saves little: 2 or 3 texture loads (3 compute dispatches) per frame, and no
+render pass, because the pass the load ended now ends at the next transfer or resolve. The GPU
+time differences are within the run-to-run noise. Its value is as the base for C2 and C3, which
+remove the EDRAM dump and the memory copy of the same resolves.
+
 ## Success criteria
 
 | Criterion | Status |
