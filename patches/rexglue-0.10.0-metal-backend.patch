@@ -302,7 +302,7 @@ index da8e432..a0af18d 100644
    uint32_t primary_buffer_ptr_ = 0;
    uint32_t primary_buffer_size_ = 0;
 diff --git a/include/rex/graphics/flags.h b/include/rex/graphics/flags.h
-index 2cf24c4..ee35f38 100644
+index 2cf24c4..a10d201 100644
 --- a/include/rex/graphics/flags.h
 +++ b/include/rex/graphics/flags.h
 @@ -15,6 +15,7 @@
@@ -313,7 +313,15 @@ index 2cf24c4..ee35f38 100644
  REXCVAR_DECLARE(bool, clear_memory_page_state);
  REXCVAR_DECLARE(bool, half_pixel_offset);
  REXCVAR_DECLARE(bool, async_shader_compilation);
-@@ -72,6 +73,8 @@ REXCVAR_DECLARE(bool, use_fuzzy_alpha_epsilon);
+@@ -23,6 +24,7 @@ REXCVAR_DECLARE(bool, async_shader_compilation);
+ REXCVAR_DECLARE(int32_t, resolution_scale);
+ REXCVAR_DECLARE(int32_t, draw_resolution_scale_x);
+ REXCVAR_DECLARE(int32_t, draw_resolution_scale_y);
++REXCVAR_DECLARE(int32_t, draw_resolution_scale_denominator);
+ REXCVAR_DECLARE(bool, resolve_resolution_scale_fill_half_pixel_offset);
+ REXCVAR_DECLARE(bool, draw_resolution_scaled_texture_offsets);
+ REXCVAR_DECLARE(std::string, readback_resolve);
+@@ -72,6 +74,8 @@ REXCVAR_DECLARE(bool, use_fuzzy_alpha_epsilon);
  
  // GPU Shader Translation
  REXCVAR_DECLARE(std::string, dump_shaders);
@@ -351,10 +359,29 @@ index ac6b056..8ef1ee8 100644
  
  }  // namespace rex::graphics
 diff --git a/include/rex/graphics/pipeline/render_target/cache.h b/include/rex/graphics/pipeline/render_target/cache.h
-index b246319..d4ab7c7 100644
+index b246319..b1730d9 100644
 --- a/include/rex/graphics/pipeline/render_target/cache.h
 +++ b/include/rex/graphics/pipeline/render_target/cache.h
-@@ -194,6 +194,34 @@ class RenderTargetCache {
+@@ -25,6 +25,7 @@
+ #include <rex/graphics/register_file.h>
+ #include <rex/graphics/registers.h>
+ #include <rex/graphics/util/draw.h>
++#include <rex/graphics/util/resolution_scale.h>
+ #include <rex/graphics/util/draw_extent_estimator.h>
+ #include <rex/graphics/xenos.h>
+ 
+@@ -183,6 +184,10 @@ class RenderTargetCache {
+   // to be discarded.
+   uint32_t draw_resolution_scale_x() const { return draw_resolution_scale_x_; }
+   uint32_t draw_resolution_scale_y() const { return draw_resolution_scale_y_; }
++  // The scale as a ratio (whole numbers until rational scales are supported).
++  DrawResolutionScale draw_resolution_scale() const {
++    return DrawResolutionScale::Whole(draw_resolution_scale_x_, draw_resolution_scale_y_);
++  }
+   bool IsDrawResolutionScaled() const {
+     return draw_resolution_scale_x() > 1 || draw_resolution_scale_y() > 1;
+   }
+@@ -194,6 +199,34 @@ class RenderTargetCache {
  
    virtual void BeginFrame();
  
@@ -389,7 +416,7 @@ index b246319..d4ab7c7 100644
    virtual bool Update(bool is_rasterization_done, reg::RB_DEPTHCONTROL normalized_depth_control,
                        uint32_t normalized_color_mask, const Shader& vertex_shader);
  
-@@ -510,6 +538,52 @@ class RenderTargetCache {
+@@ -510,6 +543,52 @@ class RenderTargetCache {
    // false).
    virtual bool IsHostDepthEncodingDifferent(xenos::DepthRenderTargetFormat format) const = 0;
  
@@ -442,7 +469,7 @@ index b246319..d4ab7c7 100644
    void ResetAccumulatedRenderTargets() { are_accumulated_render_targets_valid_ = false; }
    RenderTarget* const* last_update_accumulated_render_targets() const {
      assert_true(GetPath() == Path::kHostRenderTargets);
-@@ -666,6 +740,11 @@ class RenderTargetCache {
+@@ -666,6 +745,11 @@ class RenderTargetCache {
    bool WouldOwnershipChangeRequireTransfers(RenderTargetKey dest,
                                              uint32_t start_tiles_base_relative,
                                              uint32_t length_tiles) const;
@@ -454,7 +481,7 @@ index b246319..d4ab7c7 100644
    // Updates ownership_ranges_, adds the transfers needed for the ownership
    // change to transfers_append_out if it's not null.
    void ChangeOwnership(RenderTargetKey dest, uint32_t start_tiles_base_relative,
-@@ -688,6 +767,12 @@ class RenderTargetCache {
+@@ -688,6 +772,12 @@ class RenderTargetCache {
    // update. 0 is depth, color starting from 1, nullptr if not bound.
    // Only valid for non-pixel-shader-interlock paths.
    RenderTarget* last_update_used_render_targets_[1 + xenos::kMaxColorRenderTargets];
@@ -575,7 +602,7 @@ index 340ced5..67eafaa 100644
    // Handles the start of translation.
    // At this point the vertex and texture bindings have been gathered.
 diff --git a/include/rex/graphics/pipeline/texture/cache.h b/include/rex/graphics/pipeline/texture/cache.h
-index d26cd4f..d649134 100644
+index d26cd4f..93d1f91 100644
 --- a/include/rex/graphics/pipeline/texture/cache.h
 +++ b/include/rex/graphics/pipeline/texture/cache.h
 @@ -13,6 +13,7 @@
@@ -586,7 +613,30 @@ index d26cd4f..d649134 100644
  #include <cstring>
  #include <memory>
  #include <unordered_map>
-@@ -81,6 +82,9 @@ class TextureCache {
+@@ -23,6 +24,7 @@
+ #include <rex/graphics/register_file.h>
+ #include <rex/graphics/shared_memory.h>
+ #include <rex/graphics/xenos.h>
++#include <rex/graphics/util/resolution_scale.h>
+ #include <rex/hash.h>
+ #include <rex/thread/mutex.h>
+ 
+@@ -68,8 +70,14 @@ class TextureCache {
+ 
+   // Returns whether the actual scale is not smaller than the requested one.
+   static bool GetConfigDrawResolutionScale(uint32_t& x_out, uint32_t& y_out);
++  // The configured scale as a ratio (draw_resolution_scale_denominator); false if it was clamped.
++  static bool GetConfigDrawResolutionScale(DrawResolutionScale& scale_out);
+   uint32_t draw_resolution_scale_x() const { return draw_resolution_scale_x_; }
+   uint32_t draw_resolution_scale_y() const { return draw_resolution_scale_y_; }
++  // The scale as a ratio (whole numbers until rational scales are supported).
++  DrawResolutionScale draw_resolution_scale() const {
++    return DrawResolutionScale::Whole(draw_resolution_scale_x_, draw_resolution_scale_y_);
++  }
+   bool IsDrawResolutionScaled() const {
+     return draw_resolution_scale_x_ > 1 || draw_resolution_scale_y_ > 1;
+   }
+@@ -81,6 +89,9 @@ class TextureCache {
    virtual void BeginFrame();
  
    void MarkRangeAsResolved(uint32_t start_unscaled, uint32_t length_unscaled);
@@ -596,7 +646,7 @@ index d26cd4f..d649134 100644
    // Ensures the memory backing the range in the scaled resolve address space is
    // allocated and returns whether it is.
    virtual bool EnsureScaledResolveMemoryCommitted(uint32_t /*start_unscaled*/,
-@@ -514,6 +518,13 @@ class TextureCache {
+@@ -514,6 +525,13 @@ class TextureCache {
    // Returns nullptr not only if the key is not supported, but also if couldn't
    // create the texture - if it's nullptr, occasionally a recreation attempt
    // should be made.
@@ -687,6 +737,79 @@ index e5e4908..d003128 100644
   private:
    class PositionYExportSink : public ShaderInterpreter::ExportSink {
     public:
+diff --git a/include/rex/graphics/util/resolution_scale.h b/include/rex/graphics/util/resolution_scale.h
+new file mode 100644
+index 0000000..0f316df
+--- /dev/null
++++ b/include/rex/graphics/util/resolution_scale.h
+@@ -0,0 +1,67 @@
++/**
++ * @file        graphics/util/resolution_scale.h
++ * @brief       The draw resolution scale as a ratio of host pixels to guest pixels
++ *
++ * @license     BSD 3-Clause License
++ *              See LICENSE file in the project root for full license text.
++ */
++
++#pragma once
++
++#include <cstdint>
++#include <numeric>
++
++#include <rex/assert.h>
++
++namespace rex::graphics {
++
++// The draw resolution scale per axis, as host pixels per guest pixel: numerator / denominator. The
++// denominator is shared by both axes and divides 8, so an EDRAM tile (80x16 samples, 40x16 at 64
++// bits per pixel), the halves of a depth tile and the 8-pixel alignment of resolves stay whole
++// numbers of host pixels at any scale (3/2 makes a tile 120x24 host pixels). Kept reduced: a whole
++// scale always has the denominator 1.
++struct DrawResolutionScale {
++  static constexpr uint32_t kMaxDenominator = 8;
++
++  uint32_t numerator_x = 1;
++  uint32_t numerator_y = 1;
++  uint32_t denominator = 1;
++
++  static DrawResolutionScale Make(uint32_t numerator_x, uint32_t numerator_y,
++                                  uint32_t denominator) {
++    assert_not_zero(numerator_x);
++    assert_not_zero(numerator_y);
++    assert_true(denominator && !(kMaxDenominator % denominator));
++    uint32_t divisor = std::gcd(std::gcd(numerator_x, numerator_y), denominator);
++    return DrawResolutionScale{numerator_x / divisor, numerator_y / divisor,
++                               denominator / divisor};
++  }
++  static DrawResolutionScale Whole(uint32_t x, uint32_t y) { return Make(x, y, 1); }
++
++  // Whether every guest pixel is a whole number of host pixels.
++  bool IsWhole() const { return denominator == 1; }
++  // Whether host pixels differ from guest pixels at all.
++  bool IsScaled() const { return numerator_x != denominator || numerator_y != denominator; }
++
++  float x() const { return float(numerator_x) / float(denominator); }
++  float y() const { return float(numerator_y) / float(denominator); }
++
++  // Host pixels of a guest length the scale maps to a whole number (multiples of the denominator,
++  // such as tiles and 8-pixel blocks).
++  uint32_t ScaleX(uint32_t guest_pixels) const {
++    assert_zero(guest_pixels * numerator_x % denominator);
++    return guest_pixels * numerator_x / denominator;
++  }
++  uint32_t ScaleY(uint32_t guest_pixels) const {
++    assert_zero(guest_pixels * numerator_y % denominator);
++    return guest_pixels * numerator_y / denominator;
++  }
++
++  bool operator==(const DrawResolutionScale& other) const {
++    return numerator_x == other.numerator_x && numerator_y == other.numerator_y &&
++           denominator == other.denominator;
++  }
++  bool operator!=(const DrawResolutionScale& other) const { return !(*this == other); }
++};
++
++}  // namespace rex::graphics
 diff --git a/include/rex/graphics/vulkan/command_processor.h b/include/rex/graphics/vulkan/command_processor.h
 index 373f8dd..66c8df7 100644
 --- a/include/rex/graphics/vulkan/command_processor.h
@@ -3053,10 +3176,10 @@ index 0000000..728a7d8
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_command_processor.mm b/src/graphics/metal/metal_command_processor.mm
 new file mode 100644
-index 0000000..721423e
+index 0000000..157ec9b
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.mm
-@@ -0,0 +1,2871 @@
+@@ -0,0 +1,2884 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.mm
 + * @brief       Xenos command processing with Metal
@@ -3395,8 +3518,21 @@ index 0000000..721423e
 +    return false;
 +  }
 +
-+  uint32_t draw_resolution_scale_x, draw_resolution_scale_y;
-+  TextureCache::GetConfigDrawResolutionScale(draw_resolution_scale_x, draw_resolution_scale_y);
++  // The configured scale as a ratio. Only whole scales are drawn so far: a rational one falls back
++  // to its whole part.
++  DrawResolutionScale configured_scale;
++  TextureCache::GetConfigDrawResolutionScale(configured_scale);
++  uint32_t draw_resolution_scale_x =
++      std::max(configured_scale.numerator_x / configured_scale.denominator, UINT32_C(1));
++  uint32_t draw_resolution_scale_y =
++      std::max(configured_scale.numerator_y / configured_scale.denominator, UINT32_C(1));
++  if (!configured_scale.IsWhole()) {
++    REXGPU_WARN("Metal: the draw resolution scale {}/{} x {}/{} is not supported yet; drawing at "
++                "{}x{}",
++                configured_scale.numerator_x, configured_scale.denominator,
++                configured_scale.numerator_y, configured_scale.denominator,
++                draw_resolution_scale_x, draw_resolution_scale_y);
++  }
 +
 +  render_target_cache_ = std::make_unique<MetalRenderTargetCache>(
 +      *register_file_, *memory_, draw_resolution_scale_x, draw_resolution_scale_y, *this);
@@ -18019,7 +18155,7 @@ index e472251..21f81dc 100644
  
  void ShaderTranslator::TranslateControlFlowInstruction(const ControlFlowInstruction& cf) {
 diff --git a/src/graphics/pipeline/texture/cache.cpp b/src/graphics/pipeline/texture/cache.cpp
-index 76f5600..ff0becf 100644
+index 76f5600..aa1de3f 100644
 --- a/src/graphics/pipeline/texture/cache.cpp
 +++ b/src/graphics/pipeline/texture/cache.cpp
 @@ -19,6 +19,7 @@
@@ -18030,7 +18166,40 @@ index 76f5600..ff0becf 100644
  #include <rex/graphics/pipeline/texture/info.h>
  #include <rex/graphics/pipeline/texture/util.h>
  #include <rex/graphics/register_file.h>
-@@ -349,6 +350,39 @@ void TextureCache::MarkRangeAsResolved(uint32_t start_unscaled, uint32_t length_
+@@ -77,6 +78,13 @@ REXCVAR_DEFINE_INT32(resolution_scale, 1, "GPU",
+     .range(1, 8)
+     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+ 
++REXCVAR_DEFINE_INT32(draw_resolution_scale_denominator, 1, "GPU",
++                     "Denominator of the draw resolution scale: the scale is draw_resolution_scale_x "
++                     "and _y (or resolution_scale) divided by it, for example 3 and 2 for 1.5 "
++                     "(1920x1080 from 1280x720). 1, 2, 4 or 8")
++    .range(1, 8)
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++
+ REXCVAR_DEFINE_BOOL(pre_mask_resolve_l2_block, true, "GPU",
+                     "Pre-mask scaled resolve L2 blocks to the write range before iterating");
+ 
+@@ -249,6 +257,18 @@ bool TextureCache::GetConfigDrawResolutionScale(uint32_t& x_out, uint32_t& y_out
+   return clamped_x == config_x && clamped_y == config_y;
+ }
+ 
++bool TextureCache::GetConfigDrawResolutionScale(DrawResolutionScale& scale_out) {
++  uint32_t numerator_x, numerator_y;
++  bool within_limits = GetConfigDrawResolutionScale(numerator_x, numerator_y);
++  uint32_t denominator = uint32_t(std::max(INT32_C(1), REXCVAR_GET(draw_resolution_scale_denominator)));
++  if (DrawResolutionScale::kMaxDenominator % denominator) {
++    denominator = 1;
++    within_limits = false;
++  }
++  scale_out = DrawResolutionScale::Make(numerator_x, numerator_y, denominator);
++  return within_limits;
++}
++
+ void TextureCache::ClearCache() {
+   DestroyAllTextures();
+ }
+@@ -349,6 +369,39 @@ void TextureCache::MarkRangeAsResolved(uint32_t start_unscaled, uint32_t length_
    shared_memory().RangeWrittenByGpu(start_unscaled, length_unscaled);
  }
  
@@ -18070,7 +18239,7 @@ index 76f5600..ff0becf 100644
  uint32_t TextureCache::GuestToHostSwizzle(uint32_t guest_swizzle, uint32_t host_format_swizzle) {
    uint32_t host_swizzle = 0;
    for (uint32_t i = 0; i < 4; ++i) {
-@@ -877,9 +911,25 @@ TextureCache::Texture* TextureCache::FindOrCreateTexture(TextureKey key) {
+@@ -877,9 +930,25 @@ TextureCache::Texture* TextureCache::FindOrCreateTexture(TextureKey key) {
    }
    COUNT_profile_set("gpu/texture_cache/textures", textures_.size());
    texture->LogAction("Created");
