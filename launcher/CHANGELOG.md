@@ -6,6 +6,28 @@ it as the update's notes (`scripts/release-common.sh`). Bumping the version adds
 release without one fails. One list item (`- `) per change, in English; an item may continue on
 indented lines.
 
+## 0.5.0
+
+- macOS: a new, faster way to draw the game, now the default. The launcher no longer replays the
+  console's graphics commands step by step: it follows what the game means to do, skipping copies
+  of the picture that were not needed and writing finished images straight from the graphics card.
+  It works at every resolution scale. On Linux and Windows the console's way stays the default.
+- macOS: the game's own effects can be switched off in the Video options: depth of field, dynamic
+  shadows, ambient occlusion, bloom and lens flares. Turning off depth of field and dynamic shadows
+  gives the most extra frames per second; the other three change the look only.
+- macOS: cheaper pixel shaders in textures that need no sign handling, about 10% less graphics
+  card time per frame in the scene measured. The first start after updating compiles the shaders
+  again, with the usual "Compiling shaders" notice.
+- RAAM's Shadow can be played. Downloadable content is a new panel in the launcher: it lists every
+  Gears of War 3 pack with its state, and installs the packages you add into your saves folder. The
+  launcher prepares what RAAM's Shadow needs from your own game files, and its achievements show in
+  the achievements section.
+- Downloadable content: it works when the game is a disc image (`.iso`) and packages can be added
+  inside a `.zip`.
+- Each installation now has a player identity of its own, so two players no longer share the same
+  one. It is kept in the saves folder.
+- The controller menu's texts follow the game's language.
+
 ## 0.4.5
 
 - Linux and Windows: higher and steadier frame rates, most of all in combat, with light glows
