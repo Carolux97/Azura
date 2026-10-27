@@ -428,7 +428,7 @@ Implemented in `runtime/src/menu/pc_options.{h,cpp}` (data and texts) and `scrip
 
 | Position | Category | Change |
 | --- | --- | --- |
-| 1 | Video | A list: Calibrate brightness (opens the game's calibration screen), Full screen, Frame rate limit (a list of our own), Field of view (a list of our own), Anti-aliasing, Motion blur, Film grain (a list of our own), Anisotropic filtering, Render resolution (a list of our own), Image scaling, Sharpness (a slider, only with an image scaling effect that sharpens), Performance overlay and Overlay position (lists of our own), Stutter reduction (a list of our own, Linux and Windows only: the SDK's Vulkan `occlusion_query_no_wait`). Back and Defaults |
+| 1 | Video | A list: Calibrate brightness (opens the game's calibration screen), Full screen, Frame rate limit (a list of our own), Field of view (a list of our own), Anti-aliasing, Motion blur, Film grain (a list of our own), Anisotropic filtering, Render resolution (a list of our own), Image scaling, Sharpness (a slider, only with an image scaling effect that sharpens), Performance overlay and Overlay position (lists of our own). Back and Defaults |
 | 0 | Game | The game's own rows, then the two of the mature content category (violence 46, mature language 37 with `bRequiresMatureLanguageSupport`) |
 | 5 | Keyboard and mouse | Replaces the storage location: Mouse sensitivity. Back and Defaults |
 | 6 | Local co-op | Replaces the mature content: no list; choosing it opens the Local co-op menu (`runtime/src/local_coop_menu.h`). Greyed out with no controller connected |
@@ -450,7 +450,7 @@ How:
 - **Lists of our own** (**verified**): a raw-value list row (`bUsesRawValue=true`) with an ID the
   profile does not have (9106 frame rate limit, 9107 image scaling, whose values are the upscaling
   effects of each platform's build, 9108 render resolution, whose first value is "Automatic" in
-  the player's language, 9110 performance overlay, 9111 overlay position, 9112 field of view, 9113 film grain, 9114 stutter reduction) needs no definition, so it can have any number of
+  the player's language, 9110 performance overlay, 9111 overlay position, 9112 field of view, 9113 film grain) needs no definition, so it can have any number of
   values with any names. `PopulateOptionsList` empties its local `OptionValues`
   (`TArray<string>`), fills it with `GetProfileSettingValue_SpecialCase(psid, OptionValues)` (which
   only knows the multiplayer characters 44/45 and weapons 50/130 and leaves it empty otherwise),
