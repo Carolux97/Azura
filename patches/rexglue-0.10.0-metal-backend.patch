@@ -1761,7 +1761,7 @@ index d54df86..52b27e7 100644
    X_STATUS Setup(runtime::FunctionDispatcher* function_dispatcher, KernelState* kernel_state,
                   ui::WindowedAppContext* app_context, bool with_presentation) {
 diff --git a/include/rex/system/kernel_state.h b/include/rex/system/kernel_state.h
-index 9b9cf9e..429888a 100644
+index 9b9cf9e..a87ae8c 100644
 --- a/include/rex/system/kernel_state.h
 +++ b/include/rex/system/kernel_state.h
 @@ -10,6 +10,7 @@
@@ -1772,7 +1772,15 @@ index 9b9cf9e..429888a 100644
  #include <atomic>
  #include <condition_variable>
  #include <filesystem>
-@@ -199,7 +200,16 @@ class KernelState {
+@@ -34,6 +35,7 @@
+ #include <rex/system/util/xdbf_utils.h>
+ #include <rex/system/xam/app_manager.h>
+ #include <rex/system/xam/content_manager.h>
++#include <rex/system/xam/player_identity.h>
+ #include <rex/system/xam/user_profile.h>
+ #include <rex/platform/dynlib.h>
+ #include <rex/system/function_dispatcher.h>
+@@ -199,7 +201,19 @@ class KernelState {
  
    xam::AppManager* app_manager() const { return app_manager_.get(); }
    xam::ContentManager* content_manager() const { return content_manager_.get(); }
@@ -1781,6 +1789,9 @@ index 9b9cf9e..429888a 100644
 +  xam::UserProfile* user_profile() const { return user_profiles_[0].get(); }
 +  // The profile of local player `user_index` (0 to 3) when signed in, nullptr otherwise.
 +  xam::UserProfile* user_profile(uint32_t user_index) const;
++  // This installation's identity (player 1's XUID, the machine ID for the network), from the user
++  // data folder's identity.toml.
++  const xam::PlayerIdentity& player_identity() const { return player_identity_; }
 +  // Signs local player `user_index` (1 to 3) in under `name`, or out, and tells the game
 +  // (XN_SYS_SIGNINCHANGED with the signed-in players). Callable from any thread.
 +  void SignInLocalUser(uint32_t user_index, const std::string& name);
@@ -1790,21 +1801,34 @@ index 9b9cf9e..429888a 100644
  
    // Access must be guarded by the global critical region.
    util::ObjectTable* object_table() { return &object_table_; }
-@@ -353,7 +363,8 @@ class KernelState {
+@@ -353,7 +367,9 @@ class KernelState {
  
    std::unique_ptr<xam::AppManager> app_manager_;
    std::unique_ptr<xam::ContentManager> content_manager_;
 -  std::unique_ptr<xam::UserProfile> user_profile_;
 +  // Local players 1 to 4 (user indices 0 to 3); only the first is signed in from the start.
++  xam::PlayerIdentity player_identity_;
 +  std::array<std::unique_ptr<xam::UserProfile>, 4> user_profiles_;
  
    rex::thread::global_critical_region global_critical_region_;
  
 diff --git a/include/rex/system/xam/content_manager.h b/include/rex/system/xam/content_manager.h
-index 949d185..60ccca8 100644
+index 949d185..5337bf1 100644
 --- a/include/rex/system/xam/content_manager.h
 +++ b/include/rex/system/xam/content_manager.h
-@@ -170,7 +170,8 @@ class ContentManager {
+@@ -144,6 +144,11 @@ class ContentManager {
+   ContentManager(KernelState* kernel_state, const std::filesystem::path& root_path);
+   ~ContentManager();
+ 
++  // The folder name a local player's content is kept under: kContentFolderXuid (plus the player's
++  // index for players 2 to 4) for the XUID of a local player, whatever this installation's XUID
++  // is, so saves stay where they always were; any other XUID as it is.
++  uint64_t ContentFolderXuid(uint64_t xuid) const;
++
+   std::vector<XCONTENT_AGGREGATE_DATA> ListContent(uint32_t device_id, uint64_t xuid,
+                                                    XContentType content_type,
+                                                    uint32_t title_id = -1);
+@@ -170,7 +175,8 @@ class ContentManager {
    X_RESULT ReadContentHeaderFile(const std::string_view file_name, uint64_t xuid, uint32_t title_id,
                                   XContentType content_type, XCONTENT_AGGREGATE_DATA& data) const;
  
@@ -1814,8 +1838,83 @@ index 949d185..60ccca8 100644
    bool IsContentOpen(const XCONTENT_AGGREGATE_DATA& data) const;
    void CloseOpenedFilesFromContent(const std::string_view root_name);
  
+diff --git a/include/rex/system/xam/player_identity.h b/include/rex/system/xam/player_identity.h
+new file mode 100644
+index 0000000..162fe8c
+--- /dev/null
++++ b/include/rex/system/xam/player_identity.h
+@@ -0,0 +1,69 @@
++/**
++ * @file        system/xam/player_identity.h
++ * @brief       The identity of an installation: its players' XUID and its machine on the network
++ *
++ * @license     BSD 3-Clause License
++ *              See LICENSE file in the project root for full license text.
++ *
++ * @remarks     Games tell players and consoles apart by XUID and by the console's network address
++ *              (XNADDR), so two installations that play together (System Link, online) need values
++ *              of their own. Each one makes them the first time it runs and keeps them in
++ *              identity.toml, in the user data folder:
++ *              - the XUID of player 1, a random offline one (0xE000 followed by 48 random bits);
++ *                players 2 to 4 are the next three;
++ *              - a machine ID, a random locally administered MAC address for the XNADDR (never the
++ *                computer's own);
++ *              - the 32-byte seed of an Ed25519 key, for signing what the installation sends
++ *                online later on.
++ *              The saves stay in the folder they always had (kContentFolderXuid), whatever the
++ *              XUID: see ContentManager::ContentFolderXuid.
++ */
++
++#pragma once
++
++#include <array>
++#include <cstdint>
++#include <filesystem>
++#include <optional>
++#include <random>
++#include <string>
++#include <string_view>
++
++namespace rex::system::xam {
++
++// Player 1's XUID before installations had an identity. Saves are still kept under it (and the
++// next three for players 2 to 4), so they stay where they always were.
++constexpr uint64_t kContentFolderXuid = 0xB13EBABEBABEBABE;
++
++// File name of the identity, in the user data folder.
++constexpr std::string_view kPlayerIdentityFileName = "identity.toml";
++
++struct PlayerIdentity {
++  uint64_t xuid = 0;
++  std::array<uint8_t, 6> machine_id{};
++  std::array<uint8_t, 32> key_seed{};
++};
++
++// Whether `xuid` can be player 1's: an offline XUID (0xE000 in its top 16 bits) whose next three
++// are offline too. The top 16 bits being 0xE000 also keeps clear the bits some games check before
++// letting a profile play (0x00C0000000000000).
++bool IsValidPlayerXuid(uint64_t xuid);
++
++// Whether `machine_id` is a locally administered unicast MAC address.
++bool IsValidMachineId(const std::array<uint8_t, 6>& machine_id);
++
++// A new identity from `random`.
++PlayerIdentity GeneratePlayerIdentity(std::random_device& random);
++
++// identity.toml's text for `identity`.
++std::string SerializePlayerIdentity(const PlayerIdentity& identity);
++
++// The identity in identity.toml's `text`, or nothing when it is not a valid one.
++std::optional<PlayerIdentity> ParsePlayerIdentity(std::string_view text);
++
++// The identity kept in `user_data_root`, made and saved there the first time. A file that cannot
++// be read is kept aside as identity.toml.bad and replaced. With no folder, the identity is made
++// for this run only.
++PlayerIdentity LoadOrCreatePlayerIdentity(const std::filesystem::path& user_data_root);
++
++}  // namespace rex::system::xam
 diff --git a/include/rex/system/xam/user_profile.h b/include/rex/system/xam/user_profile.h
-index 06888b9..4f93b37 100644
+index 06888b9..d4650bc 100644
 --- a/include/rex/system/xam/user_profile.h
 +++ b/include/rex/system/xam/user_profile.h
 @@ -11,6 +11,7 @@
@@ -1826,12 +1925,14 @@ index 06888b9..4f93b37 100644
  #include <memory>
  #include <string>
  #include <unordered_map>
-@@ -214,14 +215,23 @@ class UserProfile {
+@@ -214,14 +215,24 @@ class UserProfile {
      }
    };
  
-+  // Player 1's profile: signed in from the start, named after user_name.
-   UserProfile();
+-  UserProfile();
++  // Player 1's profile: XUID `xuid` (the installation's, see player_identity.h), signed in from
++  // the start as `name` ("User" when empty, at most 15 characters).
++  UserProfile(uint64_t xuid, std::string name);
 +  // The profile of another local player (players 2 to 4): signed out until SignIn.
 +  explicit UserProfile(uint64_t xuid);
  
@@ -1851,7 +1952,7 @@ index 06888b9..4f93b37 100644
    void set_kernel_state(KernelState* ks) { kernel_state_ = ks; }
  
    void AddSetting(std::unique_ptr<Setting> setting);
-@@ -230,6 +240,9 @@ class UserProfile {
+@@ -230,6 +241,9 @@ class UserProfile {
   private:
    uint64_t xuid_;
    std::string name_;
@@ -22419,27 +22520,35 @@ index 94468e6..151f680 100644
    // XN_SYS_UI (off)
    REX_KERNEL_STATE()->BroadcastNotification(0x00000009, 0);
 diff --git a/src/system/kernel_state.cpp b/src/system/kernel_state.cpp
-index 697399c..76bf9a0 100644
+index 697399c..84c210c 100644
 --- a/src/system/kernel_state.cpp
 +++ b/src/system/kernel_state.cpp
-@@ -65,8 +65,14 @@ KernelState::KernelState(Runtime* emulator)
+@@ -65,13 +65,22 @@ KernelState::KernelState(Runtime* emulator)
    file_system_ = emulator->file_system();
  
    app_manager_ = std::make_unique<xam::AppManager>();
 -  user_profile_ = std::make_unique<xam::UserProfile>();
 -  user_profile_->set_kernel_state(this);
-+  user_profiles_[0] = std::make_unique<xam::UserProfile>();
+ 
+   auto user_data_root = emulator_->user_data_root();
+   if (!user_data_root.empty()) {
+     user_data_root = std::filesystem::absolute(user_data_root);
+   }
++  player_identity_ = xam::LoadOrCreatePlayerIdentity(user_data_root);
++  user_profiles_[0] =
++      std::make_unique<xam::UserProfile>(player_identity_.xuid, REXCVAR_GET(user_name));
 +  for (uint32_t i = 1; i < user_profiles_.size(); ++i) {
-+    // Next to player 1's XUID, which keeps the bits 58410A1F checks (0x00C0000000000000) clear.
++    // Next to player 1's XUID (IsValidPlayerXuid leaves room for them).
 +    user_profiles_[i] = std::make_unique<xam::UserProfile>(user_profiles_[0]->xuid() + i);
 +  }
 +  for (auto& profile : user_profiles_) {
 +    profile->set_kernel_state(this);
 +  }
++
+   content_manager_ = std::make_unique<xam::ContentManager>(this, user_data_root);
  
-   auto user_data_root = emulator_->user_data_root();
-   if (!user_data_root.empty()) {
-@@ -1118,6 +1124,45 @@ void KernelState::UnregisterNotifyListener(XNotifyListener* listener) {
+   if (shared_kernel_state_ != nullptr) {
+@@ -1118,6 +1127,45 @@ void KernelState::UnregisterNotifyListener(XNotifyListener* listener) {
    }
  }
  
@@ -22527,10 +22636,43 @@ index c10694c..2225156 100644
    }
    REXSYS_DEBUG("  Mounted {} at {}", abs_game_root.string(), mount_path);
 diff --git a/src/system/xam/content_manager.cpp b/src/system/xam/content_manager.cpp
-index 5f44a44..e444603 100644
+index 5f44a44..1dd7abd 100644
 --- a/src/system/xam/content_manager.cpp
 +++ b/src/system/xam/content_manager.cpp
-@@ -452,9 +452,9 @@ X_RESULT ContentManager::UnmountAndDeleteContent(uint64_t xuid,
+@@ -97,12 +97,22 @@ ContentManager::ContentManager(KernelState* kernel_state, const std::filesystem:
+ 
+ ContentManager::~ContentManager() = default;
+ 
++uint64_t ContentManager::ContentFolderXuid(uint64_t xuid) const {
++  for (uint32_t i = 0; i < 4; ++i) {
++    const UserProfile* profile = kernel_state_->user_profile(i);
++    if (profile && profile->xuid() == xuid) {
++      return kContentFolderXuid + i;
++    }
++  }
++  return xuid;
++}
++
+ std::filesystem::path ContentManager::ResolvePackageRoot(uint64_t xuid, XContentType content_type,
+                                                          uint32_t title_id) {
+   if (title_id == kCurrentlyRunningTitleId) {
+     title_id = kernel_state_->title_id();
+   }
+-  auto xuid_str = fmt::format("{:016X}", xuid);
++  auto xuid_str = fmt::format("{:016X}", ContentFolderXuid(xuid));
+   auto title_id_str = fmt::format("{:08X}", title_id);
+   auto content_type_str = fmt::format("{:08X}", uint32_t(content_type));
+ 
+@@ -137,7 +147,7 @@ std::filesystem::path ContentManager::ResolvePackageHeaderPath(const std::string
+     xuid = 0;
+   }
+ 
+-  auto xuid_str = fmt::format("{:016X}", xuid);
++  auto xuid_str = fmt::format("{:016X}", ContentFolderXuid(xuid));
+   auto title_id_str = fmt::format("{:08X}", title_id);
+   auto content_type_str = fmt::format("{:08X}", uint32_t(content_type));
+   std::string final_name = std::string(file_name) + ".header";
+@@ -452,9 +462,9 @@ X_RESULT ContentManager::UnmountAndDeleteContent(uint64_t xuid,
    return X_ERROR_FILE_NOT_FOUND;
  }
  
@@ -22542,14 +22684,217 @@ index 5f44a44..e444603 100644
  
    // Per-game per-profile data location:
    // content_root/title_id/profile/user_name
+diff --git a/src/system/xam/player_identity.cpp b/src/system/xam/player_identity.cpp
+new file mode 100644
+index 0000000..8009139
+--- /dev/null
++++ b/src/system/xam/player_identity.cpp
+@@ -0,0 +1,169 @@
++/**
++ * @file        system/xam/player_identity.cpp
++ * @brief       The identity of an installation (rex/system/xam/player_identity.h)
++ *
++ * @license     BSD 3-Clause License
++ *              See LICENSE file in the project root for full license text.
++ */
++
++#include <rex/system/xam/player_identity.h>
++
++#include <fstream>
++#include <sstream>
++#include <system_error>
++
++#include <fmt/format.h>
++#include <toml++/toml.hpp>
++
++#include <rex/logging.h>
++
++namespace rex::system::xam {
++namespace {
++
++constexpr uint64_t kOfflineXuidPrefix = 0xE000000000000000ull;
++constexpr uint64_t kOfflineXuidPrefixMask = 0xFFFF000000000000ull;
++constexpr uint64_t kXuidRandomMask = 0x0000FFFFFFFFFFFFull;
++// Players 2 to 4 are player 1's XUID plus 1 to 3: the random part leaves room for them.
++constexpr uint64_t kLocalPlayersAfterFirst = 3;
++
++template <size_t N>
++std::string ToHex(const std::array<uint8_t, N>& bytes) {
++  std::string text;
++  text.reserve(N * 2);
++  for (uint8_t byte : bytes) {
++    text += fmt::format("{:02x}", byte);
++  }
++  return text;
++}
++
++template <size_t N>
++std::optional<std::array<uint8_t, N>> FromHex(std::string_view text) {
++  if (text.size() != N * 2) {
++    return std::nullopt;
++  }
++  std::array<uint8_t, N> bytes{};
++  for (size_t i = 0; i < N; ++i) {
++    uint8_t value = 0;
++    for (size_t k = 0; k < 2; ++k) {
++      const char c = text[i * 2 + k];
++      uint8_t digit;
++      if (c >= '0' && c <= '9') {
++        digit = uint8_t(c - '0');
++      } else if (c >= 'a' && c <= 'f') {
++        digit = uint8_t(c - 'a' + 10);
++      } else if (c >= 'A' && c <= 'F') {
++        digit = uint8_t(c - 'A' + 10);
++      } else {
++        return std::nullopt;
++      }
++      value = uint8_t(value << 4 | digit);
++    }
++    bytes[i] = value;
++  }
++  return bytes;
++}
++
++std::optional<uint64_t> ParseXuid(std::string_view text) {
++  const auto bytes = FromHex<8>(text);
++  if (!bytes) {
++    return std::nullopt;
++  }
++  uint64_t xuid = 0;
++  for (uint8_t byte : *bytes) {
++    xuid = xuid << 8 | byte;
++  }
++  return xuid;
++}
++
++}  // namespace
++
++bool IsValidPlayerXuid(uint64_t xuid) {
++  return (xuid & kOfflineXuidPrefixMask) == kOfflineXuidPrefix &&
++         (xuid & kXuidRandomMask) + kLocalPlayersAfterFirst <= kXuidRandomMask;
++}
++
++bool IsValidMachineId(const std::array<uint8_t, 6>& machine_id) {
++  // Bit 1 of the first byte: locally administered; bit 0: multicast.
++  return (machine_id[0] & 0x03) == 0x02;
++}
++
++PlayerIdentity GeneratePlayerIdentity(std::random_device& random) {
++  PlayerIdentity identity;
++  uint64_t bits = 0;
++  do {
++    bits = (uint64_t(random()) << 32 | random()) & kXuidRandomMask;
++    identity.xuid = kOfflineXuidPrefix | bits;
++  } while (!IsValidPlayerXuid(identity.xuid));
++  for (auto& byte : identity.machine_id) {
++    byte = uint8_t(random());
++  }
++  identity.machine_id[0] = uint8_t((identity.machine_id[0] & 0xFC) | 0x02);
++  for (auto& byte : identity.key_seed) {
++    byte = uint8_t(random());
++  }
++  return identity;
++}
++
++std::string SerializePlayerIdentity(const PlayerIdentity& identity) {
++  return fmt::format(
++      "# This installation's identity for playing with other people. Keep it with the saves;\n"
++      "# deleting it gives the next start a new one.\n"
++      "xuid = \"{:016X}\"\n"
++      "machine_id = \"{}\"\n"
++      "key_seed = \"{}\"\n",
++      identity.xuid, ToHex(identity.machine_id), ToHex(identity.key_seed));
++}
++
++std::optional<PlayerIdentity> ParsePlayerIdentity(std::string_view text) {
++  toml::table table;
++  try {
++    table = toml::parse(text);
++  } catch (const toml::parse_error&) {
++    return std::nullopt;
++  }
++  const auto xuid = ParseXuid(table["xuid"].value_or<std::string>(""));
++  const auto machine_id = FromHex<6>(table["machine_id"].value_or<std::string>(""));
++  const auto key_seed = FromHex<32>(table["key_seed"].value_or<std::string>(""));
++  if (!xuid || !IsValidPlayerXuid(*xuid) || !machine_id || !IsValidMachineId(*machine_id) ||
++      !key_seed) {
++    return std::nullopt;
++  }
++  return PlayerIdentity{*xuid, *machine_id, *key_seed};
++}
++
++PlayerIdentity LoadOrCreatePlayerIdentity(const std::filesystem::path& user_data_root) {
++  std::random_device random;
++  if (user_data_root.empty()) {
++    REXSYS_WARN("Player identity: no user data folder, using one for this run only");
++    return GeneratePlayerIdentity(random);
++  }
++  const auto path = user_data_root / kPlayerIdentityFileName;
++  std::error_code error;
++  if (std::filesystem::exists(path, error)) {
++    std::ifstream in(path, std::ios::binary);
++    std::stringstream text;
++    text << in.rdbuf();
++    if (auto identity = ParsePlayerIdentity(text.str())) {
++      REXSYS_INFO("Player identity: XUID {:016X}", identity->xuid);
++      return *identity;
++    }
++    auto bad = path;
++    bad += ".bad";
++    std::filesystem::rename(path, bad, error);
++    REXSYS_WARN("Player identity: {} is not valid, kept as {} and replaced", path.string(),
++                bad.string());
++  }
++  const PlayerIdentity identity = GeneratePlayerIdentity(random);
++  std::filesystem::create_directories(user_data_root, error);
++  std::ofstream out(path, std::ios::binary | std::ios::trunc);
++  out << SerializePlayerIdentity(identity);
++  if (!out) {
++    REXSYS_WARN("Player identity: cannot write {}, using a new one for this run only",
++                path.string());
++  } else {
++    REXSYS_INFO("Player identity: new XUID {:016X}, saved in {}", identity.xuid, path.string());
++  }
++  return identity;
++}
++
++}  // namespace rex::system::xam
 diff --git a/src/system/xam/user_profile.cpp b/src/system/xam/user_profile.cpp
-index 7ed67aa..1ab4438 100644
+index 7ed67aa..d5c61f0 100644
 --- a/src/system/xam/user_profile.cpp
 +++ b/src/system/xam/user_profile.cpp
-@@ -35,8 +35,22 @@ UserProfile::UserProfile() {
-     config_name.resize(15);
+@@ -14,7 +14,6 @@
+ #include <fmt/format.h>
+ 
+ #include <rex/logging.h>
+-#include <rex/system/flags.h>
+ #include <rex/system/kernel_state.h>
+ #include <rex/system/xam/user_profile.h>
+ 
+@@ -22,21 +21,34 @@ namespace rex {
+ namespace system {
+ namespace xam {
+ 
+-UserProfile::UserProfile() {
++UserProfile::UserProfile(uint64_t xuid, std::string name) : xuid_(xuid) {
+   // 58410A1F checks the user XUID against a mask of 0x00C0000000000000 (3<<54),
+   // if non-zero, it prevents the user from playing the game.
+   // "You do not have permissions to perform this operation."
+-  xuid_ = 0xB13EBABEBABEBABE;
+-  std::string config_name = REXCVAR_GET(user_name);
+-  if (config_name.empty()) {
+-    config_name = "User";
++  // The installation's XUIDs keep those bits clear (IsValidPlayerXuid).
++  if (name.empty()) {
++    name = "User";
    }
-   name_ = config_name;
+-  if (config_name.size() > 15) {
+-    config_name.resize(15);
++  if (name.size() > 15) {
++    name.resize(15);
+   }
+-  name_ = config_name;
++  name_ = std::move(name);
 +  signed_in_.store(true, std::memory_order_release);
    REXLOG_DEBUG("[Kernel] UserProfile initialized with gamertag: '{}'", name_);
 +  AddDefaultSettings();
@@ -22569,7 +22914,7 @@ index 7ed67aa..1ab4438 100644
    // https://cs.rin.ru/forum/viewtopic.php?f=38&t=60668&hilit=gfwl+live&start=195
    // https://github.com/arkem/py360/blob/master/py360/constants.py
    // XPROFILE_GAMER_YAXIS_INVERSION
-@@ -142,7 +156,7 @@ UserProfile::Setting* UserProfile::GetSetting(uint32_t setting_id) {
+@@ -142,7 +154,7 @@ UserProfile::Setting* UserProfile::GetSetting(uint32_t setting_id) {
  
  void UserProfile::LoadSetting(UserProfile::Setting* setting) {
    if (setting->is_title_specific()) {
@@ -22578,7 +22923,7 @@ index 7ed67aa..1ab4438 100644
      auto setting_id = fmt::format("{:08X}", setting->setting_id);
      auto file_path = content_dir / setting_id;
      auto file = rex::filesystem::OpenFile(file_path, "rb");
-@@ -167,7 +181,7 @@ void UserProfile::LoadSetting(UserProfile::Setting* setting) {
+@@ -167,7 +179,7 @@ void UserProfile::LoadSetting(UserProfile::Setting* setting) {
  void UserProfile::SaveSetting(UserProfile::Setting* setting) {
    if (setting->is_title_specific()) {
      auto serialized_setting = setting->Serialize();
@@ -23403,3 +23748,129 @@ index 9eeb902..6337da5 100644
          break;
        }
      }
+diff --git a/tests/unit/CMakeLists.txt b/tests/unit/CMakeLists.txt
+index 7bd264b..094cf77 100644
+--- a/tests/unit/CMakeLists.txt
++++ b/tests/unit/CMakeLists.txt
+@@ -14,6 +14,7 @@ add_executable(unit_tests
+     ppc/stack_test.cpp
+     system/guest_path_test.cpp
+     system/achievement_manager_test.cpp
++    system/player_identity_test.cpp
+     system/function_dispatcher_test.cpp
+     input/input_assignment_test.cpp
+     codegen/codegen_writer_test.cpp
+diff --git a/tests/unit/system/player_identity_test.cpp b/tests/unit/system/player_identity_test.cpp
+new file mode 100644
+index 0000000..c445934
+--- /dev/null
++++ b/tests/unit/system/player_identity_test.cpp
+@@ -0,0 +1,108 @@
++/**
++ * @file        player_identity_test.cpp
++ * @brief       Unit tests for the installation's identity (rex/system/xam/player_identity.h).
++ *
++ * @license     BSD 3-Clause License
++ *              See LICENSE file in the project root for full license text.
++ */
++
++#include <filesystem>
++#include <fstream>
++#include <random>
++#include <sstream>
++#include <string>
++
++#include <catch2/catch_test_macros.hpp>
++
++#include <rex/system/xam/player_identity.h>
++
++using namespace rex::system::xam;
++
++namespace {
++
++std::filesystem::path FreshFolder(std::string_view name) {
++  auto path = std::filesystem::temp_directory_path() / "rexglue_player_identity_test" / name;
++  std::filesystem::remove_all(path);
++  std::filesystem::create_directories(path);
++  return path;
++}
++
++std::string ReadFile(const std::filesystem::path& path) {
++  std::ifstream in(path, std::ios::binary);
++  std::stringstream text;
++  text << in.rdbuf();
++  return text.str();
++}
++
++}  // namespace
++
++TEST_CASE("Player XUIDs are offline, with room for players 2 to 4", "[player_identity]") {
++  CHECK(IsValidPlayerXuid(0xE000000000000000ull));
++  CHECK(IsValidPlayerXuid(0xE000FFFFFFFFFFFCull));
++  CHECK_FALSE(IsValidPlayerXuid(0xE000FFFFFFFFFFFDull));  // player 4 would leave the range
++  CHECK_FALSE(IsValidPlayerXuid(kContentFolderXuid));
++  CHECK_FALSE(IsValidPlayerXuid(0x0009000000000001ull));  // an online XUID
++  CHECK_FALSE(IsValidPlayerXuid(0xE0C0000000000000ull));  // bits some games refuse
++}
++
++TEST_CASE("Generated identities are valid and differ", "[player_identity]") {
++  std::random_device random;
++  const PlayerIdentity a = GeneratePlayerIdentity(random);
++  const PlayerIdentity b = GeneratePlayerIdentity(random);
++  CHECK(IsValidPlayerXuid(a.xuid));
++  CHECK(IsValidMachineId(a.machine_id));
++  CHECK((a.xuid & 0x00C0000000000000ull) == 0);
++  CHECK(a.xuid != b.xuid);
++  CHECK(a.machine_id != b.machine_id);
++  CHECK(a.key_seed != b.key_seed);
++}
++
++TEST_CASE("Identities survive their file", "[player_identity]") {
++  std::random_device random;
++  const PlayerIdentity identity = GeneratePlayerIdentity(random);
++  const auto parsed = ParsePlayerIdentity(SerializePlayerIdentity(identity));
++  REQUIRE(parsed);
++  CHECK(parsed->xuid == identity.xuid);
++  CHECK(parsed->machine_id == identity.machine_id);
++  CHECK(parsed->key_seed == identity.key_seed);
++}
++
++TEST_CASE("Invalid identity files are refused", "[player_identity]") {
++  std::random_device random;
++  const std::string good = SerializePlayerIdentity(GeneratePlayerIdentity(random));
++  CHECK_FALSE(ParsePlayerIdentity(""));
++  CHECK_FALSE(ParsePlayerIdentity("not toml ["));
++  // The legacy XUID is not an installation's own.
++  auto legacy = good;
++  legacy.replace(legacy.find("xuid = \"") + 8, 16, "B13EBABEBABEBABE");
++  CHECK_FALSE(ParsePlayerIdentity(legacy));
++  // A multicast machine ID.
++  auto multicast = good;
++  multicast.replace(multicast.find("machine_id = \"") + 14, 2, "03");
++  CHECK_FALSE(ParsePlayerIdentity(multicast));
++  // A short key seed.
++  auto short_seed = good;
++  short_seed.replace(short_seed.find("key_seed = \"") + 12, 2, "");
++  CHECK_FALSE(ParsePlayerIdentity(short_seed));
++}
++
++TEST_CASE("The identity is made once and kept", "[player_identity]") {
++  const auto folder = FreshFolder("kept");
++  const PlayerIdentity first = LoadOrCreatePlayerIdentity(folder);
++  REQUIRE(std::filesystem::is_regular_file(folder / kPlayerIdentityFileName));
++  const PlayerIdentity second = LoadOrCreatePlayerIdentity(folder);
++  CHECK(second.xuid == first.xuid);
++  CHECK(second.machine_id == first.machine_id);
++  CHECK(second.key_seed == first.key_seed);
++}
++
++TEST_CASE("An unreadable identity is kept aside and replaced", "[player_identity]") {
++  const auto folder = FreshFolder("replaced");
++  {
++    std::ofstream(folder / kPlayerIdentityFileName) << "xuid = \"broken\"\n";
++  }
++  const PlayerIdentity identity = LoadOrCreatePlayerIdentity(folder);
++  CHECK(IsValidPlayerXuid(identity.xuid));
++  CHECK(ReadFile(folder / "identity.toml.bad") == "xuid = \"broken\"\n");
++  CHECK(ParsePlayerIdentity(ReadFile(folder / kPlayerIdentityFileName)));
++}
