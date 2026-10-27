@@ -12,10 +12,18 @@
 #include <functional>
 #include <iterator>
 #include <map>
+#include <memory>
 #include <optional>
+#include <span>
+#include <string>
+#include <string_view>
 #include <unordered_set>
 
 #include <rex/cvar.h>
+#include <rex/filesystem.h>
+#include <rex/filesystem/devices/disc_image_device.h>
+#include <rex/filesystem/entry.h>
+#include <rex/filesystem/file.h>
 
 #include "bytecode.h"
 #include "lzx.h"
@@ -1032,6 +1040,23 @@ std::optional<Bytes> ReadFile(const std::filesystem::path& path) {
   return Bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
 }
 
+// A file of the disc image (.iso) mounted as device, by its path inside the image (backslashes).
+std::optional<Bytes> ReadDiscFile(rex::filesystem::DiscImageDevice& device, std::string_view path) {
+  using rex::X_STATUS;
+  rex::filesystem::Entry* entry = device.ResolvePath(path);
+  if (!entry) return std::nullopt;
+  rex::filesystem::File* file = nullptr;
+  if (entry->Open(rex::filesystem::FileAccess::kFileReadData, &file) != X_STATUS_SUCCESS || !file) {
+    return std::nullopt;
+  }
+  Bytes data(entry->size());
+  size_t bytes_read = 0;
+  X_STATUS status = file->ReadSync(std::span<uint8_t>(data.data(), data.size()), 0, &bytes_read);
+  file->Destroy();
+  if (status != X_STATUS_SUCCESS || bytes_read != data.size()) return std::nullopt;
+  return data;
+}
+
 bool WriteFile(const std::filesystem::path& path, const Bytes& data) {
   std::ofstream out(path, std::ios::binary | std::ios::trunc);
   out.write(reinterpret_cast<const char*>(data.data()), std::streamsize(data.size()));
@@ -1050,9 +1075,17 @@ bool DlcPatchRequested() { return !REXCVAR_GET(make_dlc_patch).empty(); }
 
 int MakeDlcPatch(const std::filesystem::path& game_data_root) {
   const std::filesystem::path out = REXCVAR_GET(make_dlc_patch);
+  // The game data root is a folder, or a disc image (.iso) read in place as the runtime mounts it
+  // (Runtime::SetupVfs).
+  std::unique_ptr<rex::filesystem::DiscImageDevice> disc;
+  if (std::filesystem::is_regular_file(game_data_root)) {
+    disc = std::make_unique<rex::filesystem::DiscImageDevice>("", game_data_root);
+    if (!disc->Initialize()) return Fail("the game's disc image could not be read");
+  }
   const std::filesystem::path cooked = game_data_root / "GearGame" / "CookedXbox360";
   auto read_package = [&](const char* name) -> std::optional<Bytes> {
-    const auto file = ReadFile(cooked / name);
+    const auto file = disc ? ReadDiscFile(*disc, std::string("GearGame\\CookedXbox360\\") + name)
+                           : ReadFile(cooked / name);
     return file ? DecompressChunk(*file) : std::nullopt;
   };
   const auto gear_game = read_package("GearGame.xxx");
