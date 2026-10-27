@@ -782,6 +782,24 @@ The frame time follows the GPU time: the game is limited by the GPU there (about
 a 12.3 ms frame in combat). Dynamic shadows and depth of field are the only settings that change the
 frame time by much.
 
+**The Video options Depth of field, Dynamic shadows, Ambient occlusion, Bloom and Lens flares**
+write those settings while the game runs (`runtime/src/system_settings.cpp`). A mid-function hook
+right after the game reads its ambient occlusion setting (`AzuraNoteEngineSettings`) gives them the
+object's address, which the game has in `r10` there, so no edition's address is written into the
+runtime. While an option is off, every frame writes 0 to all the fields of its setting
+(`DepthOfField` +64 and +1156, `DynamicShadows` +888 and +1044, `AmbientOcclusion` +68, +1040 and
++1160, `Bloom` +72 and +1164, `LensFlares` +96 and +1188), in case the engine writes its settings
+again; turning it back on puts back the values the game had.
+
+The game reads depth of field, bloom, lens flares and ambient occlusion with the object's address
+in the code itself (`lis r11,-31932` and `addi r11,r11,-2936`, that is `0x8343F488`, then
+`lwz` of +64, +72, +96 or +1040, in sub_82593DB8, sub_82861F40, sub_82762C30 and sub_827C9610):
+those are the loads the community patches replace with 0 ("Disable Depth of Field" and "Disable
+Bloom" by boma, "Disable Lens Flares" by illusion, "Disable Ambient Occlusion" by illusion and boma,
+in the Xenia game-patches file `4D5308AB - Gears of War 3.patch.toml`), so writing the fields has
+the same effect. Ambient occlusion is off by default on Linux, where it leaves black patches on
+surfaces.
+
 ## Render command queue
 
 Game threads enqueue render commands into the engine's ring buffer (`FRingBuffer`, guest
