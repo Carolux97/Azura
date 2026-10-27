@@ -121,7 +121,29 @@
     "runtimeNotBuilt": "Még nincs felépítve: az első építés a játékpéldányodból néhány percig tart.",
     "runtimeNeedsCompiler": "Előbb telepítsd a fordítót (lejjebb).",
     "runtimeUpdateLink": "Frissítés érhető el: néhány másodperc alatt települ.",
-    "runtimeUpdateBuild": "A frissítéshez újra kell építeni a játékot: körülbelül két perc."
+    "runtimeUpdateBuild": "A frissítéshez újra kell építeni a játékot: körülbelül két perc.",
+    "dlcTitle": "Letölthető tartalom",
+    "dlcHelp": "Add hozzá a saját letölthető tartalmaidat (az Xbox 360 által letöltött csomagfájlokat). A mentések mappájába települnek.",
+    "dlcAdd": "Letölthető tartalom hozzáadása…",
+    "dlcNames": {
+      "raamsShadow": "RAAM's Shadow",
+      "hordeCommandPack": "Horde Command Pack",
+      "fenixRising": "Fenix Rising",
+      "forcesOfNature": "Forces of Nature",
+      "versusBooster": "Versus Booster Map Pack"
+    },
+    "dlcStatus": {
+      "ready": "Telepítve · válaszd a Hadjárat menüben",
+      "notInstalled": "Nincs telepítve",
+      "needsRuntime": "Telepítve · a runtime frissítése után készül el",
+      "unsupported": "Telepítve, de ezekkel a játékfájlokkal nem sikerült előkészíteni",
+      "multiplayer": "A többjátékos móddal érkezik",
+      "installing": "Telepítés… (egy percig tart)"
+    },
+    "dlcOthers": "Egyéb telepített tartalom",
+    "dlcOthersCount": "{count} csomag",
+    "dlcInstalled": "{name} telepítve.",
+    "dlcFailed": "A csomagot nem sikerült telepíteni: {detail}"
   },
   "graphics": {
     "title": "Grafika",
@@ -173,6 +195,7 @@
       "act4": "IV. felvonás",
       "act5": "V. felvonás",
       "campaign": "Kampány",
+      "raamsShadow": "RAAM's Shadow",
       "modes": "Versus, Horda és Fenevad"
     },
     "lockedTitle": "Teljesítmények zárolva",

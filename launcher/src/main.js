@@ -62,6 +62,9 @@ import {
   pickGameImage,
   onPathDropped,
   pickSavesFolder,
+  pickDlcPackage,
+  installDlc,
+  dlcState,
   repairSaves,
   resetSaves,
   restoreSaveBackup,
@@ -947,6 +950,56 @@ const setupCompiler = () => {
   });
 };
 
+/** Downloadable content panel: what is installed, and whether RAAM's Shadow can be played. */
+const dlc = { state: null, installing: null };
+/** One row of the downloadable content list: a light (its state), the name and a line under it. */
+const dlcRow = (name, detail, rowState) => {
+  const row = document.createElement("div");
+  row.className = "status";
+  row.dataset.state = rowState;
+  const dot = document.createElement("span");
+  dot.className = "dot";
+  const text = document.createElement("div");
+  const title = document.createElement("strong");
+  title.textContent = name;
+  const line = document.createElement("span");
+  line.className = "status-detail";
+  line.textContent = detail;
+  text.append(title, line);
+  row.append(dot, text);
+  return row;
+};
+
+/**
+ * The downloadable content list: each of Gears of War 3's, with a green light when it is ready, an
+ * amber one while a package installs, and a red one otherwise (not installed, or not playable yet),
+ * then the installed packages the list does not identify.
+ */
+const renderDlc = () => {
+  const list = document.getElementById("dlc-list");
+  const button = document.getElementById("add-dlc");
+  if (!list || !button) return;
+  button.disabled = dlc.installing;
+  const rows = [];
+  if (dlc.installing) rows.push(dlcRow(dlc.installing, t("install.dlcStatus.installing"), "progress"));
+  for (const entry of dlc.state?.entries ?? []) {
+    rows.push(dlcRow(t(`install.dlcNames.${entry.id}`), t(`install.dlcStatus.${entry.status}`), entry.status === "ready" ? "ok" : "warn"));
+  }
+  if (dlc.state?.otherPackages) {
+    rows.push(dlcRow(t("install.dlcOthers"), t("install.dlcOthersCount", { count: dlc.state.otherPackages }), "ok"));
+  }
+  list.replaceChildren(...rows);
+  list.hidden = rows.length === 0;
+};
+const refreshDlc = async () => {
+  try {
+    dlc.state = await dlcState();
+  } catch {
+    dlc.state = null;
+  }
+  renderDlc();
+};
+
 /** Writes the folder path and the result of its check into the Installation view. */
 const renderInstall = () => {
   const check = state.gameCheck;
@@ -1088,6 +1141,22 @@ const setupInstall = () => {
     }
     renderInstall();
   };
+  document.getElementById("add-dlc")?.addEventListener("click", async () => {
+    const pkg = await pickDlcPackage();
+    if (!pkg) return;
+    // The package's file name names its row while it installs (what it is, the runtime tells after).
+    dlc.installing = pkg.split(/[\\/]/).pop();
+    renderDlc();
+    try {
+      const name = await installDlc(pkg);
+      toast(t("install.dlcInstalled", { name }));
+    } catch (error) {
+      toast(t("install.dlcFailed", { detail: String(error) }));
+    }
+    dlc.installing = null;
+    await refreshDlc();
+  });
+  refreshDlc();
   document.getElementById("pick-saves").addEventListener("click", async () => {
     const folder = await pickSavesFolder();
     if (folder && folder !== state.savesFolder) await moveSaves(folder, false);

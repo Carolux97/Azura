@@ -28,6 +28,9 @@ REXCVAR_DEFINE_BOOL(menu_remove_unused, true, "Azura/Menu",
                     "Remove main menu options that cannot work (event calendar, Marketplace)");
 REXCVAR_DEFINE_BOOL(menu_coming_soon, true, "Azura/Menu",
                     "Grey out online options and mark them \"(coming soon)\"");
+REXCVAR_DEFINE_BOOL(dlc_campaign, false, "Azura/DLC",
+                    "RAAM's Shadow is installed and Azura's script patch for it is mounted: the "
+                    "campaign menu's DLC option opens it (set by the launcher)");
 
 namespace azura::menu {
 
@@ -48,25 +51,29 @@ struct Texts {
   const char* quit;
   const char* quit_tooltip;
   const char* coming_soon;
+  const char* dlc_name;  // the campaign add-on's title
+  const char* dlc_tooltip;
+  const char* not_installed;  // after its title while it is not installed
+  const char* not_installed_tooltip;
 };
 
 // Texts for each localization, keyed by the extension of its files.
 const std::map<std::string, Texts>& LocalizedTexts() {
   static const std::map<std::string, Texts> texts = {
-      {"int", {"Quit Game", "Close Gears of War 3 and return to the desktop.", "(coming soon)"}},
-      {"esn", {"Salir del juego", "Cierra Gears of War 3 y vuelve al escritorio.", "(próximamente)"}},
-      {"deu", {"Spiel beenden", "Beendet Gears of War 3 und kehrt zum Desktop zurück.", "(demnächst)"}},
-      {"ita", {"Esci dal gioco", "Chiudi Gears of War 3 e torna al desktop.", "(prossimamente)"}},
-      {"jpn", {"ゲームを終了", "Gears of War 3 を終了してデスクトップに戻ります。", "(近日公開)"}},
-      {"esm", {"Salir del juego", "Cierra Gears of War 3 y vuelve al escritorio.", "(próximamente)"}},
-      {"fra", {"Quitter le jeu", "Fermer Gears of War 3 et revenir au bureau.", "(bientôt)"}},
-      {"ptb", {"Sair do jogo", "Fecha o Gears of War 3 e volta para a área de trabalho.", "(em breve)"}},
-      {"pol", {"Wyjdź z gry", "Zamknij Gears of War 3 i wróć do pulpitu.", "(wkrótce)"}},
-      {"rus", {"Выйти из игры", "Закрыть Gears of War 3 и вернуться на рабочий стол.", "(скоро)"}},
-      {"cze", {"Ukončit hru", "Zavřít Gears of War 3 a vrátit se na plochu.", "(již brzy)"}},
-      {"hun", {"Kilépés a játékból", "A Gears of War 3 bezárása és visszatérés az asztalra.", "(hamarosan)"}},
-      {"chn", {"退出遊戲", "關閉 Gears of War 3 並返回桌面。", "(即將推出)"}},
-      {"kor", {"게임 종료", "Gears of War 3를 닫고 바탕 화면으로 돌아갑니다.", "(출시 예정)"}},
+      {"int", {"Quit Game", "Close Gears of War 3 and return to the desktop.", "(coming soon)", "RAAM's Shadow", "Play the RAAM's Shadow campaign.", "(not installed)", "Add RAAM's Shadow from the launcher (Installation, Downloadable content) to play it."}},
+      {"esn", {"Salir del juego", "Cierra Gears of War 3 y vuelve al escritorio.", "(próximamente)", "Sombras de RAAM", "Juega la campaña de Sombras de RAAM.", "(no instalado)", "Añade Sombras de RAAM desde el launcher (Instalación, Contenido descargable) para jugarla."}},
+      {"deu", {"Spiel beenden", "Beendet Gears of War 3 und kehrt zum Desktop zurück.", "(demnächst)", "RAAMs Schatten", "Spiele die Kampagne RAAM's Shadow.", "(nicht installiert)", "Füge RAAMs Schatten im Launcher hinzu (Installation, Herunterladbare Inhalte), um es zu spielen."}},
+      {"ita", {"Esci dal gioco", "Chiudi Gears of War 3 e torna al desktop.", "(prossimamente)", "L'ombra di RAAM", "Gioca la campagna RAAM's Shadow.", "(non installato)", "Aggiungi L'ombra di RAAM dal launcher (Installazione, Contenuti scaricabili) per giocarlo."}},
+      {"jpn", {"ゲームを終了", "Gears of War 3 を終了してデスクトップに戻ります。", "(近日公開)", "RAAM's Shadow", "RAAM's Shadow のキャンペーンをプレイします。", "(未インストール)", "ランチャー (インストール、ダウンロードコンテンツ) から RAAM's Shadow を追加するとプレイできます。"}},
+      {"esm", {"Salir del juego", "Cierra Gears of War 3 y vuelve al escritorio.", "(próximamente)", "Sombras de RAAM", "Juega la campaña de Sombras de RAAM.", "(no instalado)", "Agrega Sombras de RAAM desde el launcher (Instalación, Contenido descargable) para jugarla."}},
+      {"fra", {"Quitter le jeu", "Fermer Gears of War 3 et revenir au bureau.", "(bientôt)", "L'Ombre de RAAM", "Jouer la campagne RAAM's Shadow.", "(non installé)", "Ajoutez L'Ombre de RAAM depuis le launcher (Installation, Contenu téléchargeable) pour y jouer."}},
+      {"ptb", {"Sair do jogo", "Fecha o Gears of War 3 e volta para a área de trabalho.", "(em breve)", "A Sombra de RAAM", "Jogue a campanha RAAM's Shadow.", "(não instalado)", "Adicione A Sombra de RAAM pelo launcher (Instalação, Conteúdo para download) para jogar."}},
+      {"pol", {"Wyjdź z gry", "Zamknij Gears of War 3 i wróć do pulpitu.", "(wkrótce)", "Cień RAAM-a", "Zagraj w kampanię RAAM's Shadow.", "(niezainstalowane)", "Dodaj Cień RAAM-a w launcherze (Instalacja, Zawartość do pobrania), aby zagrać."}},
+      {"rus", {"Выйти из игры", "Закрыть Gears of War 3 и вернуться на рабочий стол.", "(скоро)", "Тень RAAM", "Пройти кампанию RAAM's Shadow.", "(не установлено)", "Добавьте «Тень RAAM» в лаунчере (Установка, Загружаемый контент), чтобы играть."}},
+      {"cze", {"Ukončit hru", "Zavřít Gears of War 3 a vrátit se na plochu.", "(již brzy)", "RAAMův stín", "Hrát kampaň RAAM's Shadow.", "(nenainstalováno)", "Přidejte RAAMův stín v launcheru (Instalace, Stahovatelný obsah) a můžete hrát."}},
+      {"hun", {"Kilépés a játékból", "A Gears of War 3 bezárása és visszatérés az asztalra.", "(hamarosan)", "RAAM árnyéka", "A RAAM's Shadow kampány játszása.", "(nincs telepítve)", "Add hozzá a RAAM árnyékát a launcherben (Telepítés, Letölthető tartalom) a játékhoz."}},
+      {"chn", {"退出遊戲", "關閉 Gears of War 3 並返回桌面。", "(即將推出)", "RAAM's Shadow", "遊玩 RAAM's Shadow 戰役。", "(未安裝)", "在啟動器（安裝、下載內容）中加入 RAAM's Shadow 即可遊玩。"}},
+      {"kor", {"게임 종료", "Gears of War 3를 닫고 바탕 화면으로 돌아갑니다.", "(출시 예정)", "RAAM's Shadow", "RAAM's Shadow 캠페인을 플레이합니다.", "(설치되지 않음)", "런처(설치, 다운로드 콘텐츠)에서 RAAM's Shadow를 추가하면 플레이할 수 있습니다."}},
   };
   return texts;
 }
@@ -207,6 +214,16 @@ int PatchMenuStructure(CoalescedSection& section) {
     quit_option = static_cast<int>(entries.size()) - 1;
   });
   if (!main_found) return -1;
+  // With RAAM's Shadow ready to play, the campaign menu's DLC option ("Coming Soon!" and greyed
+  // out on the disc) opens the standard campaign choices; the runtime remembers it was chosen and
+  // starts the DLC's chapters (see PatchTravelURL in script_hooks.cpp).
+  if (REXCVAR_GET(dlc_campaign)) {
+    EditScreen(section, "MAINMENUOP_Campaign", [](std::vector<std::u16string>& entries) {
+      for (auto& e : entries) {
+        if (EntryLabel(e) == u"CampaignDLC") e = u"(Label=\"CampaignDLC\",Next=MAINMENUOP_CampaignStandard)";
+      }
+    });
+  }
   if (!REXCVAR_GET(menu_coming_soon)) return quit_option;
   EditScreen(section, "MAINMENUOP_CampaignStandard", DisableLabels({"CreatePublic", "JoinPublic"}));
   EditScreen(section, "MAINMENUOP_CampaignArcade", DisableLabels({"CreatePublic", "JoinPublic"}));
@@ -220,8 +237,18 @@ int PatchMenuStructure(CoalescedSection& section) {
 void PatchMenuTexts(CoalescedSection& section, const Texts& texts) {
   const bool coming_soon = REXCVAR_GET(menu_coming_soon);
   const auto soon = CoalescedString::FromUtf8(std::string(" ") + texts.coming_soon);
+  const bool dlc = REXCVAR_GET(dlc_campaign);
   for (auto& key : section.keys) {
     const std::string name = key.name.Ascii();
+    // The campaign DLC option: its title, and while the add-on is not installed (the option stays
+    // greyed out, as the disc has it) "(not installed)" after it instead of "Coming Soon!".
+    if (name == "CampaignDLC") {
+      key.value = CoalescedString::FromUtf8(dlc ? std::string(texts.dlc_name)
+                                                : std::string(texts.dlc_name) + " " + texts.not_installed);
+    }
+    if (name == "TOOLTIP_CampaignDLC") {
+      key.value = CoalescedString::FromUtf8(dlc ? texts.dlc_tooltip : texts.not_installed_tooltip);
+    }
     if (coming_soon && (name == "VS" || name == "TITLE_VS_Competitiveness" || name == "CreatePublic" ||
                         name == "JoinPublic" || name == "HordeStandard" || name == "SiegeStandard" ||
                         name == "Recreational" || name == "Competitive")) {

@@ -121,7 +121,29 @@
     "runtimeNotBuilt": "Pas encore construit : la première construction à partir de votre copie du jeu prend quelques minutes.",
     "runtimeNeedsCompiler": "Installez d'abord le compilateur (plus bas).",
     "runtimeUpdateLink": "Une mise à jour est prête : elle s'installe en quelques secondes.",
-    "runtimeUpdateBuild": "Une mise à jour demande de reconstruire le jeu : environ deux minutes."
+    "runtimeUpdateBuild": "Une mise à jour demande de reconstruire le jeu : environ deux minutes.",
+    "dlcTitle": "Contenu téléchargeable",
+    "dlcHelp": "Ajoutez le contenu téléchargeable que vous possédez (les fichiers de paquet téléchargés par votre Xbox 360). Il est installé dans votre dossier de sauvegardes.",
+    "dlcAdd": "Ajouter du contenu téléchargeable…",
+    "dlcNames": {
+      "raamsShadow": "RAAM's Shadow",
+      "hordeCommandPack": "Horde Command Pack",
+      "fenixRising": "Fenix Rising",
+      "forcesOfNature": "Forces of Nature",
+      "versusBooster": "Versus Booster Map Pack"
+    },
+    "dlcStatus": {
+      "ready": "Installé · choisissez-le dans Campagne",
+      "notInstalled": "Non installé",
+      "needsRuntime": "Installé · prêt après la mise à jour du runtime",
+      "unsupported": "Installé, mais n'a pas pu être préparé avec ces fichiers du jeu",
+      "multiplayer": "Arrivera avec le multijoueur",
+      "installing": "Installation… (une minute)"
+    },
+    "dlcOthers": "Autre contenu installé",
+    "dlcOthersCount": "{count} paquets",
+    "dlcInstalled": "{name} installé.",
+    "dlcFailed": "Impossible d'installer le paquet : {detail}"
   },
   "graphics": {
     "title": "Graphismes",
@@ -173,6 +195,7 @@
       "act4": "Acte IV",
       "act5": "Acte V",
       "campaign": "Campagne",
+      "raamsShadow": "RAAM's Shadow",
       "modes": "Versus, Horde et Bête"
     },
     "lockedTitle": "Succès verrouillés",

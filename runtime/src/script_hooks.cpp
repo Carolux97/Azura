@@ -68,6 +68,9 @@
 #include <rex/system/kernel_state.h>
 
 #include "class_dump.h"
+#include "dlc/class_fixups.h"
+#include "dlc/dlc_achievements.h"
+#include "dlc/missing_super.h"
 #include "menu/menu_patches.h"
 #include "menu/pc_options.h"
 #include "input/mouse_look.h"
@@ -275,6 +278,9 @@ enum WatchedName {
   kOnClose,                  // a menu scene closes (UIScene_Options: the Options menu)
   kWidgetInitialized,        // a menu scene sets up a widget (the main menu's scene, for the title screen)
   kGetDesiredFOV,            // a camera mode: the field of view it wants this frame
+  kAddEnemyLocators,         // RAAM's Shadow's satellite camera: marks the enemies it sees
+  kCompleteChapterByDifficulty,   // GearProfileSettings: a campaign chapter is completed
+  kUpdateAchievementProgression,  // GearProfileSettings: progress towards a counted achievement
   kWatchedNameCount,
 };
 constexpr const char* kWatchedNames[kWatchedNameCount] = {
@@ -290,7 +296,8 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "Callback_GammaWasChanged", "Callback_SelectStorageLocation", "ShouldOptionBeDisabled",
     "PlayerInput",           "Callback_ViewController", "Callback_ResetTutorials",
     "PopulateOptionsMenu",   "OnClose",     "WidgetInitialized",
-    "GetDesiredFOV"};
+    "GetDesiredFOV",         "AddEnemyLocators",       "CompleteChapterByDifficulty",
+    "UpdateAchievementProgression"};
 
 // FName index of each watched name, -1 until found (0 is a valid index: None).
 std::atomic<int32_t> g_names[kWatchedNameCount];
@@ -453,6 +460,26 @@ void ApplyMouseLookFor(uint8_t* base, uint32_t player_input) {
   }
   target.base_fov = static_cast<float>(REXCVAR_GET(field_of_view));
   azura::input::ApplyMouseLook(base, user, target);
+}
+
+// The campaign DLC (RAAM's Shadow), chosen in the campaign menu and not replaced by another choice
+// since: the travel to a campaign starts its chapters (PatchTravelURL).
+std::atomic<bool> g_dlc_campaign_chosen{false};
+constexpr int kFirstDlcChapter = 31;
+
+// Notes a campaign menu choice (UIScene_FrontEnd.HandleMenuSelection on MAINMENUOP_Campaign).
+void NoteCampaignChoice(const uint8_t* base, uint32_t frame) {
+  const uint32_t function = LoadU32(base, frame + kFrameNode);
+  const uint32_t locals = LoadU32(base, frame + kFrameLocals);
+  const int32_t screen = ParamOffset(base, function, "ParentScreen");
+  const int32_t option = ParamOffset(base, function, "SelectedOption");
+  const int32_t simulating = ParamOffset(base, function, "bIsSimulating");
+  if (screen < 0 || option < 0 || base[locals + screen] != azura::menu::kCampaignScreen) return;
+  if (simulating >= 0 && LoadU32(base, locals + simulating) != 0) return;
+  const bool dlc = static_cast<int32_t>(LoadU32(base, locals + option)) == azura::menu::kCampaignDlcOption;
+  if (g_dlc_campaign_chosen.exchange(dlc) != dlc) {
+    REXLOG_INFO("[Azura campaign] {} chosen", dlc ? "RAAM's Shadow" : "The main campaign");
+  }
 }
 
 // Whether the frame about to run is the main menu choosing the Quit Game option.
@@ -1261,9 +1288,24 @@ bool PatchTravelURL(uint8_t* base, uint32_t fstring_addr) {
 
   std::string new_url = url;
   StripListenParam(new_url);
-  if (new_url == url) return false;
+  // RAAM's Shadow, chosen from the campaign menu: its chapters are 31 to 35. A campaign of the main
+  // game (a new one, its chapter selection, or its checkpoint to continue) starts the DLC's first.
+  if (g_dlc_campaign_chosen.load(std::memory_order_relaxed)) {
+    const size_t at = new_url.find("chapter=");
+    if (at != std::string::npos) {
+      size_t end = at + 8;
+      while (end < new_url.size() && std::isdigit(static_cast<unsigned char>(new_url[end]))) ++end;
+      const int chapter = end > at + 8 ? std::stoi(new_url.substr(at + 8, end - at - 8)) : 0;
+      if (chapter < kFirstDlcChapter) {
+        new_url.replace(at + 8, end - at - 8, std::to_string(kFirstDlcChapter));
+        const size_t checkpoint = new_url.find("?loadcheckpoint");
+        if (checkpoint != std::string::npos) new_url.erase(checkpoint, 15);
+      }
+    }
+  }
+  if (new_url == url || new_url.size() + 1 > max) return false;
 
-  // Removing characters only shortens the URL, so it always fits in the buffer.
+  // The URL fits in the buffer (checked against its capacity above).
   for (size_t i = 0; i < new_url.size(); ++i) {
     base[data + i * 2] = 0;
     base[data + i * 2 + 1] = static_cast<uint8_t>(new_url[i]);
@@ -1391,6 +1433,8 @@ bool HandleLiveChange(PPCContext& ctx, uint8_t* base, uint32_t function, int bor
 }  // namespace
 
 extern "C" void sub_822DF4D0(PPCContext& __restrict ctx, uint8_t* base) {
+  // A Super call of RAAM's Shadow to a parent function the disc build lacks (dlc/missing_super.h).
+  if (ctx.r6.u32 == 0 && azura::dlc::HandleMissingSuper(ctx, base)) return;
   ShowPcOptionValue(base, ctx.r4.u32);
   if (!REXCVAR_GET(script_dump_classes).empty()) {
     azura::script::StartClassDump(base, REXCVAR_GET(script_dump_classes), REXCVAR_GET(script_dump_code));
@@ -1509,6 +1553,33 @@ bool WriteProfileSetting(uint32_t user, int id, uint32_t value) {
 
 }  // namespace azura::script
 
+// The game's fatal error handler (appErrorf), logged with its message arguments (ASCII or UTF-16)
+// before it parks the thread: otherwise the game just stops, with nothing in the log (a missing
+// script function, a failed import...).
+static std::string GuestText(const uint8_t* base, uint32_t address) {
+  if (address < 0x40000000u || address >= 0xA0000000u) return "";
+  std::string ascii, wide;
+  for (uint32_t i = 0; i < 400; ++i) {
+    const uint8_t c = base[address + i];
+    if (c == 0) break;
+    ascii.push_back(c >= 32 && c < 127 ? static_cast<char>(c) : '.');
+  }
+  for (uint32_t i = 0; i < 400; ++i) {
+    const uint8_t hi = base[address + i * 2], lo = base[address + i * 2 + 1];
+    if (hi == 0 && lo == 0) break;
+    wide.push_back(hi == 0 && lo >= 32 && lo < 127 ? static_cast<char>(lo) : '.');
+  }
+  return wide.size() > ascii.size() ? wide : ascii;
+}
+
+extern "C" void __imp__sub_82319958(PPCContext& __restrict ctx, uint8_t* base);
+extern "C" void sub_82319958(PPCContext& __restrict ctx, uint8_t* base) {
+  REXLOG_ERROR("[Azura] fatal error handler: r3 '{}' r4 '{}' r5 '{}' r6 '{}' (lr {:08X})",
+               GuestText(base, ctx.r3.u32), GuestText(base, ctx.r4.u32), GuestText(base, ctx.r5.u32),
+               GuestText(base, ctx.r6.u32), static_cast<uint32_t>(ctx.lr));
+  __imp__sub_82319958(ctx, base);
+}
+
 extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   if (g_names_missing.load(std::memory_order_relaxed) > 0 &&
       (g_calls.fetch_add(1, std::memory_order_relaxed) & 0x3FF) == 0) {
@@ -1526,12 +1597,38 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   }
   // Before it runs: it reads FOVAngle.
   if (Is(base, function, kGetDesiredFOV)) ApplyFieldOfView(base, ctx.r3.u32);
+  // Before it runs: it reaches GearGRI.SHODTargets.
+  if (Is(base, function, kAddEnemyLocators)) azura::dlc::BindShodTargets(base, ctx.r3.u32);
   if (REXCVAR_GET(script_trace) &&
       (Is(base, function, kPawnDied) || Is(base, function, kShouldDeathCauseFailure) ||
        Is(base, function, kGetDeathGameOverReason) || Is(base, function, kGameOverPlayer) ||
        Is(base, function, kClientGameOver) || Is(base, function, kClientSetCinematicMode) ||
        Is(base, function, kMatineeCancelled))) {
     REXLOG_INFO("[Azura death trace] {}", DescribeCall(base, ctx.r4.u32));
+  }
+  // After they run (their optional parameters have their values then): what RAAM's Shadow's
+  // achievements need, which the Title Update's versions of these functions handle
+  // (dlc/dlc_achievements.h).
+  if (Is(base, function, kCompleteChapterByDifficulty) || Is(base, function, kUpdateAchievementProgression)) {
+    const uint32_t locals = LoadU32(base, ctx.r4.u32 + kFrameLocals);
+    __imp__sub_822DF9E0(ctx, base);
+    if (Is(base, function, kCompleteChapterByDifficulty)) {
+      const int32_t chapter = ParamOffset(base, function, "Chapter");
+      const int32_t arcade = ParamOffset(base, function, "bWasArcade");
+      const int32_t cheat = ParamOffset(base, function, "bIsCheatCommand");
+      if (chapter >= 0 && arcade >= 0 && (cheat < 0 || LoadU32(base, locals + cheat) == 0)) {
+        azura::dlc::OnChapterCompleted(static_cast<int32_t>(LoadU32(base, locals + chapter)),
+                                       LoadU32(base, locals + arcade) != 0);
+      }
+    } else {
+      const int32_t achievement = ParamOffset(base, function, "Achievement");
+      const int32_t count = ParamOffset(base, function, "Count");
+      if (achievement >= 0 && count >= 0) {
+        azura::dlc::OnAchievementProgress(base[locals + achievement],
+                                          static_cast<int32_t>(LoadU32(base, locals + count)));
+      }
+    }
+    return;
   }
   if (Is(base, function, kBuildCampaignURL)) {
     const uint32_t result = ctx.r5.u32;
@@ -1548,6 +1645,7 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
       PatchTravelURL(base, locals + static_cast<uint32_t>(url_offset));
     }
   }
+  if (Is(base, function, kHandleMenuSelection)) NoteCampaignChoice(base, ctx.r4.u32);
   // The main menu's Options option opens the Options as Start does there (the script, which does
   // not know the option, does not run).
   const int options_option = azura::menu::MainMenuOptionsOption();

@@ -7,6 +7,9 @@ run, a dump or the code) or **inferred** (deduced, not yet checked).
 
 Nothing here is game data: only names, offsets and identifiers needed to hook the game.
 
+The RAAM's Shadow DLC and the Title Update it depends on have their own notes in
+[raams-shadow-dlc.md](raams-shadow-dlc.md).
+
 ## Contents
 
 - [Engine basics](#engine-basics)

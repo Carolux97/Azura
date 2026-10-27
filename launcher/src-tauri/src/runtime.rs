@@ -113,6 +113,8 @@ pub struct LaunchFolders<'a> {
 /// graphics card (see `gpus.rs`).
 pub fn launch_arguments(folders: &LaunchFolders, gpu: &LaunchChoice) -> Vec<String> {
     let mut args = folder_arguments(folders);
+    // RAAM's Shadow, when it is installed and can be played (see dlc.rs).
+    args.extend(crate::dlc::launch_arguments(folders.runtime, folders.game, folders.saves));
     if let Some(uuid) = &gpu.device_uuid {
         args.push(format!("--vulkan_device_uuid={uuid}"));
     }
