@@ -46,6 +46,25 @@ REXCVAR_DEFINE_DOUBLE(field_of_view, 80.0, "Azura/Graphics",
 REXCVAR_DEFINE_BOOL(film_grain, true, "Azura/Graphics",
                     "The game's film grain (UberPostProcessEffect.bEnableImageGrain); applies while the "
                     "game runs");
+REXCVAR_DEFINE_BOOL(depth_of_field, true, "Azura/Graphics",
+                    "The game's depth of field (SystemSettings.DepthOfField); applies while the game "
+                    "runs");
+REXCVAR_DEFINE_BOOL(dynamic_shadows, true, "Azura/Graphics",
+                    "The game's dynamic shadows (SystemSettings.DynamicShadows); applies while the game "
+                    "runs");
+// Off by default on Linux, where the game's ambient occlusion leaves black patches on surfaces.
+#if defined(__linux__)
+constexpr bool kAmbientOcclusionDefault = false;
+#else
+constexpr bool kAmbientOcclusionDefault = true;
+#endif
+REXCVAR_DEFINE_BOOL(ambient_occlusion, kAmbientOcclusionDefault, "Azura/Graphics",
+                    "The game's ambient occlusion (SystemSettings.AmbientOcclusion); applies while the "
+                    "game runs. Off by default on Linux");
+REXCVAR_DEFINE_BOOL(bloom, true, "Azura/Graphics",
+                    "The game's bloom (SystemSettings.Bloom); applies while the game runs");
+REXCVAR_DEFINE_BOOL(lens_flares, true, "Azura/Graphics",
+                    "The game's lens flares (SystemSettings.LensFlares); applies while the game runs");
 
 namespace azura::menu {
 
@@ -70,6 +89,11 @@ enum class Label {
   kPerformanceOverlayPosition,
   kFieldOfView,
   kFilmGrain,
+  kDepthOfField,
+  kDynamicShadows,
+  kAmbientOcclusion,
+  kBloom,
+  kLensFlares,
   kCount
 };
 
@@ -131,25 +155,34 @@ const std::vector<Option>& Options() {
       // a toggle would need a definition of a profile setting the game does not use, and none is
       // left with two values.
       {kVideoCategory, 6, Label::kFilmGrain, "film_grain", Kind::kChoice, 9113, -1, {"false", "true"}},
+      // Apply while the game runs, as the engine's settings object is written every frame
+      // (system_settings.cpp). Lists of our own (IDs 9114 and 9115), as film grain's; these two
+      // save the most GPU time.
+      {kVideoCategory, 7, Label::kDepthOfField, "depth_of_field", Kind::kChoice, 9114, -1, {"false", "true"}},
+      {kVideoCategory, 8, Label::kDynamicShadows, "dynamic_shadows", Kind::kChoice, 9115, -1, {"false", "true"}},
+      // The same for the effects that change the look more than the frame rate (IDs 9116 to 9118).
+      {kVideoCategory, 9, Label::kAmbientOcclusion, "ambient_occlusion", Kind::kChoice, 9116, -1, {"false", "true"}},
+      {kVideoCategory, 10, Label::kBloom, "bloom", Kind::kChoice, 9117, -1, {"false", "true"}},
+      {kVideoCategory, 11, Label::kLensFlares, "lens_flares", Kind::kChoice, 9118, -1, {"false", "true"}},
       // Generic Xbox profile settings with three values that Gears never reads: Controller
       // Sensitivity (it has its own, 368, 59 and 60) and Voice Via Speakers.
-      {kVideoCategory, 7, Label::kAnisotropic, "anisotropic_override", Kind::kChoice, 13, 2, {"0", "3", "5"}},
+      {kVideoCategory, 12, Label::kAnisotropic, "anisotropic_override", Kind::kChoice, 13, 2, {"0", "3", "5"}},
       // Lists of our own too: the resolution's value names include "Automatic" in the player's
       // language, and the upscaling values depend on the platform (UpscalingChoices).
-      {kVideoCategory, 8, Label::kRenderResolution, "render_resolution", Kind::kChoice, 9108, -1,
+      {kVideoCategory, 13, Label::kRenderResolution, "render_resolution", Kind::kChoice, 9108, -1,
        {"auto", "1280x720", "2560x1440", "3840x2160"}},
       // Right above the sharpness row, which belongs to it.
-      {kVideoCategory, 9, Label::kUpscaling, "present_effect", Kind::kChoice, 9107, -1, UpscalingChoices()},
+      {kVideoCategory, 14, Label::kUpscaling, "present_effect", Kind::kChoice, 9107, -1, UpscalingChoices()},
       // Applies while the game runs, so the player sees the sharpening change (ApplyUpscalingSharpness).
       // Only shown with an image scaling effect that sharpens; the rows below it then move up one.
-      {kVideoCategory, 10, Label::kSharpness, "upscaling_sharpness", Kind::kSlider, 9109, -1, {}, 0.0f, 1.0f,
+      {kVideoCategory, 15, Label::kSharpness, "upscaling_sharpness", Kind::kSlider, 9109, -1, {}, 0.0f, 1.0f,
        0.1f},
       // A list of our own (ID 9110): its values grow as the overlay gets more modes. Last in the
       // list, with its position below it.
-      {kVideoCategory, 11, Label::kPerformanceOverlay, "performance_overlay", Kind::kChoice, 9110, -1,
+      {kVideoCategory, 16, Label::kPerformanceOverlay, "performance_overlay", Kind::kChoice, 9110, -1,
        {"off", "fps", "detailed", "advanced"}},
       // Our own list too (ID 9111): the corner the overlay is shown in.
-      {kVideoCategory, 12, Label::kPerformanceOverlayPosition, "performance_overlay_position", Kind::kChoice, 9111, -1,
+      {kVideoCategory, 17, Label::kPerformanceOverlayPosition, "performance_overlay_position", Kind::kChoice, 9111, -1,
        {"top_left", "top_right", "bottom_left", "bottom_right"}},
   };
   return options;
@@ -193,7 +226,12 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"PERFORMANCE OVERLAY", "Show the game's frame rate in a corner of the screen."},
          {"OVERLAY POSITION", "Corner of the screen the performance overlay is shown in."},
          {"FIELD OF VIEW", "How wide the camera sees. 80 is the original; aiming and cover widen or narrow with it."},
-         {"FILM GRAIN", "The film grain noise the game adds to the image."}},
+         {"FILM GRAIN", "The film grain noise the game adds to the image."},
+         {"DEPTH OF FIELD", "The blur of what is out of focus. Turn it off to make the game run faster."},
+         {"DYNAMIC SHADOWS", "The shadows of characters and moving objects. Turn them off to make the game run faster."},
+         {"AMBIENT OCCLUSION", "The soft shadows in corners and where objects meet."},
+         {"BLOOM", "The glow around bright lights."},
+         {"LENS FLARES", "The flares bright lights draw over the image."}},
         "Off", "On", "FXAA", "FXAA extreme", "Open", "Bilinear (original)", "AMD CAS (sharpening)", "AMD FSR 1", "Automatic", {"Top left", "Top right", "Bottom left", "Bottom right"}, "Detailed", "Advanced"}},
       {"esn",
        {{"TECLADO Y RATÓN", "Ajuste las opciones del teclado y el ratón."},
@@ -214,7 +252,12 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"INDICADOR DE RENDIMIENTO", "Muestre los fotogramas por segundo del juego en una esquina de la pantalla."},
          {"POSICIÓN DEL INDICADOR", "Esquina de la pantalla en la que se muestra el indicador de rendimiento."},
          {"CAMPO DE VISIÓN", "Amplitud de la vista de la cámara. 80 es el original; apuntar y cubrirse cambian en la misma proporción."},
-         {"GRANO DE PELÍCULA", "El ruido de grano de película que el juego añade a la imagen."}},
+         {"GRANO DE PELÍCULA", "El ruido de grano de película que el juego añade a la imagen."},
+         {"PROFUNDIDAD DE CAMPO", "El desenfoque de lo que queda fuera de foco. Desactívela para que el juego vaya más rápido."},
+         {"SOMBRAS DINÁMICAS", "Las sombras de los personajes y de los objetos que se mueven. Desactívelas para que el juego vaya más rápido."},
+         {"OCLUSIÓN AMBIENTAL", "Las sombras suaves en las esquinas y donde se juntan los objetos."},
+         {"RESPLANDOR", "El halo que rodea las luces intensas."},
+         {"DESTELLOS DE LENTE", "Los destellos que las luces intensas dibujan sobre la imagen."}},
         "Desactivado", "Activado", "FXAA", "FXAA extremo", "Abrir", "Bilineal (original)", "AMD CAS (nitidez)", "AMD FSR 1", "Automática", {"Arriba a la izquierda", "Arriba a la derecha", "Abajo a la izquierda", "Abajo a la derecha"}, "Detallado", "Avanzado"}},
       {"deu",
        {{"TASTATUR UND MAUS", "Passen Sie die Einstellungen für Tastatur und Maus an."},
@@ -234,7 +277,12 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"LEISTUNGSANZEIGE", "Zeigt die Bildrate des Spiels in einer Ecke des Bildschirms an."},
          {"POSITION DER ANZEIGE", "Bildschirmecke, in der die Leistungsanzeige erscheint."},
          {"SICHTFELD", "Wie weit die Kamera sieht. 80 ist der ursprüngliche Wert; Zielen und Deckung ändern sich im gleichen Verhältnis."},
-         {"FILMKORN", "Das Filmkorn, das das Spiel dem Bild hinzufügt."}},
+         {"FILMKORN", "Das Filmkorn, das das Spiel dem Bild hinzufügt."},
+         {"TIEFENSCHÄRFE", "Die Unschärfe außerhalb des Fokus. Ausgeschaltet läuft das Spiel schneller."},
+         {"DYNAMISCHE SCHATTEN", "Die Schatten von Figuren und bewegten Objekten. Ausgeschaltet läuft das Spiel schneller."},
+         {"UMGEBUNGSVERDECKUNG", "Die weichen Schatten in Ecken und dort, wo Objekte aufeinandertreffen."},
+         {"BLOOM", "Das Leuchten um helle Lichter."},
+         {"LINSENREFLEXE", "Die Reflexe, die helle Lichter über das Bild legen."}},
         "Aus", "Ein", "FXAA", "FXAA extrem", "Öffnen", "Bilinear (Original)", "AMD CAS (Schärfung)", "AMD FSR 1", "Automatisch", {"Oben links", "Oben rechts", "Unten links", "Unten rechts"}, "Detailliert", "Erweitert"}},
       {"ita",
        {{"TASTIERA E MOUSE", "Regola le impostazioni di tastiera e mouse."},
@@ -254,7 +302,12 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"INDICATORE PRESTAZIONI", "Mostra la frequenza dei fotogrammi del gioco in un angolo dello schermo."},
          {"POSIZIONE INDICATORE", "Angolo dello schermo in cui compare l'indicatore delle prestazioni."},
          {"CAMPO VISIVO", "Ampiezza della visuale. 80 è il valore originale; mira e copertura cambiano nella stessa proporzione."},
-         {"GRANA PELLICOLA", "La grana pellicola che il gioco aggiunge all'immagine."}},
+         {"GRANA PELLICOLA", "La grana pellicola che il gioco aggiunge all'immagine."},
+         {"PROFONDITÀ DI CAMPO", "La sfocatura di ciò che è fuori fuoco. Disattivala per rendere il gioco più veloce."},
+         {"OMBRE DINAMICHE", "Le ombre dei personaggi e degli oggetti in movimento. Disattivale per rendere il gioco più veloce."},
+         {"OCCLUSIONE AMBIENTALE", "Le ombre morbide negli angoli e dove gli oggetti si incontrano."},
+         {"BLOOM", "Il bagliore attorno alle luci intense."},
+         {"RIFLESSI DELLA LENTE", "I riflessi che le luci intense disegnano sull'immagine."}},
         "Disattivato", "Attivato", "FXAA", "FXAA estremo", "Apri", "Bilineare (originale)", "AMD CAS (nitidezza)", "AMD FSR 1", "Automatica", {"In alto a sinistra", "In alto a destra", "In basso a sinistra", "In basso a destra"}, "Dettagliato", "Avanzato"}},
       {"jpn",
        {{"キーボードとマウス", "キーボードとマウスの設定を調整します。"},
@@ -274,7 +327,12 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"パフォーマンス表示", "ゲームのフレームレートを画面の隅に表示します。"},
          {"表示位置", "パフォーマンス表示を出す画面の隅。"},
          {"視野角", "カメラの視野の広さです。80 がオリジナルです。エイムやカバーも同じ割合で変わります。"},
-         {"フィルムグレイン", "ゲームが映像に加えるフィルムグレインのノイズです。"}},
+         {"フィルムグレイン", "ゲームが映像に加えるフィルムグレインのノイズです。"},
+         {"被写界深度", "ピントの合っていない部分のぼかしです。オフにするとゲームが軽くなります。"},
+         {"動的な影", "キャラクターや動く物体の影です。オフにするとゲームが軽くなります。"},
+         {"アンビエントオクルージョン", "隅や物が接する部分の柔らかい影です。"},
+         {"ブルーム", "明るい光のまわりの輝きです。"},
+         {"レンズフレア", "明るい光が画面に描くフレアです。"}},
         "オフ", "オン", "FXAA", "FXAA (最大)", "開く", "バイリニア（オリジナル）", "AMD CAS（シャープ化）", "AMD FSR 1", "自動", {"左上", "右上", "左下", "右下"}, "詳細", "高度"}},
       {"fra",
        {{"CLAVIER ET SOURIS", "Réglez les options du clavier et de la souris."},
@@ -294,7 +352,12 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"INDICATEUR DE PERFORMANCES", "Affiche la fréquence d'images du jeu dans un coin de l'écran."},
          {"POSITION DE L'INDICATEUR", "Coin de l'écran où s'affiche l'indicateur de performances."},
          {"CHAMP DE VISION", "Largeur de la vue de la caméra. 80 est la valeur d'origine ; la visée et le couvert changent dans la même proportion."},
-         {"GRAIN DE FILM", "Le grain de film que le jeu ajoute à l'image."}},
+         {"GRAIN DE FILM", "Le grain de film que le jeu ajoute à l'image."},
+         {"PROFONDEUR DE CHAMP", "Le flou de ce qui est hors de la mise au point. Désactivez-la pour que le jeu soit plus rapide."},
+         {"OMBRES DYNAMIQUES", "Les ombres des personnages et des objets en mouvement. Désactivez-les pour que le jeu soit plus rapide."},
+         {"OCCLUSION AMBIANTE", "Les ombres douces dans les coins et là où les objets se touchent."},
+         {"BLOOM", "Le halo autour des lumières vives."},
+         {"REFLETS DE LENTILLE", "Les reflets que les lumières vives dessinent sur l'image."}},
         "Désactivé", "Activé", "FXAA", "FXAA extrême", "Ouvrir", "Bilinéaire (d'origine)", "AMD CAS (netteté)", "AMD FSR 1", "Automatique", {"En haut à gauche", "En haut à droite", "En bas à gauche", "En bas à droite"}, "Détaillé", "Avancé"}},
       {"ptb",
        {{"TECLADO E MOUSE", "Ajuste as opções do teclado e do mouse."},
@@ -315,7 +378,12 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"INDICADOR DE DESEMPENHO", "Mostra a taxa de quadros do jogo em um canto da tela."},
          {"POSIÇÃO DO INDICADOR", "Canto da tela em que o indicador de desempenho aparece."},
          {"CAMPO DE VISÃO", "Amplitude da visão da câmera. 80 é o original; mirar e se proteger mudam na mesma proporção."},
-         {"GRANULAÇÃO DE FILME", "A granulação de filme que o jogo adiciona à imagem."}},
+         {"GRANULAÇÃO DE FILME", "A granulação de filme que o jogo adiciona à imagem."},
+         {"PROFUNDIDADE DE CAMPO", "O desfoque do que está fora de foco. Desative para o jogo ficar mais rápido."},
+         {"SOMBRAS DINÂMICAS", "As sombras dos personagens e dos objetos em movimento. Desative para o jogo ficar mais rápido."},
+         {"OCLUSÃO DE AMBIENTE", "As sombras suaves nos cantos e onde os objetos se encontram."},
+         {"BLOOM", "O brilho em volta das luzes fortes."},
+         {"REFLEXOS DE LENTE", "Os reflexos que as luzes fortes desenham sobre a imagem."}},
         "Desativado", "Ativado", "FXAA", "FXAA extremo", "Abrir", "Bilinear (original)", "AMD CAS (nitidez)", "AMD FSR 1", "Automática", {"Superior esquerdo", "Superior direito", "Inferior esquerdo", "Inferior direito"}, "Detalhado", "Avançado"}},
       {"pol",
        {{"KLAWIATURA I MYSZ", "Dostosuj ustawienia klawiatury i myszy."},
@@ -335,7 +403,12 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"WSKAŹNIK WYDAJNOŚCI", "Wyświetla liczbę klatek na sekundę gry w rogu ekranu."},
          {"POŁOŻENIE WSKAŹNIKA", "Róg ekranu, w którym wyświetla się wskaźnik wydajności."},
          {"POLE WIDZENIA", "Szerokość widoku kamery. 80 to wartość oryginalna; celowanie i osłona zmieniają się w tej samej proporcji."},
-         {"ZIARNO FILMOWE", "Ziarno filmowe, które gra dodaje do obrazu."}},
+         {"ZIARNO FILMOWE", "Ziarno filmowe, które gra dodaje do obrazu."},
+         {"GŁĘBIA OSTROŚCI", "Rozmycie tego, co jest poza ostrością. Wyłącz, aby gra działała szybciej."},
+         {"DYNAMICZNE CIENIE", "Cienie postaci i ruchomych obiektów. Wyłącz, aby gra działała szybciej."},
+         {"OKLUZJA OTOCZENIA", "Miękkie cienie w narożnikach i tam, gdzie stykają się obiekty."},
+         {"POŚWIATA", "Blask wokół jasnych świateł."},
+         {"ODBLASKI SOCZEWKI", "Odblaski, które jasne światła rysują na obrazie."}},
         "Wyłączone", "Włączone", "FXAA", "FXAA ekstremalne", "Otwórz", "Dwuliniowe (oryginalne)", "AMD CAS (wyostrzanie)", "AMD FSR 1", "Automatyczna", {"Lewy górny róg", "Prawy górny róg", "Lewy dolny róg", "Prawy dolny róg"}, "Szczegółowy", "Zaawansowany"}},
       {"rus",
        {{"КЛАВИАТУРА И МЫШЬ", "Настройте параметры клавиатуры и мыши."},
@@ -355,7 +428,12 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"ПОКАЗАТЕЛЬ ПРОИЗВОДИТЕЛЬНОСТИ", "Показывает частоту кадров игры в углу экрана."},
          {"ПОЛОЖЕНИЕ ПОКАЗАТЕЛЯ", "Угол экрана, в котором показывается показатель производительности."},
          {"ПОЛЕ ЗРЕНИЯ", "Ширина обзора камеры. 80 — исходное значение; прицеливание и укрытие меняются в той же пропорции."},
-         {"ЗЕРНИСТОСТЬ ПЛЁНКИ", "Эффект зернистости плёнки, который игра добавляет к изображению."}},
+         {"ЗЕРНИСТОСТЬ ПЛЁНКИ", "Эффект зернистости плёнки, который игра добавляет к изображению."},
+         {"ГЛУБИНА РЕЗКОСТИ", "Размытие того, что находится не в фокусе. Выключите, чтобы игра работала быстрее."},
+         {"ДИНАМИЧЕСКИЕ ТЕНИ", "Тени персонажей и движущихся объектов. Выключите, чтобы игра работала быстрее."},
+         {"ФОНОВОЕ ЗАТЕНЕНИЕ", "Мягкие тени в углах и там, где соприкасаются предметы."},
+         {"СВЕЧЕНИЕ", "Ореол вокруг ярких источников света."},
+         {"БЛИКИ ОБЪЕКТИВА", "Блики, которые яркий свет рисует поверх изображения."}},
         "Выкл.", "Вкл.", "FXAA", "FXAA (макс.)", "Открыть", "Билинейное (оригинал)", "AMD CAS (резкость)", "AMD FSR 1", "Автоматически", {"Сверху слева", "Сверху справа", "Снизу слева", "Снизу справа"}, "Подробно", "Расширенный"}},
       {"cze",
        {{"KLÁVESNICE A MYŠ", "Upravte nastavení klávesnice a myši."},
@@ -375,7 +453,12 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"UKAZATEL VÝKONU", "Zobrazí snímkovou frekvenci hry v rohu obrazovky."},
          {"UMÍSTĚNÍ UKAZATELE", "Roh obrazovky, ve kterém se zobrazuje ukazatel výkonu."},
          {"ZORNÉ POLE", "Šířka záběru kamery. 80 je původní hodnota; míření a kryt se mění ve stejném poměru."},
-         {"FILMOVÉ ZRNO", "Filmové zrno, které hra přidává do obrazu."}},
+         {"FILMOVÉ ZRNO", "Filmové zrno, které hra přidává do obrazu."},
+         {"HLOUBKA OSTROSTI", "Rozmazání toho, co je mimo ostrost. Vypněte ji, aby hra běžela rychleji."},
+         {"DYNAMICKÉ STÍNY", "Stíny postav a pohyblivých objektů. Vypněte je, aby hra běžela rychleji."},
+         {"OKOLNÍ ZASTÍNĚNÍ", "Měkké stíny v rozích a tam, kde se objekty stýkají."},
+         {"ZÁŘE", "Záře kolem jasných světel."},
+         {"ODLESKY OBJEKTIVU", "Odlesky, které jasná světla kreslí přes obraz."}},
         "Vypnuto", "Zapnuto", "FXAA", "FXAA extrémní", "Otevřít", "Bilineární (původní)", "AMD CAS (zostření)", "AMD FSR 1", "Automaticky", {"Vlevo nahoře", "Vpravo nahoře", "Vlevo dole", "Vpravo dole"}, "Podrobný", "Pokročilý"}},
       {"hun",
        {{"BILLENTYŰZET ÉS EGÉR", "A billentyűzet és az egér beállításai."},
@@ -395,7 +478,12 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"TELJESÍTMÉNYJELZŐ", "Megjeleníti a játék képkockasebességét a képernyő sarkában."},
          {"JELZŐ HELYE", "A képernyő sarka, ahol a teljesítményjelző megjelenik."},
          {"LÁTÓMEZŐ", "A kamera látószögének szélessége. A 80 az eredeti; a célzás és a fedezék ugyanilyen arányban változik."},
-         {"FILMSZEMCSÉZET", "A filmszemcsés zaj, amelyet a játék a képhez ad."}},
+         {"FILMSZEMCSÉZET", "A filmszemcsés zaj, amelyet a játék a képhez ad."},
+         {"MÉLYSÉGÉLESSÉG", "A fókuszon kívüli részek elmosása. Kapcsold ki, hogy gyorsabban fusson a játék."},
+         {"DINAMIKUS ÁRNYÉKOK", "A szereplők és a mozgó tárgyak árnyékai. Kapcsold ki őket, hogy gyorsabban fusson a játék."},
+         {"KÖRNYEZETI TAKARÁS", "A lágy árnyékok a sarkokban és ott, ahol a tárgyak összeérnek."},
+         {"RAGYOGÁS", "Az erős fények körüli fényudvar."},
+         {"LENCSECSILLANÁS", "A csillanások, amelyeket az erős fények a képre rajzolnak."}},
         "Ki", "Be", "FXAA", "FXAA (extrém)", "Megnyitás", "Bilineáris (eredeti)", "AMD CAS (élesítés)", "AMD FSR 1", "Automatikus", {"Bal felső sarok", "Jobb felső sarok", "Bal alsó sarok", "Jobb alsó sarok"}, "Részletes", "Haladó"}},
       {"chn",
        {{"鍵盤與滑鼠", "調整鍵盤與滑鼠設定。"},
@@ -415,7 +503,12 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"效能顯示", "在畫面角落顯示遊戲的每秒影格數。"},
          {"顯示位置", "效能顯示出現在畫面的哪個角落。"},
          {"視野", "鏡頭視野的寬度。80 為原始值；瞄準與掩護會以相同比例改變。"},
-         {"底片顆粒", "遊戲加在畫面上的底片顆粒雜訊。"}},
+         {"底片顆粒", "遊戲加在畫面上的底片顆粒雜訊。"},
+         {"景深", "焦點以外部分的模糊效果。關閉可讓遊戲執行得更快。"},
+         {"動態陰影", "角色與移動物體的陰影。關閉可讓遊戲執行得更快。"},
+         {"環境光遮蔽", "角落與物體相接處的柔和陰影。"},
+         {"光暈", "明亮光源周圍的光暈。"},
+         {"鏡頭光暈", "明亮光源在畫面上產生的鏡頭光斑。"}},
         "關閉", "開啟", "FXAA", "FXAA 極致", "開啟", "雙線性（原始）", "AMD CAS（銳利化）", "AMD FSR 1", "自動", {"左上角", "右上角", "左下角", "右下角"}, "詳細", "進階"}},
       {"kor",
        {{"키보드 및 마우스", "키보드 및 마우스 설정을 조정합니다."},
@@ -435,7 +528,12 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"성능 표시", "화면 모서리에 게임의 프레임 속도를 표시합니다."},
          {"표시 위치", "성능 표시가 나타나는 화면 모서리입니다."},
          {"시야각", "카메라 시야의 넓이입니다. 80이 원래 값이며, 조준과 엄폐도 같은 비율로 바뀝니다."},
-         {"필름 그레인", "게임이 화면에 더하는 필름 그레인 노이즈입니다."}},
+         {"필름 그레인", "게임이 화면에 더하는 필름 그레인 노이즈입니다."},
+         {"피사계 심도", "초점 밖 부분의 흐림 효과입니다. 끄면 게임이 더 빨리 실행됩니다."},
+         {"동적 그림자", "캐릭터와 움직이는 물체의 그림자입니다. 끄면 게임이 더 빨리 실행됩니다."},
+         {"앰비언트 오클루전", "구석과 물체가 맞닿는 곳의 부드러운 그림자입니다."},
+         {"블룸", "밝은 빛 주위의 번짐입니다."},
+         {"렌즈 플레어", "밝은 빛이 화면 위에 그리는 플레어입니다."}},
         "끔", "켬", "FXAA", "FXAA 최대", "열기", "바이리니어 (원본)", "AMD CAS (선명화)", "AMD FSR 1", "자동", {"왼쪽 위", "오른쪽 위", "왼쪽 아래", "오른쪽 아래"}, "상세", "고급"}},
   };
   return texts;
@@ -768,7 +866,9 @@ bool PcOptionValueNames(int psid, std::vector<std::u16string>& names) {
       const auto found = unlimited.find(REXCVAR_GET(user_language));
       names = {u"30", u"60", u"90", u"120", found != unlimited.end() ? found->second : u"Unlimited"};
     }
-    if (option.label == Label::kFilmGrain) {
+    if (option.label == Label::kFilmGrain || option.label == Label::kDepthOfField ||
+        option.label == Label::kDynamicShadows || option.label == Label::kAmbientOcclusion ||
+        option.label == Label::kBloom || option.label == Label::kLensFlares) {
       const Texts& texts = TextsFor(PlayerLanguage());
       names = {CoalescedString::FromUtf8(texts.off).text, CoalescedString::FromUtf8(texts.on).text};
     }

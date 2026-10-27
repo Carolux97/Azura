@@ -44,7 +44,6 @@ endif()
 set(AZURA_SOURCES
     src/main.cpp
     src/achievement_export.cpp
-    src/ambient_occlusion.cpp
     src/achievement_toast.cpp
     src/hooks.cpp
     src/script_hooks.cpp
@@ -68,6 +67,7 @@ set(AZURA_SOURCES
     src/perf_stats.cpp
     src/shader_compile_overlay.cpp
     src/shader_precompile.cpp
+    src/system_settings.cpp
     src/local_coop_menu.cpp
     src/controls_menu.cpp
     src/coop_ui.cpp

@@ -53,6 +53,16 @@ upscaling_sharpness = 0.0
 field_of_view = 80.0
 # The Video menu's Film grain: the game's film grain noise. It applies while the game runs.
 film_grain = true
+# The Video menu's Depth of field and Dynamic shadows: the game's own settings, written while it
+# runs. They are the game's most costly effects: on an M4 in combat, turning them off saves about
+# 2 ms and 3 ms of the 10.5 ms of GPU time per frame.
+depth_of_field = true
+dynamic_shadows = true
+# The Video menu's Bloom and Lens flares: the same, for effects that change the look rather than the
+# frame rate. Its Ambient occlusion is not set here: it is on by default, except on Linux, where the
+# game's ambient occlusion leaves black patches on surfaces.
+bloom = true
+lens_flares = true
 # The Video menu's Performance overlay: off, fps for the game's frame rate in a corner of the game,
 # detailed to add the game's CPU and GPU use, or advanced to add its memory use, a graph of frame
 # times, the average frame rate and the 1% low.
