@@ -24,6 +24,7 @@ The RAAM's Shadow DLC and the Title Update it depends on have their own notes in
 - [Mouse look](#mouse-look)
 - [Field of view](#field-of-view)
 - [Film grain](#film-grain)
+- [Engine settings (SystemSettings)](#engine-settings-systemsettings)
 - [Render command queue](#render-command-queue)
 - [Pitfalls](#pitfalls)
 
@@ -184,7 +185,8 @@ How localized values are imported (**verified** by changing them and dumping the
   means writing all its members.
 - Indexed keys (`ProfileMappings[N]`) only fill positions that exist: one past the end is ignored.
 
-Whether the Xbox 360 build honours edited `[SystemSettings]` values is **not verified**.
+The Xbox 360 build honours edited `[SystemSettings]` values (**verified**, see
+[Engine settings (SystemSettings)](#engine-settings-systemsettings)).
 
 ### How patched copies reach the game (verified)
 
@@ -725,6 +727,60 @@ or writes any of them (`script_dump_code` of `Camera`, `PostProcessVolume`, `Wor
 The runtime clears `bEnableImageGrain` in the effects of those three chains while `film_grain` is
 off, every frame as each player's input runs, and puts back the value each effect had otherwise
 (`runtime/src/script_hooks.cpp`, "Film grain").
+
+## Engine settings (SystemSettings)
+
+The engine's settings object (`GSystemSettings` in Unreal Engine 3 terms, an **inference** from its
+contents) is a global at guest `0x8343F488`, with a vtable pointer (`0x8210C898`) at +0. Its fields
+were mapped (**verified**) by starting the game seven times with `[SystemSettings]` values changed
+in the coalesced file, each boolean turned off in a different subset of the runs (a binary code per
+setting) and the numbers set to unique values, and dumping the object when the game first reads it.
+
+It holds the ini's settings three times:
+
+- **+4 to +156**, the main block, in the ini's order with booleans as 32-bit words: `DetailMode`
+  +4, `MaxDrawDistanceScale` +8, `StaticDecals` +24, `DynamicLights` +40, `MotionBlur` +56,
+  `DepthOfField` +64, `AmbientOcclusion` +68, `Bloom` +72, `bAllowLightShafts` +76, `Distortion`
+  +80, `LensFlares` +96, `FogVolumes` +100, `AllowSubsurfaceScattering` +132,
+  `AllowImageReflections` +136, and the others in between. The shadow settings follow further on:
+  `DynamicShadows` +888, `LightEnvironmentShadows` +892, `MinShadowResolution` +900,
+  `MaxShadowResolution` +908, `bAllowWholeSceneDominantShadows` +944, `ShadowFadeResolution` +996.
+- **+1036 to +1084**, a short block with copies of some of them: `MotionBlur` +1036,
+  `AmbientOcclusion` +1040, `DynamicShadows` +1044, `FogVolumes` +1052,
+  `AllowSubsurfaceScattering` +1056, and shadow resolutions.
+- **+1096 onwards**, a full second copy of the main block (`DetailMode` +1096, `DepthOfField`
+  +1156, `AmbientOcclusion` +1160, `Bloom` +1164, ...).
+
+The community patches of the Xenia game-patches file read these fields: depth of field (+64), bloom
+(+72) and lens flares (+96) of the main block, ambient occlusion (+1040) and dynamic shadows (+1044)
+of the short one.
+
+**Changing them while the game runs.** Writing a setting's fields (all its copies) in guest memory
+while the game runs changes the GPU work of the next frames for `DepthOfField`, `DynamicShadows`,
+`MotionBlur` and `bAllowLightShafts` (**verified**: their render passes and draws drop at once and
+come back when the value is restored). For `AmbientOcclusion`, `Bloom`, `LensFlares`, `Distortion`,
+`bAllowWholeSceneDominantShadows`, `FogVolumes`, `AllowSubsurfaceScattering`,
+`AllowImageReflections` and `DetailMode` the counters did not change, so either they do not apply
+while the game runs or the scenes measured did not use them (**not verified**).
+
+**What each costs** on macOS (Metal, `gfx = hle`, M4, 1280x720, `frame_rate_limit = 150`, one run
+of about 10 minutes with the campaign start and its first combat). The run turned one setting off
+and on every 0.5 seconds, in blocks of 8 seconds per setting, and compares each half second with the
+effect off against the half seconds around it with it on, so both see nearly the same scene. Median
+change of the host GPU time per frame:
+
+| Turned off | All gameplay frames | Frames with 1200 or more draws (the combat, an **inference**) |
+| --- | --- | --- |
+| `DynamicShadows` | -2.65 ms (-26%), -18 render passes | -2.9 ms (-30%) |
+| `DepthOfField` | -2.15 ms (-20%), -49 of 94 render passes | -2.15 ms (-20%) |
+| `MotionBlur` | -0.5 ms (-5%) | -0.2 ms |
+| `bAllowLightShafts` | -0.5 ms (-4%) | -0.8 ms |
+| `LensFlares` | none measurable | -0.9 ms (few samples) |
+| The others listed above | none measurable | none measurable |
+
+The frame time follows the GPU time: the game is limited by the GPU there (about 10.5 ms of GPU in
+a 12.3 ms frame in combat). Dynamic shadows and depth of field are the only settings that change the
+frame time by much.
 
 ## Render command queue
 
