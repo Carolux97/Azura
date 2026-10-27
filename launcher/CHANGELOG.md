@@ -6,6 +6,12 @@ it as the update's notes (`scripts/release-common.sh`). Bumping the version adds
 release without one fails. One list item (`- `) per change, in English; an item may continue on
 indented lines.
 
+## 0.4.4
+
+- Linux and Windows: light glows no longer show through walls. The stall reduction of 0.4.3 is
+  removed, with its Stutter reduction row in the Video options: it made the game treat hidden
+  lights as visible. A fix for those stalls that keeps the lights right will come later.
+
 ## 0.4.3
 
 - Installing the game runtime shows why it failed next to the Install button, instead of looking
