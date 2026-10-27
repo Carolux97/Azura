@@ -6,6 +6,17 @@ it as the update's notes (`scripts/release-common.sh`). Bumping the version adds
 release without one fails. One list item (`- `) per change, in English; an item may continue on
 indented lines.
 
+## 0.4.5
+
+- Linux and Windows: higher and steadier frame rates, most of all in combat, with light glows
+  still hidden behind walls. The game gets what the graphics card has counted as visible sooner,
+  copying the game's memory no longer splits up the graphics card's work, and less time is spent
+  waiting for both to be ready.
+- Linux and Windows: lights no longer flicker in busy scenes: when a frame tested more objects for
+  visibility than there was room to count, the rest were taken as visible.
+- Linux: far fewer stutters. Watching the game's memory no longer reads a large system file on every
+  write (on Linux 6.11 and newer; older kernels work as before).
+
 ## 0.4.4
 
 - Linux and Windows: light glows no longer show through walls. The stall reduction of 0.4.3 is
