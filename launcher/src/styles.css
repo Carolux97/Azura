@@ -571,6 +571,8 @@ code, kbd {
   box-shadow: 0 0 8px var(--imulsion-glow);
   animation: status-progress 2.4s ease-in-out infinite;
 }
+/* Nothing is running, but a step is still pending (installed content waiting for the runtime update): steady amber. */
+.status[data-state="pending"] .dot { background: var(--imulsion); box-shadow: 0 0 8px var(--imulsion-glow); }
 @keyframes status-progress { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
 
 .release-notes-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }

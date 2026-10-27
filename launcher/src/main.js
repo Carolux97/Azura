@@ -972,8 +972,8 @@ const dlcRow = (name, detail, rowState) => {
 
 /**
  * The downloadable content list: each of Gears of War 3's, with a green light when it is ready, an
- * amber one while a package installs, and a red one otherwise (not installed, or not playable yet),
- * then the installed packages the list does not identify.
+ * amber one while a package installs, a steady amber one when it is installed and only waits for the
+ * runtime to be updated, and a red one otherwise (not installed, or not playable yet), then the installed packages the list does not identify.
  */
 const renderDlc = () => {
   const list = document.getElementById("dlc-list");
@@ -983,7 +983,8 @@ const renderDlc = () => {
   const rows = [];
   if (dlc.installing) rows.push(dlcRow(dlc.installing, t("install.dlcStatus.installing"), "progress"));
   for (const entry of dlc.state?.entries ?? []) {
-    rows.push(dlcRow(t(`install.dlcNames.${entry.id}`), t(`install.dlcStatus.${entry.status}`), entry.status === "ready" ? "ok" : "warn"));
+    const rowState = entry.status === "ready" ? "ok" : entry.status === "needsRuntime" ? "pending" : "warn";
+    rows.push(dlcRow(t(`install.dlcNames.${entry.id}`), t(`install.dlcStatus.${entry.status}`), rowState));
   }
   if (dlc.state?.otherPackages) {
     rows.push(dlcRow(t("install.dlcOthers"), t("install.dlcOthersCount", { count: dlc.state.otherPackages }), "ok"));
