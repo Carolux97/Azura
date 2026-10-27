@@ -114,14 +114,10 @@ async fn get_achievements(
     let export_dir = achievements_dir(&app)?.join(&version_id);
     let export = match achievements::read_export(&export_dir) {
         Some(export) => export,
-        // No runtime yet, or one older than the build: an older one may not know
+        // No runtime yet, or one that needs an update: an older one may not know
         // --export_achievements and would start the game instead. The section asks for it to be
         // installed, as Play would do first.
-        None if !runtime::executable_path(&runtime).is_file()
-            || install::status(&runtime, install::find_build().as_deref()).update_available =>
-        {
-            return Ok(AchievementsState::NoRuntime)
-        }
+        None if !runtime_current(&app) => return Ok(AchievementsState::NoRuntime),
         None => match achievements::export(&runtime, Path::new(&folder), &export_dir, None) {
             Ok(export) => export,
             Err(detail) => return Ok(AchievementsState::Unavailable { detail }),
@@ -129,12 +125,17 @@ async fn get_achievements(
     };
     let saves = settings_paths(&app)?.saves_folder()?;
     // RAAM's Shadow's own achievements, when it is installed (its database also holds the game's
-    // and other packs', which are left out). A failed export leaves them out too.
+    // and other packs', which are left out). A failed export leaves them out too, and so does a
+    // runtime that needs an update (it may not know --export_achievements_from).
     let dlc_dir = export_dir.join("raams-shadow");
     let game_ids: std::collections::HashSet<u32> = export.achievements.iter().map(|exported| exported.id).collect();
     let dlc_export = dlc::raams_shadow_achievements(&saves).and_then(|spa| {
         achievements::read_export(&dlc_dir)
-            .or_else(|| achievements::export(&runtime, Path::new(&folder), &dlc_dir, Some(&spa)).ok())
+            .or_else(|| {
+                runtime_current(&app)
+                    .then(|| achievements::export(&runtime, Path::new(&folder), &dlc_dir, Some(&spa)).ok())
+                    .flatten()
+            })
             .map(|mut dlc_export| {
                 dlc_export.achievements.retain(|exported| {
                     dlc::RAAMS_SHADOW_ACHIEVEMENTS.contains(&exported.id) && !game_ids.contains(&exported.id)
@@ -204,17 +205,22 @@ fn work_dir(app: &tauri::AppHandle, version: &versions::KnownVersion) -> Result<
 /// from this kit for the game in the saved folder.
 #[tauri::command]
 async fn get_runtime_status(app: tauri::AppHandle) -> Result<RuntimeStatus, String> {
-    let dir = runtime_dir(&app)?;
-    match runtime_source(&app) {
+    runtime_status(&app)
+}
+
+/// The runtime status get_runtime_status reports, for the commands that run the runtime too.
+fn runtime_status(app: &tauri::AppHandle) -> Result<RuntimeStatus, String> {
+    let dir = runtime_dir(app)?;
+    match runtime_source(app) {
         RuntimeSource::Build(build) => Ok(install::status(&dir, Some(&build))),
         RuntimeSource::None => Ok(install::status(&dir, None)),
         RuntimeSource::Kit(kit) => {
             let mut status = install::status(&dir, None);
             status.source = "kit";
             status.build_found = true;
-            let kind = match (builder::read_kit(&kit), game_build(&app)) {
+            let kind = match (builder::read_kit(&kit), game_build(app)) {
                 (Ok(kit), Ok((_, version))) => {
-                    let work = work_dir(&app, &version)?;
+                    let work = work_dir(app, &version)?;
                     let state = builder::read_state(&work);
                     // Installed means built here from the kit for this game: a runtime folder
                     // that holds an executable from elsewhere (a copied project build) is not.
@@ -375,14 +381,15 @@ async fn dlc_state(app: tauri::AppHandle) -> Result<dlc::DlcState, String> {
     let game = paths.load()?.game_folder.map(std::path::PathBuf::from);
     let saves = paths.saves_folder()?;
     let runtime = runtime_dir(&app)?;
-    Ok(dlc::state(&runtime, game.as_deref(), &saves, runtime_current(&runtime)))
+    Ok(dlc::state(&runtime, game.as_deref(), &saves, runtime_current(&app)))
 }
 
-/// Whether the installed runtime is the newest there is: an older one may not know the one-off
-/// tasks the launcher asks of it (--install_content, --make_dlc_patch) and would start the game
+/// Whether the runtime is installed and needs no update, by the same check as Play (a project build,
+/// or the launcher's kit): an older runtime may not know the one-off tasks the launcher asks of it
+/// (--install_content, --make_dlc_patch, --export_achievements_from) and would start the game
 /// instead. Play installs the newer one first.
-fn runtime_current(runtime: &Path) -> bool {
-    runtime::executable_path(runtime).is_file() && !install::status(runtime, install::find_build().as_deref()).update_available
+fn runtime_current(app: &tauri::AppHandle) -> bool {
+    runtime_status(app).is_ok_and(|status| status.installed && !status.update_available)
 }
 
 /// Installs a downloadable content package the player chose into the saves folder. Returns its
@@ -393,7 +400,7 @@ async fn install_dlc(app: tauri::AppHandle, package: String) -> Result<String, S
     let game = paths.load()?.game_folder.map(std::path::PathBuf::from).ok_or("no game folder")?;
     let saves = paths.saves_folder()?;
     let runtime = runtime_dir(&app)?;
-    if !runtime_current(&runtime) {
+    if !runtime_current(&app) {
         return Err("the runtime needs its update first (Play installs it)".into());
     }
     dlc::install(&runtime, &game, &saves, std::path::Path::new(&package))

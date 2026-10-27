@@ -35,12 +35,9 @@ let currentLocale = FALLBACK_LOCALE;
 let currentPreference = AUTO;
 const listeners = new Set();
 
-/**
- * Fetches one message file from locales/. Never from the web view's cache, which can keep a file of
- * an earlier launcher after an update (its new messages would show as their keys).
- */
+/** Fetches one message file from locales/. */
 const loadMessages = async (code) => {
-  const response = await fetch(`locales/${code}.json`, { cache: "no-store" });
+  const response = await fetch(`locales/${code}.json`);
   if (!response.ok) throw new Error(`Cannot load locale "${code}": HTTP ${response.status}`);
   return response.json();
 };
