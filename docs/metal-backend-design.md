@@ -296,10 +296,19 @@ themselves off for Gears 3, whose end sample counts are 0x20 bytes before the be
 The Vulkan backend counts the same way: the marker tells the begin from the end, each guest draw
 between them is counted by a host occlusion query begun and ended around it inside its render
 pass (so the backend's own draws are not counted), and the result is written when the submission
-completes. Host queries come in blocks of 256 reset at the start of each submission, since resets
-must be outside render passes. While the command processor waits for commands with results
+completes. Host queries come in blocks of 2048 reset at the start of each submission, since resets
+must be outside render passes; up to 478 guest queries were seen in one submission, and a guest
+query whose draws find no host query left is written as visible (`occlusion_results_incomplete`
+counts them). Performance work around these queries is in vulkan-performance.md. While the command processor waits for commands with results
 pending, it submits the open work and writes the results as the GPU completes them, as the guest
-may wait for them before sending more.
+may wait for them before sending more. With `hostQueryReset` (Vulkan 1.2) the blocks are reset
+from the CPU when they are taken, so a host query reads as available only once the GPU has counted
+it for this use, and each result is written as soon as all its host queries are available instead
+of when its whole submission completes (`occlusion_query_early_results`, on by default). The game's
+render thread spins until it has them: in the first chapter (RTX laptop, frame rate not limited,
+one run each) about 40% of the results arrived that way, and the median frame went from 16.9 to
+14.6 ms (60 to 66 FPS on average, 1% low 24 to 27 FPS), with the same draws and the same share of
+hidden objects.
 
 - **Counting.** `MetalCommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD` tells the begin from
   the end by the 0xFFFFFEED marker the guest's driver writes at the end. Between them, each render
