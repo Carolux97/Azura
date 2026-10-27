@@ -70,7 +70,6 @@ enum class Label {
   kPerformanceOverlayPosition,
   kFieldOfView,
   kFilmGrain,
-  kStutterReduction,
   kCount
 };
 
@@ -152,14 +151,6 @@ const std::vector<Option>& Options() {
       // Our own list too (ID 9111): the corner the overlay is shown in.
       {kVideoCategory, 12, Label::kPerformanceOverlayPosition, "performance_overlay_position", Kind::kChoice, 9111, -1,
        {"top_left", "top_right", "bottom_left", "bottom_right"}},
-#if !defined(__APPLE__)
-      // The SDK's Vulkan occlusion_query_no_wait: the game stops waiting for the GPU to count its
-      // occlusion queries (most hitches go, the GPU draws more of what is hidden). Linux and
-      // Windows only, where Vulkan draws the game; on by default there. Applies while the game
-      // runs. A list of our own (ID 9114).
-      {kVideoCategory, 13, Label::kStutterReduction, "occlusion_query_no_wait", Kind::kChoice, 9114, -1,
-       {"false", "true"}},
-#endif
   };
   return options;
 }
@@ -202,8 +193,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"PERFORMANCE OVERLAY", "Show the game's frame rate in a corner of the screen."},
          {"OVERLAY POSITION", "Corner of the screen the performance overlay is shown in."},
          {"FIELD OF VIEW", "How wide the camera sees. 80 is the original; aiming and cover widen or narrow with it."},
-         {"FILM GRAIN", "The film grain noise the game adds to the image."},
-         {"STUTTER REDUCTION", "Don't wait for the graphics card's visibility tests: removes most hitches, but the card draws more. Turn it off if your graphics card is the limit."}},
+         {"FILM GRAIN", "The film grain noise the game adds to the image."}},
         "Off", "On", "FXAA", "FXAA extreme", "Open", "Bilinear (original)", "AMD CAS (sharpening)", "AMD FSR 1", "Automatic", {"Top left", "Top right", "Bottom left", "Bottom right"}, "Detailed", "Advanced"}},
       {"esn",
        {{"TECLADO Y RATÓN", "Ajuste las opciones del teclado y el ratón."},
@@ -224,8 +214,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"INDICADOR DE RENDIMIENTO", "Muestre los fotogramas por segundo del juego en una esquina de la pantalla."},
          {"POSICIÓN DEL INDICADOR", "Esquina de la pantalla en la que se muestra el indicador de rendimiento."},
          {"CAMPO DE VISIÓN", "Amplitud de la vista de la cámara. 80 es el original; apuntar y cubrirse cambian en la misma proporción."},
-         {"GRANO DE PELÍCULA", "El ruido de grano de película que el juego añade a la imagen."},
-         {"REDUCIR TIRONES", "No espera a las pruebas de visibilidad de la tarjeta gráfica: quita la mayoría de los tirones, pero la tarjeta dibuja más. Desactívelo si su tarjeta gráfica es el límite."}},
+         {"GRANO DE PELÍCULA", "El ruido de grano de película que el juego añade a la imagen."}},
         "Desactivado", "Activado", "FXAA", "FXAA extremo", "Abrir", "Bilineal (original)", "AMD CAS (nitidez)", "AMD FSR 1", "Automática", {"Arriba a la izquierda", "Arriba a la derecha", "Abajo a la izquierda", "Abajo a la derecha"}, "Detallado", "Avanzado"}},
       {"deu",
        {{"TASTATUR UND MAUS", "Passen Sie die Einstellungen für Tastatur und Maus an."},
@@ -245,8 +234,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"LEISTUNGSANZEIGE", "Zeigt die Bildrate des Spiels in einer Ecke des Bildschirms an."},
          {"POSITION DER ANZEIGE", "Bildschirmecke, in der die Leistungsanzeige erscheint."},
          {"SICHTFELD", "Wie weit die Kamera sieht. 80 ist der ursprüngliche Wert; Zielen und Deckung ändern sich im gleichen Verhältnis."},
-         {"FILMKORN", "Das Filmkorn, das das Spiel dem Bild hinzufügt."},
-         {"RUCKLER VERMEIDEN", "Nicht auf die Sichtbarkeitstests der Grafikkarte warten: entfernt die meisten Ruckler, aber die Grafikkarte zeichnet mehr. Ausschalten, wenn die Grafikkarte die Grenze ist."}},
+         {"FILMKORN", "Das Filmkorn, das das Spiel dem Bild hinzufügt."}},
         "Aus", "Ein", "FXAA", "FXAA extrem", "Öffnen", "Bilinear (Original)", "AMD CAS (Schärfung)", "AMD FSR 1", "Automatisch", {"Oben links", "Oben rechts", "Unten links", "Unten rechts"}, "Detailliert", "Erweitert"}},
       {"ita",
        {{"TASTIERA E MOUSE", "Regola le impostazioni di tastiera e mouse."},
@@ -266,8 +254,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"INDICATORE PRESTAZIONI", "Mostra la frequenza dei fotogrammi del gioco in un angolo dello schermo."},
          {"POSIZIONE INDICATORE", "Angolo dello schermo in cui compare l'indicatore delle prestazioni."},
          {"CAMPO VISIVO", "Ampiezza della visuale. 80 è il valore originale; mira e copertura cambiano nella stessa proporzione."},
-         {"GRANA PELLICOLA", "La grana pellicola che il gioco aggiunge all'immagine."},
-         {"RIDUCI SCATTI", "Non attende i test di visibilità della scheda grafica: elimina quasi tutti gli scatti, ma la scheda disegna di più. Disattivalo se la tua scheda grafica è il limite."}},
+         {"GRANA PELLICOLA", "La grana pellicola che il gioco aggiunge all'immagine."}},
         "Disattivato", "Attivato", "FXAA", "FXAA estremo", "Apri", "Bilineare (originale)", "AMD CAS (nitidezza)", "AMD FSR 1", "Automatica", {"In alto a sinistra", "In alto a destra", "In basso a sinistra", "In basso a destra"}, "Dettagliato", "Avanzato"}},
       {"jpn",
        {{"キーボードとマウス", "キーボードとマウスの設定を調整します。"},
@@ -287,8 +274,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"パフォーマンス表示", "ゲームのフレームレートを画面の隅に表示します。"},
          {"表示位置", "パフォーマンス表示を出す画面の隅。"},
          {"視野角", "カメラの視野の広さです。80 がオリジナルです。エイムやカバーも同じ割合で変わります。"},
-         {"フィルムグレイン", "ゲームが映像に加えるフィルムグレインのノイズです。"},
-         {"カクつき軽減", "グラフィックカードの可視判定の結果を待ちません。カクつきの大半がなくなりますが、描画量が増えます。グラフィックカードが性能の上限ならオフにしてください。"}},
+         {"フィルムグレイン", "ゲームが映像に加えるフィルムグレインのノイズです。"}},
         "オフ", "オン", "FXAA", "FXAA (最大)", "開く", "バイリニア（オリジナル）", "AMD CAS（シャープ化）", "AMD FSR 1", "自動", {"左上", "右上", "左下", "右下"}, "詳細", "高度"}},
       {"fra",
        {{"CLAVIER ET SOURIS", "Réglez les options du clavier et de la souris."},
@@ -308,8 +294,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"INDICATEUR DE PERFORMANCES", "Affiche la fréquence d'images du jeu dans un coin de l'écran."},
          {"POSITION DE L'INDICATEUR", "Coin de l'écran où s'affiche l'indicateur de performances."},
          {"CHAMP DE VISION", "Largeur de la vue de la caméra. 80 est la valeur d'origine ; la visée et le couvert changent dans la même proportion."},
-         {"GRAIN DE FILM", "Le grain de film que le jeu ajoute à l'image."},
-         {"RÉDUCTION DES SACCADES", "N'attend pas les tests de visibilité de la carte graphique : supprime la plupart des saccades, mais la carte dessine davantage. Désactivez-la si votre carte graphique est la limite."}},
+         {"GRAIN DE FILM", "Le grain de film que le jeu ajoute à l'image."}},
         "Désactivé", "Activé", "FXAA", "FXAA extrême", "Ouvrir", "Bilinéaire (d'origine)", "AMD CAS (netteté)", "AMD FSR 1", "Automatique", {"En haut à gauche", "En haut à droite", "En bas à gauche", "En bas à droite"}, "Détaillé", "Avancé"}},
       {"ptb",
        {{"TECLADO E MOUSE", "Ajuste as opções do teclado e do mouse."},
@@ -330,8 +315,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"INDICADOR DE DESEMPENHO", "Mostra a taxa de quadros do jogo em um canto da tela."},
          {"POSIÇÃO DO INDICADOR", "Canto da tela em que o indicador de desempenho aparece."},
          {"CAMPO DE VISÃO", "Amplitude da visão da câmera. 80 é o original; mirar e se proteger mudam na mesma proporção."},
-         {"GRANULAÇÃO DE FILME", "A granulação de filme que o jogo adiciona à imagem."},
-         {"REDUZIR TRAVADAS", "Não espera os testes de visibilidade da placa de vídeo: remove a maioria das travadas, mas a placa desenha mais. Desative se a sua placa de vídeo for o limite."}},
+         {"GRANULAÇÃO DE FILME", "A granulação de filme que o jogo adiciona à imagem."}},
         "Desativado", "Ativado", "FXAA", "FXAA extremo", "Abrir", "Bilinear (original)", "AMD CAS (nitidez)", "AMD FSR 1", "Automática", {"Superior esquerdo", "Superior direito", "Inferior esquerdo", "Inferior direito"}, "Detalhado", "Avançado"}},
       {"pol",
        {{"KLAWIATURA I MYSZ", "Dostosuj ustawienia klawiatury i myszy."},
@@ -351,8 +335,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"WSKAŹNIK WYDAJNOŚCI", "Wyświetla liczbę klatek na sekundę gry w rogu ekranu."},
          {"POŁOŻENIE WSKAŹNIKA", "Róg ekranu, w którym wyświetla się wskaźnik wydajności."},
          {"POLE WIDZENIA", "Szerokość widoku kamery. 80 to wartość oryginalna; celowanie i osłona zmieniają się w tej samej proporcji."},
-         {"ZIARNO FILMOWE", "Ziarno filmowe, które gra dodaje do obrazu."},
-         {"REDUKCJA ZACINANIA", "Nie czeka na testy widoczności karty graficznej: usuwa większość zacięć, ale karta rysuje więcej. Wyłącz, jeśli karta graficzna jest ograniczeniem."}},
+         {"ZIARNO FILMOWE", "Ziarno filmowe, które gra dodaje do obrazu."}},
         "Wyłączone", "Włączone", "FXAA", "FXAA ekstremalne", "Otwórz", "Dwuliniowe (oryginalne)", "AMD CAS (wyostrzanie)", "AMD FSR 1", "Automatyczna", {"Lewy górny róg", "Prawy górny róg", "Lewy dolny róg", "Prawy dolny róg"}, "Szczegółowy", "Zaawansowany"}},
       {"rus",
        {{"КЛАВИАТУРА И МЫШЬ", "Настройте параметры клавиатуры и мыши."},
@@ -372,8 +355,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"ПОКАЗАТЕЛЬ ПРОИЗВОДИТЕЛЬНОСТИ", "Показывает частоту кадров игры в углу экрана."},
          {"ПОЛОЖЕНИЕ ПОКАЗАТЕЛЯ", "Угол экрана, в котором показывается показатель производительности."},
          {"ПОЛЕ ЗРЕНИЯ", "Ширина обзора камеры. 80 — исходное значение; прицеливание и укрытие меняются в той же пропорции."},
-         {"ЗЕРНИСТОСТЬ ПЛЁНКИ", "Эффект зернистости плёнки, который игра добавляет к изображению."},
-         {"МЕНЬШЕ ПОДТОРМАЖИВАНИЙ", "Не ждать результатов проверок видимости видеокарты: убирает большинство подтормаживаний, но видеокарта рисует больше. Выключите, если видеокарта — узкое место."}},
+         {"ЗЕРНИСТОСТЬ ПЛЁНКИ", "Эффект зернистости плёнки, который игра добавляет к изображению."}},
         "Выкл.", "Вкл.", "FXAA", "FXAA (макс.)", "Открыть", "Билинейное (оригинал)", "AMD CAS (резкость)", "AMD FSR 1", "Автоматически", {"Сверху слева", "Сверху справа", "Снизу слева", "Снизу справа"}, "Подробно", "Расширенный"}},
       {"cze",
        {{"KLÁVESNICE A MYŠ", "Upravte nastavení klávesnice a myši."},
@@ -393,8 +375,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"UKAZATEL VÝKONU", "Zobrazí snímkovou frekvenci hry v rohu obrazovky."},
          {"UMÍSTĚNÍ UKAZATELE", "Roh obrazovky, ve kterém se zobrazuje ukazatel výkonu."},
          {"ZORNÉ POLE", "Šířka záběru kamery. 80 je původní hodnota; míření a kryt se mění ve stejném poměru."},
-         {"FILMOVÉ ZRNO", "Filmové zrno, které hra přidává do obrazu."},
-         {"OMEZENÍ ZÁSEKŮ", "Nečeká na testy viditelnosti grafické karty: odstraní většinu záseků, ale karta kreslí víc. Vypněte, pokud je grafická karta omezením."}},
+         {"FILMOVÉ ZRNO", "Filmové zrno, které hra přidává do obrazu."}},
         "Vypnuto", "Zapnuto", "FXAA", "FXAA extrémní", "Otevřít", "Bilineární (původní)", "AMD CAS (zostření)", "AMD FSR 1", "Automaticky", {"Vlevo nahoře", "Vpravo nahoře", "Vlevo dole", "Vpravo dole"}, "Podrobný", "Pokročilý"}},
       {"hun",
        {{"BILLENTYŰZET ÉS EGÉR", "A billentyűzet és az egér beállításai."},
@@ -414,8 +395,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"TELJESÍTMÉNYJELZŐ", "Megjeleníti a játék képkockasebességét a képernyő sarkában."},
          {"JELZŐ HELYE", "A képernyő sarka, ahol a teljesítményjelző megjelenik."},
          {"LÁTÓMEZŐ", "A kamera látószögének szélessége. A 80 az eredeti; a célzás és a fedezék ugyanilyen arányban változik."},
-         {"FILMSZEMCSÉZET", "A filmszemcsés zaj, amelyet a játék a képhez ad."},
-         {"AKADÁSOK CSÖKKENTÉSE", "Nem várja meg a videokártya láthatósági tesztjeit: megszünteti a legtöbb akadást, de a kártya többet rajzol. Kapcsolja ki, ha a videokártya a szűk keresztmetszet."}},
+         {"FILMSZEMCSÉZET", "A filmszemcsés zaj, amelyet a játék a képhez ad."}},
         "Ki", "Be", "FXAA", "FXAA (extrém)", "Megnyitás", "Bilineáris (eredeti)", "AMD CAS (élesítés)", "AMD FSR 1", "Automatikus", {"Bal felső sarok", "Jobb felső sarok", "Bal alsó sarok", "Jobb alsó sarok"}, "Részletes", "Haladó"}},
       {"chn",
        {{"鍵盤與滑鼠", "調整鍵盤與滑鼠設定。"},
@@ -435,8 +415,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"效能顯示", "在畫面角落顯示遊戲的每秒影格數。"},
          {"顯示位置", "效能顯示出現在畫面的哪個角落。"},
          {"視野", "鏡頭視野的寬度。80 為原始值；瞄準與掩護會以相同比例改變。"},
-         {"底片顆粒", "遊戲加在畫面上的底片顆粒雜訊。"},
-         {"減少卡頓", "不等待顯示卡的可見性測試：消除大部分卡頓，但顯示卡會繪製更多內容。若顯示卡是效能瓶頸，請關閉。"}},
+         {"底片顆粒", "遊戲加在畫面上的底片顆粒雜訊。"}},
         "關閉", "開啟", "FXAA", "FXAA 極致", "開啟", "雙線性（原始）", "AMD CAS（銳利化）", "AMD FSR 1", "自動", {"左上角", "右上角", "左下角", "右下角"}, "詳細", "進階"}},
       {"kor",
        {{"키보드 및 마우스", "키보드 및 마우스 설정을 조정합니다."},
@@ -456,8 +435,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"성능 표시", "화면 모서리에 게임의 프레임 속도를 표시합니다."},
          {"표시 위치", "성능 표시가 나타나는 화면 모서리입니다."},
          {"시야각", "카메라 시야의 넓이입니다. 80이 원래 값이며, 조준과 엄폐도 같은 비율로 바뀝니다."},
-         {"필름 그레인", "게임이 화면에 더하는 필름 그레인 노이즈입니다."},
-         {"끊김 줄이기", "그래픽 카드의 가시성 테스트를 기다리지 않습니다. 대부분의 끊김이 사라지지만 그래픽 카드가 더 많이 그립니다. 그래픽 카드가 한계라면 끄세요."}},
+         {"필름 그레인", "게임이 화면에 더하는 필름 그레인 노이즈입니다."}},
         "끔", "켬", "FXAA", "FXAA 최대", "열기", "바이리니어 (원본)", "AMD CAS (선명화)", "AMD FSR 1", "자동", {"왼쪽 위", "오른쪽 위", "왼쪽 아래", "오른쪽 아래"}, "상세", "고급"}},
   };
   return texts;
@@ -790,7 +768,7 @@ bool PcOptionValueNames(int psid, std::vector<std::u16string>& names) {
       const auto found = unlimited.find(REXCVAR_GET(user_language));
       names = {u"30", u"60", u"90", u"120", found != unlimited.end() ? found->second : u"Unlimited"};
     }
-    if (option.label == Label::kFilmGrain || option.label == Label::kStutterReduction) {
+    if (option.label == Label::kFilmGrain) {
       const Texts& texts = TextsFor(PlayerLanguage());
       names = {CoalescedString::FromUtf8(texts.off).text, CoalescedString::FromUtf8(texts.on).text};
     }
