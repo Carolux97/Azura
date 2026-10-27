@@ -40,17 +40,17 @@ address = 0x823F42D8
 name = "AzuraCheckRenderCommand"
 registers = ["r18"]
 
-# "Disable Ambient Occlusion" (Linux only): right after each `lwz r11,1040(r10)` the community fix
-# replaces with `li r11,0`, in sub_82762C30 and sub_827C9610. r10 is the engine's settings object,
-# which the Video options write. See runtime/src/ambient_occlusion.cpp.
+# The engine's settings object, which the Video options write: r10 right after the game reads its
+# ambient occlusion setting (`lwz r11,1040(r10)` in sub_82762C30 and sub_827C9610). See
+# runtime/src/system_settings.cpp.
 [[entrypoint.midasm_hook]]
 address = 0x82762C54
-name = "AzuraDisableAmbientOcclusion"
-registers = ["r10", "r11"]
+name = "AzuraNoteEngineSettings"
+registers = ["r10"]
 after_instruction = true
 
 [[entrypoint.midasm_hook]]
 address = 0x827C9628
-name = "AzuraDisableAmbientOcclusion"
-registers = ["r10", "r11"]
+name = "AzuraNoteEngineSettings"
+registers = ["r10"]
 after_instruction = true

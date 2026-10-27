@@ -58,6 +58,11 @@ film_grain = true
 # 2 ms and 3 ms of the 10.5 ms of GPU time per frame.
 depth_of_field = true
 dynamic_shadows = true
+# The Video menu's Bloom and Lens flares: the same, for effects that change the look rather than the
+# frame rate. Its Ambient occlusion is not set here: it is on by default, except on Linux, where the
+# game's ambient occlusion leaves black patches on surfaces.
+bloom = true
+lens_flares = true
 # The Video menu's Performance overlay: off, fps for the game's frame rate in a corner of the game,
 # detailed to add the game's CPU and GPU use, or advanced to add its memory use, a graph of frame
 # times, the average frame rate and the 1% low.

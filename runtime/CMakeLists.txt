@@ -44,7 +44,6 @@ endif()
 set(AZURA_SOURCES
     src/main.cpp
     src/achievement_export.cpp
-    src/ambient_occlusion.cpp
     src/achievement_toast.cpp
     src/hooks.cpp
     src/script_hooks.cpp
