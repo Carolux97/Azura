@@ -18,7 +18,7 @@
 //! option enabled.
 
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -108,8 +108,9 @@ struct ToolReport {
     error: String,
 }
 
-/// What `dlc_patch.json` records: the GearGame.xxx the patch was made from, and the runtime that
-/// made it (its executable's size and modification time).
+/// What `dlc_patch.json` records: the GearGame.xxx the patch was made from (see
+/// `game_files_identity`), and the runtime that made it (its executable's size and modification
+/// time).
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct PatchManifest {
     #[serde(rename = "GearGame.xxx")]
@@ -156,10 +157,23 @@ fn sha256(path: &Path) -> io::Result<String> {
     Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// What the patch for these game files, made by this runtime, records; `None` when the game's
-/// GearGame.xxx or the runtime executable cannot be read.
+/// Identifies the game files a patch is made from. A game folder: the SHA-256 of its GearGame.xxx.
+/// A disc image (.iso), which the runtime reads in place: the image's size and modification time,
+/// as hashing the whole image (7 to 8 GB) every time the launcher checks the patch would take too
+/// long, and its GearGame.xxx is not a file of its own.
+fn game_files_identity(game: &Path) -> Option<String> {
+    if game.is_file() {
+        let image = fs::metadata(game).ok()?;
+        let modified = image.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
+        return Some(format!("disc image {}:{modified}", image.len()));
+    }
+    sha256(&game.join("GearGame").join("CookedXbox360").join("GearGame.xxx")).ok()
+}
+
+/// What the patch for these game files, made by this runtime, records; `None` when the game files
+/// or the runtime executable cannot be read.
 fn expected_manifest(runtime: &Path, game: &Path) -> Option<PatchManifest> {
-    let gear_game = sha256(&game.join("GearGame").join("CookedXbox360").join("GearGame.xxx")).ok()?;
+    let gear_game = game_files_identity(game)?;
     let executable = fs::metadata(crate::runtime::executable_path(runtime)).ok()?;
     let modified = executable.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
     Some(PatchManifest { gear_game, runtime: format!("{}:{modified}", executable.len()) })
@@ -274,9 +288,61 @@ pub fn launch_arguments(runtime: &Path, game: Option<&Path>, saves: &Path) -> Ve
     ]
 }
 
+/// The first bytes of an Xbox 360 content package: LIVE and PIRS for Microsoft's, CON for a
+/// console's own.
+const PACKAGE_MAGICS: [&[u8; 4]; 3] = [b"LIVE", b"PIRS", b"CON "];
+
+/// Where a package shared as a .zip is extracted for the installation, in the saves folder (the
+/// same disk the installed content goes to), removed afterwards.
+const ZIP_EXTRACT_DIR: &str = ".dlc-from-zip";
+
+fn is_zip(path: &Path) -> bool {
+    let mut magic = [0u8; 4];
+    fs::File::open(path).and_then(|mut file| file.read_exact(&mut magic)).is_ok() && &magic == b"PK\x03\x04"
+}
+
+/// Extracts the first Xbox 360 content package inside `archive` into `folder`, under its own file
+/// name (the installed content keeps it), and returns its path.
+fn extract_package_from_zip(archive: &Path, folder: &Path) -> Result<PathBuf, String> {
+    let file = fs::File::open(archive).map_err(|e| format!("cannot open {}: {e}", archive.display()))?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("the .zip cannot be read: {e}"))?;
+    for index in 0..zip.len() {
+        let mut entry = zip.by_index(index).map_err(|e| format!("the .zip cannot be read: {e}"))?;
+        if entry.is_dir() {
+            continue;
+        }
+        let mut magic = [0u8; 4];
+        if entry.read_exact(&mut magic).is_err() || !PACKAGE_MAGICS.contains(&&magic) {
+            continue;
+        }
+        let name = Path::new(entry.name()).file_name().ok_or("a package in the .zip has no name")?.to_owned();
+        fs::create_dir_all(folder).map_err(|e| format!("cannot create {}: {e}", folder.display()))?;
+        let path = folder.join(name);
+        let mut out = fs::File::create(&path).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+        out.write_all(&magic)
+            .and_then(|()| io::copy(&mut entry, &mut out).map(|_| ()))
+            .map_err(|e| format!("cannot extract the package from the .zip: {e}"))?;
+        return Ok(path);
+    }
+    Err("the .zip has no Xbox 360 content package".into())
+}
+
 /// Installs `package` into the saves folder with the runtime, and makes RAAM's Shadow's patch when
-/// the package is that add-on. Returns the package's name.
+/// the package is that add-on. Returns the package's name. A .zip holding the package (as packages
+/// are often shared) is extracted first.
 pub fn install(runtime: &Path, game: &Path, saves: &Path, package: &Path) -> Result<String, String> {
+    if !is_zip(package) {
+        return install_package(runtime, game, saves, package);
+    }
+    let folder = saves.join(ZIP_EXTRACT_DIR);
+    let _ = fs::remove_dir_all(&folder);
+    let result = extract_package_from_zip(package, &folder)
+        .and_then(|extracted| install_package(runtime, game, saves, &extracted));
+    let _ = fs::remove_dir_all(&folder);
+    result
+}
+
+fn install_package(runtime: &Path, game: &Path, saves: &Path, package: &Path) -> Result<String, String> {
     let report = run_tool(
         runtime,
         &[
@@ -318,6 +384,43 @@ mod tests {
         fs::write(package.join(RAAMS_SHADOW_MARKER), b"").unwrap();
         assert_eq!(raams_shadow(&saves), Some(package));
         let _ = fs::remove_dir_all(&saves);
+    }
+
+    #[test]
+    fn extracts_the_package_from_a_zip() {
+        let root = temp("zip");
+        let archive = root.join("pack.zip");
+        let mut writer = zip::ZipWriter::new(fs::File::create(&archive).unwrap());
+        let options =
+            zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        writer.start_file("readme.txt", options).unwrap();
+        writer.write_all(b"not a package").unwrap();
+        writer.start_file("4D5308AB/00000002/ABCD", options).unwrap();
+        writer.write_all(b"LIVE and the rest of the package").unwrap();
+        writer.finish().unwrap();
+        assert!(is_zip(&archive));
+        let extracted = extract_package_from_zip(&archive, &root.join("out")).unwrap();
+        assert_eq!(extracted.file_name().unwrap(), "ABCD");
+        assert_eq!(fs::read(&extracted).unwrap(), b"LIVE and the rest of the package");
+        let empty = root.join("empty.zip");
+        let mut writer = zip::ZipWriter::new(fs::File::create(&empty).unwrap());
+        writer.start_file("readme.txt", options).unwrap();
+        writer.write_all(b"not a package").unwrap();
+        writer.finish().unwrap();
+        assert!(extract_package_from_zip(&empty, &root.join("out2")).is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn identifies_a_disc_image_by_its_size_and_date() {
+        let root = temp("disc");
+        let image = root.join("game.iso");
+        fs::write(&image, b"an image of the disc").unwrap();
+        let identity = game_files_identity(&image).unwrap();
+        assert!(identity.starts_with("disc image 20:"), "{identity}");
+        // A folder is identified by its GearGame.xxx, and has none here.
+        assert!(game_files_identity(&root).is_none());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
