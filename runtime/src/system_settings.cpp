@@ -3,12 +3,17 @@
 #include <array>
 #include <atomic>
 #include <mutex>
+#include <vector>
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
+#include <rex/ppc/context.h>
 
 REXCVAR_DECLARE(bool, depth_of_field);
 REXCVAR_DECLARE(bool, dynamic_shadows);
+REXCVAR_DECLARE(bool, ambient_occlusion);
+REXCVAR_DECLARE(bool, bloom);
+REXCVAR_DECLARE(bool, lens_flares);
 
 namespace azura::system_settings {
 
@@ -19,16 +24,19 @@ namespace {
 // second copy of the main block), and a setting is turned off in every copy.
 struct Setting {
   bool (*enabled)();
-  std::array<uint32_t, 2> offsets;
+  std::vector<uint32_t> offsets;
 };
 
 // Offsets verified by starting the game with each [SystemSettings] value changed and reading the
-// object (docs/reverse-engineering.md, "Engine settings (SystemSettings)").
-const std::array<Setting, 2> kSettings = {{
-    // DepthOfField: the main block and its copy.
+// object (docs/reverse-engineering.md, "Engine settings (SystemSettings)"). The game reads depth of
+// field (+64), ambient occlusion (+1040), bloom (+72) and lens flares (+96) as it draws; those are
+// the reads the community patches for this game replace with 0.
+const std::array<Setting, 5> kSettings = {{
     {[] { return REXCVAR_GET(depth_of_field); }, {64, 1156}},
-    // DynamicShadows: the shadow settings and the short block.
     {[] { return REXCVAR_GET(dynamic_shadows); }, {888, 1044}},
+    {[] { return REXCVAR_GET(ambient_occlusion); }, {68, 1040, 1160}},
+    {[] { return REXCVAR_GET(bloom); }, {72, 1164}},
+    {[] { return REXCVAR_GET(lens_flares); }, {96, 1188}},
 }};
 
 uint32_t LoadU32(const uint8_t* base, uint32_t address) {
@@ -45,19 +53,12 @@ std::atomic<uint32_t> g_object{0};
 // the option turns it on again. Guarded by g_mutex.
 struct Saved {
   bool off = false;
-  std::array<uint32_t, 2> values{};
+  std::vector<uint32_t> values;
 };
 std::mutex g_mutex;
-std::array<Saved, 2> g_saved;
+std::array<Saved, kSettings.size()> g_saved;
 
 }  // namespace
-
-void NoteSettingsObject(uint32_t address) {
-  uint32_t expected = 0;
-  if (g_object.compare_exchange_strong(expected, address)) {
-    REXLOG_INFO("[Azura options] Engine settings object at {:08X}", address);
-  }
-}
 
 void Apply(uint8_t* base) {
   const uint32_t object = g_object.load(std::memory_order_relaxed);
@@ -68,9 +69,8 @@ void Apply(uint8_t* base) {
     Saved& saved = g_saved[i];
     if (!setting.enabled()) {
       if (!saved.off) {
-        for (size_t j = 0; j < setting.offsets.size(); ++j) {
-          saved.values[j] = LoadU32(base, object + setting.offsets[j]);
-        }
+        saved.values.clear();
+        for (uint32_t offset : setting.offsets) saved.values.push_back(LoadU32(base, object + offset));
         saved.off = true;
       }
       // Every frame, in case the engine writes its settings again (a settings profile it applies).
@@ -85,3 +85,12 @@ void Apply(uint8_t* base) {
 }
 
 }  // namespace azura::system_settings
+
+// Mid-function hook (manifest) right after the game reads its ambient occlusion setting from the
+// engine's settings object: r10 holds the object's address, in every edition.
+void AzuraNoteEngineSettings(PPCRegister& r10) {
+  uint32_t expected = 0;
+  if (azura::system_settings::g_object.compare_exchange_strong(expected, r10.u32)) {
+    REXLOG_INFO("[Azura options] Engine settings object at {:08X}", r10.u32);
+  }
+}
