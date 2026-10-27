@@ -12,9 +12,10 @@ indented lines.
   console's graphics commands step by step: it follows what the game means to do, skipping copies
   of the picture that were not needed and writing finished images straight from the graphics card.
   It works at every resolution scale. On Linux and Windows the console's way stays the default.
-- macOS: the game's own effects can be switched off in the Video options: depth of field, dynamic
+- The game's own effects can be switched off in the Video options: depth of field, dynamic
   shadows, ambient occlusion, bloom and lens flares. Turning off depth of field and dynamic shadows
-  gives the most extra frames per second; the other three change the look only.
+  saves the most graphics card time (measured on macOS); the other three change the look only.
+  Ambient occlusion stays off by default on Linux, as before.
 - macOS: cheaper pixel shaders in textures that need no sign handling, about 10% less graphics
   card time per frame in the scene measured. The first start after updating compiles the shaders
   again, with the usual "Compiling shaders" notice.
