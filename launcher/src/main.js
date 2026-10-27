@@ -1615,6 +1615,7 @@ const setupAchievements = () => {
 const renderAll = () => {
   renderPlay();
   renderInstall();
+  renderDlc();
   renderGameLanguages();
   renderGraphics();
   renderLanguageOptions();
