@@ -450,7 +450,45 @@ the rooftop with the fountain, where the background behind them showed four time
 - **Not explained.** Kabu did not see the flashes on Linux, where the SPIR-V translator had the same
   bug; not verified why.
 
-## 18. Risks
+## 18. Fragment shader cost on Metal with HLE graphics
+
+Measured on 27 October 2026 on a base M4 at 1280x720, `gfx = "hle"`, uncapped
+(`frame_rate_limit = 150`), the scripted pad to the campaign start, with a Metal System Trace
+("Azura GPU Limiters": counters and shader profiler) and the bench.
+
+- **Where the shader time goes** (Shader Timeline, weighted by each shader's share of the GPU
+  work): XSC pixel shaders 60%, compute (resolves, texture loads, the gamma table) 26%, transfer
+  and paint fragment shaders 11%, vertex shaders 2%. The 12 most expensive pixel shaders take 52%.
+- **Counters** (samples with the GPU busy): fragment occupancy 33%, total 52% against an
+  occupancy manager target of 73%, L1 eviction rate 8%; stack accesses are about 1% of the L1
+  traffic (4.5 and 6 GB/s against about 240 GB/s), so register spills cost little. Instruction
+  throughput limiter 49%, fragment shader launch 47%; among the ALU blocks Integer and
+  Conditional leads (37%) ahead of F32 (27%), F16 1.5%.
+- **Spills by shader.** The trace reports spills per encoder; the bench drawn under a trace, with
+  one labelled encoder per variant, ties them to shaders: 9 of 960 pixel shader variants spill,
+  and only one matters in that scene (E50DFC1ED401165C, 288 bytes, 5% of the shader time).
+- **Attribution in the bench.** Ablations of the 12 most expensive shaders (hand-edited copies
+  through `XSC_BENCH_MSL_OVERRIDE`, not correct, for the cost only): without the texture sign
+  handling (the signed binding sampled under a branch and a switch per component over the four
+  signs, gamma included) their time drops 23% with every texture unsigned and 35% with random
+  signs; implicit gradients instead of `gradient2d` 6% and 13% (not kept: the hardware's own LOD
+  computation is not guaranteed to give the same result).
+- **Kept: a fast path for unsigned textures.** When the 8 sign bits of the fetch constant are all
+  0 (one uniform branch per fetch), only the unsigned binding is sampled and its components are
+  the result; otherwise the full sign handling runs as before. Both paths give the same result
+  (the bench's seeds with values in [0, 1] have every texture unsigned, so the comparison covers
+  both: 0 differences, MSL and SPIR-V). In the bench, the game's 883 pixel shader variants
+  83.7 to 69.5 ms (-17%) with every texture unsigned, the 12 most expensive -38%; with random
+  signs no change beyond the noise. In the game, alternating runs of the same scene without a
+  trace: GPU time per frame median 11.05 and 10.97 ms before, 9.63 and 10.29 ms after (-9.5%),
+  frame time 11.2 to 10.2 ms. Against the work the change does not touch (compute, transfers and
+  vertex shaders, as the two traces do not cover the same seconds), the XSC pixel shaders take 28%
+  less, the most expensive one 48% less.
+- **Left for later:** specializing the signs per draw would remove the general path too, at the
+  cost of pipeline variants compiled while playing; the dispatch loop (section 15) is still not
+  measured on its own.
+
+## 19. Risks
 
 - Visual differences in shaders the bench does not reach with random constants (branches the
   game never takes in the bench, special texture formats): the in-game captures cover the main
