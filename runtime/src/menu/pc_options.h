@@ -72,6 +72,7 @@ struct GameControlsTexts {
   std::string back;
   std::string defaults;
 };
+// The texts of the player's language (user_language), or English when the game has none in it.
 GameControlsTexts ControlsTextsFromGame();
 
 // A setting of the controls menus: sets cvar `name` to `value` and writes it to azura.toml, quoted

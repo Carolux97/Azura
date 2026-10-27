@@ -460,8 +460,9 @@ std::string PlayerLanguage() {
 
 std::mutex g_mutex;
 std::filesystem::path g_config_path;
-// The game's texts of the controls menus, read as the menu's localization file is patched.
-GameControlsTexts g_controls_texts;
+// The game's texts of the controls menus, read as each language's localization file is patched
+// (the menu shows the player's language's).
+std::map<std::string, GameControlsTexts> g_controls_texts;
 // Value shown for each option once read: settings that apply at the next start keep their old
 // cvar value until then, so the menu shows what was chosen rather than what is in effect.
 std::map<int, float> g_values;
@@ -812,8 +813,13 @@ void SetPcOptionsConfigPath(std::filesystem::path config_path) {
 }
 
 GameControlsTexts ControlsTextsFromGame() {
+  const std::string language = PlayerLanguage();
   std::lock_guard lock(g_mutex);
-  return g_controls_texts;
+  for (const std::string& candidate : {language, std::string("int")}) {
+    const auto found = g_controls_texts.find(candidate);
+    if (found != g_controls_texts.end()) return found->second;
+  }
+  return g_controls_texts.empty() ? GameControlsTexts{} : g_controls_texts.begin()->second;
 }
 
 void StoreControlsSetting(const std::string& name, const std::string& value, bool quoted) {
@@ -1135,8 +1141,9 @@ void PatchOptionsMenu(CoalescedSection& section, const std::string& language) {
   controls.back = back;
   controls.defaults = defaults;
   std::lock_guard lock(g_mutex);
-  controls.value_names = std::move(g_controls_texts.value_names);
-  g_controls_texts = std::move(controls);
+  GameControlsTexts& stored = g_controls_texts[language];
+  controls.value_names = std::move(stored.value_names);
+  stored = std::move(controls);
 }
 
 void PatchValueNames(CoalescedSection& section, const std::string& language) {
@@ -1152,7 +1159,7 @@ void PatchValueNames(CoalescedSection& section, const std::string& language) {
       if (key) value_names[psid] = Quoted(key->value.text, u"Name");
     }
     std::lock_guard lock(g_mutex);
-    g_controls_texts.value_names = std::move(value_names);
+    g_controls_texts[language].value_names = std::move(value_names);
   }
   const Texts& texts = TextsFor(language);
   for (const Option& option : Options()) {

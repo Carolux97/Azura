@@ -26,6 +26,9 @@
 #include <rex/ui/presenter.h>
 
 #include "achievement_export.h"
+#include "dlc/content_install.h"
+#include "dlc/dlc_achievements.h"
+#include "dlc/raams_shadow_patch.h"
 #include "achievement_toast.h"
 #include "input/mouse_look.h"
 #include "input/player_assignment.h"
@@ -103,15 +106,22 @@ class AzuraApp : public rex::ReXApp {
 
   // Logging is ready and nothing else has started (no window, no GPU). Started by the launcher for
   // a one-off task, the runtime does only that and exits: exporting the achievements, so the
-  // launcher can read them without starting the game, or listing the graphics cards
-  // (--list_gpus). std::_Exit skips the static destructors of a runtime that never set up the
-  // rest.
+  // launcher can read them without starting the game, listing the graphics cards (--list_gpus),
+  // installing a downloadable content package (--install_content), or writing the script patch for
+  // RAAM's Shadow (--make_dlc_patch). std::_Exit skips the static destructors of a runtime that never
+  // set up the rest.
   void OnPostInitLogging() override {
 #if defined(_WIN32)
     azura::LogDisabledVulkanLayers();
 #endif
     if (azura::AchievementExportRequested()) {
       std::_Exit(azura::ExportAchievements(game_data_root()));
+    }
+    if (azura::dlc::ContentInstallRequested()) {
+      std::_Exit(azura::dlc::InstallContent(game_data_root(), REXCVAR_GET(user_data_root)));
+    }
+    if (azura::dlc::DlcPatchRequested()) {
+      std::_Exit(azura::dlc::MakeDlcPatch(game_data_root()));
     }
     if (azura::GpuListRequested()) {
       std::_Exit(azura::PrintGpuList());
@@ -131,6 +141,14 @@ class AzuraApp : public rex::ReXApp {
     azura::menu::ApplyPresentMode();
     azura::menu::ApplyRenderResolution();
     azura::menu::ApplyUpscalingSharpness(false);
+  }
+
+  // default.xex is loaded with its achievements: add RAAM's Shadow's when it is installed, so their
+  // unlocks are recorded and shown (dlc/dlc_achievements.h).
+  void OnPostLoadXexImage() override {
+    const std::filesystem::path cache =
+        runtime()->cache_root().empty() ? runtime()->user_data_root() / "cache" : runtime()->cache_root();
+    azura::dlc::RegisterDlcAchievements(runtime()->user_data_root(), cache);
   }
 
   // The runtime has mounted the game files and the game has not started: apply the menu changes

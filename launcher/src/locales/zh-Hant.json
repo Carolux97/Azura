@@ -121,7 +121,29 @@
     "runtimeNotBuilt": "尚未建置：第一次從你的遊戲副本建置需要幾分鐘。",
     "runtimeNeedsCompiler": "請先安裝下方的編譯器。",
     "runtimeUpdateLink": "有可用的更新：幾秒內即可安裝。",
-    "runtimeUpdateBuild": "更新需要重新建置遊戲：約兩分鐘。"
+    "runtimeUpdateBuild": "更新需要重新建置遊戲：約兩分鐘。",
+    "dlcTitle": "下載內容",
+    "dlcHelp": "加入你擁有的下載內容（Xbox 360 下載的套件檔案）。它會安裝到你的存檔資料夾。",
+    "dlcAdd": "加入下載內容…",
+    "dlcNames": {
+      "raamsShadow": "RAAM's Shadow",
+      "hordeCommandPack": "Horde Command Pack",
+      "fenixRising": "Fenix Rising",
+      "forcesOfNature": "Forces of Nature",
+      "versusBooster": "Versus Booster Map Pack"
+    },
+    "dlcStatus": {
+      "ready": "已安裝 · 請在「戰役」中選擇",
+      "notInstalled": "未安裝",
+      "needsRuntime": "已安裝 · 更新執行環境後即可使用",
+      "unsupported": "已安裝，但無法以這些遊戲檔案準備",
+      "multiplayer": "將隨多人模式推出",
+      "installing": "安裝中…（約需一分鐘）"
+    },
+    "dlcOthers": "其他已安裝的內容",
+    "dlcOthersCount": "{count} 個套件",
+    "dlcInstalled": "已安裝 {name}。",
+    "dlcFailed": "無法安裝套件：{detail}"
   },
   "graphics": {
     "title": "圖形",
@@ -173,6 +195,7 @@
       "act4": "第四幕",
       "act5": "第五幕",
       "campaign": "戰役",
+      "raamsShadow": "RAAM's Shadow",
       "modes": "對戰、獸群與野獸模式"
     },
     "lockedTitle": "成就已鎖定",

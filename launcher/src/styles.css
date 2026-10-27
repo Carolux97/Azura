@@ -537,6 +537,11 @@ code, kbd {
 }
 
 .status-list { display: grid; gap: 10px; }
+.status-list[hidden] { display: none; }
+/* The downloadable content list, between the panel's help and its button. Its names are product
+   names, as a store shows them: in their own case, not the status lines' capitals. */
+.dlc-list { margin: 16px 0 18px; }
+.dlc-list .status strong { font-family: var(--font-body); font-size: 16px; letter-spacing: 0; text-transform: none; }
 
 .status { display: flex; gap: 12px; align-items: flex-start; }
 .status[hidden] { display: none; }

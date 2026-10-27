@@ -121,7 +121,29 @@
     "runtimeNotBuilt": "Noch nicht gebaut: Der erste Bau aus deiner Spielkopie dauert einige Minuten.",
     "runtimeNeedsCompiler": "Installiere zuerst den Compiler (weiter unten).",
     "runtimeUpdateLink": "Ein Update ist bereit: Es ist in wenigen Sekunden installiert.",
-    "runtimeUpdateBuild": "Ein Update erfordert, das Spiel neu zu bauen: etwa zwei Minuten."
+    "runtimeUpdateBuild": "Ein Update erfordert, das Spiel neu zu bauen: etwa zwei Minuten.",
+    "dlcTitle": "Herunterladbare Inhalte",
+    "dlcHelp": "Füge herunterladbare Inhalte hinzu, die du besitzt (die Paketdateien, die deine Xbox 360 heruntergeladen hat). Sie werden in deinem Spielstandordner installiert.",
+    "dlcAdd": "Herunterladbare Inhalte hinzufügen…",
+    "dlcNames": {
+      "raamsShadow": "RAAM's Shadow",
+      "hordeCommandPack": "Horde Command Pack",
+      "fenixRising": "Fenix Rising",
+      "forcesOfNature": "Forces of Nature",
+      "versusBooster": "Versus Booster Map Pack"
+    },
+    "dlcStatus": {
+      "ready": "Installiert · Wähle es unter Kampagne",
+      "notInstalled": "Nicht installiert",
+      "needsRuntime": "Installiert · wird nach dem Runtime-Update vorbereitet",
+      "unsupported": "Installiert, konnte aber mit diesen Spieldateien nicht vorbereitet werden",
+      "multiplayer": "Kommt mit dem Mehrspielermodus",
+      "installing": "Wird installiert … (dauert eine Minute)"
+    },
+    "dlcOthers": "Weitere installierte Inhalte",
+    "dlcOthersCount": "{count} Pakete",
+    "dlcInstalled": "{name} installiert.",
+    "dlcFailed": "Das Paket konnte nicht installiert werden: {detail}"
   },
   "graphics": {
     "title": "Grafik",
@@ -173,6 +195,7 @@
       "act4": "Akt IV",
       "act5": "Akt V",
       "campaign": "Kampagne",
+      "raamsShadow": "RAAM's Shadow",
       "modes": "Versus, Horde und Bestie"
     },
     "lockedTitle": "Erfolge gesperrt",
