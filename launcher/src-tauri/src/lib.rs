@@ -6,6 +6,7 @@
 mod achievements;
 mod builder;
 mod disc_image;
+mod dlc;
 mod game_folder;
 mod gamepad;
 mod gpus;
@@ -121,12 +122,26 @@ async fn get_achievements(
         {
             return Ok(AchievementsState::NoRuntime)
         }
-        None => match achievements::export(&runtime, Path::new(&folder), &export_dir) {
+        None => match achievements::export(&runtime, Path::new(&folder), &export_dir, None) {
             Ok(export) => export,
             Err(detail) => return Ok(AchievementsState::Unavailable { detail }),
         },
     };
     let saves = settings_paths(&app)?.saves_folder()?;
+    // RAAM's Shadow's own achievements, when it is installed (its database also holds the game's
+    // and other packs', which are left out). A failed export leaves them out too.
+    let dlc_dir = export_dir.join("raams-shadow");
+    let game_ids: std::collections::HashSet<u32> = export.achievements.iter().map(|exported| exported.id).collect();
+    let dlc_export = dlc::raams_shadow_achievements(&saves).and_then(|spa| {
+        achievements::read_export(&dlc_dir)
+            .or_else(|| achievements::export(&runtime, Path::new(&folder), &dlc_dir, Some(&spa)).ok())
+            .map(|mut dlc_export| {
+                dlc_export.achievements.retain(|exported| {
+                    dlc::RAAMS_SHADOW_ACHIEVEMENTS.contains(&exported.id) && !game_ids.contains(&exported.id)
+                });
+                dlc_export
+            })
+    });
     let unlocks = achievements::read_unlocks(&achievements::unlocks_path(&saves, &export.title_id));
     let languages: Vec<&str> = game_language
         .as_deref()
@@ -134,7 +149,11 @@ async fn get_achievements(
         .into_iter()
         .chain(std::iter::once(ui_locale.as_str()))
         .collect();
-    Ok(achievements::build_state(&export, &export_dir, &unlocks, &languages))
+    let mut sources = vec![(&export, export_dir.as_path())];
+    if let Some(dlc_export) = &dlc_export {
+        sources.push((dlc_export, dlc_dir.as_path()));
+    }
+    Ok(achievements::build_state(&sources, &unlocks, &languages))
 }
 
 /// Where the runtime comes from. A developer's explicit choice wins (`AZURA_RUNTIME_BUILD`, then
@@ -348,6 +367,38 @@ fn start_runtime(app: tauri::AppHandle, process: &GameProcess, extra: &[&str]) -
     process.launch_with(app, &folders, &gpu, extra)
 }
 
+/// The downloadable content installed in the saves folder, and whether RAAM's Shadow can be
+/// played. `async`: it hashes the game's script package, which takes a moment.
+#[tauri::command]
+async fn dlc_state(app: tauri::AppHandle) -> Result<dlc::DlcState, String> {
+    let paths = settings_paths(&app)?;
+    let game = paths.load()?.game_folder.map(std::path::PathBuf::from);
+    let saves = paths.saves_folder()?;
+    let runtime = runtime_dir(&app)?;
+    Ok(dlc::state(&runtime, game.as_deref(), &saves, runtime_current(&runtime)))
+}
+
+/// Whether the installed runtime is the newest there is: an older one may not know the one-off
+/// tasks the launcher asks of it (--install_content, --make_dlc_patch) and would start the game
+/// instead. Play installs the newer one first.
+fn runtime_current(runtime: &Path) -> bool {
+    runtime::executable_path(runtime).is_file() && !install::status(runtime, install::find_build().as_deref()).update_available
+}
+
+/// Installs a downloadable content package the player chose into the saves folder. Returns its
+/// name.
+#[tauri::command]
+async fn install_dlc(app: tauri::AppHandle, package: String) -> Result<String, String> {
+    let paths = settings_paths(&app)?;
+    let game = paths.load()?.game_folder.map(std::path::PathBuf::from).ok_or("no game folder")?;
+    let saves = paths.saves_folder()?;
+    let runtime = runtime_dir(&app)?;
+    if !runtime_current(&runtime) {
+        return Err("the runtime needs its update first (Play installs it)".into());
+    }
+    dlc::install(&runtime, &game, &saves, std::path::Path::new(&package))
+}
+
 /// Event sent when the chosen graphics card is not in the computer any more, before the game starts
 /// with the automatic choice.
 const GPU_MISSING_EVENT: &str = "gpu-missing";
@@ -403,6 +454,13 @@ async fn open_saves_folder(app: tauri::AppHandle) -> Result<(), String> {
     let paths = settings_paths(&app)?;
     let saves = paths.saves_folder()?;
     saves::open_saves_folder_internal(&saves)
+}
+
+/// Opens the file picker for a downloadable content package. Returns `None` when the user cancels.
+#[tauri::command]
+async fn pick_dlc_package(app: tauri::AppHandle) -> Option<String> {
+    let picked = app.dialog().file().blocking_pick_file()?;
+    Some(picked.into_path().ok()?.to_string_lossy().into_owned())
 }
 
 /// Opens the folder picker for a new saves folder. Returns `None` when the user cancels; nothing
@@ -503,6 +561,9 @@ pub fn run() {
             get_system_info,
             get_release_notes,
             list_gpus,
+            dlc_state,
+            install_dlc,
+            pick_dlc_package,
             get_runtime_status,
             install_runtime,
             launch_game,

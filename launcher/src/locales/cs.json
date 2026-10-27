@@ -121,7 +121,29 @@
     "runtimeNotBuilt": "Zatím nesestaveno: první sestavení z vaší kopie hry trvá několik minut.",
     "runtimeNeedsCompiler": "Nejdřív nainstalujte kompilátor (níže).",
     "runtimeUpdateLink": "Je připravena aktualizace: nainstaluje se za pár sekund.",
-    "runtimeUpdateBuild": "Aktualizace vyžaduje znovu sestavit hru: asi dvě minuty."
+    "runtimeUpdateBuild": "Aktualizace vyžaduje znovu sestavit hru: asi dvě minuty.",
+    "dlcTitle": "Stahovatelný obsah",
+    "dlcHelp": "Přidejte stahovatelný obsah, který vlastníte (soubory balíčků stažené vaším Xbox 360). Nainstaluje se do složky s uloženými hrami.",
+    "dlcAdd": "Přidat stahovatelný obsah…",
+    "dlcNames": {
+      "raamsShadow": "RAAM's Shadow",
+      "hordeCommandPack": "Horde Command Pack",
+      "fenixRising": "Fenix Rising",
+      "forcesOfNature": "Forces of Nature",
+      "versusBooster": "Versus Booster Map Pack"
+    },
+    "dlcStatus": {
+      "ready": "Nainstalováno · vyberte ho v Kampani",
+      "notInstalled": "Nenainstalováno",
+      "needsRuntime": "Nainstalováno · připraví se po aktualizaci runtime",
+      "unsupported": "Nainstalováno, ale s těmito soubory hry se ho nepodařilo připravit",
+      "multiplayer": "Přijde s multiplayerem",
+      "installing": "Instalace… (trvá minutu)"
+    },
+    "dlcOthers": "Další nainstalovaný obsah",
+    "dlcOthersCount": "Balíčky: {count}",
+    "dlcInstalled": "{name} nainstalován.",
+    "dlcFailed": "Balíček se nepodařilo nainstalovat: {detail}"
   },
   "graphics": {
     "title": "Grafika",
@@ -173,6 +195,7 @@
       "act4": "Akt IV",
       "act5": "Akt V",
       "campaign": "Kampaň",
+      "raamsShadow": "RAAM's Shadow",
       "modes": "Versus, Horda a Bestie"
     },
     "lockedTitle": "Úspěchy zamčené",

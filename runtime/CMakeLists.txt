@@ -49,6 +49,14 @@ set(AZURA_SOURCES
     src/hooks.cpp
     src/script_hooks.cpp
     src/class_dump.cpp
+    src/dlc/bytecode.cpp
+    src/dlc/class_fixups.cpp
+    src/dlc/content_install.cpp
+    src/dlc/dlc_achievements.cpp
+    src/dlc/lzx.cpp
+    src/dlc/missing_super.cpp
+    src/dlc/raams_shadow_patch.cpp
+    src/dlc/ue3.cpp
     src/render_queue.cpp
     src/hle_gfx/frame_capture.cpp
     src/hle_gfx/hooks.cpp
@@ -145,6 +153,11 @@ target_compile_definitions(azura_glyph_sheet PRIVATE
 if(TARGET imgui)
     target_include_directories(azura_glyph_sheet PRIVATE $<TARGET_PROPERTY:imgui,INTERFACE_INCLUDE_DIRECTORIES>)
 endif()
+
+# Inspection tool for Xbox 360 STFS packages (title updates, DLC): lists and extracts them with the
+# SDK's reader. Not part of the normal build: cmake --build --preset <preset> --target azura_stfs_extract
+add_executable(azura_stfs_extract EXCLUDE_FROM_ALL tools/stfs_extract.cpp)
+target_link_libraries(azura_stfs_extract PRIVATE rex::runtime)
 
 # Unit tests for the button prompt engine and the controller assignment (synthetic data only). Catch2 comes with the SDK source
 # tree; it is added here on its own so the SDK's much larger test suite is not built.

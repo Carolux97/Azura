@@ -156,6 +156,18 @@ export const pickSavesFolder = async () =>
 export const changeSavesFolder = async (folder, replace = false) =>
   isNativeApp ? tauri.core.invoke("change_saves_folder", { folder, replace }) : folder;
 
+/** Opens the file picker for a downloadable content package; null when cancelled. */
+export const pickDlcPackage = async () => (isNativeApp ? tauri.core.invoke("pick_dlc_package") : null);
+
+/** Installs a downloadable content package into the saves folder; resolves with its name. */
+export const installDlc = async (pkg) => (isNativeApp ? tauri.core.invoke("install_dlc", { package: pkg }) : "RAAM's Shadow");
+
+/**
+ * The installed downloadable content: { packages, raamsShadow, raamsShadowPlayable }.
+ */
+export const dlcState = async () =>
+  isNativeApp ? tauri.core.invoke("dlc_state") : { packages: [], raamsShadow: false, raamsShadowPlayable: false };
+
 /** Listeners for the simulated game in a browser; the app uses Tauri events instead. */
 const simulated = { output: new Set(), exit: new Set() };
 

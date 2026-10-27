@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -17,6 +18,9 @@
 REXCVAR_DEFINE_STRING(export_achievements, "", "Azura",
                       "Write the game's achievements (texts in every language and artwork) to this "
                       "folder and exit (used by the launcher)");
+REXCVAR_DEFINE_STRING(export_achievements_from, "", "Azura",
+                      "With export_achievements: read the achievements from this XDBF file (a "
+                      "downloadable content package's spa.bin) instead of default.xex");
 
 namespace azura {
 
@@ -83,8 +87,19 @@ bool WriteFile(const std::filesystem::path& path, const void* data, size_t size)
 
 bool AchievementExportRequested() { return !REXCVAR_GET(export_achievements).empty(); }
 
+// Writes the achievements of `db` (see achievement_export.h), with `title_id` ("" when unknown).
+static int WriteAchievements(const XdbfGameData& db, const std::string& title_id, const std::filesystem::path& out_dir);
+
 int ExportAchievements(const std::filesystem::path& game_data_root) {
   const std::filesystem::path out_dir = REXCVAR_GET(export_achievements);
+  // An XDBF file of its own (a package's achievement database): no need for the game.
+  if (const std::filesystem::path from = REXCVAR_GET(export_achievements_from); !from.empty()) {
+    std::ifstream in(from, std::ios::binary);
+    const std::vector<uint8_t> data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    const XdbfGameData db(data.empty() ? nullptr : data.data(), data.size());
+    if (!db.is_valid()) return Fail(from.string() + " has no achievement data");
+    return WriteAchievements(db, "", out_dir);
+  }
   // A folder, or a disc image (.iso), which the runtime mounts in place.
   if (game_data_root.empty() || !std::filesystem::exists(game_data_root)) {
     return Fail("game_data_root is neither a folder nor a disc image");
@@ -106,6 +121,12 @@ int ExportAchievements(const std::filesystem::path& game_data_root) {
   if (!db.is_valid()) {
     return Fail("default.xex has no achievement data");
   }
+  char title_id[9];
+  std::snprintf(title_id, sizeof(title_id), "%08X", runtime->kernel_state()->title_id());
+  return WriteAchievements(db, title_id, out_dir);
+}
+
+static int WriteAchievements(const XdbfGameData& db, const std::string& title_id, const std::filesystem::path& out_dir) {
 
   // Only the languages the game has a string table for: the others would read as empty strings.
   std::vector<std::pair<XLanguage, const char*>> languages;
@@ -132,10 +153,7 @@ int ExportAchievements(const std::filesystem::path& game_data_root) {
   };
 
   const auto achievements = db.GetAchievements();
-  std::string json = "{\"titleId\":\"";
-  char title_id[9];
-  std::snprintf(title_id, sizeof(title_id), "%08X", runtime->kernel_state()->title_id());
-  json += std::string(title_id) + "\",\"languages\":[";
+  std::string json = "{\"titleId\":\"" + title_id + "\",\"languages\":[";
   for (size_t i = 0; i < languages.size(); ++i) {
     json += (i ? ",\"" : "\"") + std::string(languages[i].second) + "\"";
   }
