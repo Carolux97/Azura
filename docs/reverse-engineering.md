@@ -782,6 +782,13 @@ The frame time follows the GPU time: the game is limited by the GPU there (about
 a 12.3 ms frame in combat). Dynamic shadows and depth of field are the only settings that change the
 frame time by much.
 
+**The Video options Depth of field and Dynamic shadows** write those settings while the game runs
+(`runtime/src/system_settings.cpp`). The ambient occlusion hook (`ambient_occlusion.cpp`) hands
+them the object's address, which the game has in `r10` there, so no edition's address is written
+into the runtime. While an option is off, every frame writes 0 to all the fields of its setting
+(`DepthOfField` +64 and +1156, `DynamicShadows` +888 and +1044), in case the engine writes its
+settings again; turning it back on puts back the values the game had.
+
 ## Render command queue
 
 Game threads enqueue render commands into the engine's ring buffer (`FRingBuffer`, guest

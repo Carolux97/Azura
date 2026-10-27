@@ -8,11 +8,18 @@
 // The load itself still runs and reads what the game reads, so it is harmless.
 //
 // On macOS ambient occlusion stays as the game draws it.
+//
+// r10 holds the engine's settings object at both addresses: the hook also hands it to the Video
+// options that write the engine's settings (system_settings.cpp).
 
 #include <rex/ppc/context.h>
 
-// Called with the guest's r11, just loaded at one of the two addresses.
-void AzuraDisableAmbientOcclusion(PPCRegister& r11) {
+#include "system_settings.h"
+
+// Called with the guest's r10 (the settings object) and r11, just loaded from it at one of the two
+// addresses.
+void AzuraDisableAmbientOcclusion(PPCRegister& r10, PPCRegister& r11) {
+  azura::system_settings::NoteSettingsObject(r10.u32);
 #if defined(__linux__)
   r11.u64 = 0;
 #else

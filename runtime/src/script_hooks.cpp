@@ -71,6 +71,7 @@
 #include "dlc/class_fixups.h"
 #include "dlc/dlc_achievements.h"
 #include "dlc/missing_super.h"
+#include "system_settings.h"
 #include "menu/menu_patches.h"
 #include "menu/pc_options.h"
 #include "input/mouse_look.h"
@@ -422,6 +423,7 @@ void ApplyMouseLookFor(uint8_t* base, uint32_t player_input) {
   const uint32_t user = LoadU32(base, local_player + static_cast<uint32_t>(controller_id));
   if (user >= 4) return;
   ApplyFilmGrain(base, controller, local_player);
+  azura::system_settings::Apply(base);
   g_player_controllers[user].store(controller, std::memory_order_relaxed);
   g_guest_base.store(base, std::memory_order_relaxed);
   if (user == 0) {

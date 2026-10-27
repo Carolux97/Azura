@@ -41,15 +41,16 @@ name = "AzuraCheckRenderCommand"
 registers = ["r18"]
 
 # "Disable Ambient Occlusion" (Linux only): right after each `lwz r11,1040(r10)` the community fix
-# replaces with `li r11,0`, in sub_82762C30 and sub_827C9610. See runtime/src/ambient_occlusion.cpp.
+# replaces with `li r11,0`, in sub_82762C30 and sub_827C9610. r10 is the engine's settings object,
+# which the Video options write. See runtime/src/ambient_occlusion.cpp.
 [[entrypoint.midasm_hook]]
 address = 0x82762C54
 name = "AzuraDisableAmbientOcclusion"
-registers = ["r11"]
+registers = ["r10", "r11"]
 after_instruction = true
 
 [[entrypoint.midasm_hook]]
 address = 0x827C9628
 name = "AzuraDisableAmbientOcclusion"
-registers = ["r11"]
+registers = ["r10", "r11"]
 after_instruction = true
