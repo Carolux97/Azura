@@ -22,7 +22,9 @@ bool AchievementExportRequested();
 //                        {"id":1,"gamerscore":5,"flags":14,"imageId":1,
 //                         "label":{"en":"..."},"description":{...},"unachieved":{...}}]}
 //   icons/<imageId>.png  the artwork of each achievement, as the game stores it
-// achievements.json is written last, so its presence means the export is complete. Prints one line
+// achievements.json is written last, so its presence means the export is complete. With
+// export_achievements_from=<file>, the achievements come from that XDBF file instead (a downloadable
+// content package's spa.bin), without loading the game, and titleId is empty. Prints one line
 // of JSON on standard output ({"achievements":50} or {"error":"..."}) and returns the exit code:
 // 0, or 1 when the achievements cannot be read.
 int ExportAchievements(const std::filesystem::path& game_data_root);

@@ -121,7 +121,29 @@
     "runtimeNotBuilt": "아직 빌드되지 않았습니다: 게임 사본으로 처음 빌드하는 데 몇 분이 걸립니다.",
     "runtimeNeedsCompiler": "먼저 아래에서 컴파일러를 설치하세요.",
     "runtimeUpdateLink": "업데이트가 준비되었습니다: 몇 초 만에 설치됩니다.",
-    "runtimeUpdateBuild": "업데이트하려면 게임을 다시 빌드해야 합니다: 약 2분."
+    "runtimeUpdateBuild": "업데이트하려면 게임을 다시 빌드해야 합니다: 약 2분.",
+    "dlcTitle": "다운로드 콘텐츠",
+    "dlcHelp": "보유한 다운로드 콘텐츠(Xbox 360이 다운로드한 패키지 파일)를 추가합니다. 저장 폴더에 설치됩니다.",
+    "dlcAdd": "다운로드 콘텐츠 추가…",
+    "dlcNames": {
+      "raamsShadow": "RAAM's Shadow",
+      "hordeCommandPack": "Horde Command Pack",
+      "fenixRising": "Fenix Rising",
+      "forcesOfNature": "Forces of Nature",
+      "versusBooster": "Versus Booster Map Pack"
+    },
+    "dlcStatus": {
+      "ready": "설치됨 · 캠페인에서 선택",
+      "notInstalled": "설치되지 않음",
+      "needsRuntime": "설치됨 · 런타임 업데이트 후 준비됩니다",
+      "unsupported": "설치되었지만 이 게임 파일로는 준비할 수 없었습니다",
+      "multiplayer": "멀티플레이어와 함께 제공 예정",
+      "installing": "설치 중… (1분 정도 걸립니다)"
+    },
+    "dlcOthers": "기타 설치된 콘텐츠",
+    "dlcOthersCount": "패키지 {count}개",
+    "dlcInstalled": "{name} 설치됨.",
+    "dlcFailed": "패키지를 설치하지 못했습니다: {detail}"
   },
   "graphics": {
     "title": "그래픽",
@@ -173,6 +195,7 @@
       "act4": "4막",
       "act5": "5막",
       "campaign": "캠페인",
+      "raamsShadow": "RAAM's Shadow",
       "modes": "대전, 호드, 비스트"
     },
     "lockedTitle": "도전 과제 잠김",

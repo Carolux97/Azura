@@ -121,7 +121,29 @@
     "runtimeNotBuilt": "まだビルドされていません: お持ちのゲームからの初回ビルドには数分かかります。",
     "runtimeNeedsCompiler": "先に下のコンパイラーをインストールしてください。",
     "runtimeUpdateLink": "更新があります: 数秒でインストールされます。",
-    "runtimeUpdateBuild": "更新にはゲームの再ビルドが必要です: 約 2 分。"
+    "runtimeUpdateBuild": "更新にはゲームの再ビルドが必要です: 約 2 分。",
+    "dlcTitle": "ダウンロードコンテンツ",
+    "dlcHelp": "所有しているダウンロードコンテンツ (Xbox 360 がダウンロードしたパッケージファイル) を追加します。セーブデータのフォルダーにインストールされます。",
+    "dlcAdd": "ダウンロードコンテンツを追加…",
+    "dlcNames": {
+      "raamsShadow": "RAAM's Shadow",
+      "hordeCommandPack": "Horde Command Pack",
+      "fenixRising": "Fenix Rising",
+      "forcesOfNature": "Forces of Nature",
+      "versusBooster": "Versus Booster Map Pack"
+    },
+    "dlcStatus": {
+      "ready": "インストール済み · キャンペーンで選択",
+      "notInstalled": "未インストール",
+      "needsRuntime": "インストール済み · ランタイム更新後に準備されます",
+      "unsupported": "インストール済みですが、このゲームファイルでは準備できませんでした",
+      "multiplayer": "マルチプレイヤー対応時に追加",
+      "installing": "インストール中… (1分ほどかかります)"
+    },
+    "dlcOthers": "その他のインストール済みコンテンツ",
+    "dlcOthersCount": "{count} 個のパッケージ",
+    "dlcInstalled": "{name} をインストールしました。",
+    "dlcFailed": "パッケージをインストールできませんでした: {detail}"
   },
   "graphics": {
     "title": "グラフィック",
@@ -173,6 +195,7 @@
       "act4": "ACT IV",
       "act5": "ACT V",
       "campaign": "キャンペーン",
+      "raamsShadow": "RAAM's Shadow",
       "modes": "Versus、ホード、ビースト"
     },
     "lockedTitle": "実績はロックされています",

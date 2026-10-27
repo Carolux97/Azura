@@ -19,8 +19,9 @@ export const ACHIEVEMENT_FILTERS = ["all", "unlocked", "locked", "hidden"];
  * act and chapter unlock them ("Story progress in Act 1, Chapter 2"). The secret one (19, "Respect
  * for the Dead") is earned in Act 4, Chapter 1, where Griffin's weapon stash is, so it opens that
  * act. The others belong to no act: difficulty, collectibles and co-op go under the campaign, and
- * levels, Versus, Horde and Beast under the other modes. `chapters` is how many chapters the act
- * has.
+ * levels, Versus, Horde and Beast under the other modes. RAAM's Shadow's achievements (56 to 65,
+ * sent only when the add-on is installed) have a section of their own, which shows only then.
+ * `chapters` is how many chapters the act (or the add-on) has.
  */
 export const ACHIEVEMENT_SECTIONS = [
   { key: "prologue", ids: [1] },
@@ -30,6 +31,7 @@ export const ACHIEVEMENT_SECTIONS = [
   { key: "act4", chapters: 6, ids: [19, 13, 14, 15] },
   { key: "act5", chapters: 6, ids: [16, 17, 18] },
   { key: "campaign", ids: [20, 21, 22, 23, 24, 25, 26, 27, 28] },
+  { key: "raamsShadow", chapters: 5, ids: [56, 57, 58, 59, 60, 61, 62, 63, 64, 65] },
   { key: "modes", ids: [29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50] },
 ];
 
