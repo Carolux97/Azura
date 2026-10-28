@@ -86,6 +86,12 @@ user_language = 5
 # Player gamertag shown in lobbies, menus and multiplayer (15 characters max).
 user_name = "User"
 
+# ---------- Network ----------
+# "offline": no network link, so the game's System Link options stay greyed out.
+# "system_link": play System Link (campaign co-op, Horde, Beast, private Versus) with the other
+# computers of the local network.
+network_mode = "offline"
+
 # ---------- Input ----------
 # Enable keyboard/mouse controller emulation. If a physical gamepad is plugged in,
 # it works concurrently.
