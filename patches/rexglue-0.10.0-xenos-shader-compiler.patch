@@ -5013,10 +5013,10 @@ index 0000000..476b6a7
 +}  // namespace rex::graphics::xsc
 diff --git a/src/graphics/pipeline/shader/xsc/xsc_translator.h b/src/graphics/pipeline/shader/xsc/xsc_translator.h
 new file mode 100644
-index 0000000..7ff9d07
+index 0000000..70622e3
 --- /dev/null
 +++ b/src/graphics/pipeline/shader/xsc/xsc_translator.h
-@@ -0,0 +1,289 @@
+@@ -0,0 +1,299 @@
 +/**
 + * @file        graphics/pipeline/shader/xsc/xsc_translator.h
 + * @brief       Xenos shader compiler (XSC): lowers Xenos microcode into the XSC IR and emits it
@@ -5068,12 +5068,15 @@ index 0000000..7ff9d07
 +  // scale (the pixel position and the textures resolved at that scale).
 +  XscShaderTranslator(Target target, const SpirvShaderTranslator::Features& features,
 +                      bool native_2x_msaa_with_attachments, uint32_t draw_resolution_scale_x,
-+                      uint32_t draw_resolution_scale_y)
++                      uint32_t draw_resolution_scale_y,
++                      uint32_t draw_resolution_scale_denominator = 1)
 +      : target_(target),
 +        features_(features),
 +        native_2x_msaa_with_attachments_(native_2x_msaa_with_attachments),
 +        draw_resolution_scale_x_(draw_resolution_scale_x ? draw_resolution_scale_x : 1),
-+        draw_resolution_scale_y_(draw_resolution_scale_y ? draw_resolution_scale_y : 1) {}
++        draw_resolution_scale_y_(draw_resolution_scale_y ? draw_resolution_scale_y : 1),
++        draw_resolution_scale_denominator_(
++            draw_resolution_scale_denominator ? draw_resolution_scale_denominator : 1) {}
 +
 +  // Debugging aid: pixel shaders paint the color outputs that the guest render target could not
 +  // hold magenta (NaN or infinity) or cyan (outside [0, 31.875] for a 7e3 render target), before
@@ -5242,8 +5245,15 @@ index 0000000..7ff9d07
 +  Target target_;
 +  SpirvShaderTranslator::Features features_;
 +  bool native_2x_msaa_with_attachments_;
++  // The draw resolution scale: draw_resolution_scale_x_ / draw_resolution_scale_denominator_ host
++  // pixels per guest pixel (the denominator is 1 except for a rational scale such as 3/2).
 +  uint32_t draw_resolution_scale_x_;
 +  uint32_t draw_resolution_scale_y_;
++  uint32_t draw_resolution_scale_denominator_;
++  bool IsDrawResolutionScaled() const {
++    return draw_resolution_scale_x_ > draw_resolution_scale_denominator_ ||
++           draw_resolution_scale_y_ > draw_resolution_scale_denominator_;
++  }
 +  bool debug_color_range_ = false;
 +  std::vector<DebugCounterShader> debug_counter_shaders_;
 +  std::string unsupported_reason_;
@@ -6163,10 +6173,10 @@ index 0000000..bc45626
 +}  // namespace rex::graphics::xsc
 diff --git a/src/graphics/pipeline/shader/xsc/xsc_translator_fetch.cpp b/src/graphics/pipeline/shader/xsc/xsc_translator_fetch.cpp
 new file mode 100644
-index 0000000..8d1c57e
+index 0000000..bcc3b75
 --- /dev/null
 +++ b/src/graphics/pipeline/shader/xsc/xsc_translator_fetch.cpp
-@@ -0,0 +1,1319 @@
+@@ -0,0 +1,1321 @@
 +/**
 + * @file        graphics/pipeline/shader/xsc/xsc_translator_fetch.cpp
 + * @brief       Xenos shader compiler: texture fetch instructions
@@ -6950,9 +6960,11 @@ index 0000000..8d1c57e
 +    // are scaled like in the SPIR-V translator.
 +    ValueId texture_resolution_scaled = kNoValue;
 +    uint32_t revert_resolution_scale_axes =
-+        uint32_t(draw_resolution_scale_x_ > 1) | (uint32_t(draw_resolution_scale_y_ > 1) << 1);
-+    const float texture_resolution_scale[] = {float(draw_resolution_scale_x_),
-+                                              float(draw_resolution_scale_y_)};
++        uint32_t(draw_resolution_scale_x_ > draw_resolution_scale_denominator_) |
++        (uint32_t(draw_resolution_scale_y_ > draw_resolution_scale_denominator_) << 1);
++    const float texture_resolution_scale[] = {
++        float(draw_resolution_scale_x_) / float(draw_resolution_scale_denominator_),
++        float(draw_resolution_scale_y_) / float(draw_resolution_scale_denominator_)};
 +    if (revert_resolution_scale_axes) {
 +      texture_resolution_scaled = b.Compare(
 +          Op::kINotEqual,
@@ -7488,10 +7500,10 @@ index 0000000..8d1c57e
 +}  // namespace rex::graphics::xsc
 diff --git a/src/graphics/pipeline/shader/xsc/xsc_translator_ps.cpp b/src/graphics/pipeline/shader/xsc/xsc_translator_ps.cpp
 new file mode 100644
-index 0000000..b72fd2f
+index 0000000..5dab3a4
 --- /dev/null
 +++ b/src/graphics/pipeline/shader/xsc/xsc_translator_ps.cpp
-@@ -0,0 +1,494 @@
+@@ -0,0 +1,499 @@
 +/**
 + * @file        graphics/pipeline/shader/xsc/xsc_translator_ps.cpp
 + * @brief       Xenos shader compiler: pixel shader prologue and epilogue, gamma conversions
@@ -7543,8 +7555,7 @@ index 0000000..b72fd2f
 +  bool alpha_to_coverage_possible = shader.writes_color_target(0) && !IsEarlyFragmentTests();
 +  fragment.early_fragment_tests = IsEarlyFragmentTests();
 +  // Moving the evaluation to the guest pixel center needs the host pixel position.
-+  bool guest_pixel_center = modification.pixel.guest_pixel_center &&
-+                            (draw_resolution_scale_x_ > 1 || draw_resolution_scale_y_ > 1);
++  bool guest_pixel_center = modification.pixel.guest_pixel_center && IsDrawResolutionScaled();
 +  fragment.frag_coord = param_gen_needed || alpha_to_coverage_possible || guest_pixel_center;
 +  fragment.front_facing = param_gen_needed && !modification.pixel.param_gen_point;
 +  fragment.color_targets = shader.writes_color_targets();
@@ -7573,16 +7584,22 @@ index 0000000..b72fd2f
 +
 +  // Host pixels per guest pixel along each axis, and with guest_pixel_center, the offset from the
 +  // center of this host pixel to the center of its guest pixel.
-+  uint32_t guest_pixel_size_x = draw_resolution_scale_x_ << modification.pixel.sample_space_x_log2;
-+  uint32_t guest_pixel_size_y = draw_resolution_scale_y_ << modification.pixel.sample_space_y_log2;
++  // 1.5 at a scale of 3/2: a host pixel may then straddle two guest pixels, and the one its center
++  // is in is taken.
++  float guest_pixel_size_x =
++      float(draw_resolution_scale_x_ << modification.pixel.sample_space_x_log2) /
++      float(draw_resolution_scale_denominator_);
++  float guest_pixel_size_y =
++      float(draw_resolution_scale_y_ << modification.pixel.sample_space_y_log2) /
++      float(draw_resolution_scale_denominator_);
 +  ValueId guest_pixel_center_offset_x = kNoValue, guest_pixel_center_offset_y = kNoValue;
 +  if (guest_pixel_center) {
-+    auto get_offset = [&](uint32_t component, uint32_t guest_pixel_size) {
++    auto get_offset = [&](uint32_t component, float guest_pixel_size) {
 +      // (floor(position / size) + 0.5) * size - position.
 +      ValueId position = b.Extract(frag_coord_, component);
-+      ValueId size = b.ConstFloat(float(guest_pixel_size));
++      ValueId size = b.ConstFloat(guest_pixel_size);
 +      ValueId guest_pixel = b.Unary(
-+          Op::kFloor, b.Binary(Op::kFMul, position, b.ConstFloat(1.0f / float(guest_pixel_size))));
++          Op::kFloor, b.Binary(Op::kFMul, position, b.ConstFloat(1.0f / guest_pixel_size)));
 +      return b.Binary(
 +          Op::kFSub,
 +          b.Binary(Op::kFMul, b.Binary(Op::kFAdd, guest_pixel, b.ConstFloat(0.5f)), size),

@@ -363,10 +363,18 @@ index ac6b056..8ef1ee8 100644
  
  }  // namespace rex::graphics
 diff --git a/include/rex/graphics/pipeline/render_target/cache.h b/include/rex/graphics/pipeline/render_target/cache.h
-index b246319..b1730d9 100644
+index b246319..fe44e37 100644
 --- a/include/rex/graphics/pipeline/render_target/cache.h
 +++ b/include/rex/graphics/pipeline/render_target/cache.h
-@@ -25,6 +25,7 @@
+@@ -10,6 +10,7 @@
+  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
+  */
+ 
++#include <algorithm>
+ #include <cmath>
+ #include <cstdint>
+ #include <functional>
+@@ -25,6 +26,7 @@
  #include <rex/graphics/register_file.h>
  #include <rex/graphics/registers.h>
  #include <rex/graphics/util/draw.h>
@@ -374,18 +382,32 @@ index b246319..b1730d9 100644
  #include <rex/graphics/util/draw_extent_estimator.h>
  #include <rex/graphics/xenos.h>
  
-@@ -183,6 +184,10 @@ class RenderTargetCache {
+@@ -181,11 +183,20 @@ class RenderTargetCache {
+   // would participate in filtering. However, 1x1 scissor rounded to 1x1, with
+   // the half-pixel offset of vertices, would cause the entire 0.75...2.25 quad
    // to be discarded.
-   uint32_t draw_resolution_scale_x() const { return draw_resolution_scale_x_; }
-   uint32_t draw_resolution_scale_y() const { return draw_resolution_scale_y_; }
-+  // The scale as a ratio (whole numbers until rational scales are supported).
-+  DrawResolutionScale draw_resolution_scale() const {
-+    return DrawResolutionScale::Whole(draw_resolution_scale_x_, draw_resolution_scale_y_);
-+  }
-   bool IsDrawResolutionScaled() const {
-     return draw_resolution_scale_x() > 1 || draw_resolution_scale_y() > 1;
+-  uint32_t draw_resolution_scale_x() const { return draw_resolution_scale_x_; }
+-  uint32_t draw_resolution_scale_y() const { return draw_resolution_scale_y_; }
+-  bool IsDrawResolutionScaled() const {
+-    return draw_resolution_scale_x() > 1 || draw_resolution_scale_y() > 1;
++  // The whole part of the scale per axis, for the code that does not take the ratio: the Vulkan
++  // and D3D12 backends (which only get whole scales) and the parts of the Metal backend that only
++  // support whole scales so far.
++  uint32_t draw_resolution_scale_x() const {
++    return std::max(draw_resolution_scale_.numerator_x / draw_resolution_scale_.denominator,
++                    UINT32_C(1));
    }
-@@ -194,6 +199,34 @@ class RenderTargetCache {
++  uint32_t draw_resolution_scale_y() const {
++    return std::max(draw_resolution_scale_.numerator_y / draw_resolution_scale_.denominator,
++                    UINT32_C(1));
++  }
++  // The scale as a ratio: host pixels per guest pixel along each axis.
++  DrawResolutionScale draw_resolution_scale() const { return draw_resolution_scale_; }
++  bool IsDrawResolutionScaled() const { return draw_resolution_scale_.IsScaled(); }
+ 
+   // Virtual (both the common code and the implementation may do something
+   // here), don't call from destructors (does work not needed for shutdown
+@@ -194,6 +205,34 @@ class RenderTargetCache {
  
    virtual void BeginFrame();
  
@@ -420,7 +442,30 @@ index b246319..b1730d9 100644
    virtual bool Update(bool is_rasterization_done, reg::RB_DEPTHCONTROL normalized_depth_control,
                        uint32_t normalized_color_mask, const Shader& vertex_shader);
  
-@@ -510,6 +543,52 @@ class RenderTargetCache {
+@@ -205,14 +244,15 @@ class RenderTargetCache {
+ 
+  protected:
+   RenderTargetCache(const RegisterFile& register_file, const memory::Memory& memory,
+-                    uint32_t draw_resolution_scale_x, uint32_t draw_resolution_scale_y)
++                    DrawResolutionScale draw_resolution_scale)
+       : register_file_(register_file),
+-        draw_extent_estimator_(register_file, memory),
+-        draw_resolution_scale_x_(draw_resolution_scale_x),
+-        draw_resolution_scale_y_(draw_resolution_scale_y) {
+-    assert_not_zero(draw_resolution_scale_x);
+-    assert_not_zero(draw_resolution_scale_y);
+-  }
++        draw_resolution_scale_(draw_resolution_scale),
++        draw_extent_estimator_(register_file, memory) {}
++  RenderTargetCache(const RegisterFile& register_file, const memory::Memory& memory,
++                    uint32_t draw_resolution_scale_x, uint32_t draw_resolution_scale_y)
++      : RenderTargetCache(register_file, memory,
++                          DrawResolutionScale::Whole(draw_resolution_scale_x,
++                                                     draw_resolution_scale_y)) {}
+ 
+   const RegisterFile& register_file() const { return register_file_; }
+ 
+@@ -510,6 +550,52 @@ class RenderTargetCache {
    // false).
    virtual bool IsHostDepthEncodingDifferent(xenos::DepthRenderTargetFormat format) const = 0;
  
@@ -473,7 +518,17 @@ index b246319..b1730d9 100644
    void ResetAccumulatedRenderTargets() { are_accumulated_render_targets_valid_ = false; }
    RenderTarget* const* last_update_accumulated_render_targets() const {
      assert_true(GetPath() == Path::kHostRenderTargets);
-@@ -666,6 +745,11 @@ class RenderTargetCache {
+@@ -573,8 +659,7 @@ class RenderTargetCache {
+ 
+  private:
+   const RegisterFile& register_file_;
+-  uint32_t draw_resolution_scale_x_;
+-  uint32_t draw_resolution_scale_y_;
++  DrawResolutionScale draw_resolution_scale_;
+ 
+   DrawExtentEstimator draw_extent_estimator_;
+ 
+@@ -666,6 +751,11 @@ class RenderTargetCache {
    bool WouldOwnershipChangeRequireTransfers(RenderTargetKey dest,
                                              uint32_t start_tiles_base_relative,
                                              uint32_t length_tiles) const;
@@ -485,7 +540,7 @@ index b246319..b1730d9 100644
    // Updates ownership_ranges_, adds the transfers needed for the ownership
    // change to transfers_append_out if it's not null.
    void ChangeOwnership(RenderTargetKey dest, uint32_t start_tiles_base_relative,
-@@ -688,6 +772,12 @@ class RenderTargetCache {
+@@ -688,6 +778,12 @@ class RenderTargetCache {
    // update. 0 is depth, color starting from 1, nullptr if not bound.
    // Only valid for non-pixel-shader-interlock paths.
    RenderTarget* last_update_used_render_targets_[1 + xenos::kMaxColorRenderTargets];
@@ -524,7 +579,7 @@ index dd90ef7..6169777 100644
    std::atomic_flag bindings_setup_entered_ = ATOMIC_FLAG_INIT;
    std::vector<TextureBinding> texture_bindings_;
 diff --git a/include/rex/graphics/pipeline/shader/spirv_translator.h b/include/rex/graphics/pipeline/shader/spirv_translator.h
-index 3a9b681..977075d 100644
+index 3a9b681..fc77731 100644
 --- a/include/rex/graphics/pipeline/shader/spirv_translator.h
 +++ b/include/rex/graphics/pipeline/shader/spirv_translator.h
 @@ -94,6 +94,12 @@ class SpirvShaderTranslator : public ShaderTranslator {
@@ -540,7 +595,7 @@ index 3a9b681..977075d 100644
      } pixel;
      uint64_t value = 0;
  
-@@ -405,6 +411,11 @@ class SpirvShaderTranslator : public ShaderTranslator {
+@@ -405,17 +411,25 @@ class SpirvShaderTranslator : public ShaderTranslator {
  
      bool demote_to_helper_invocation;
      bool sample_rate_shading;
@@ -552,7 +607,23 @@ index 3a9b681..977075d 100644
    };
  
    SpirvShaderTranslator(const Features& features, bool native_2x_msaa_with_attachments,
-@@ -444,6 +455,11 @@ class SpirvShaderTranslator : public ShaderTranslator {
+                         bool native_2x_msaa_no_attachments, bool edram_fragment_shader_interlock,
+-                        uint32_t draw_resolution_scale_x = 1, uint32_t draw_resolution_scale_y = 1)
++                        uint32_t draw_resolution_scale_x = 1, uint32_t draw_resolution_scale_y = 1,
++                        uint32_t draw_resolution_scale_denominator = 1)
+       : features_(features),
+         native_2x_msaa_with_attachments_(native_2x_msaa_with_attachments),
+         native_2x_msaa_no_attachments_(native_2x_msaa_no_attachments),
+         edram_fragment_shader_interlock_(edram_fragment_shader_interlock),
+         draw_resolution_scale_x_(draw_resolution_scale_x ? draw_resolution_scale_x : 1),
+-        draw_resolution_scale_y_(draw_resolution_scale_y ? draw_resolution_scale_y : 1) {}
++        draw_resolution_scale_y_(draw_resolution_scale_y ? draw_resolution_scale_y : 1),
++        draw_resolution_scale_denominator_(
++            draw_resolution_scale_denominator ? draw_resolution_scale_denominator : 1) {}
+ 
+   uint64_t GetDefaultVertexShaderModification(
+       uint32_t dynamic_addressable_register_count,
+@@ -444,6 +458,11 @@ class SpirvShaderTranslator : public ShaderTranslator {
        Modification::DepthStencilMode depth_stencil_mode =
            Modification::DepthStencilMode::kNoModifiers);
  
@@ -564,7 +635,7 @@ index 3a9b681..977075d 100644
    // Common functions useful not only for the translator, but also for EDRAM
    // emulation via conventional render targets.
  
-@@ -697,6 +713,11 @@ class SpirvShaderTranslator : public ShaderTranslator {
+@@ -697,6 +716,11 @@ class SpirvShaderTranslator : public ShaderTranslator {
    // set internally, optionally doing linear interpolation between the an
    // existing value and the new one (the result location may be the same as for
    // the first lerp endpoint, but not across signedness).
@@ -576,7 +647,30 @@ index 3a9b681..977075d 100644
    void SampleTexture(spv::Builder::TextureParameters& texture_parameters,
                       spv::ImageOperandsMask image_operands_mask, spv::Id image_unsigned,
                       spv::Id image_signed, spv::Id sampler, spv::Id is_any_unsigned,
-@@ -1061,6 +1082,14 @@ class SpirvShaderTranslator : public ShaderTranslator {
+@@ -762,8 +786,22 @@ class SpirvShaderTranslator : public ShaderTranslator {
+   // flow of the main function, and that there are no returns before either
+   // (there's a single return from the shader).
+   bool edram_fragment_shader_interlock_;
++  // The draw resolution scale: draw_resolution_scale_x_ / draw_resolution_scale_denominator_ host
++  // pixels per guest pixel (the denominator is 1 except for a rational scale such as 3/2).
+   uint32_t draw_resolution_scale_x_;
+   uint32_t draw_resolution_scale_y_;
++  uint32_t draw_resolution_scale_denominator_;
++  bool IsDrawResolutionScaledX() const {
++    return draw_resolution_scale_x_ > draw_resolution_scale_denominator_;
++  }
++  bool IsDrawResolutionScaledY() const {
++    return draw_resolution_scale_y_ > draw_resolution_scale_denominator_;
++  }
++  // Host pixels per guest pixel along an axis, with the sample-space factor 1 << sample_space_log2.
++  float GetGuestPixelSize(uint32_t axis, uint32_t sample_space_log2) const {
++    return float((axis ? draw_resolution_scale_y_ : draw_resolution_scale_x_) << sample_space_log2) /
++           float(draw_resolution_scale_denominator_);
++  }
+ 
+   // Is currently writing the empty depth-only pixel shader, such as for depth
+   // and stencil testing with fragment shader interlock.
+@@ -1061,6 +1099,14 @@ class SpirvShaderTranslator : public ShaderTranslator {
    std::unique_ptr<spv::Instruction> main_switch_op_;
    spv::Block* main_switch_merge_;
    std::vector<spv::Id> main_switch_next_pc_phi_operands_;
@@ -606,10 +700,14 @@ index 340ced5..67eafaa 100644
    // Handles the start of translation.
    // At this point the vertex and texture bindings have been gathered.
 diff --git a/include/rex/graphics/pipeline/texture/cache.h b/include/rex/graphics/pipeline/texture/cache.h
-index d26cd4f..93d1f91 100644
+index d26cd4f..e9738a5 100644
 --- a/include/rex/graphics/pipeline/texture/cache.h
 +++ b/include/rex/graphics/pipeline/texture/cache.h
-@@ -13,6 +13,7 @@
+@@ -10,9 +10,11 @@
+  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
+  */
+ 
++#include <algorithm>
  #include <array>
  #include <atomic>
  #include <cstdint>
@@ -617,7 +715,7 @@ index d26cd4f..93d1f91 100644
  #include <cstring>
  #include <memory>
  #include <unordered_map>
-@@ -23,6 +24,7 @@
+@@ -23,6 +25,7 @@
  #include <rex/graphics/register_file.h>
  #include <rex/graphics/shared_memory.h>
  #include <rex/graphics/xenos.h>
@@ -625,22 +723,34 @@ index d26cd4f..93d1f91 100644
  #include <rex/hash.h>
  #include <rex/thread/mutex.h>
  
-@@ -68,8 +70,14 @@ class TextureCache {
+@@ -68,11 +71,22 @@ class TextureCache {
  
    // Returns whether the actual scale is not smaller than the requested one.
    static bool GetConfigDrawResolutionScale(uint32_t& x_out, uint32_t& y_out);
+-  uint32_t draw_resolution_scale_x() const { return draw_resolution_scale_x_; }
+-  uint32_t draw_resolution_scale_y() const { return draw_resolution_scale_y_; }
+-  bool IsDrawResolutionScaled() const {
+-    return draw_resolution_scale_x_ > 1 || draw_resolution_scale_y_ > 1;
 +  // The configured scale as a ratio (draw_resolution_scale_denominator); false if it was clamped.
 +  static bool GetConfigDrawResolutionScale(DrawResolutionScale& scale_out);
-   uint32_t draw_resolution_scale_x() const { return draw_resolution_scale_x_; }
-   uint32_t draw_resolution_scale_y() const { return draw_resolution_scale_y_; }
-+  // The scale as a ratio (whole numbers until rational scales are supported).
-+  DrawResolutionScale draw_resolution_scale() const {
-+    return DrawResolutionScale::Whole(draw_resolution_scale_x_, draw_resolution_scale_y_);
-+  }
-   bool IsDrawResolutionScaled() const {
-     return draw_resolution_scale_x_ > 1 || draw_resolution_scale_y_ > 1;
++  // The whole part of the scale per axis, for the code that does not take the ratio: the Vulkan
++  // and D3D12 backends (which only get whole scales) and the scaled resolve buffer of the Metal
++  // backend (whole scales only).
++  uint32_t draw_resolution_scale_x() const {
++    return std::max(draw_resolution_scale_.numerator_x / draw_resolution_scale_.denominator,
++                    UINT32_C(1));
    }
-@@ -81,6 +89,9 @@ class TextureCache {
++  uint32_t draw_resolution_scale_y() const {
++    return std::max(draw_resolution_scale_.numerator_y / draw_resolution_scale_.denominator,
++                    UINT32_C(1));
++  }
++  // The scale as a ratio: host texels per guest texel of a texture resolved at the scale.
++  DrawResolutionScale draw_resolution_scale() const { return draw_resolution_scale_; }
++  bool IsDrawResolutionScaled() const { return draw_resolution_scale_.IsScaled(); }
+ 
+   virtual void ClearCache();
+ 
+@@ -81,6 +95,9 @@ class TextureCache {
    virtual void BeginFrame();
  
    void MarkRangeAsResolved(uint32_t start_unscaled, uint32_t length_unscaled);
@@ -650,7 +760,21 @@ index d26cd4f..93d1f91 100644
    // Ensures the memory backing the range in the scaled resolve address space is
    // allocated and returns whether it is.
    virtual bool EnsureScaledResolveMemoryCommitted(uint32_t /*start_unscaled*/,
-@@ -514,6 +525,13 @@ class TextureCache {
+@@ -473,7 +490,12 @@ class TextureCache {
+   };
+ 
+   explicit TextureCache(const RegisterFile& register_file, SharedMemory& shared_memory,
+-                        uint32_t draw_resolution_scale_x, uint32_t draw_resolution_scale_y);
++                        DrawResolutionScale draw_resolution_scale);
++  explicit TextureCache(const RegisterFile& register_file, SharedMemory& shared_memory,
++                        uint32_t draw_resolution_scale_x, uint32_t draw_resolution_scale_y)
++      : TextureCache(register_file, shared_memory,
++                     DrawResolutionScale::Whole(draw_resolution_scale_x,
++                                                draw_resolution_scale_y)) {}
+ 
+   const RegisterFile& register_file() const { return register_file_; }
+   SharedMemory& shared_memory() const { return shared_memory_; }
+@@ -514,6 +536,13 @@ class TextureCache {
    // Returns nullptr not only if the key is not supported, but also if couldn't
    // create the texture - if it's nullptr, occasionally a recreation attempt
    // should be made.
@@ -664,6 +788,16 @@ index d26cd4f..93d1f91 100644
    Texture* FindOrCreateTexture(TextureKey key);
  
    static const LoadShaderInfo& GetLoadShaderInfo(LoadShaderIndex load_shader_index) {
+@@ -582,8 +611,7 @@ class TextureCache {
+ 
+   const RegisterFile& register_file_;
+   SharedMemory& shared_memory_;
+-  uint32_t draw_resolution_scale_x_;
+-  uint32_t draw_resolution_scale_y_;
++  DrawResolutionScale draw_resolution_scale_;
+ 
+   static const LoadShaderInfo load_shader_info_[kLoadShaderCount];
+ 
 diff --git a/include/rex/graphics/pipeline/texture/events.h b/include/rex/graphics/pipeline/texture/events.h
 new file mode 100644
 index 0000000..0868eed
@@ -720,6 +854,51 @@ index 65a24ed..3d76067 100644
  
  // Converts normalized_color_mask to a 4-bit bitmask of bound RTs.
  // normalized_color_mask contains 4 bits per RT (RGBA).
+diff --git a/include/rex/graphics/util/draw.h b/include/rex/graphics/util/draw.h
+index 3da182d..d0c69c5 100644
+--- a/include/rex/graphics/util/draw.h
++++ b/include/rex/graphics/util/draw.h
+@@ -19,6 +19,7 @@
+ #include <rex/graphics/pipeline/shader/shader.h>
+ #include <rex/graphics/register_file.h>
+ #include <rex/graphics/registers.h>
++#include <rex/graphics/util/resolution_scale.h>
+ #include <rex/graphics/xenos.h>
+ #include <rex/memory.h>
+ 
+@@ -272,12 +273,26 @@ struct ViewportInfo {
+ // a viewport, plus values to multiply-add the returned position by, usable on
+ // host graphics APIs such as Direct3D 11+ and Vulkan, also forcing it to the
+ // Direct3D clip space with 0...W Z rather than -W...W.
+-void GetHostViewportInfo(const RegisterFile& regs, uint32_t draw_resolution_scale_x,
+-                         uint32_t draw_resolution_scale_y, bool origin_bottom_left, uint32_t x_max,
+-                         uint32_t y_max, bool allow_reverse_z,
+-                         reg::RB_DEPTHCONTROL normalized_depth_control, bool convert_z_to_float24,
+-                         bool full_float24_in_0_to_1, bool pixel_shader_writes_depth,
+-                         ViewportInfo& viewport_info_out);
++// At a rational draw resolution scale (3/2), a guest pixel edge may fall inside a host pixel: the
++// viewport's edges are rounded to the nearest host pixel (as GetHostScissor rounds the scissor,
++// so the two agree), and the position is mapped exactly onto that rounded viewport.
++void GetHostViewportInfo(const RegisterFile& regs, DrawResolutionScale draw_resolution_scale,
++                         bool origin_bottom_left, uint32_t x_max, uint32_t y_max,
++                         bool allow_reverse_z, reg::RB_DEPTHCONTROL normalized_depth_control,
++                         bool convert_z_to_float24, bool full_float24_in_0_to_1,
++                         bool pixel_shader_writes_depth, ViewportInfo& viewport_info_out);
++inline void GetHostViewportInfo(const RegisterFile& regs, uint32_t draw_resolution_scale_x,
++                                uint32_t draw_resolution_scale_y, bool origin_bottom_left,
++                                uint32_t x_max, uint32_t y_max, bool allow_reverse_z,
++                                reg::RB_DEPTHCONTROL normalized_depth_control,
++                                bool convert_z_to_float24, bool full_float24_in_0_to_1,
++                                bool pixel_shader_writes_depth, ViewportInfo& viewport_info_out) {
++  GetHostViewportInfo(regs,
++                      DrawResolutionScale::Whole(draw_resolution_scale_x, draw_resolution_scale_y),
++                      origin_bottom_left, x_max, y_max, allow_reverse_z, normalized_depth_control,
++                      convert_z_to_float24, full_float24_in_0_to_1, pixel_shader_writes_depth,
++                      viewport_info_out);
++}
+ 
+ struct Scissor {
+   // Offset from render target UV = 0 to +UV.
 diff --git a/include/rex/graphics/util/draw_extent_estimator.h b/include/rex/graphics/util/draw_extent_estimator.h
 index e5e4908..d003128 100644
 --- a/include/rex/graphics/util/draw_extent_estimator.h
@@ -743,10 +922,10 @@ index e5e4908..d003128 100644
     public:
 diff --git a/include/rex/graphics/util/resolution_scale.h b/include/rex/graphics/util/resolution_scale.h
 new file mode 100644
-index 0000000..0f316df
+index 0000000..b81eb8b
 --- /dev/null
 +++ b/include/rex/graphics/util/resolution_scale.h
-@@ -0,0 +1,67 @@
+@@ -0,0 +1,89 @@
 +/**
 + * @file        graphics/util/resolution_scale.h
 + * @brief       The draw resolution scale as a ratio of host pixels to guest pixels
@@ -804,6 +983,28 @@ index 0000000..0f316df
 +  uint32_t ScaleY(uint32_t guest_pixels) const {
 +    assert_zero(guest_pixels * numerator_y % denominator);
 +    return guest_pixels * numerator_y / denominator;
++  }
++
++  // Host pixels covering a guest length of any size, rounded up (a texture of an odd size at 3/2).
++  uint32_t ScaleXCeil(uint32_t guest_pixels) const {
++    return (guest_pixels * numerator_x + (denominator - 1)) / denominator;
++  }
++  uint32_t ScaleYCeil(uint32_t guest_pixels) const {
++    return (guest_pixels * numerator_y + (denominator - 1)) / denominator;
++  }
++
++  // Host pixel nearest to a guest pixel edge (half up): where a viewport or scissor edge goes when
++  // it falls inside a host pixel at a rational scale. Exact for a whole scale.
++  uint32_t RoundX(uint32_t guest_pixels) const {
++    return (2 * guest_pixels * numerator_x + denominator) / (2 * denominator);
++  }
++  uint32_t RoundY(uint32_t guest_pixels) const {
++    return (2 * guest_pixels * numerator_y + denominator) / (2 * denominator);
++  }
++  // The scale times 2^x_log2 and 2^y_log2: host pixels per guest pixel of a multisampled surface
++  // drawn with a host pixel per sample.
++  DrawResolutionScale ShiftedBy(uint32_t x_log2, uint32_t y_log2) const {
++    return Make(numerator_x << x_log2, numerator_y << y_log2, denominator);
 +  }
 +
 +  bool operator==(const DrawResolutionScale& other) const {
@@ -3679,10 +3880,10 @@ index 0000000..728a7d8
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_command_processor.mm b/src/graphics/metal/metal_command_processor.mm
 new file mode 100644
-index 0000000..157ec9b
+index 0000000..a7c2cf1
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.mm
-@@ -0,0 +1,2884 @@
+@@ -0,0 +1,2882 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.mm
 + * @brief       Xenos command processing with Metal
@@ -4021,24 +4222,27 @@ index 0000000..157ec9b
 +    return false;
 +  }
 +
-+  // The configured scale as a ratio. Only whole scales are drawn so far: a rational one falls back
-+  // to its whole part.
-+  DrawResolutionScale configured_scale;
-+  TextureCache::GetConfigDrawResolutionScale(configured_scale);
-+  uint32_t draw_resolution_scale_x =
-+      std::max(configured_scale.numerator_x / configured_scale.denominator, UINT32_C(1));
-+  uint32_t draw_resolution_scale_y =
-+      std::max(configured_scale.numerator_y / configured_scale.denominator, UINT32_C(1));
-+  if (!configured_scale.IsWhole()) {
-+    REXGPU_WARN("Metal: the draw resolution scale {}/{} x {}/{} is not supported yet; drawing at "
++  // The configured scale as a ratio (3/2 for 1920x1080). A rational scale needs gfx = hle: its
++  // resolves are written straight from the render targets (the native path), and only those give
++  // textures at the scale; without it, it falls back to its whole part.
++  DrawResolutionScale draw_resolution_scale;
++  TextureCache::GetConfigDrawResolutionScale(draw_resolution_scale);
++  if (!draw_resolution_scale.IsWhole() && !hle::HleGraphicsEnabled()) {
++    DrawResolutionScale whole_part = DrawResolutionScale::Whole(
++        std::max(draw_resolution_scale.numerator_x / draw_resolution_scale.denominator,
++                 UINT32_C(1)),
++        std::max(draw_resolution_scale.numerator_y / draw_resolution_scale.denominator,
++                 UINT32_C(1)));
++    REXGPU_WARN("Metal: the draw resolution scale {}/{} x {}/{} needs gfx = hle; drawing at "
 +                "{}x{}",
-+                configured_scale.numerator_x, configured_scale.denominator,
-+                configured_scale.numerator_y, configured_scale.denominator,
-+                draw_resolution_scale_x, draw_resolution_scale_y);
++                draw_resolution_scale.numerator_x, draw_resolution_scale.denominator,
++                draw_resolution_scale.numerator_y, draw_resolution_scale.denominator,
++                whole_part.numerator_x, whole_part.numerator_y);
++    draw_resolution_scale = whole_part;
 +  }
 +
-+  render_target_cache_ = std::make_unique<MetalRenderTargetCache>(
-+      *register_file_, *memory_, draw_resolution_scale_x, draw_resolution_scale_y, *this);
++  render_target_cache_ = std::make_unique<MetalRenderTargetCache>(*register_file_, *memory_,
++                                                                   draw_resolution_scale, *this);
 +  if (!render_target_cache_->Initialize()) {
 +    REXGPU_ERROR("Metal: failed to initialize the render target cache");
 +    return false;
@@ -4078,8 +4282,7 @@ index 0000000..157ec9b
 +  }
 +
 +  texture_cache_ = MetalTextureCache::Create(*register_file_, *shared_memory_,
-+                                             draw_resolution_scale_x, draw_resolution_scale_y,
-+                                             *this);
++                                             draw_resolution_scale, *this);
 +  if (!texture_cache_) {
 +    REXGPU_ERROR("Metal: failed to initialize the texture cache");
 +    return false;
@@ -4876,11 +5079,15 @@ index 0000000..157ec9b
 +  if (!sample_counts) {
 +    return;
 +  }
-+  // Render targets at a draw resolution scale have that many more samples than the guest's.
-+  uint64_t scale = uint64_t(texture_cache_->draw_resolution_scale_x()) *
-+                   texture_cache_->draw_resolution_scale_y();
-+  if (scale > 1) {
-+    samples = (samples + scale / 2) / scale;
++  // Render targets at a draw resolution scale have that many more samples than the guest's (2.25
++  // times at 3/2).
++  DrawResolutionScale draw_resolution_scale = render_target_cache_->draw_resolution_scale();
++  uint64_t scale_numerator =
++      uint64_t(draw_resolution_scale.numerator_x) * draw_resolution_scale.numerator_y;
++  uint64_t scale_denominator =
++      uint64_t(draw_resolution_scale.denominator) * draw_resolution_scale.denominator;
++  if (scale_numerator > scale_denominator) {
++    samples = (samples * scale_denominator + scale_numerator / 2) / scale_numerator;
 +  }
 +  uint32_t clamped = uint32_t(std::min(samples, uint64_t(UINT32_MAX)));
 +  PERF_counter_inc(kOcclusionQueries);
@@ -5667,15 +5874,12 @@ index 0000000..157ec9b
 +  // Viewport, scissor and the rest of the dynamic state, in host pixels: with sample-space render
 +  // targets, a multisampled guest surface has a host pixel per sample.
 +  xenos::MsaaSamples guest_msaa_samples = regs.Get<reg::RB_SURFACE_INFO>().msaa_samples;
-+  uint32_t draw_resolution_scale_x = texture_cache_->draw_resolution_scale_x()
-+                                     << render_target_cache_->GetSampleSpaceXLog2(
-+                                            guest_msaa_samples);
-+  uint32_t draw_resolution_scale_y = texture_cache_->draw_resolution_scale_y()
-+                                     << render_target_cache_->GetSampleSpaceYLog2(
-+                                            guest_msaa_samples);
++  DrawResolutionScale host_pixel_scale = render_target_cache_->draw_resolution_scale().ShiftedBy(
++      render_target_cache_->GetSampleSpaceXLog2(guest_msaa_samples),
++      render_target_cache_->GetSampleSpaceYLog2(guest_msaa_samples));
 +  draw_util::ViewportInfo viewport_info;
-+  draw_util::GetHostViewportInfo(regs, draw_resolution_scale_x, draw_resolution_scale_y, false,
-+                                 16384, 16384, true, normalized_depth_control,
++  draw_util::GetHostViewportInfo(regs, host_pixel_scale, false, 16384, 16384, true,
++                                 normalized_depth_control,
 +                                 render_target_cache_->depth_float24_convert_in_pixel_shader(),
 +                                 true, pixel_shader && pixel_shader->writes_depth(),
 +                                 viewport_info);
@@ -5825,12 +6029,9 @@ index 0000000..157ec9b
 +  RenderEncoderState& state = render_encoder_state_;
 +  bool force = !state.valid;
 +  xenos::MsaaSamples guest_msaa_samples = regs.Get<reg::RB_SURFACE_INFO>().msaa_samples;
-+  uint32_t draw_resolution_scale_x = texture_cache_->draw_resolution_scale_x()
-+                                     << render_target_cache_->GetSampleSpaceXLog2(
-+                                            guest_msaa_samples);
-+  uint32_t draw_resolution_scale_y = texture_cache_->draw_resolution_scale_y()
-+                                     << render_target_cache_->GetSampleSpaceYLog2(
-+                                            guest_msaa_samples);
++  DrawResolutionScale host_pixel_scale = render_target_cache_->draw_resolution_scale().ShiftedBy(
++      render_target_cache_->GetSampleSpaceXLog2(guest_msaa_samples),
++      render_target_cache_->GetSampleSpaceYLog2(guest_msaa_samples));
 +
 +  // Viewport.
 +  MTLViewport viewport;
@@ -5856,11 +6057,12 @@ index 0000000..157ec9b
 +  // Scissor, within the render pass as Metal requires.
 +  draw_util::Scissor scissor;
 +  draw_util::GetScissor(regs, scissor);
-+  uint32_t scissor_x0 = std::min(scissor.offset[0] * draw_resolution_scale_x, render_pass.width);
-+  uint32_t scissor_y0 = std::min(scissor.offset[1] * draw_resolution_scale_y, render_pass.height);
-+  uint32_t scissor_x1 = std::min((scissor.offset[0] + scissor.extent[0]) * draw_resolution_scale_x,
++  // The edges rounded to the nearest host pixel at a rational scale, as the viewport's.
++  uint32_t scissor_x0 = std::min(host_pixel_scale.RoundX(scissor.offset[0]), render_pass.width);
++  uint32_t scissor_y0 = std::min(host_pixel_scale.RoundY(scissor.offset[1]), render_pass.height);
++  uint32_t scissor_x1 = std::min(host_pixel_scale.RoundX(scissor.offset[0] + scissor.extent[0]),
 +                                 render_pass.width);
-+  uint32_t scissor_y1 = std::min((scissor.offset[1] + scissor.extent[1]) * draw_resolution_scale_y,
++  uint32_t scissor_y1 = std::min(host_pixel_scale.RoundY(scissor.offset[1] + scissor.extent[1]),
 +                                 render_pass.height);
 +  MTLScissorRect scissor_rect;
 +  scissor_rect.x = scissor_x0;
@@ -5883,7 +6085,7 @@ index 0000000..157ec9b
 +  // With non-square resolution scaling, make sure the worst-case impact is reverted (slope only
 +  // along the scaled axis), thus max.
 +  depth_bias_slope_factor *= xenos::kPolygonOffsetScaleSubpixelUnit *
-+                             float(std::max(draw_resolution_scale_x, draw_resolution_scale_y));
++                             std::max(host_pixel_scale.x(), host_pixel_scale.y());
 +  // std::memcmp instead of != so in case of NaN, every draw won't be invalidating it.
 +  if (force ||
 +      std::memcmp(&state.depth_bias_constant, &depth_bias_constant_factor, sizeof(float)) ||
@@ -5947,12 +6149,9 @@ index 0000000..157ec9b
 +  auto vgt_min_vtx_indx = regs.Get<uint32_t>(XE_GPU_REG_VGT_MIN_VTX_INDX);
 +
 +  // Host pixels per guest pixel, including a pixel per sample with sample-space render targets.
-+  uint32_t draw_resolution_scale_x = texture_cache_->draw_resolution_scale_x()
-+                                     << render_target_cache_->GetSampleSpaceXLog2(
-+                                            rb_surface_info.msaa_samples);
-+  uint32_t draw_resolution_scale_y = texture_cache_->draw_resolution_scale_y()
-+                                     << render_target_cache_->GetSampleSpaceYLog2(
-+                                            rb_surface_info.msaa_samples);
++  DrawResolutionScale host_pixel_scale = render_target_cache_->draw_resolution_scale().ShiftedBy(
++      render_target_cache_->GetSampleSpaceXLog2(rb_surface_info.msaa_samples),
++      render_target_cache_->GetSampleSpaceYLog2(rb_surface_info.msaa_samples));
 +
 +  reg::RB_COLOR_INFO color_infos[xenos::kMaxColorRenderTargets];
 +  for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
@@ -6124,9 +6323,9 @@ index 0000000..157ec9b
 +    // conversion to avoid multiplying the per-vertex diameter by an additional constant in the
 +    // shader.
 +    float point_screen_diameter_to_ndc_radius_x =
-+        float(draw_resolution_scale_x) / std::max(viewport_info.xy_extent[0], uint32_t(1));
++        host_pixel_scale.x() / std::max(viewport_info.xy_extent[0], uint32_t(1));
 +    float point_screen_diameter_to_ndc_radius_y =
-+        float(draw_resolution_scale_y) / std::max(viewport_info.xy_extent[1], uint32_t(1));
++        host_pixel_scale.y() / std::max(viewport_info.xy_extent[1], uint32_t(1));
 +    dirty |= system_constants_.point_screen_diameter_to_ndc_radius[0] !=
 +             point_screen_diameter_to_ndc_radius_x;
 +    dirty |= system_constants_.point_screen_diameter_to_ndc_radius[1] !=
@@ -7282,7 +7481,7 @@ index 0000000..1217613
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_pipeline_cache.mm b/src/graphics/metal/metal_pipeline_cache.mm
 new file mode 100644
-index 0000000..857da58
+index 0000000..ba2837c
 --- /dev/null
 +++ b/src/graphics/metal/metal_pipeline_cache.mm
 @@ -0,0 +1,1053 @@
@@ -7531,14 +7730,14 @@ index 0000000..857da58
 +  features.signed_zero_inf_nan_preserve_float32 = false;
 +  features.denorm_flush_to_zero_float32 = false;
 +  features.rounding_mode_rte_float32 = false;
++  // The draw resolution scale as a ratio (3/2 for 1920x1080).
++  DrawResolutionScale scale = render_target_cache_.draw_resolution_scale();
 +  shader_translator_ = std::make_unique<SpirvShaderTranslator>(
-+      features, true, true, false, render_target_cache_.draw_resolution_scale_x(),
-+      render_target_cache_.draw_resolution_scale_y());
++      features, true, true, false, scale.numerator_x, scale.numerator_y, scale.denominator);
 +  if (REXCVAR_GET(shader_compiler) == "xsc") {
 +    xsc_translator_ = std::make_unique<xsc::XscShaderTranslator>(
-+        xsc::XscShaderTranslator::Target::kMsl, features, true,
-+        render_target_cache_.draw_resolution_scale_x(),
-+        render_target_cache_.draw_resolution_scale_y());
++        xsc::XscShaderTranslator::Target::kMsl, features, true, scale.numerator_x,
++        scale.numerator_y, scale.denominator);
 +    if (REXCVAR_GET(xsc_debug_color_range)) {
 +      xsc_translator_->set_debug_color_range(true);
 +      REXGPU_INFO("Metal: XSC paints out-of-range pixel shader colors (xsc_debug_color_range)");
@@ -9244,10 +9443,10 @@ index 0000000..d717bea
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_render_target_cache.h b/src/graphics/metal/metal_render_target_cache.h
 new file mode 100644
-index 0000000..e9f8fbe
+index 0000000..53ff782
 --- /dev/null
 +++ b/src/graphics/metal/metal_render_target_cache.h
-@@ -0,0 +1,641 @@
+@@ -0,0 +1,666 @@
 +/**
 + * @file        graphics/metal/metal_render_target_cache.h
 + * @brief       EDRAM emulation with sample-space host render targets for the Metal backend
@@ -9307,7 +9506,7 @@ index 0000000..e9f8fbe
 +class MetalRenderTargetCache final : public RenderTargetCache {
 + public:
 +  MetalRenderTargetCache(const RegisterFile& register_file, const memory::Memory& memory,
-+                         uint32_t draw_resolution_scale_x, uint32_t draw_resolution_scale_y,
++                         DrawResolutionScale draw_resolution_scale,
 +                         MetalCommandProcessor& command_processor);
 +  ~MetalRenderTargetCache();
 +
@@ -9624,6 +9823,9 @@ index 0000000..e9f8fbe
 +    struct {
 +      xenos::MsaaSamples msaa_samples : 2;
 +      uint32_t resource_format : 4;
++      // At a rational draw resolution scale: dumping to edram_buffer_guest_ at the guest
++      // resolution, each guest sample read from the host pixel at its centre.
++      uint32_t guest_resolution : 1;
 +      // Last bit because this affects the pipeline - after sorting, only change
 +      // it at most once. Depth buffers have an additional stencil SRV.
 +      uint32_t is_depth : 1;
@@ -9777,9 +9979,10 @@ index 0000000..e9f8fbe
 +  const ComputePipeline* GetDumpPipeline(DumpPipelineKey key);
 +
 +  // Writes contents of host render targets within rectangles from
-+  // ResolveInfo::GetCopyEdramTileSpan to edram_buffer_.
++  // ResolveInfo::GetCopyEdramTileSpan to edram_buffer_, or with guest_resolution (at a rational
++  // draw resolution scale) to edram_buffer_guest_.
 +  bool DumpRenderTargets(uint32_t dump_base, uint32_t dump_row_length_used, uint32_t dump_rows,
-+                         uint32_t dump_pitch);
++                         uint32_t dump_pitch, bool guest_resolution = false);
 +
 +  MetalCommandProcessor& command_processor_;
 +
@@ -9791,6 +9994,10 @@ index 0000000..e9f8fbe
 +  bool msaa_2x_attachments_supported_ = false;
 +
 +  id<MTLBuffer> edram_buffer_ = nil;
++  // At a rational draw resolution scale, where the copy shaders have no scaled variant: the EDRAM
++  // at the guest resolution, for the resolves the native path does not handle, dumped there and
++  // copied by the unscaled shaders to the guest memory.
++  id<MTLBuffer> edram_buffer_guest_ = nil;
 +
 +  std::array<ComputePipeline, size_t(draw_util::ResolveCopyShaderIndex::kCount)>
 +      resolve_copy_pipelines_{};
@@ -9835,9 +10042,26 @@ index 0000000..e9f8fbe
 +  // resolve buffer bound at the destination's scaled base, with dest_base 0). With
 +  // verify, nothing is written: the values already in the memory (written by the usual path) are
 +  // compared with the ones the native path computes, and a mismatch is logged.
++  // At a rational draw resolution scale (rational_mode), the destination is either the guest
++  // memory at the guest resolution (each guest pixel reads the host pixel at its centre) or a
++  // scaled surface of the texture cache (MetalTextureCache::RequestRationalScaledSurface, bound at
++  // its start with dest_base 0, surface_pitch texels per row) at the host resolution.
++  enum class RationalResolveMode { kNone, kGuestResolution, kScaledSurface };
 +  void ResolveFromRenderTarget(const draw_util::ResolveInfo& resolve_info,
 +                               const RangeOwner& owner, id<MTLBuffer> dest,
-+                               NSUInteger dest_offset, uint32_t dest_base, bool verify);
++                               NSUInteger dest_offset, uint32_t dest_base, bool verify,
++                               RationalResolveMode rational_mode = RationalResolveMode::kNone,
++                               uint32_t surface_pitch = 0);
++  // The copy of a resolve at a rational draw resolution scale, where there is no scaled resolve
++  // buffer and no scaled copy shader: written straight from the render targets (the native path)
++  // to the guest memory at the guest resolution, and, for a resolve textures may sample at the
++  // scale (not data, see kDataTargetMaxSize, and from the start of its destination), to a scaled
++  // surface too. A resolve the native path does not handle is dumped at the guest resolution to
++  // edram_buffer_guest_ and copied from there as at 1x.
++  bool ResolveCopyAtRationalScale(const draw_util::ResolveInfo& resolve_info,
++                                  MetalSharedMemory& shared_memory,
++                                  MetalTextureCache& texture_cache,
++                                  uint32_t& written_address_out, uint32_t& written_length_out);
 +  // gfx = hle (hle_resolve_in_render_pass): writes a resolve of a native source (see
 +  // GetNativeResolveSource) with a tile function inside the open render pass, when the source is
 +  // one of the pass's color attachments; false, with nothing done, otherwise. dest is the shared
@@ -9891,10 +10115,10 @@ index 0000000..e9f8fbe
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_render_target_cache.mm b/src/graphics/metal/metal_render_target_cache.mm
 new file mode 100644
-index 0000000..388923e
+index 0000000..3dad115
 --- /dev/null
 +++ b/src/graphics/metal/metal_render_target_cache.mm
-@@ -0,0 +1,5035 @@
+@@ -0,0 +1,5250 @@
 +/**
 + * @file        graphics/metal/metal_render_target_cache.mm
 + * @brief       EDRAM emulation with sample-space host render targets for the Metal backend
@@ -10120,6 +10344,11 @@ index 0000000..388923e
 +  uint owner_pitch;
 +  uint range_start;
 +  uint range_end;
++  // At a rational draw resolution scale, writing at the guest resolution: the scale's numerators
++  // and denominator (0 otherwise), with which a guest pixel reads the host pixel at its centre.
++  uint reduce_num_x;
++  uint reduce_num_y;
++  uint reduce_den;
 +};
 +// texture_util::GetTiledOffset2D.
 +int resolve_tiled_offset_2d(int x, int y, uint pitch, int bytes_per_block_log2) {
@@ -10216,6 +10445,11 @@ index 0000000..388923e
 +                          thread uint2& source_pixel) {
 +  uint2 edram = uint2(constants.source_x, constants.source_y) +
 +                max(pixel, uint2(constants.fill_x, constants.fill_y));
++  if (constants.reduce_den != 0u) {
++    // A guest pixel at a rational scale: the host pixel at its centre, floor((x + 1/2) * scale).
++    edram = (edram * 2u + 1u) * uint2(constants.reduce_num_x, constants.reduce_num_y) /
++            (2u * constants.reduce_den);
++  }
 +  uint2 tile_size = uint2(constants.tile_width, constants.tile_height);
 +  uint2 tile = edram / tile_size;
 +  uint tile_index = constants.edram_base + tile.y * constants.edram_pitch + tile.x;
@@ -10439,6 +10673,9 @@ index 0000000..388923e
 +  uint32_t owner_pitch;
 +  uint32_t range_start;
 +  uint32_t range_end;
++  uint32_t reduce_num_x;
++  uint32_t reduce_num_y;
++  uint32_t reduce_den;
 +};
 +
 +// The tile function of a resolve inside the render pass (appended to kRenderTargetShaderSource):
@@ -10649,10 +10886,9 @@ index 0000000..388923e
 +
 +MetalRenderTargetCache::MetalRenderTargetCache(const RegisterFile& register_file,
 +                                               const memory::Memory& memory,
-+                                               uint32_t draw_resolution_scale_x,
-+                                               uint32_t draw_resolution_scale_y,
++                                               DrawResolutionScale draw_resolution_scale,
 +                                               MetalCommandProcessor& command_processor)
-+    : RenderTargetCache(register_file, memory, draw_resolution_scale_x, draw_resolution_scale_y),
++    : RenderTargetCache(register_file, memory, draw_resolution_scale),
 +      command_processor_(command_processor) {}
 +
 +MetalRenderTargetCache::~MetalRenderTargetCache() { Shutdown(true); }
@@ -10665,15 +10901,27 @@ index 0000000..388923e
 +  depth_float24_convert_in_pixel_shader_ = REXCVAR_GET(depth_float24_convert_in_pixel_shader);
 +
 +  // EDRAM contents reinterpretation buffer, for host depth storing and resolves. At a draw
-+  // resolution scale, every EDRAM sample has that many host samples (90 MB at 3x3).
-+  edram_buffer_ = [device newBufferWithLength:NSUInteger(xenos::kEdramSizeBytes) *
-+                                              draw_resolution_scale_x() * draw_resolution_scale_y()
-+                                      options:MTLResourceStorageModePrivate];
++  // resolution scale, every EDRAM tile has the scale's host samples along each axis (90 MB at 3x3,
++  // 22.5 MB at 3/2): a whole number of samples per tile, as the denominator divides the tile size.
++  DrawResolutionScale scale = draw_resolution_scale();
++  edram_buffer_ = [device
++      newBufferWithLength:NSUInteger(xenos::kEdramSizeBytes) * scale.numerator_x *
++                          scale.numerator_y / (scale.denominator * scale.denominator)
++                  options:MTLResourceStorageModePrivate];
 +  if (!edram_buffer_) {
 +    REXGPU_ERROR("MetalRenderTargetCache: Failed to create the EDRAM buffer");
 +    return false;
 +  }
 +  edram_buffer_.label = @"EDRAM";
++  if (!scale.IsWhole()) {
++    edram_buffer_guest_ = [device newBufferWithLength:NSUInteger(xenos::kEdramSizeBytes)
++                                              options:MTLResourceStorageModePrivate];
++    if (!edram_buffer_guest_) {
++      REXGPU_ERROR("MetalRenderTargetCache: Failed to create the guest resolution EDRAM buffer");
++      return false;
++    }
++    edram_buffer_guest_.label = @"EDRAM at the guest resolution";
++  }
 +
 +  // Resolve copy pipelines: the EDRAM buffer (set 0) to the shared memory (set 1).
 +  const std::vector<MslBinding> resolve_copy_bindings = {
@@ -10687,7 +10935,8 @@ index 0000000..388923e
 +    std::array<uint32_t, 3> threadgroup_size;
 +    ComputePipeline& pipeline = resolve_copy_pipelines_[i];
 +    const ResolveCopyShaderCode& code = kResolveCopyShaders[i];
-+    bool scaled = IsDrawResolutionScaled();
++    // At a rational scale, the unscaled shaders copy from edram_buffer_guest_.
++    bool scaled = IsDrawResolutionScaled() && draw_resolution_scale().IsWhole();
 +    pipeline.pipeline = CreateComputePipelineFromSpirv(
 +        device, scaled ? code.scaled : code.unscaled,
 +        (scaled ? code.scaled_size_bytes : code.unscaled_size_bytes) / sizeof(uint32_t),
@@ -10845,6 +11094,7 @@ index 0000000..388923e
 +    pipeline = ComputePipeline();
 +  }
 +  edram_buffer_ = nil;
++  edram_buffer_guest_ = nil;
 +  last_update_render_pass_ = MetalRenderPass();
 +
 +  if (!from_destructor) {
@@ -10958,9 +11208,10 @@ index 0000000..388923e
 +  MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
 +  descriptor.textureType = MTLTextureType2D;
 +  descriptor.pixelFormat = format;
-+  descriptor.width = key.GetWidth() * draw_resolution_scale_x();
-+  descriptor.height =
-+      GetRenderTargetHeight(key.pitch_tiles_at_32bpp, key.msaa_samples) * draw_resolution_scale_y();
++  // Whole tiles wide and 8-pixel rows tall: whole numbers of host pixels at any scale.
++  descriptor.width = draw_resolution_scale().ScaleX(key.GetWidth());
++  descriptor.height = draw_resolution_scale().ScaleY(
++      GetRenderTargetHeight(key.pitch_tiles_at_32bpp, key.msaa_samples));
 +  descriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
 +  // Views are needed for the stencil of depth render targets and the integer transfer format.
 +  if (key.is_depth || transfer_format != format) {
@@ -11208,7 +11459,8 @@ index 0000000..388923e
 +void MetalRenderTargetCache::ResolveFromRenderTarget(const draw_util::ResolveInfo& resolve_info,
 +                                                     const RangeOwner& owner, id<MTLBuffer> dest,
 +                                                     NSUInteger dest_offset, uint32_t dest_base,
-+                                                     bool verify) {
++                                                     bool verify, RationalResolveMode rational_mode,
++                                                     uint32_t surface_pitch) {
 +  MetalRenderTarget& source = *static_cast<MetalRenderTarget*>(owner.render_target);
 +  id<MTLTexture> source_view = source.transfer_view();
 +  ResolveFromRenderTargetConstants constants;
@@ -11254,6 +11506,40 @@ index 0000000..388923e
 +  if (source_view.pixelFormat != expected_view_format) {
 +    assert_always();
 +    return;
++  }
++  if (rational_mode != RationalResolveMode::kNone) {
++    // The constants are for the guest resolution (GetResolveInfo at the whole part, 1): the render
++    // target is read through EDRAM tiles of the host size.
++    DrawResolutionScale scale = draw_resolution_scale();
++    const draw_util::ResolveEdramInfo& edram_info = resolve_info.IsCopyingDepth()
++                                                        ? resolve_info.depth_edram_info
++                                                        : resolve_info.color_edram_info;
++    constants.tile_width = scale.ScaleX(xenos::kEdramTileWidthSamples >>
++                                        uint32_t(edram_info.format_is_64bpp != 0));
++    constants.tile_height = scale.ScaleY(xenos::kEdramTileHeightSamples);
++    if (rational_mode == RationalResolveMode::kGuestResolution) {
++      constants.reduce_num_x = scale.numerator_x;
++      constants.reduce_num_y = scale.numerator_y;
++      constants.reduce_den = scale.denominator;
++    } else {
++      // Host pixels (whole: the rectangle is in 8-pixel blocks), from the start of the surface.
++      // With the half-pixel offset, the draws leave the first host column and row uncovered (the
++      // offset is 0.75 host pixels at 3/2, past their centers): they take the next ones, as
++      // ResolveEdramInfo::fill_half_pixel_offset does at whole scales (where GetResolveInfo, called
++      // here at the whole part, 1, does not set it).
++      constants.source_x = scale.ScaleX(constants.source_x);
++      constants.source_y = scale.ScaleY(constants.source_y);
++      constants.width = scale.ScaleX(constants.width);
++      constants.height = scale.ScaleY(constants.height);
++      bool fill_half_pixel_offset =
++          REXCVAR_GET(resolve_resolution_scale_fill_half_pixel_offset) &&
++          REXCVAR_GET(half_pixel_offset) &&
++          register_file().Get<reg::PA_SU_VTX_CNTL>().pix_center == xenos::PixelCenter::kD3DZero;
++      constants.fill_x = constants.fill_y = fill_half_pixel_offset ? 1 : 0;
++      constants.dest_x = 0;
++      constants.dest_y = 0;
++      constants.dest_pitch = surface_pitch;
++    }
 +  }
 +  constants.verify = verify;
 +  constants.dest_base = dest_base;
@@ -11494,7 +11780,10 @@ index 0000000..388923e
 +
 +  // Copying.
 +  bool copied = false;
-+  if (resolve_info.copy_dest_extent_length) {
++  if (resolve_info.copy_dest_extent_length && !draw_resolution_scale().IsWhole()) {
++    copied = ResolveCopyAtRationalScale(resolve_info, shared_memory, texture_cache,
++                                        written_address_out, written_length_out);
++  } else if (resolve_info.copy_dest_extent_length) {
 +    draw_util::ResolveCopyShaderConstants copy_shader_constants;
 +    uint32_t copy_group_count_x, copy_group_count_y;
 +    draw_util::ResolveCopyShaderIndex copy_shader =
@@ -11724,6 +12013,102 @@ index 0000000..388923e
 +  return copied;
 +}
 +
++bool MetalRenderTargetCache::ResolveCopyAtRationalScale(const draw_util::ResolveInfo& resolve_info,
++                                                        MetalSharedMemory& shared_memory,
++                                                        MetalTextureCache& texture_cache,
++                                                        uint32_t& written_address_out,
++                                                        uint32_t& written_length_out) {
++  // The copy shader only tells which kind of copy the resolve is (GetNativeResolveOwners).
++  draw_util::ResolveCopyShaderConstants copy_shader_constants;
++  uint32_t copy_group_count_x, copy_group_count_y;
++  draw_util::ResolveCopyShaderIndex copy_shader = resolve_info.GetCopyShader(
++      1, 1, copy_shader_constants, copy_group_count_x, copy_group_count_y);
++  if (copy_shader == draw_util::ResolveCopyShaderIndex::kUnknown) {
++    return false;
++  }
++  uint32_t written_start = resolve_info.copy_dest_extent_start;
++  uint32_t written_length = resolve_info.copy_dest_extent_length;
++  uint32_t dest_base = resolve_info.copy_dest_base;
++  std::vector<RangeOwner> owners;
++  if (!GetNativeResolveOwners(resolve_info, copy_shader, owners)) {
++    // Not one the native path handles (another format conversion, a multisampled or gfx = pm4
++    // source): the render targets are dumped at the guest resolution, each guest sample taken from
++    // the host pixel at its centre, and the unscaled copy shader writes the guest memory from
++    // there, as at 1x. Textures then load it at the guest resolution.
++    uint32_t dump_base, dump_row_length_used, dump_rows, dump_pitch;
++    resolve_info.GetCopyEdramTileSpan(dump_base, dump_row_length_used, dump_rows, dump_pitch);
++    if (!DumpRenderTargets(dump_base, dump_row_length_used, dump_rows, dump_pitch, true)) {
++      REXGPU_ERROR("MetalRenderTargetCache: Failed to dump host render targets for resolve");
++      return false;
++    }
++    if (!shared_memory.RequestRange(written_start, written_length)) {
++      REXGPU_ERROR("MetalRenderTargetCache: Failed to obtain the resolve destination memory "
++                   "region (base 0x{:08X}, length 0x{:08X})",
++                   written_start, written_length);
++      return false;
++    }
++    const ComputePipeline& pipeline = resolve_copy_pipelines_[size_t(copy_shader)];
++    id<MTLComputeCommandEncoder> compute =
++        command_processor_.GetComputeEncoder(rex::perf::CounterId::kRenderPassEndsResolve);
++    [compute setComputePipelineState:pipeline.pipeline];
++    [compute setBuffer:edram_buffer_guest_ offset:0 atIndex:kComputeBufferEdram];
++    // The whole shared memory is bound, so the destination base stays absolute.
++    [compute setBuffer:shared_memory.buffer() offset:0 atIndex:kComputeBufferDest];
++    [compute setBytes:&copy_shader_constants
++               length:sizeof(copy_shader_constants)
++              atIndex:kComputeBufferConstants];
++    [compute dispatchThreadgroups:MTLSizeMake(copy_group_count_x, copy_group_count_y, 1)
++            threadsPerThreadgroup:pipeline.threads_per_threadgroup];
++    PERF_counter_inc(kHostDispatches);
++    texture_cache.DropRationalScaledSurface(dest_base);
++    texture_cache.MarkRangeAsResolvedUnscaled(written_start, written_length);
++    written_address_out = written_start;
++    written_length_out = written_length;
++    return true;
++  }
++  if (!shared_memory.RequestRange(written_start, written_length)) {
++    REXGPU_ERROR("MetalRenderTargetCache: Failed to obtain the resolve destination memory region "
++                 "(base 0x{:08X}, length 0x{:08X})",
++                 written_start, written_length);
++    return false;
++  }
++  for (const RangeOwner& owner : owners) {
++    ResolveFromRenderTarget(resolve_info, owner, shared_memory.buffer(), 0,
++                            resolve_info.copy_dest_base, false,
++                            RationalResolveMode::kGuestResolution);
++  }
++  PERF_counter_inc(kResolvesFromRenderTargets);
++
++  // Textures sample the resolve at the scale from a surface of its own, except for data (computed
++  // at the guest pixel centres, see kDataTargetMaxSize) and a resolve to an offset in its
++  // destination (a part of a texture, whose rest is only in the guest memory).
++  uint32_t width = resolve_info.coordinate_info.width_div_8 << 3;
++  uint32_t height = resolve_info.height_div_8 << 3;
++  id<MTLBuffer> surface = nil;
++  uint32_t surface_pitch = 0;
++  if (width > kDataTargetMaxSize && height > kDataTargetMaxSize &&
++      !resolve_info.copy_dest_coordinate_info.offset_x_div_8 &&
++      !resolve_info.copy_dest_coordinate_info.offset_y_div_8) {
++    const FormatInfo* dest_format_info =
++        FormatInfo::Get(xenos::TextureFormat(resolve_info.copy_dest_info.copy_dest_format));
++    surface = texture_cache.RequestRationalScaledSurface(
++        dest_base, width, height, dest_format_info->bytes_per_block(), surface_pitch);
++  }
++  if (surface) {
++    for (const RangeOwner& owner : owners) {
++      ResolveFromRenderTarget(resolve_info, owner, surface, 0, 0, false,
++                              RationalResolveMode::kScaledSurface, surface_pitch);
++    }
++    texture_cache.MarkRangeAsResolved(written_start, written_length);
++  } else {
++    texture_cache.DropRationalScaledSurface(dest_base);
++    texture_cache.MarkRangeAsResolvedUnscaled(written_start, written_length);
++  }
++  written_address_out = written_start;
++  written_length_out = written_length;
++  return true;
++}
++
 +bool MetalRenderTargetCache::Update(bool is_rasterization_done,
 +                                    reg::RB_DEPTHCONTROL normalized_depth_control,
 +                                    uint32_t normalized_color_mask, const Shader& vertex_shader) {
@@ -11773,10 +12158,10 @@ index 0000000..388923e
 +    render_pass.height = xenos::kTexture2DCubeMaxWidthHeight;
 +  }
 +  // In host pixels, as the attachments.
-+  render_pass.width = std::min(render_pass.width * draw_resolution_scale_x(),
-+                               GetMaxRenderTargetWidth());
-+  render_pass.height = std::min(render_pass.height * draw_resolution_scale_y(),
-+                                GetMaxRenderTargetHeight());
++  render_pass.width =
++      std::min(draw_resolution_scale().ScaleX(render_pass.width), GetMaxRenderTargetWidth());
++  render_pass.height =
++      std::min(draw_resolution_scale().ScaleY(render_pass.height), GetMaxRenderTargetHeight());
 +  // Attachments created for an earlier pitch may be smaller than the area of this one.
 +  for (id<MTLTexture> attachment : render_pass.color) {
 +    if (attachment) {
@@ -11983,9 +12368,9 @@ index 0000000..388923e
 +      // Guest pixel coordinates (the transfer rectangles) to Vulkan clip space, as the shared
 +      // rectangle code expects: a guest pixel is draw_resolution_scale host pixels wide and tall.
 +      float pixels_to_ndc_x =
-+          2.0f * float(draw_resolution_scale_x()) / float(transfer_render_pass.width);
++          2.0f * draw_resolution_scale().x() / float(transfer_render_pass.width);
 +      float pixels_to_ndc_y =
-+          2.0f * float(draw_resolution_scale_y()) / float(transfer_render_pass.height);
++          2.0f * draw_resolution_scale().y() / float(transfer_render_pass.height);
 +      MTLViewport transfer_viewport = {0.0, 0.0, double(transfer_render_pass.width),
 +                                       double(transfer_render_pass.height), 0.0, 1.0};
 +      [encoder setViewport:transfer_viewport];
@@ -12052,12 +12437,35 @@ index 0000000..388923e
 +          assert_not_zero(transfer_invocation_rectangle_count);
 +          for (uint32_t j = 0; j < transfer_invocation_rectangle_count; ++j) {
 +            const Transfer::Rectangle& transfer_rectangle = transfer_invocation_rectangles[j];
-+            float transfer_rectangle_x0 = -1.0f + transfer_rectangle.x_pixels * pixels_to_ndc_x;
-+            float transfer_rectangle_y0 = -1.0f + transfer_rectangle.y_pixels * pixels_to_ndc_y;
-+            float transfer_rectangle_x1 =
-+                transfer_rectangle_x0 + transfer_rectangle.width_pixels * pixels_to_ndc_x;
-+            float transfer_rectangle_y1 =
-+                transfer_rectangle_y0 + transfer_rectangle.height_pixels * pixels_to_ndc_y;
++            float transfer_rectangle_x0, transfer_rectangle_y0;
++            float transfer_rectangle_x1, transfer_rectangle_y1;
++            DrawResolutionScale scale = draw_resolution_scale();
++            if (scale.IsWhole()) {
++              transfer_rectangle_x0 = -1.0f + transfer_rectangle.x_pixels * pixels_to_ndc_x;
++              transfer_rectangle_y0 = -1.0f + transfer_rectangle.y_pixels * pixels_to_ndc_y;
++              transfer_rectangle_x1 =
++                  transfer_rectangle_x0 + transfer_rectangle.width_pixels * pixels_to_ndc_x;
++              transfer_rectangle_y1 =
++                  transfer_rectangle_y0 + transfer_rectangle.height_pixels * pixels_to_ndc_y;
++            } else {
++              // A rational scale: edges on the host pixels the scissor rounds a guest clear's
++              // edges to (an edge around a clear cutout may be at an odd guest pixel), so a
++              // transfer and the clear next to it leave no host pixel between them.
++              float host_to_ndc_x = 2.0f / float(transfer_render_pass.width);
++              float host_to_ndc_y = 2.0f / float(transfer_render_pass.height);
++              transfer_rectangle_x0 =
++                  -1.0f + float(scale.RoundX(transfer_rectangle.x_pixels)) * host_to_ndc_x;
++              transfer_rectangle_y0 =
++                  -1.0f + float(scale.RoundY(transfer_rectangle.y_pixels)) * host_to_ndc_y;
++              transfer_rectangle_x1 =
++                  -1.0f + float(scale.RoundX(transfer_rectangle.x_pixels +
++                                             transfer_rectangle.width_pixels)) *
++                              host_to_ndc_x;
++              transfer_rectangle_y1 =
++                  -1.0f + float(scale.RoundY(transfer_rectangle.y_pixels +
++                                             transfer_rectangle.height_pixels)) *
++                              host_to_ndc_y;
++            }
 +            const float rectangle_vertices[] = {
 +                transfer_rectangle_x0, transfer_rectangle_y0, transfer_rectangle_x0,
 +                transfer_rectangle_y1, transfer_rectangle_x1, transfer_rectangle_y0,
@@ -12188,11 +12596,12 @@ index 0000000..388923e
 +                          1.0};
 +  [encoder setViewport:viewport];
 +  // Assuming the rectangle (in guest pixels) is already clamped by
-+  // PrepareHostRenderTargetsResolveClear.
-+  [encoder setScissorRect:MTLScissorRect{rectangle.x_pixels * draw_resolution_scale_x(),
-+                                         rectangle.y_pixels * draw_resolution_scale_y(),
-+                                         rectangle.width_pixels * draw_resolution_scale_x(),
-+                                         rectangle.height_pixels * draw_resolution_scale_y()}];
++  // PrepareHostRenderTargetsResolveClear, and in 8-pixel blocks, so whole host pixels at any scale.
++  DrawResolutionScale scale = draw_resolution_scale();
++  [encoder setScissorRect:MTLScissorRect{scale.ScaleX(rectangle.x_pixels),
++                                         scale.ScaleY(rectangle.y_pixels),
++                                         scale.ScaleX(rectangle.width_pixels),
++                                         scale.ScaleY(rectangle.height_pixels)}];
 +  [encoder setCullMode:MTLCullModeNone];
 +  [encoder setTriangleFillMode:MTLTriangleFillModeFill];
 +  [encoder setDepthClipMode:MTLDepthClipModeClip];
@@ -12284,7 +12693,8 @@ index 0000000..388923e
 +}
 +
 +bool MetalRenderTargetCache::DumpRenderTargets(uint32_t dump_base, uint32_t dump_row_length_used,
-+                                               uint32_t dump_rows, uint32_t dump_pitch) {
++                                               uint32_t dump_rows, uint32_t dump_pitch,
++                                               bool guest_resolution) {
 +  GetResolveCopyRectanglesToDump(dump_base, dump_row_length_used, dump_rows, dump_pitch,
 +                                 dump_rectangles_);
 +  if (dump_rectangles_.empty()) {
@@ -12308,6 +12718,7 @@ index 0000000..388923e
 +    DumpPipelineKey pipeline_key;
 +    pipeline_key.msaa_samples = rt_key.msaa_samples;
 +    pipeline_key.resource_format = rt_key.resource_format;
++    pipeline_key.guest_resolution = uint32_t(guest_resolution);
 +    pipeline_key.is_depth = rt_key.is_depth;
 +    dump_invocations_.emplace_back(rectangle, pipeline_key);
 +  }
@@ -12318,7 +12729,9 @@ index 0000000..388923e
 +  // Dump the render targets.
 +  id<MTLComputeCommandEncoder> compute =
 +      command_processor_.GetComputeEncoder(rex::perf::CounterId::kRenderPassEndsResolve);
-+  [compute setBuffer:edram_buffer_ offset:0 atIndex:kComputeBufferEdram];
++  [compute setBuffer:guest_resolution ? edram_buffer_guest_ : edram_buffer_
++              offset:0
++             atIndex:kComputeBufferEdram];
 +  bool all_pipelines_available = true;
 +  for (const DumpInvocation& invocation : dump_invocations_) {
 +    const ResolveCopyDumpRectangle& rectangle = invocation.rectangle;
@@ -12352,12 +12765,14 @@ index 0000000..388923e
 +      offsets.dispatch_first_tile = dump_base + dispatch.offset;
 +      constants[kDumpPushConstantOffsets] = offsets.offsets;
 +      [compute setBytes:constants length:sizeof(constants) atIndex:kComputeBufferConstants];
-+      // One thread per host sample, draw_resolution_scale per EDRAM sample along each axis.
-+      uint32_t dump_samples_x = draw_resolution_scale_x() *
-+                                (xenos::kEdramTileWidthSamples >> uint32_t(rt_key.Is64bpp())) *
-+                                dispatch.width_tiles;
++      // One thread per host sample, draw_resolution_scale per EDRAM sample along each axis (whole
++      // tiles, so whole host samples at any scale), or per guest sample with guest_resolution.
++      DrawResolutionScale dump_scale =
++          guest_resolution ? DrawResolutionScale() : draw_resolution_scale();
++      uint32_t dump_samples_x = dump_scale.ScaleX(
++          (xenos::kEdramTileWidthSamples >> uint32_t(rt_key.Is64bpp())) * dispatch.width_tiles);
 +      uint32_t dump_samples_y =
-+          draw_resolution_scale_y() * xenos::kEdramTileHeightSamples * dispatch.height_tiles;
++          dump_scale.ScaleY(xenos::kEdramTileHeightSamples * dispatch.height_tiles);
 +      [compute dispatchThreadgroups:MTLSizeMake(
 +                                        (dump_samples_x + (kDumpSamplesPerGroupX - 1)) /
 +                                            kDumpSamplesPerGroupX,
@@ -12685,8 +13100,10 @@ index 0000000..388923e
 +  // Working with unsigned numbers for simplicity now, bitcasting to signed will
 +  // be done at texture fetch.
 +
-+  uint32_t tile_width_samples = xenos::kEdramTileWidthSamples * draw_resolution_scale_x();
-+  uint32_t tile_height_samples = xenos::kEdramTileHeightSamples * draw_resolution_scale_y();
++  // Host samples per EDRAM tile: whole numbers at any scale (120x24 at 3/2), and so are the halves
++  // and quarters below for 64bpp and MSAA, as the denominator divides 8.
++  uint32_t tile_width_samples = draw_resolution_scale().ScaleX(xenos::kEdramTileWidthSamples);
++  uint32_t tile_height_samples = draw_resolution_scale().ScaleY(xenos::kEdramTileHeightSamples);
 +
 +  // Split the destination pixel index into 32bpp tile and 32bpp-tile-relative
 +  // pixel index.
@@ -14487,15 +14904,18 @@ index 0000000..388923e
 +  // Windows, as of June 2022.
 +  spv::Id global_invocation_id = builder.createLoad(input_global_invocation_id, spv::NoPrecision);
 +  spv::Id rectangle_sample_x = builder.createCompositeExtract(global_invocation_id, type_uint, 0);
++  // In EDRAM samples of the buffer dumped to: host samples, or guest ones with guest_resolution.
++  DrawResolutionScale dump_scale =
++      key.guest_resolution ? DrawResolutionScale() : draw_resolution_scale();
 +  uint32_t tile_width =
-+      (xenos::kEdramTileWidthSamples >> uint32_t(format_is_64bpp)) * draw_resolution_scale_x();
++      dump_scale.ScaleX(xenos::kEdramTileWidthSamples >> uint32_t(format_is_64bpp));
 +  spv::Id const_tile_width = builder.makeUintConstant(tile_width);
 +  spv::Id rectangle_tile_index_x =
 +      builder.createBinOp(spv::OpUDiv, type_uint, rectangle_sample_x, const_tile_width);
 +  spv::Id tile_sample_x =
 +      builder.createBinOp(spv::OpUMod, type_uint, rectangle_sample_x, const_tile_width);
 +  spv::Id rectangle_sample_y = builder.createCompositeExtract(global_invocation_id, type_uint, 1);
-+  uint32_t tile_height = xenos::kEdramTileHeightSamples * draw_resolution_scale_y();
++  uint32_t tile_height = dump_scale.ScaleY(xenos::kEdramTileHeightSamples);
 +  spv::Id const_tile_height = builder.makeUintConstant(tile_height);
 +  spv::Id rectangle_tile_index_y =
 +      builder.createBinOp(spv::OpUDiv, type_uint, rectangle_sample_y, const_tile_height);
@@ -14585,6 +15005,25 @@ index 0000000..388923e
 +      spv::OpIAdd, type_uint,
 +      builder.createBinOp(spv::OpIMul, type_uint, const_tile_height, source_tile_index_y),
 +      tile_sample_y);
++  if (key.guest_resolution) {
++    // A guest sample reads the host sample at its centre: floor((x + 1/2) * scale).
++    DrawResolutionScale scale = draw_resolution_scale();
++    spv::Id const_uint_1 = builder.makeUintConstant(1);
++    spv::Id const_double_denominator = builder.makeUintConstant(2 * scale.denominator);
++    auto guest_to_host = [&](spv::Id guest, uint32_t numerator) {
++      spv::Id doubled_center = builder.createBinOp(
++          spv::OpIAdd, type_uint,
++          builder.createBinOp(spv::OpShiftLeftLogical, type_uint, guest, const_uint_1),
++          const_uint_1);
++      return builder.createBinOp(
++          spv::OpUDiv, type_uint,
++          builder.createBinOp(spv::OpIMul, type_uint, doubled_center,
++                              builder.makeUintConstant(numerator)),
++          const_double_denominator);
++    };
++    source_sample_x = guest_to_host(source_sample_x, scale.numerator_x);
++    source_sample_y = guest_to_host(source_sample_y, scale.numerator_y);
++  }
 +  // Get the source pixel coordinate and the sample index within the pixel.
 +  spv::Id source_pixel_x = source_sample_x, source_pixel_y = source_sample_y;
 +  spv::Id source_sample_id = spv::NoResult;
@@ -15392,10 +15831,10 @@ index 0000000..c2d1f96
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_texture_cache.h b/src/graphics/metal/metal_texture_cache.h
 new file mode 100644
-index 0000000..02d626a
+index 0000000..aee13b4
 --- /dev/null
 +++ b/src/graphics/metal/metal_texture_cache.h
-@@ -0,0 +1,267 @@
+@@ -0,0 +1,296 @@
 +/**
 + * @file        graphics/metal/metal_texture_cache.h
 + * @brief       Guest textures as Metal textures, loaded from the shared memory with compute shaders
@@ -15451,8 +15890,7 @@ index 0000000..02d626a
 +
 +  static std::unique_ptr<MetalTextureCache> Create(const RegisterFile& register_file,
 +                                                   MetalSharedMemory& shared_memory,
-+                                                   uint32_t draw_resolution_scale_x,
-+                                                   uint32_t draw_resolution_scale_y,
++                                                   DrawResolutionScale draw_resolution_scale,
 +                                                   MetalCommandProcessor& command_processor);
 +  ~MetalTextureCache();
 +
@@ -15484,10 +15922,24 @@ index 0000000..02d626a
 +  bool GetScaledResolveRange(uint32_t start_unscaled, uint32_t length_unscaled,
 +                             uint32_t length_scaled_alignment_log2, uint64_t& start_scaled_out,
 +                             uint64_t& length_scaled_out) const;
-+  // Resolves write here instead of the shared memory when drawing at a resolution scale: each byte
-+  // of the guest memory has draw_resolution_scale_x * draw_resolution_scale_y bytes here. Only the
-+  // pages written or read are backed by physical memory (see InitializeScaledResolveBuffer).
++  // Resolves write here instead of the shared memory when drawing at a whole resolution scale: each
++  // byte of the guest memory has draw_resolution_scale_x * draw_resolution_scale_y bytes here. Only
++  // the pages written or read are backed by physical memory (see InitializeScaledResolveBuffer).
++  // nil at a rational scale, which uses the scaled surfaces below.
 +  id<MTLBuffer> scaled_resolve_buffer() const { return scaled_resolve_buffer_; }
++
++  // At a rational draw resolution scale (3/2), where a guest byte has no whole number of bytes for
++  // the scaled resolve buffer's layout, a resolve that a texture may sample at the scale writes its
++  // rectangle at the host resolution to a surface of its own: laid out as a guest texture of the
++  // host size would be (tiled, the resolve's format and endianness), so the unscaled load shaders
++  // read it as such a texture. One surface per destination address, the latest resolve's.
++  // Returns the surface buffer for a resolve of width x height guest pixels (multiples of 8), made
++  // or resized as needed, and its row pitch in host texels (aligned to 32 for the tiling).
++  id<MTLBuffer> RequestRationalScaledSurface(uint32_t dest_base, uint32_t width, uint32_t height,
++                                             uint32_t bytes_per_texel, uint32_t& pitch_out);
++  // A resolve to the address that will not have a scaled surface (one textures load at the guest
++  // resolution): the older surface there is dropped.
++  void DropRationalScaledSurface(uint32_t dest_base) { rational_scaled_surfaces_.erase(dest_base); }
 +
 +  // gfx = hle (hle_native_resolves): right after a resolve invalidated its destination, copies the
 +  // resolved rectangle of the render target (source, at source_x and source_y) into each texture
@@ -15599,7 +16051,7 @@ index 0000000..02d626a
 +  }
 +
 +  MetalTextureCache(const RegisterFile& register_file, MetalSharedMemory& shared_memory,
-+                    uint32_t draw_resolution_scale_x, uint32_t draw_resolution_scale_y,
++                    DrawResolutionScale draw_resolution_scale,
 +                    MetalCommandProcessor& command_processor);
 +
 +  bool Initialize();
@@ -15638,6 +16090,22 @@ index 0000000..02d626a
 +  // Variants reading the scaled resolve buffer, for the shaders that have one.
 +  std::array<LoadPipeline, kLoadShaderCount> load_pipelines_scaled_{};
 +
++  // The surfaces of RequestRationalScaledSurface, by destination address. The guest size is the
++  // resolve's; a texture is loaded from the surface only with exactly that size and as many bytes
++  // per texel (any format of that size reads the same bits, as from the guest memory).
++  struct RationalScaledSurface {
++    id<MTLBuffer> buffer = nil;
++    uint32_t width = 0;
++    uint32_t height = 0;
++    uint32_t bytes_per_texel = 0;
++    uint32_t pitch = 0;
++  };
++  std::unordered_map<uint32_t, RationalScaledSurface> rational_scaled_surfaces_;
++  // The surface a texture resolved at a rational scale is loaded from, or nullptr: a 2D tiled
++  // texture of one level and slice, not in a packed mip tail, whose base is a surface's address and
++  // whose size and bytes per texel are the surface's.
++  const RationalScaledSurface* GetRationalScaledSurface(TextureKey key) const;
++
 +  // Reserved, not committed, virtual memory the scaled resolve buffer is created over.
 +  void* scaled_resolve_memory_ = nullptr;
 +  uint64_t scaled_resolve_buffer_size_ = 0;
@@ -15665,10 +16133,10 @@ index 0000000..02d626a
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_texture_cache.mm b/src/graphics/metal/metal_texture_cache.mm
 new file mode 100644
-index 0000000..b1b0942
+index 0000000..0de9164
 --- /dev/null
 +++ b/src/graphics/metal/metal_texture_cache.mm
-@@ -0,0 +1,1900 @@
+@@ -0,0 +1,1983 @@
 +/**
 + * @file        graphics/metal/metal_texture_cache.mm
 + * @brief       Guest textures as Metal textures, loaded from the shared memory with compute shaders
@@ -16087,11 +16555,9 @@ index 0000000..b1b0942
 +
 +std::unique_ptr<MetalTextureCache> MetalTextureCache::Create(
 +    const RegisterFile& register_file, MetalSharedMemory& shared_memory,
-+    uint32_t draw_resolution_scale_x, uint32_t draw_resolution_scale_y,
-+    MetalCommandProcessor& command_processor) {
-+  std::unique_ptr<MetalTextureCache> texture_cache(
-+      new MetalTextureCache(register_file, shared_memory, draw_resolution_scale_x,
-+                            draw_resolution_scale_y, command_processor));
++    DrawResolutionScale draw_resolution_scale, MetalCommandProcessor& command_processor) {
++  std::unique_ptr<MetalTextureCache> texture_cache(new MetalTextureCache(
++      register_file, shared_memory, draw_resolution_scale, command_processor));
 +  if (!texture_cache->Initialize()) {
 +    return nullptr;
 +  }
@@ -16100,10 +16566,9 @@ index 0000000..b1b0942
 +
 +MetalTextureCache::MetalTextureCache(const RegisterFile& register_file,
 +                                     MetalSharedMemory& shared_memory,
-+                                     uint32_t draw_resolution_scale_x,
-+                                     uint32_t draw_resolution_scale_y,
++                                     DrawResolutionScale draw_resolution_scale,
 +                                     MetalCommandProcessor& command_processor)
-+    : TextureCache(register_file, shared_memory, draw_resolution_scale_x, draw_resolution_scale_y),
++    : TextureCache(register_file, shared_memory, draw_resolution_scale),
 +      command_processor_(command_processor) {}
 +
 +MetalTextureCache::~MetalTextureCache() {
@@ -16169,7 +16634,8 @@ index 0000000..b1b0942
 +                                              uint32_t length_scaled_alignment_log2,
 +                                              uint64_t& start_scaled_out,
 +                                              uint64_t& length_scaled_out) const {
-+  if (!IsDrawResolutionScaled()) {
++  // The scaled resolve buffer exists at whole scales only.
++  if (!IsDrawResolutionScaled() || !draw_resolution_scale().IsWhole()) {
 +    return false;
 +  }
 +  if (length_unscaled == 0) {
@@ -16197,6 +16663,10 @@ index 0000000..b1b0942
 +bool MetalTextureCache::EnsureScaledResolveMemoryCommitted(uint32_t start_unscaled,
 +                                                           uint32_t length_unscaled,
 +                                                           uint32_t length_scaled_alignment_log2) {
++  // At a rational scale, textures load from the scaled surfaces, whole buffers made by the resolve.
++  if (!draw_resolution_scale().IsWhole()) {
++    return true;
++  }
 +  // The whole buffer is mapped, the pages get physical memory on first use: only the range needs
 +  // to be within the buffer.
 +  uint64_t start_scaled, length_scaled;
@@ -16205,9 +16675,63 @@ index 0000000..b1b0942
 +                               start_scaled, length_scaled);
 +}
 +
++id<MTLBuffer> MetalTextureCache::RequestRationalScaledSurface(uint32_t dest_base, uint32_t width,
++                                                              uint32_t height,
++                                                              uint32_t bytes_per_texel,
++                                                              uint32_t& pitch_out) {
++  // Tiled textures are stored in 32x32 texel tiles, so the pitch and the rows are whole tiles.
++  uint32_t pitch = rex::align(draw_resolution_scale().ScaleXCeil(width), UINT32_C(32));
++  uint32_t rows = rex::align(draw_resolution_scale().ScaleYCeil(height), UINT32_C(32));
++  NSUInteger size = NSUInteger(pitch) * rows * bytes_per_texel;
++  RationalScaledSurface& surface = rational_scaled_surfaces_[dest_base];
++  if (!surface.buffer || surface.buffer.length < size) {
++    surface.buffer = [command_processor_.device() newBufferWithLength:size
++                                                              options:MTLResourceStorageModePrivate];
++    if (!surface.buffer) {
++      rational_scaled_surfaces_.erase(dest_base);
++      return nil;
++    }
++    surface.buffer.label = [NSString stringWithFormat:@"Scaled surface 0x%08X", dest_base];
++  }
++  surface.width = width;
++  surface.height = height;
++  surface.bytes_per_texel = bytes_per_texel;
++  surface.pitch = pitch;
++  pitch_out = pitch;
++  return surface.buffer;
++}
++
++const MetalTextureCache::RationalScaledSurface* MetalTextureCache::GetRationalScaledSurface(
++    TextureKey key) const {
++  if (key.dimension != xenos::DataDimension::k2DOrStacked || key.depth_or_array_size_minus_1 ||
++      !key.tiled || key.mip_max_level) {
++    return nullptr;
++  }
++  auto it = rational_scaled_surfaces_.find(key.base_page << 12);
++  if (it == rational_scaled_surfaces_.end()) {
++    return nullptr;
++  }
++  const RationalScaledSurface& surface = it->second;
++  const FormatInfo* format_info = FormatInfo::Get(key.format);
++  if (format_info->block_width != 1 || format_info->block_height != 1 ||
++      format_info->bytes_per_block() != surface.bytes_per_texel ||
++      key.GetWidth() != surface.width || key.GetHeight() != surface.height) {
++    return nullptr;
++  }
++  // A base level in a packed mip tail is stored elsewhere in its tail.
++  if (key.packed_mips && key.GetGuestLayout().packed_level == 0) {
++    return nullptr;
++  }
++  return &surface;
++}
++
 +bool MetalTextureCache::IsScaledResolveSupportedForFormat(TextureKey key) const {
 +  if (!IsDrawResolutionScaled()) {
 +    return false;
++  }
++  // At a rational scale, only a texture with its own resolve's scaled surface.
++  if (!draw_resolution_scale().IsWhole()) {
++    return GetRationalScaledSurface(key) != nullptr;
 +  }
 +  const HostFormatPair& host_format_pair = GetHostFormatPair(key);
 +  bool host_format_is_signed;
@@ -16343,9 +16867,10 @@ index 0000000..b1b0942
 +  mark_load_shaders_needed(kHostFormatDXT5AUnaligned);
 +
 +  // Variants reading the scaled resolve buffer, for the formats render targets are resolved to
-+  // (block-compressed and subsampled formats are never resolve destinations).
++  // (block-compressed and subsampled formats are never resolve destinations). Whole scales only: at
++  // a rational scale, the unscaled shaders read the scaled surfaces.
 +  std::pair<const uint32_t*, size_t> load_shader_code_scaled[kLoadShaderCount] = {};
-+  if (IsDrawResolutionScaled()) {
++  if (IsDrawResolutionScaled() && draw_resolution_scale().IsWhole()) {
 +    load_shader_code_scaled[kLoadShaderIndex8bpb] =
 +        std::make_pair(shaders::texture_load_8bpb_scaled_cs,
 +                       sizeof(shaders::texture_load_8bpb_scaled_cs));
@@ -16436,7 +16961,8 @@ index 0000000..b1b0942
 +    }
 +  }
 +
-+  if (IsDrawResolutionScaled() && !InitializeScaledResolveBuffer()) {
++  if (IsDrawResolutionScaled() && draw_resolution_scale().IsWhole() &&
++      !InitializeScaledResolveBuffer()) {
 +    return false;
 +  }
 +
@@ -16749,8 +17275,10 @@ index 0000000..b1b0942
 +  key = texture->key();
 +  width_unscaled_out = key.GetWidth();
 +  height_unscaled_out = key.GetHeight();
-+  width_scaled_out = width_unscaled_out * (key.scaled_resolve ? draw_resolution_scale_x() : 1);
-+  height_scaled_out = height_unscaled_out * (key.scaled_resolve ? draw_resolution_scale_y() : 1);
++  width_scaled_out = key.scaled_resolve ? draw_resolution_scale().ScaleXCeil(width_unscaled_out)
++                                        : width_unscaled_out;
++  height_scaled_out = key.scaled_resolve ? draw_resolution_scale().ScaleYCeil(height_unscaled_out)
++                                         : height_unscaled_out;
 +  format_out = key.format;
 +  return view;
 +}
@@ -16839,8 +17367,11 @@ index 0000000..b1b0942
 +      break;
 +  }
 +  descriptor.pixelFormat = format;
-+  descriptor.width = key.GetWidth() * (key.scaled_resolve ? draw_resolution_scale_x() : 1);
-+  descriptor.height = key.GetHeight() * (key.scaled_resolve ? draw_resolution_scale_y() : 1);
++  // Rounded up at a rational scale, for an odd guest size.
++  descriptor.width =
++      key.scaled_resolve ? draw_resolution_scale().ScaleXCeil(key.GetWidth()) : key.GetWidth();
++  descriptor.height =
++      key.scaled_resolve ? draw_resolution_scale().ScaleYCeil(key.GetHeight()) : key.GetHeight();
 +  descriptor.mipmapLevelCount = key.mip_max_level + 1;
 +  // Views reinterpret the format between the signednesses and apply the guest swizzle.
 +  descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView;
@@ -17025,7 +17556,17 @@ index 0000000..b1b0942
 +  if (load_shader == kLoadShaderIndexUnknown) {
 +    return false;
 +  }
-+  const LoadPipeline& load_pipeline = texture_key.scaled_resolve
++  // A texture resolved at a rational scale is loaded from its resolve's scaled surface, read as an
++  // unscaled texture of the host size; at a whole scale, from the scaled resolve buffer.
++  const RationalScaledSurface* rational_surface = nullptr;
++  if (texture_key.scaled_resolve && !draw_resolution_scale().IsWhole()) {
++    rational_surface = GetRationalScaledSurface(texture_key);
++    if (!rational_surface) {
++      return false;
++    }
++  }
++  bool read_scaled_resolve_buffer = texture_key.scaled_resolve && !rational_surface;
++  const LoadPipeline& load_pipeline = read_scaled_resolve_buffer
 +                                          ? load_pipelines_scaled_[load_shader]
 +                                          : load_pipelines_[load_shader];
 +  if (!load_pipeline.pipeline) {
@@ -17038,8 +17579,10 @@ index 0000000..b1b0942
 +  xenos::DataDimension dimension = texture_key.dimension;
 +  bool is_3d = dimension == xenos::DataDimension::k3D;
 +  bool is_3d_tiling = is_3d || metal_texture.force_load_3d_tiling();
-+  uint32_t width = texture_key.GetWidth();
-+  uint32_t height = texture_key.GetHeight();
++  uint32_t width = rational_surface ? draw_resolution_scale().ScaleXCeil(texture_key.GetWidth())
++                                    : texture_key.GetWidth();
++  uint32_t height = rational_surface ? draw_resolution_scale().ScaleYCeil(texture_key.GetHeight())
++                                     : texture_key.GetHeight();
 +  uint32_t depth_or_array_size = texture_key.GetDepthOrArraySize();
 +  uint32_t depth = is_3d ? depth_or_array_size : 1;
 +  uint32_t array_size = is_3d ? 1 : depth_or_array_size;
@@ -17056,8 +17599,8 @@ index 0000000..b1b0942
 +  uint32_t level_stored_last = std::min(level_last, level_packed);
 +  // Textures resolved at the draw resolution scale have that many more texels, read from the scaled
 +  // resolve buffer.
-+  uint32_t texture_resolution_scale_x = texture_key.scaled_resolve ? draw_resolution_scale_x() : 1;
-+  uint32_t texture_resolution_scale_y = texture_key.scaled_resolve ? draw_resolution_scale_y() : 1;
++  uint32_t texture_resolution_scale_x = read_scaled_resolve_buffer ? draw_resolution_scale_x() : 1;
++  uint32_t texture_resolution_scale_y = read_scaled_resolve_buffer ? draw_resolution_scale_y() : 1;
 +  uint32_t texture_resolution_scale_area = texture_resolution_scale_x * texture_resolution_scale_y;
 +
 +  // The loop counter can mean two things depending on whether the packed mip tail is stored as
@@ -17144,7 +17687,10 @@ index 0000000..b1b0942
 +  uint64_t source_base_start = 0, source_mips_start = 0;
 +  if (level_first == 0) {
 +    uint64_t source_base_range;
-+    if (texture_key.scaled_resolve) {
++    if (rational_surface) {
++      source_base_start = 0;
++      source_base_range = rational_surface->buffer.length;
++    } else if (read_scaled_resolve_buffer) {
 +      if (!GetScaledResolveRange(texture_key.base_page << 12, metal_texture.GetGuestBaseSize(),
 +                                 source_length_alignment_log2, source_base_start,
 +                                 source_base_range)) {
@@ -17161,7 +17707,7 @@ index 0000000..b1b0942
 +  }
 +  if (level_last != 0) {
 +    uint64_t source_mips_range;
-+    if (texture_key.scaled_resolve) {
++    if (read_scaled_resolve_buffer) {
 +      if (!GetScaledResolveRange(texture_key.mip_page << 12, metal_texture.GetGuestMipsSize(),
 +                                 source_length_alignment_log2, source_mips_start,
 +                                 source_mips_range)) {
@@ -17176,7 +17722,8 @@ index 0000000..b1b0942
 +      }
 +    }
 +  }
-+  id<MTLBuffer> source_buffer = texture_key.scaled_resolve
++  id<MTLBuffer> source_buffer = rational_surface ? rational_surface->buffer
++                                : read_scaled_resolve_buffer
 +                                    ? scaled_resolve_buffer_
 +                                    : static_cast<MetalSharedMemory&>(shared_memory()).buffer();
 +
@@ -17219,6 +17766,10 @@ index 0000000..b1b0942
 +      // Shaders expect pitch in blocks for tiled textures.
 +      level_guest_pitch /= bytes_per_block;
 +      assert_zero(level_guest_pitch & (xenos::kTextureTileWidthHeight - 1));
++    }
++    if (rational_surface) {
++      // The surface's own pitch, in texels (one texel per block).
++      level_guest_pitch = rational_surface->pitch;
 +    }
 +    load_constants.guest_pitch_aligned = level_guest_pitch;
 +    load_constants.guest_z_stride_block_rows_aligned = level_guest_layout.z_slice_stride_block_rows;
@@ -17616,7 +18167,7 @@ index 0000000..b9bc2fb
 +
 +#undef CAMetalLayer
 diff --git a/src/graphics/pipeline/render_target/cache.cpp b/src/graphics/pipeline/render_target/cache.cpp
-index bd0019c..aa4af7e 100644
+index bd0019c..7572bdd 100644
 --- a/src/graphics/pipeline/render_target/cache.cpp
 +++ b/src/graphics/pipeline/render_target/cache.cpp
 @@ -13,6 +13,10 @@
@@ -17806,6 +18357,19 @@ index bd0019c..aa4af7e 100644
  
    auto rb_surface_info = regs.Get<reg::RB_SURFACE_INFO>();
    xenos::MsaaSamples msaa_samples = rb_surface_info.msaa_samples;
+@@ -441,9 +588,9 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
+       ((pitch_pixels << msaa_samples_x_log2) + (xenos::kEdramTileWidthSamples - 1)) /
+       xenos::kEdramTileWidthSamples;
+   if (!interlock_barrier_only) {
+-    uint32_t pitch_pixels_tile_aligned_scaled =
+-        pitch_tiles_at_32bpp * (xenos::kEdramTileWidthSamples >> msaa_samples_x_log2) *
+-        draw_resolution_scale_x();
++    // Whole tiles, so a whole number of host pixels at any scale.
++    uint32_t pitch_pixels_tile_aligned_scaled = draw_resolution_scale().ScaleX(
++        pitch_tiles_at_32bpp * (xenos::kEdramTileWidthSamples >> msaa_samples_x_log2));
+     uint32_t max_render_target_width = GetMaxRenderTargetWidth();
+     if (pitch_pixels_tile_aligned_scaled > max_render_target_width) {
+       // TODO(Triang3l): If really needed for some game on some device, clamp
 @@ -693,11 +840,52 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
    // draw with whatever contents currently are in the render target in this
    // case).
@@ -17873,7 +18437,54 @@ index bd0019c..aa4af7e 100644
    // If everything succeeded, update the used render targets.
    for (uint32_t i = 0; i < 1 + xenos::kMaxColorRenderTargets; ++i) {
      last_update_used_render_targets_[i] =
-@@ -1254,6 +1448,281 @@ bool RenderTargetCache::WouldOwnershipChangeRequireTransfers(RenderTargetKey des
+@@ -810,10 +1004,12 @@ uint32_t RenderTargetCache::GetRenderTargetHeight(uint32_t pitch_tiles_at_32bpp,
+   static_assert(!(xenos::kTexture2DCubeMaxWidthHeight % xenos::kEdramTileHeightSamples),
+                 "Maximum guest render target height is assumed to always be a multiple "
+                 "of an EDRAM tile height");
+-  uint32_t max_height_scaled = std::min(
+-      xenos::kTexture2DCubeMaxWidthHeight * draw_resolution_scale_y(), GetMaxRenderTargetHeight());
++  uint32_t max_height_scaled =
++      std::min(draw_resolution_scale().ScaleY(xenos::kTexture2DCubeMaxWidthHeight),
++               GetMaxRenderTargetHeight());
+   uint32_t msaa_samples_y_log2 = uint32_t(msaa_samples >= xenos::MsaaSamples::k2X);
+-  uint32_t tile_height_samples_scaled = xenos::kEdramTileHeightSamples * draw_resolution_scale_y();
++  uint32_t tile_height_samples_scaled =
++      draw_resolution_scale().ScaleY(xenos::kEdramTileHeightSamples);
+   tile_rows =
+       std::min(tile_rows, (max_height_scaled << msaa_samples_y_log2) / tile_height_samples_scaled);
+   assert_not_zero(tile_rows);
+@@ -837,13 +1033,14 @@ void RenderTargetCache::GetHostDepthStoreRectangleInfo(
+   rectangle_constant.y_pixels_div_8 = transfer_rectangle.y_pixels >> 3;
+   rectangle_constant.width_pixels_div_8_minus_1 = (transfer_rectangle.width_pixels >> 3) - 1;
+   rectangle_constant_out = rectangle_constant;
+-  // 1 thread group = 64x8 host samples.
+-  uint32_t pixel_size_x = draw_resolution_scale_x()
+-                          << uint32_t(msaa_samples >= xenos::MsaaSamples::k4X);
+-  uint32_t pixel_size_y = draw_resolution_scale_y()
+-                          << uint32_t(msaa_samples >= xenos::MsaaSamples::k2X);
+-  group_count_x_out = (transfer_rectangle.width_pixels * pixel_size_x + 63) >> 6;
+-  group_count_y_out = (transfer_rectangle.height_pixels * pixel_size_y) >> 3;
++  // 1 thread group = 64x8 host samples. The rectangle is in 8-pixel blocks, a whole number of host
++  // samples at any scale.
++  uint32_t width_samples = transfer_rectangle.width_pixels
++                           << uint32_t(msaa_samples >= xenos::MsaaSamples::k4X);
++  uint32_t height_samples = transfer_rectangle.height_pixels
++                            << uint32_t(msaa_samples >= xenos::MsaaSamples::k2X);
++  group_count_x_out = (draw_resolution_scale().ScaleX(width_samples) + 63) >> 6;
++  group_count_y_out = draw_resolution_scale().ScaleY(height_samples) >> 3;
+ }
+ 
+ void RenderTargetCache::GetResolveCopyRectanglesToDump(
+@@ -990,7 +1187,7 @@ bool RenderTargetCache::PrepareHostRenderTargetsResolveClear(
+   }
+   uint32_t pitch_pixels =
+       pitch_tiles_at_32bpp * (xenos::kEdramTileWidthSamples >> msaa_samples_x_log2);
+-  uint32_t pitch_pixels_scaled = pitch_pixels * draw_resolution_scale_x();
++  uint32_t pitch_pixels_scaled = draw_resolution_scale().ScaleX(pitch_pixels);
+   uint32_t max_render_target_width = GetMaxRenderTargetWidth();
+   if (pitch_pixels_scaled > max_render_target_width) {
+     // TODO(Triang3l): If really needed for some game on some device, clamp the
+@@ -1254,6 +1451,281 @@ bool RenderTargetCache::WouldOwnershipChangeRequireTransfers(RenderTargetKey des
    return false;
  }
  
@@ -18155,7 +18766,7 @@ index bd0019c..aa4af7e 100644
  void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_tiles_base_relative,
                                          uint32_t length_tiles,
                                          std::vector<Transfer>* transfers_append_out,
-@@ -1335,6 +1804,8 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
+@@ -1335,6 +1807,8 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
                       transfer_host_depth_source)) {
                // Extend the last transfer if, for example, transferring color,
                // but host depth is different.
@@ -18164,7 +18775,7 @@ index bd0019c..aa4af7e 100644
                transfers_append_out->back().end_tiles = transfer_end_tiles;
              } else {
                auto transfer_source_rt_it = render_targets_.find(transfer_source);
-@@ -1353,6 +1824,7 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
+@@ -1353,6 +1827,7 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
                        transfer_host_depth_source_rt_it != render_targets_.end()
                            ? transfer_host_depth_source_rt_it->second
                            : nullptr);
@@ -18173,7 +18784,7 @@ index bd0019c..aa4af7e 100644
                }
              }
 diff --git a/src/graphics/pipeline/shader/spirv_translator.cpp b/src/graphics/pipeline/shader/spirv_translator.cpp
-index d2ea876..64af756 100644
+index d2ea876..6592e71 100644
 --- a/src/graphics/pipeline/shader/spirv_translator.cpp
 +++ b/src/graphics/pipeline/shader/spirv_translator.cpp
 @@ -42,7 +42,8 @@ SpirvShaderTranslator::Features::Features(bool all)
@@ -18287,13 +18898,17 @@ index d2ea876..64af756 100644
  void SpirvShaderTranslator::ProcessExecInstructionBegin(const ParsedExecInstruction& instr) {
    UpdateExecConditionals(instr.type, instr.bool_constant_index, instr.condition);
  }
-@@ -2904,8 +2954,12 @@ void SpirvShaderTranslator::StartFragmentShaderBeforeMain() {
-       (draw_resolution_scale_x_ > 1 || draw_resolution_scale_y_ > 1 ||
+@@ -2901,11 +2951,15 @@ void SpirvShaderTranslator::StartFragmentShaderBeforeMain() {
+   Modification fragment_coordinates_modification = GetSpirvShaderModification();
+   bool memexport_resolution_scaled =
+       current_shader().memexport_eM_written() &&
+-      (draw_resolution_scale_x_ > 1 || draw_resolution_scale_y_ > 1 ||
++      (IsDrawResolutionScaledX() || IsDrawResolutionScaledY() ||
         fragment_coordinates_modification.pixel.sample_space_x_log2 ||
         fragment_coordinates_modification.pixel.sample_space_y_log2);
 +  // Moving the evaluation to the guest pixel center needs the host pixel position.
 +  bool guest_pixel_center = fragment_coordinates_modification.pixel.guest_pixel_center &&
-+                            (draw_resolution_scale_x_ > 1 || draw_resolution_scale_y_ > 1);
++                            (IsDrawResolutionScaledX() || IsDrawResolutionScaledY());
    if (edram_fragment_shader_interlock_ || param_gen_needed || memexport_resolution_scaled ||
 -      float24_depth_from_fragment_coordinates || alpha_to_coverage_possible) {
 +      float24_depth_from_fragment_coordinates || alpha_to_coverage_possible ||
@@ -18301,25 +18916,79 @@ index d2ea876..64af756 100644
      input_fragment_coordinates_ = builder_->createVariable(spv::NoPrecision, spv::StorageClassInput,
                                                             type_float4_, "gl_FragCoord");
      builder_->addDecoration(input_fragment_coordinates_, spv::DecorationBuiltIn,
-@@ -3171,6 +3225,43 @@ void SpirvShaderTranslator::StartFragmentShaderInMain() {
+@@ -3107,7 +3161,8 @@ void SpirvShaderTranslator::StartFragmentShaderInMain() {
+         draw_resolution_scale_x_ << memexport_modification.pixel.sample_space_x_log2,
+         draw_resolution_scale_y_ << memexport_modification.pixel.sample_space_y_log2};
+     uint32_t resolution_scaled_axes =
+-        uint32_t(memexport_scale[0] > 1) | (uint32_t(memexport_scale[1] > 1) << 1);
++        uint32_t(memexport_scale[0] > draw_resolution_scale_denominator_) |
++        (uint32_t(memexport_scale[1] > draw_resolution_scale_denominator_) << 1);
+     if (resolution_scaled_axes) {
+       assert_true(input_fragment_coordinates_ != spv::NoResult);
+       spv::Id memexport_allowed = spv::NoResult;
+@@ -3121,13 +3176,36 @@ void SpirvShaderTranslator::StartFragmentShaderInMain() {
+             builder_->createAccessChain(spv::StorageClassInput, input_fragment_coordinates_,
+                                         id_vector_temp_),
+             spv::NoPrecision);
+-        spv::Id position_mod = builder_->createBinOp(
+-            spv::OpUMod, type_uint_,
+-            builder_->createUnaryOp(spv::OpConvertFToU, type_uint_, position),
+-            builder_->makeUintConstant(memexport_scale[i]));
+-        spv::Id position_is_center =
+-            builder_->createBinOp(spv::OpIEqual, type_bool_, position_mod,
+-                                  builder_->makeUintConstant(memexport_scale[i] >> 1));
++        spv::Id position_is_center;
++        if (draw_resolution_scale_denominator_ == 1) {
++          spv::Id position_mod = builder_->createBinOp(
++              spv::OpUMod, type_uint_,
++              builder_->createUnaryOp(spv::OpConvertFToU, type_uint_, position),
++              builder_->makeUintConstant(memexport_scale[i]));
++          position_is_center =
++              builder_->createBinOp(spv::OpIEqual, type_bool_, position_mod,
++                                    builder_->makeUintConstant(memexport_scale[i] >> 1));
++        } else {
++          // A rational scale: the host pixel containing the center of its guest pixel,
++          // floor((floor(position / size) + 0.5) * size) == floor(position).
++          float size = GetGuestPixelSize(i, i ? memexport_modification.pixel.sample_space_y_log2
++                                              : memexport_modification.pixel.sample_space_x_log2);
++          spv::Id guest_pixel = builder_->createUnaryBuiltinCall(
++              type_float_, ext_inst_glsl_std_450_, GLSLstd450Floor,
++              builder_->createNoContractionBinOp(spv::OpFMul, type_float_, position,
++                                                 builder_->makeFloatConstant(1.0f / size)));
++          spv::Id center_host_pixel = builder_->createUnaryBuiltinCall(
++              type_float_, ext_inst_glsl_std_450_, GLSLstd450Floor,
++              builder_->createNoContractionBinOp(
++                  spv::OpFMul, type_float_,
++                  builder_->createNoContractionBinOp(spv::OpFAdd, type_float_, guest_pixel,
++                                                     builder_->makeFloatConstant(0.5f)),
++                  builder_->makeFloatConstant(size)));
++          position_is_center = builder_->createBinOp(
++              spv::OpFOrdEqual, type_bool_, center_host_pixel,
++              builder_->createUnaryBuiltinCall(type_float_, ext_inst_glsl_std_450_,
++                                               GLSLstd450Floor, position));
++        }
+         memexport_allowed = memexport_allowed != spv::NoResult
+                                 ? builder_->createBinOp(spv::OpLogicalAnd, type_bool_,
+                                                         memexport_allowed, position_is_center)
+@@ -3171,6 +3249,43 @@ void SpirvShaderTranslator::StartFragmentShaderInMain() {
  
    uint32_t param_gen_interpolator = GetPsParamGenInterpolator();
  
 +  // Host pixels per guest pixel along each axis, and with guest_pixel_center, the offset from the
 +  // center of this host pixel to the center of its guest pixel.
 +  Modification guest_pixel_modification = GetSpirvShaderModification();
-+  uint32_t guest_pixel_size_x = draw_resolution_scale_x_
-+                                << guest_pixel_modification.pixel.sample_space_x_log2;
-+  uint32_t guest_pixel_size_y = draw_resolution_scale_y_
-+                                << guest_pixel_modification.pixel.sample_space_y_log2;
++  float guest_pixel_size_x =
++      GetGuestPixelSize(0, guest_pixel_modification.pixel.sample_space_x_log2);
++  float guest_pixel_size_y =
++      GetGuestPixelSize(1, guest_pixel_modification.pixel.sample_space_y_log2);
 +  bool guest_pixel_center = guest_pixel_modification.pixel.guest_pixel_center &&
-+                            (draw_resolution_scale_x_ > 1 || draw_resolution_scale_y_ > 1);
++                            (IsDrawResolutionScaledX() || IsDrawResolutionScaledY());
 +  spv::Id guest_pixel_center_offsets[2] = {spv::NoResult, spv::NoResult};
 +  if (guest_pixel_center) {
 +    assert_true(input_fragment_coordinates_ != spv::NoResult);
 +    for (uint32_t i = 0; i < 2; ++i) {
 +      // (floor(position / size) + 0.5) * size - position.
-+      float guest_pixel_size = float(i ? guest_pixel_size_y : guest_pixel_size_x);
++      float guest_pixel_size = i ? guest_pixel_size_y : guest_pixel_size_x;
 +      id_vector_temp_.clear();
 +      id_vector_temp_.push_back(builder_->makeIntConstant(int(i)));
 +      spv::Id position = builder_->createLoad(
@@ -18345,7 +19014,7 @@ index d2ea876..64af756 100644
    // Zero general-purpose registers to prevent crashes when the game
    // references them after only initializing them conditionally, and copy
    // interpolants to GPRs.
-@@ -3179,14 +3270,32 @@ void SpirvShaderTranslator::StartFragmentShaderInMain() {
+@@ -3179,14 +3294,32 @@ void SpirvShaderTranslator::StartFragmentShaderInMain() {
      if (i == param_gen_interpolator) {
        continue;
      }
@@ -18384,10 +19053,19 @@ index d2ea876..64af756 100644
    }
  
    // Pixel parameters.
-@@ -3224,6 +3333,11 @@ void SpirvShaderTranslator::StartFragmentShaderInMain() {
+@@ -3218,12 +3351,16 @@ void SpirvShaderTranslator::StartFragmentShaderInMain() {
+             builder_->createAccessChain(spv::StorageClassInput, input_fragment_coordinates_,
+                                         id_vector_temp_),
+             spv::NoPrecision));
+-    uint32_t param_gen_scale_x = draw_resolution_scale_x_
+-                                 << modification.pixel.sample_space_x_log2;
+-    if (param_gen_scale_x > 1) {
++    float param_gen_scale_x = GetGuestPixelSize(0, modification.pixel.sample_space_x_log2);
++    if (param_gen_scale_x > 1.0f) {
        param_gen_x = builder_->createNoContractionBinOp(
            spv::OpFMul, type_float_, param_gen_x,
-           builder_->makeFloatConstant(1.0f / float(param_gen_scale_x)));
+-          builder_->makeFloatConstant(1.0f / float(param_gen_scale_x)));
++          builder_->makeFloatConstant(1.0f / param_gen_scale_x));
 +      // With guest_pixel_center, the guest pixel itself.
 +      if (guest_pixel_center) {
 +        param_gen_x = builder_->createUnaryBuiltinCall(type_float_, ext_inst_glsl_std_450_,
@@ -18396,10 +19074,19 @@ index d2ea876..64af756 100644
      }
      param_gen_x = builder_->createUnaryBuiltinCall(type_float_, ext_inst_glsl_std_450_,
                                                     GLSLstd450FAbs, param_gen_x);
-@@ -3262,6 +3376,10 @@ void SpirvShaderTranslator::StartFragmentShaderInMain() {
+@@ -3256,12 +3393,15 @@ void SpirvShaderTranslator::StartFragmentShaderInMain() {
+             builder_->createAccessChain(spv::StorageClassInput, input_fragment_coordinates_,
+                                         id_vector_temp_),
+             spv::NoPrecision));
+-    uint32_t param_gen_scale_y = draw_resolution_scale_y_
+-                                 << modification.pixel.sample_space_y_log2;
+-    if (param_gen_scale_y > 1) {
++    float param_gen_scale_y = GetGuestPixelSize(1, modification.pixel.sample_space_y_log2);
++    if (param_gen_scale_y > 1.0f) {
        param_gen_y = builder_->createNoContractionBinOp(
            spv::OpFMul, type_float_, param_gen_y,
-           builder_->makeFloatConstant(1.0f / float(param_gen_scale_y)));
+-          builder_->makeFloatConstant(1.0f / float(param_gen_scale_y)));
++          builder_->makeFloatConstant(1.0f / param_gen_scale_y));
 +      if (guest_pixel_center) {
 +        param_gen_y = builder_->createUnaryBuiltinCall(type_float_, ext_inst_glsl_std_450_,
 +                                                       GLSLstd450Floor, param_gen_y);
@@ -18408,7 +19095,7 @@ index d2ea876..64af756 100644
      param_gen_y = builder_->createUnaryBuiltinCall(type_float_, ext_inst_glsl_std_450_,
                                                     GLSLstd450FAbs, param_gen_y);
 diff --git a/src/graphics/pipeline/shader/spirv_translator_fetch.cpp b/src/graphics/pipeline/shader/spirv_translator_fetch.cpp
-index 9ce3bb4..f590aca 100644
+index 9ce3bb4..766dc1c 100644
 --- a/src/graphics/pipeline/shader/spirv_translator_fetch.cpp
 +++ b/src/graphics/pipeline/shader/spirv_translator_fetch.cpp
 @@ -691,7 +691,8 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
@@ -18432,6 +19119,35 @@ index 9ce3bb4..f590aca 100644
            // The size is not needed for face ID offset.
            size_needed_components &= 0b0011;
            break;
+@@ -975,7 +980,7 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
+     }
+     spv::Id texture_resolution_scaled = spv::NoResult;
+     uint32_t revert_resolution_scale_axes =
+-        uint32_t(draw_resolution_scale_x_ > 1) | (uint32_t(draw_resolution_scale_y_ > 1) << 1);
++        uint32_t(IsDrawResolutionScaledX()) | (uint32_t(IsDrawResolutionScaledY()) << 1);
+     spv::Id const_texture_resolution_scale[] = {spv::NoResult, spv::NoResult};
+     spv::Id const_texture_resolution_scale_reciprocal[] = {spv::NoResult, spv::NoResult};
+     if (revert_resolution_scale_axes) {
+@@ -992,15 +997,15 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
+           const_uint_0_);
+       if (revert_resolution_scale_axes & 0b001) {
+         const_texture_resolution_scale[0] =
+-            builder_->makeFloatConstant(float(draw_resolution_scale_x_));
++            builder_->makeFloatConstant(GetGuestPixelSize(0, 0));
+         const_texture_resolution_scale_reciprocal[0] =
+-            builder_->makeFloatConstant(1.0f / float(draw_resolution_scale_x_));
++            builder_->makeFloatConstant(1.0f / GetGuestPixelSize(0, 0));
+       }
+       if (revert_resolution_scale_axes & 0b010) {
+         const_texture_resolution_scale[1] =
+-            builder_->makeFloatConstant(float(draw_resolution_scale_y_));
++            builder_->makeFloatConstant(GetGuestPixelSize(1, 0));
+         const_texture_resolution_scale_reciprocal[1] =
+-            builder_->makeFloatConstant(1.0f / float(draw_resolution_scale_y_));
++            builder_->makeFloatConstant(1.0f / GetGuestPixelSize(1, 0));
+       }
+     }
+ 
 @@ -1409,8 +1414,7 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
              builder_->createUnaryOp(spv::OpLogicalNot, type_bool_, is_all_signed);
  
@@ -18658,7 +19374,7 @@ index e472251..21f81dc 100644
  
  void ShaderTranslator::TranslateControlFlowInstruction(const ControlFlowInstruction& cf) {
 diff --git a/src/graphics/pipeline/texture/cache.cpp b/src/graphics/pipeline/texture/cache.cpp
-index 76f5600..aa1de3f 100644
+index 76f5600..2bf7aa6 100644
 --- a/src/graphics/pipeline/texture/cache.cpp
 +++ b/src/graphics/pipeline/texture/cache.cpp
 @@ -19,6 +19,7 @@
@@ -18683,13 +19399,64 @@ index 76f5600..aa1de3f 100644
  REXCVAR_DEFINE_BOOL(pre_mask_resolve_l2_block, true, "GPU",
                      "Pre-mask scaled resolve L2 blocks to the write range before iterating");
  
-@@ -249,6 +257,18 @@ bool TextureCache::GetConfigDrawResolutionScale(uint32_t& x_out, uint32_t& y_out
-   return clamped_x == config_x && clamped_y == config_y;
+@@ -205,17 +213,16 @@ const TextureCache::LoadShaderInfo TextureCache::load_shader_info_[kLoadShaderCo
+ };
+ 
+ TextureCache::TextureCache(const RegisterFile& register_file, SharedMemory& shared_memory,
+-                           uint32_t draw_resolution_scale_x, uint32_t draw_resolution_scale_y)
++                           DrawResolutionScale draw_resolution_scale)
+     : register_file_(register_file),
+       shared_memory_(shared_memory),
+-      draw_resolution_scale_x_(draw_resolution_scale_x),
+-      draw_resolution_scale_y_(draw_resolution_scale_y) {
+-  assert_true(draw_resolution_scale_x >= 1);
+-  assert_true(draw_resolution_scale_x <= kMaxDrawResolutionScaleAlongAxis);
+-  assert_true(draw_resolution_scale_y >= 1);
+-  assert_true(draw_resolution_scale_y <= kMaxDrawResolutionScaleAlongAxis);
+-
+-  if (draw_resolution_scale_x > 1 || draw_resolution_scale_y > 1) {
++      draw_resolution_scale_(draw_resolution_scale) {
++  assert_true(draw_resolution_scale.x() >= 1.0f);
++  assert_true(draw_resolution_scale.x() <= float(kMaxDrawResolutionScaleAlongAxis));
++  assert_true(draw_resolution_scale.y() >= 1.0f);
++  assert_true(draw_resolution_scale.y() <= float(kMaxDrawResolutionScaleAlongAxis));
++
++  if (IsDrawResolutionScaled()) {
+     constexpr uint32_t kScaledResolvePageDwordCount = SharedMemory::kBufferSize / 4096 / 32;
+     scaled_resolve_pages_ = std::unique_ptr<uint32_t[]>(new uint32_t[kScaledResolvePageDwordCount]);
+     std::memset(scaled_resolve_pages_.get(), 0, kScaledResolvePageDwordCount * sizeof(uint32_t));
+@@ -233,7 +240,12 @@ TextureCache::~TextureCache() {
+   }
  }
  
+-bool TextureCache::GetConfigDrawResolutionScale(uint32_t& x_out, uint32_t& y_out) {
++namespace {
++// The configured numerators of the draw resolution scale (draw_resolution_scale_x and _y, or
++// resolution_scale), clamped to kMaxDrawResolutionScaleAlongAxis; false if clamped.
++bool GetConfigDrawResolutionScaleNumerators(uint32_t& x_out, uint32_t& y_out) {
++  constexpr uint32_t kMaxDrawResolutionScaleAlongAxis =
++      TextureCache::kMaxDrawResolutionScaleAlongAxis;
+   uint32_t shared_scale = uint32_t(std::max(INT32_C(1), REXCVAR_GET(resolution_scale)));
+   bool use_shared_scale = rex::cvar::HasNonDefaultValue("resolution_scale");
+   uint32_t config_x = use_shared_scale && !rex::cvar::HasNonDefaultValue("draw_resolution_scale_x")
+@@ -248,6 +260,28 @@ bool TextureCache::GetConfigDrawResolutionScale(uint32_t& x_out, uint32_t& y_out
+   y_out = clamped_y;
+   return clamped_x == config_x && clamped_y == config_y;
+ }
++}  // namespace
++
++bool TextureCache::GetConfigDrawResolutionScale(uint32_t& x_out, uint32_t& y_out) {
++  // The whole part of a rational scale (1 for 3/2): the backends taking a whole scale draw at it.
++  DrawResolutionScale scale;
++  bool within_limits = GetConfigDrawResolutionScale(scale);
++  x_out = std::max(scale.numerator_x / scale.denominator, UINT32_C(1));
++  y_out = std::max(scale.numerator_y / scale.denominator, UINT32_C(1));
++  return within_limits;
++}
++
 +bool TextureCache::GetConfigDrawResolutionScale(DrawResolutionScale& scale_out) {
 +  uint32_t numerator_x, numerator_y;
-+  bool within_limits = GetConfigDrawResolutionScale(numerator_x, numerator_y);
++  bool within_limits = GetConfigDrawResolutionScaleNumerators(numerator_x, numerator_y);
 +  uint32_t denominator = uint32_t(std::max(INT32_C(1), REXCVAR_GET(draw_resolution_scale_denominator)));
 +  if (DrawResolutionScale::kMaxDenominator % denominator) {
 +    denominator = 1;
@@ -18698,11 +19465,23 @@ index 76f5600..aa1de3f 100644
 +  scale_out = DrawResolutionScale::Make(numerator_x, numerator_y, denominator);
 +  return within_limits;
 +}
-+
+ 
  void TextureCache::ClearCache() {
    DestroyAllTextures();
- }
-@@ -349,6 +369,39 @@ void TextureCache::MarkRangeAsResolved(uint32_t start_unscaled, uint32_t length_
+@@ -259,9 +293,9 @@ void TextureCache::CompletedSubmissionUpdated(uint64_t completed_submission_inde
+   // texture_cache_memory_limit_render_to_texture is assumed to be included in
+   // texture_cache_memory_limit_soft and texture_cache_memory_limit_hard, at 1x,
+   // so subtracting 1 from the scale.
+-  uint32_t limit_scaled_resolve_add_mb =
+-      REXCVAR_GET(texture_cache_memory_limit_render_to_texture) *
+-      (draw_resolution_scale_x() * draw_resolution_scale_y() - 1);
++  uint32_t limit_scaled_resolve_add_mb = uint32_t(
++      float(REXCVAR_GET(texture_cache_memory_limit_render_to_texture)) *
++      (draw_resolution_scale().x() * draw_resolution_scale().y() - 1.0f));
+   uint32_t limit_soft_mb =
+       REXCVAR_GET(texture_cache_memory_limit_soft) + limit_scaled_resolve_add_mb;
+   uint32_t limit_hard_mb =
+@@ -349,6 +383,39 @@ void TextureCache::MarkRangeAsResolved(uint32_t start_unscaled, uint32_t length_
    shared_memory().RangeWrittenByGpu(start_unscaled, length_unscaled);
  }
  
@@ -18742,7 +19521,19 @@ index 76f5600..aa1de3f 100644
  uint32_t TextureCache::GuestToHostSwizzle(uint32_t guest_swizzle, uint32_t host_format_swizzle) {
    uint32_t host_swizzle = 0;
    for (uint32_t i = 0; i < 4; ++i) {
-@@ -877,9 +930,25 @@ TextureCache::Texture* TextureCache::FindOrCreateTexture(TextureKey key) {
+@@ -780,8 +847,9 @@ TextureCache::Texture* TextureCache::FindOrCreateTexture(TextureKey key) {
+     host_width_out = key.GetWidth();
+     host_height_out = key.GetHeight();
+     if (key.scaled_resolve) {
+-      host_width_out *= draw_resolution_scale_x();
+-      host_height_out *= draw_resolution_scale_y();
++      // Rounded up at a rational scale, for an odd guest size.
++      host_width_out = draw_resolution_scale().ScaleXCeil(host_width_out);
++      host_height_out = draw_resolution_scale().ScaleYCeil(host_height_out);
+     }
+     host_depth_or_array_size_out = key.GetDepthOrArraySize();
+   };
+@@ -877,9 +945,25 @@ TextureCache::Texture* TextureCache::FindOrCreateTexture(TextureKey key) {
    }
    COUNT_profile_set("gpu/texture_cache/textures", textures_.size());
    texture->LogAction("Created");
@@ -18846,6 +19637,103 @@ index ec756d3..6e16b00 100644
  #if REX_HAS_D3D12
    if (backend == "any" || backend == "d3d12") {
      return new rex::graphics::d3d12::D3D12GraphicsSystem();
+diff --git a/src/graphics/util/draw.cpp b/src/graphics/util/draw.cpp
+index 305380e..ac54e34 100644
+--- a/src/graphics/util/draw.cpp
++++ b/src/graphics/util/draw.cpp
+@@ -161,14 +161,15 @@ bool IsPixelShaderNeededWithRasterization(const Shader& shader, const RegisterFi
+   return false;
+ }
+ 
+-void GetHostViewportInfo(const RegisterFile& regs, uint32_t draw_resolution_scale_x,
+-                         uint32_t draw_resolution_scale_y, bool origin_bottom_left, uint32_t x_max,
+-                         uint32_t y_max, bool allow_reverse_z,
+-                         reg::RB_DEPTHCONTROL normalized_depth_control, bool convert_z_to_float24,
+-                         bool full_float24_in_0_to_1, bool pixel_shader_writes_depth,
+-                         ViewportInfo& viewport_info_out) {
+-  assert_not_zero(draw_resolution_scale_x);
+-  assert_not_zero(draw_resolution_scale_y);
++void GetHostViewportInfo(const RegisterFile& regs, DrawResolutionScale draw_resolution_scale,
++                         bool origin_bottom_left, uint32_t x_max, uint32_t y_max,
++                         bool allow_reverse_z, reg::RB_DEPTHCONTROL normalized_depth_control,
++                         bool convert_z_to_float24, bool full_float24_in_0_to_1,
++                         bool pixel_shader_writes_depth, ViewportInfo& viewport_info_out) {
++  // Host pixels per guest pixel: numerator / denominator along each axis.
++  const uint32_t draw_resolution_scale_numerator[] = {draw_resolution_scale.numerator_x,
++                                                      draw_resolution_scale.numerator_y};
++  const uint32_t draw_resolution_scale_denominator = draw_resolution_scale.denominator;
+ 
+   // A vertex position goes the following path:
+   //
+@@ -329,7 +330,9 @@ void GetHostViewportInfo(const RegisterFile& regs, uint32_t draw_resolution_scal
+ 
+   // The maximum value is at least the maximum host render target size anyway -
+   // and a guest pixel is always treated as a whole with resolution scaling.
+-  uint32_t xy_max_unscaled[] = {x_max / draw_resolution_scale_x, y_max / draw_resolution_scale_y};
++  uint32_t xy_max_unscaled[] = {
++      x_max * draw_resolution_scale_denominator / draw_resolution_scale_numerator[0],
++      y_max * draw_resolution_scale_denominator / draw_resolution_scale_numerator[1]};
+   assert_not_zero(xy_max_unscaled[0]);
+   assert_not_zero(xy_max_unscaled[1]);
+ 
+@@ -347,8 +350,9 @@ void GetHostViewportInfo(const RegisterFile& regs, uint32_t draw_resolution_scal
+       viewport_info_out.xy_offset[i] = 0;
+       uint32_t extent_axis_unscaled =
+           std::min(xenos::kTexture2DCubeMaxWidthHeight, xy_max_unscaled[i]);
+-      viewport_info_out.xy_extent[i] =
+-          extent_axis_unscaled * (i ? draw_resolution_scale_y : draw_resolution_scale_x);
++      // Exact at 3/2 too: the extent is the 8192 maximum or a whole number of host pixels.
++      viewport_info_out.xy_extent[i] = i ? draw_resolution_scale.ScaleYCeil(extent_axis_unscaled)
++                                         : draw_resolution_scale.ScaleXCeil(extent_axis_unscaled);
+       float extent_axis_unscaled_float = float(extent_axis_unscaled);
+       float pixels_to_ndc_axis = 2.0f / extent_axis_unscaled_float;
+       ndc_scale[i] = scale_xy[i] * pixels_to_ndc_axis;
+@@ -373,7 +377,6 @@ void GetHostViewportInfo(const RegisterFile& regs, uint32_t draw_resolution_scal
+       // vertices if we did flooring in host pixels. Instead of flooring, also
+       // doing truncation for simplicity - since maxing with 0 is done anyway
+       // (we only return viewports in the positive quarter-plane).
+-      uint32_t axis_resolution_scale = i ? draw_resolution_scale_y : draw_resolution_scale_x;
+       float offset_axis = offset_base_xy[i] + offset_add_xy[i];
+       float scale_axis = scale_xy[i];
+       float scale_axis_abs = std::abs(scale_xy[i]);
+@@ -383,10 +386,35 @@ void GetHostViewportInfo(const RegisterFile& regs, uint32_t draw_resolution_scal
+       uint32_t axis_1_int =
+           uint32_t(rex::clamp_float(offset_axis + scale_axis_abs, 0.0f, axis_max_unscaled_float));
+       uint32_t axis_extent_int = axis_1_int - axis_0_int;
+-      viewport_info_out.xy_offset[i] = axis_0_int * axis_resolution_scale;
+-      viewport_info_out.xy_extent[i] = axis_extent_int * axis_resolution_scale;
+       float ndc_scale_axis;
+       float ndc_offset_axis;
++      if (draw_resolution_scale_denominator != 1) {
++        // A rational scale: the edges rounded to the nearest host pixel (half up), and the guest
++        // position mapped onto those host pixels exactly, as host pixels.
++        uint32_t numerator = draw_resolution_scale_numerator[i];
++        uint32_t denominator = draw_resolution_scale_denominator;
++        uint32_t host_0 = (2 * axis_0_int * numerator + denominator) / (2 * denominator);
++        uint32_t host_1 = (2 * axis_1_int * numerator + denominator) / (2 * denominator);
++        uint32_t host_extent = host_1 - host_0;
++        viewport_info_out.xy_offset[i] = host_0;
++        viewport_info_out.xy_extent[i] = host_extent;
++        if (axis_extent_int && host_extent) {
++          float scale = float(numerator) / float(denominator);
++          float host_extent_float = float(host_extent);
++          ndc_scale_axis = scale_axis * scale * 2.0f / host_extent_float;
++          ndc_offset_axis = (offset_axis * scale - (float(host_0) + host_extent_float * 0.5f)) *
++                            2.0f / host_extent_float;
++        } else {
++          ndc_scale_axis = 1.0f;
++          ndc_offset_axis = 0.0f;
++        }
++        ndc_scale[i] = ndc_scale_axis;
++        ndc_offset[i] = ndc_offset_axis;
++        continue;
++      }
++      uint32_t axis_resolution_scale = draw_resolution_scale_numerator[i];
++      viewport_info_out.xy_offset[i] = axis_0_int * axis_resolution_scale;
++      viewport_info_out.xy_extent[i] = axis_extent_int * axis_resolution_scale;
+       if (axis_extent_int) {
+         // Rescale from the old bounds to the new ones, and also apply the sign.
+         // If the new bounds are smaller than the old, for instance, we're
 diff --git a/src/graphics/util/draw_extent_estimator.cpp b/src/graphics/util/draw_extent_estimator.cpp
 index 3027dc8..42b4c9c 100644
 --- a/src/graphics/util/draw_extent_estimator.cpp
