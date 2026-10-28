@@ -584,6 +584,7 @@ code, kbd {
 .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 22px; }
 
 .field { display: grid; gap: 6px; }
+.field[hidden] { display: none; }
 .field > span {
   display: flex;
   justify-content: space-between;

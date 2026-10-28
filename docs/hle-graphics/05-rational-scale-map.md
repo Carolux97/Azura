@@ -1,5 +1,13 @@
 # Rational draw resolution scales: what assumes a whole number (map, for review)
 
+Status: implemented on the Metal backend (card 101), with 1920x1080 in the Video menu and the
+launcher on macOS. It needs gfx = hle (a rational scale falls back to its whole part with pm4).
+Differences from the proposals below: a resolve textures sample at the scale writes a scaled
+surface of its own (laid out as a guest texture of the host size, which the unscaled load shaders
+read) instead of copying into the textures; resolves the native path does not handle are dumped
+at the guest resolution (each guest sample from the host pixel at its center) to an EDRAM buffer
+of that size and copied by the unscaled shaders, and their textures load at the guest resolution.
+
 Phase (a) of option 4 in [04-full-hle-design.md](04-full-hle-design.md): every place on the macOS
 path (the shared render target, texture and draw code, the Metal backend, and the XSC and SPIR-V
 shader translators) that uses the draw resolution scale, what it assumes, and what a scale of 3/2

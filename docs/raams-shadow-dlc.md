@@ -399,7 +399,7 @@ same: `GearPawn_LocustEliteBoomerFlailBase`, `Turret_SatelliteHODBase`,
 ### Menu and launcher
 
 - The campaign menu's DLC option (`CampaignDLC`, greyed out and "Coming Soon!" on the disc) shows
-  the add-on's name. Without the add-on it stays greyed out, with "(not installed)". With it
+  the add-on's name. Without the add-on it stays greyed out and reads "Not Installed". With it
   (`--dlc_campaign=true`) it opens the standard campaign choices, and the runtime starts chapter
   31 when the travel names a chapter of the main campaign.
 - The launcher installs the player's package (`azura --install_content=<package>`, through the
