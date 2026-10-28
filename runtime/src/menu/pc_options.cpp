@@ -28,9 +28,10 @@ REXCVAR_DEFINE_BOOL(motion_blur, true, "Azura/Graphics",
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_STRING(render_resolution, "auto", "Azura/Graphics",
                       "Resolution the game is drawn at: auto (chosen for this computer), 1280x720 (the "
-                      "Xbox 360's), 2560x1440 or 3840x2160. Sets draw_resolution_scale_x/y and the "
-                      "texture cache limits when the game starts")
-    .allowed({"auto", "1280x720", "2560x1440", "3840x2160"})
+                      "Xbox 360's), 1920x1080 (macOS only, with gfx = hle; elsewhere 1280x720), "
+                      "2560x1440 or 3840x2160. Sets the draw resolution scale and the texture cache "
+                      "limits when the game starts")
+    .allowed({"auto", "1280x720", "1920x1080", "2560x1440", "3840x2160"})
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_DOUBLE(upscaling_sharpness, 0.0, "Azura/Graphics",
                       "Extra sharpening of the image scaling effects that sharpen (AMD CAS, and AMD FSR 1 "
@@ -113,6 +114,16 @@ struct Option {
   float slider_min = 0, slider_max = 0, slider_step = 0;
 };
 
+// The render resolutions the Video menu offers, in order. 1920x1080 is a draw resolution scale of
+// 3/2, which only the Metal renderer draws (macOS); Vulkan draws its whole part, 1280x720.
+std::vector<const char*> RenderResolutionChoices() {
+#if defined(__APPLE__)
+  return {"auto", "1280x720", "1920x1080", "2560x1440", "3840x2160"};
+#else
+  return {"auto", "1280x720", "2560x1440", "3840x2160"};
+#endif
+}
+
 // The upscaling effects present_effect accepts in this build of the SDK, in menu order. Others it
 // may accept (the experimental temporal FSR) are not offered. The menu shows the ones the running
 // presenter draws (ChoicesOf).
@@ -168,9 +179,10 @@ const std::vector<Option>& Options() {
       // Sensitivity (it has its own, 368, 59 and 60) and Voice Via Speakers.
       {kVideoCategory, 12, Label::kAnisotropic, "anisotropic_override", Kind::kChoice, 13, 2, {"0", "3", "5"}},
       // Lists of our own too: the resolution's value names include "Automatic" in the player's
-      // language, and the upscaling values depend on the platform (UpscalingChoices).
+      // language, and the resolution and upscaling values depend on the platform
+      // (RenderResolutionChoices, UpscalingChoices).
       {kVideoCategory, 13, Label::kRenderResolution, "render_resolution", Kind::kChoice, 9108, -1,
-       {"auto", "1280x720", "2560x1440", "3840x2160"}},
+       RenderResolutionChoices()},
       // Right above the sharpness row, which belongs to it.
       {kVideoCategory, 14, Label::kUpscaling, "present_effect", Kind::kChoice, 9107, -1, UpscalingChoices()},
       // Applies while the game runs, so the player sees the sharpening change (ApplyUpscalingSharpness).
@@ -886,9 +898,16 @@ bool PcOptionValueNames(int psid, std::vector<std::u16string>& names) {
       for (const char* corner : TextsFor(language).corners) names.push_back(CoalescedString::FromUtf8(corner).text);
     }
     if (option.label == Label::kRenderResolution) {
+      // "Automatic" in the player's language, then the sizes as "1920 × 1080".
       const std::string language = PlayerLanguage();
-      names = {CoalescedString::FromUtf8(TextsFor(language).automatic).text, u"1280 × 720", u"2560 × 1440",
-               u"3840 × 2160"};
+      for (const char* resolution : ChoicesOf(option)) {
+        std::string value = resolution;
+        size_t x = value.find('x');
+        std::string name = x == std::string::npos
+                               ? std::string(TextsFor(language).automatic)
+                               : value.substr(0, x) + " × " + value.substr(x + 1);
+        names.push_back(CoalescedString::FromUtf8(name.c_str()).text);
+      }
     }
     if (option.label == Label::kUpscaling) {
       const std::string language = PlayerLanguage();
@@ -1369,16 +1388,21 @@ int AutoResolutionScale() {
 
 void ApplyRenderResolution() {
   const std::string chosen = REXCVAR_GET(render_resolution);
-  const int scale = chosen == "1280x720"    ? 1
-                    : chosen == "2560x1440" ? 2
-                    : chosen == "3840x2160" ? 3
-                                            : AutoResolutionScale();
+  // The scale as numerator / denominator: 1920x1080 is 3/2 (the renderer draws its whole part, 1,
+  // where it cannot draw a rational scale).
+  const int numerator = chosen == "1280x720"    ? 1
+                        : chosen == "1920x1080" ? 3
+                        : chosen == "2560x1440" ? 2
+                        : chosen == "3840x2160" ? 3
+                                                : AutoResolutionScale();
+  const int denominator = chosen == "1920x1080" ? 2 : 1;
   // A larger render needs more texture memory; the hard limit is twice the soft one, as in the
   // SDK's defaults (384 and 768 MB).
-  const int texture_memory = scale >= 2 ? 768 : 384;
+  const int texture_memory = numerator > denominator ? 768 : 384;
   const std::pair<const char*, int> settings[] = {
-      {"draw_resolution_scale_x", scale},
-      {"draw_resolution_scale_y", scale},
+      {"draw_resolution_scale_x", numerator},
+      {"draw_resolution_scale_y", numerator},
+      {"draw_resolution_scale_denominator", denominator},
       {"texture_cache_memory_limit_soft", texture_memory},
       {"texture_cache_memory_limit_hard", texture_memory * 2},
   };
@@ -1388,8 +1412,9 @@ void ApplyRenderResolution() {
       REXLOG_WARN("[Azura options] Cannot set {} = {} for the render resolution", name, value);
     }
   }
-  REXLOG_INFO("[Azura options] Render resolution {}: {}x{} (scale {}, texture memory {} MB)", chosen,
-              1280 * scale, 720 * scale, scale, texture_memory);
+  REXLOG_INFO("[Azura options] Render resolution {}: {}x{} (scale {}/{}, texture memory {} MB)",
+              chosen, 1280 * numerator / denominator, 720 * numerator / denominator, numerator,
+              denominator, texture_memory);
   // These values are the ones the game starts with, not changes waiting for a restart.
   rex::cvar::ClearPendingRestartFlags();
 }

@@ -17,8 +17,15 @@
 /** Base render size of the game on the console; resolutionScale multiplies it. */
 export const BASE_RENDER_SIZE = { width: 1280, height: 720 };
 
-/** Resolution scales the launcher offers, in order. */
-export const RESOLUTION_SCALES = [1, 2, 3];
+/**
+ * Resolution scales the launcher offers, in order. 1.5 (1920 × 1080) only on macOS, where the
+ * Metal renderer draws that scale (3/2); Vulkan (Linux, Windows) draws whole scales.
+ */
+export const RESOLUTION_SCALES = [1, 1.5, 2, 3];
+
+/** The resolution scales offered on an operating system ("macos", "linux" or "windows"). */
+export const resolutionScalesFor = (os) =>
+  os === "macos" ? RESOLUTION_SCALES : RESOLUTION_SCALES.filter(Number.isInteger);
 
 /**
  * Resolution scale "Automatic" stands for on a machine described by `system` (see

@@ -17,11 +17,11 @@
 import { getLocale, getPreference, initI18n, onLocaleChange, setPreference, systemLocale, t } from "./i18n.js";
 import { SUPPORTED_LOCALES } from "./locale.js";
 import {
-  RESOLUTION_SCALES,
   choosableGpus,
   gpuChoiceVisible,
   gpuLabel,
   renderSize,
+  resolutionScalesFor,
   resolutionValue,
   resolveAutoScale,
   scaleOfResolution,
@@ -1202,11 +1202,16 @@ const applyStoredGraphics = (settings) => {
   state.minimizeWhilePlaying = settings.minimizeWhilePlaying ?? true;
 };
 
-/** Text of a resolution scale: "2560 × 1440 (2×)", or "1280 × 720 · original" for 1. */
+/**
+ * Text of a resolution scale: "2560 × 1440 (2×)", "1920 × 1080 (1,5×)" with the decimal separator of
+ * the launcher's language, or "1280 × 720 · original" for 1.
+ */
 const resolutionLabel = (scale) => {
   const { width, height } = renderSize(scale);
   const size = `${width} × ${height}`;
-  return scale === 1 ? `${size} · ${t("graphics.original")}` : `${size} (${scale}×)`;
+  return scale === 1
+    ? `${size} · ${t("graphics.original")}`
+    : `${size} (${scale.toLocaleString(getLocale())}×)`;
 };
 
 /** Writes the current graphics state into the controls. */
@@ -1214,8 +1219,12 @@ const renderGraphics = () => {
   const select = document.getElementById("resolution-scale");
   select.replaceChildren();
   select.add(new Option(t("graphics.resolutionAuto", { size: resolutionLabel(resolveAutoScale()) }), "auto"));
-  for (const scale of RESOLUTION_SCALES) select.add(new Option(resolutionLabel(scale), resolutionValue(scale)));
-  select.value = state.renderResolution;
+  const scales = resolutionScalesFor(state.system?.os);
+  for (const scale of scales) select.add(new Option(resolutionLabel(scale), resolutionValue(scale)));
+  // A resolution this platform does not offer (1920 × 1080 set on a Mac, settings moved to a PC)
+  // shows as Automatic; the runtime draws its whole part there.
+  const offered = scales.some((scale) => resolutionValue(scale) === state.renderResolution);
+  select.value = offered ? state.renderResolution : "auto";
   document.getElementById("display-mode").value = state.fullscreen ? "fullscreen" : "windowed";
   document.getElementById("while-playing").value = state.minimizeWhilePlaying ? "minimize" : "keepOpen";
   renderGpuChoice();
