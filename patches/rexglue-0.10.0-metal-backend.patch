@@ -2142,10 +2142,10 @@ index 0000000..1d7d7fb
 +}  // namespace rex::system::xam
 diff --git a/include/rex/system/xam/system_link.h b/include/rex/system/xam/system_link.h
 new file mode 100644
-index 0000000..77ffaeb
+index 0000000..b742f90
 --- /dev/null
 +++ b/include/rex/system/xam/system_link.h
-@@ -0,0 +1,103 @@
+@@ -0,0 +1,120 @@
 +/**
 + * @file        system/xam/system_link.h
 + * @brief       System Link: the local network as XNet and the session services show it to a title
@@ -2194,8 +2194,25 @@ index 0000000..77ffaeb
 +bool SystemLinkEnabled();
 +
 +// IPv4 address (as a number: 192.168.1.2 is 0xC0A80102) of the interface that reaches the local
-+// network, found once; 0 when there is none.
++// network, found once; 0 when there is none. The system_link_address setting picks it by hand;
++// otherwise a private address wins over a public one, an adapter with a default gateway over one
++// without (Windows reports gateways), and then the interface of the default route. Every interface
++// seen and the one chosen are logged.
 +uint32_t LanAddress();
++
++// The broadcast address of LanAddress's subnet (192.168.1.255 for 192.168.1.2/24), or 0 when its
++// netmask is not known. Titles broadcast to 255.255.255.255, which Windows sends out of a single
++// adapter, not necessarily the local network's (a VPN or virtual adapter can take it); a subnet
++// broadcast always leaves through the adapter of that subnet.
++uint32_t LanBroadcastAddress();
++
++// The broadcast address of the subnet of `address` with `netmask`, or 0 when the subnet has no
++// broadcast address (no netmask, or a /31 or /32).
++uint32_t SubnetBroadcast(uint32_t address, uint32_t netmask);
++
++// Whether `address` is in a private range (10/8, 172.16/12, 192.168/16), the ranges home and office
++// networks use. VPNs such as Hamachi (25/8), Radmin (26/8) or Tailscale (100.64/10) use others.
++bool IsPrivateAddress(uint32_t address);
 +
 +// The XNADDR of an installation with IPv4 address `ip` (as LanAddress) and `machine_id`.
 +XnAddrBytes MakeXnAddr(uint32_t ip, const std::array<uint8_t, 6>& machine_id);
@@ -24947,10 +24964,10 @@ index 0000000..1cfbf15
 +}  // namespace rex::system::xam
 diff --git a/src/system/xam/system_link.cpp b/src/system/xam/system_link.cpp
 new file mode 100644
-index 0000000..20079e5
+index 0000000..f93f31c
 --- /dev/null
 +++ b/src/system/xam/system_link.cpp
-@@ -0,0 +1,218 @@
+@@ -0,0 +1,372 @@
 +/**
 + * @file        system/xam/system_link.cpp
 + * @brief       System Link: the local network as XNet and the session services show it to a title
@@ -24966,6 +24983,9 @@ index 0000000..20079e5
 +#include <map>
 +#include <mutex>
 +#include <string>
++#include <vector>
++
++#include <fmt/format.h>
 +
 +#include <rex/cvar.h>
 +#include <rex/logging.h>
@@ -24975,6 +24995,7 @@ index 0000000..20079e5
 +#include <WinSock2.h>
 +
 +#include <WS2tcpip.h>
++#include <iphlpapi.h>
 +#else
 +#include <arpa/inet.h>
 +#include <ifaddrs.h>
@@ -24991,6 +25012,12 @@ index 0000000..20079e5
 +    .allowed({"offline", "system_link"})
 +    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 +
++REXCVAR_DEFINE_STRING(system_link_address, "", "Network",
++                      "IPv4 address of this computer on the local network System Link plays on "
++                      "(for example 192.168.1.20), for a computer with several network adapters; "
++                      "empty: chosen automatically")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++
 +namespace rex::system::xam {
 +namespace {
 +
@@ -25002,13 +25029,49 @@ index 0000000..20079e5
 +std::map<uint32_t, XnAddrBytes> g_address_book;  // by IP address
 +std::map<uint32_t, SystemLinkSession> g_sessions;  // by the title's session handle
 +
++// An IPv4 interface of this computer that is up and is not the loopback one.
++struct LanInterface {
++  std::string name;
++  uint32_t address = 0;
++  uint32_t netmask = 0;
++  bool has_gateway = false;  // only known on Windows
++};
++
++// The address and netmask System Link uses.
++struct LanChoice {
++  uint32_t address = 0;
++  uint32_t netmask = 0;
++};
++
++std::string FormatAddress(uint32_t address) {
++  return fmt::format("{}.{}.{}.{}", address >> 24, (address >> 16) & 0xFF, (address >> 8) & 0xFF,
++                     address & 0xFF);
++}
++
++int PrefixLength(uint32_t netmask) {
++  int length = 0;
++  for (uint32_t bit = 0x80000000u; bit && (netmask & bit); bit >>= 1) {
++    ++length;
++  }
++  return length;
++}
++
 +// The local address of a UDP socket "connected" to `ip`: the address of the interface the host
 +// would send to it from. A UDP connect sends nothing.
 +uint32_t RouteSourceAddress(uint32_t ip) {
-+  const auto handle = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 +#if REX_PLATFORM_WIN32
-+  if (handle == INVALID_SOCKET) return 0;
++  // The title may not have started Winsock yet when the address is first asked for; a socket
++  // fails until someone has. WSAStartup counts its callers, so this start and its cleanup leave
++  // the title's own untouched.
++  WSADATA wsa_data;
++  const bool started = WSAStartup(MAKEWORD(2, 2), &wsa_data) == 0;
++  const auto handle = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
++  if (handle == INVALID_SOCKET) {
++    if (started) WSACleanup();
++    return 0;
++  }
 +#else
++  const auto handle = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 +  if (handle < 0) return 0;
 +#endif
 +  sockaddr_in to{};
@@ -25025,45 +25088,140 @@ index 0000000..20079e5
 +  }
 +#if REX_PLATFORM_WIN32
 +  closesocket(handle);
++  if (started) WSACleanup();
 +#else
 +  close(handle);
 +#endif
 +  return address;
 +}
 +
-+// The first IPv4 address of an interface that is up and is not the loopback one.
-+uint32_t FirstInterfaceAddress() {
++// This computer's IPv4 interfaces that are up, without the loopback one.
++std::vector<LanInterface> ListInterfaces() {
++  std::vector<LanInterface> result;
 +#if REX_PLATFORM_WIN32
-+  return 0;
++  constexpr ULONG kFlags = GAA_FLAG_INCLUDE_GATEWAYS | GAA_FLAG_SKIP_ANYCAST |
++                           GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
++  // The size the documentation suggests; a bigger buffer is asked for when it does not fit.
++  std::vector<uint8_t> buffer(15 * 1024);
++  ULONG size = static_cast<ULONG>(buffer.size());
++  auto* adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data());
++  ULONG ret = GetAdaptersAddresses(AF_INET, kFlags, nullptr, adapters, &size);
++  if (ret == ERROR_BUFFER_OVERFLOW) {
++    buffer.resize(size);
++    adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data());
++    ret = GetAdaptersAddresses(AF_INET, kFlags, nullptr, adapters, &size);
++  }
++  if (ret != NO_ERROR) {
++    REXSYS_WARN("System Link: GetAdaptersAddresses failed ({})", ret);
++    return result;
++  }
++  for (auto* adapter = adapters; adapter; adapter = adapter->Next) {
++    if (adapter->OperStatus != IfOperStatusUp || adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK) {
++      continue;
++    }
++    std::string name;
++    if (adapter->FriendlyName) {
++      const int length =
++          WideCharToMultiByte(CP_UTF8, 0, adapter->FriendlyName, -1, nullptr, 0, nullptr, nullptr);
++      if (length > 1) {
++        name.resize(length - 1);
++        WideCharToMultiByte(CP_UTF8, 0, adapter->FriendlyName, -1, name.data(), length, nullptr,
++                            nullptr);
++      }
++    }
++    for (auto* unicast = adapter->FirstUnicastAddress; unicast; unicast = unicast->Next) {
++      const auto* socket_address = unicast->Address.lpSockaddr;
++      if (!socket_address || socket_address->sa_family != AF_INET) continue;
++      LanInterface entry;
++      entry.name = name;
++      entry.address =
++          ntohl(reinterpret_cast<const sockaddr_in*>(socket_address)->sin_addr.s_addr);
++      const ULONG prefix = unicast->OnLinkPrefixLength;
++      entry.netmask = prefix == 0 ? 0 : prefix >= 32 ? 0xFFFFFFFFu : ~(0xFFFFFFFFu >> prefix);
++      entry.has_gateway = adapter->FirstGatewayAddress != nullptr;
++      result.push_back(entry);
++    }
++  }
 +#else
 +  ifaddrs* interfaces = nullptr;
-+  if (getifaddrs(&interfaces) != 0) return 0;
-+  uint32_t address = 0;
-+  for (auto* entry = interfaces; entry && !address; entry = entry->ifa_next) {
++  if (getifaddrs(&interfaces) != 0) return result;
++  for (auto* entry = interfaces; entry; entry = entry->ifa_next) {
 +    if (!entry->ifa_addr || entry->ifa_addr->sa_family != AF_INET) continue;
 +    if (!(entry->ifa_flags & IFF_UP) || (entry->ifa_flags & IFF_LOOPBACK)) continue;
-+    address = ntohl(reinterpret_cast<const sockaddr_in*>(entry->ifa_addr)->sin_addr.s_addr);
++    LanInterface item;
++    item.name = entry->ifa_name ? entry->ifa_name : "";
++    item.address = ntohl(reinterpret_cast<const sockaddr_in*>(entry->ifa_addr)->sin_addr.s_addr);
++    if (entry->ifa_netmask) {
++      item.netmask =
++          ntohl(reinterpret_cast<const sockaddr_in*>(entry->ifa_netmask)->sin_addr.s_addr);
++    }
++    result.push_back(item);
 +  }
 +  freeifaddrs(interfaces);
-+  return address;
 +#endif
++  return result;
 +}
 +
-+uint32_t FindLanAddress() {
-+  // The interface of the default route is the one the local network is on; a network without one
-+  // (no router to the internet) still has its interfaces.
++LanChoice FindLan() {
++  const std::vector<LanInterface> interfaces = ListInterfaces();
++  // The interface of the default route; it breaks ties between equally good interfaces.
 +  constexpr uint32_t kOutsideAddress = 0xC0000201;  // 192.0.2.1, an address for documentation
-+  uint32_t address = RouteSourceAddress(kOutsideAddress);
-+  if (!address || (address >> 24) == 127) {
-+    address = FirstInterfaceAddress();
++  const uint32_t route_address = RouteSourceAddress(kOutsideAddress);
++
++  for (const auto& entry : interfaces) {
++    REXSYS_INFO("System Link: interface '{}' {}/{}{}{}", entry.name, FormatAddress(entry.address),
++                PrefixLength(entry.netmask), entry.has_gateway ? ", default gateway" : "",
++                entry.address == route_address ? ", default route" : "");
 +  }
-+  if (address) {
-+    REXSYS_INFO("System Link: local network address {}.{}.{}.{}", address >> 24,
-+                (address >> 16) & 0xFF, (address >> 8) & 0xFF, address & 0xFF);
++
++  const LanInterface* chosen = nullptr;
++  const std::string wanted = REXCVAR_GET(system_link_address);
++  if (!wanted.empty()) {
++    in_addr parsed{};
++    if (inet_pton(AF_INET, wanted.c_str(), &parsed) == 1) {
++      const uint32_t wanted_address = ntohl(parsed.s_addr);
++      for (const auto& entry : interfaces) {
++        if (entry.address == wanted_address) chosen = &entry;
++      }
++    }
++    if (!chosen) {
++      REXSYS_WARN("System Link: system_link_address {} is not an address of this computer; "
++                  "choosing one automatically",
++                  wanted);
++    }
++  }
++  if (!chosen) {
++    // Ranked by private address, then default gateway, then default route; the first of equals.
++    const auto rank = [route_address](const LanInterface& entry) {
++      return (IsPrivateAddress(entry.address) ? 4 : 0) + (entry.has_gateway ? 2 : 0) +
++             (entry.address == route_address ? 1 : 0);
++    };
++    for (const auto& entry : interfaces) {
++      if (!chosen || rank(entry) > rank(*chosen)) chosen = &entry;
++    }
++  }
++
++  LanChoice choice;
++  if (chosen) {
++    choice.address = chosen->address;
++    choice.netmask = chosen->netmask;
++  } else if (route_address && (route_address >> 24) != 127) {
++    // No interface list (it failed): the default route's address, without a subnet broadcast.
++    choice.address = route_address;
++  }
++  if (choice.address) {
++    const uint32_t broadcast = SubnetBroadcast(choice.address, choice.netmask);
++    REXSYS_INFO("System Link: local network address {}{}", FormatAddress(choice.address),
++                broadcast ? fmt::format(", broadcasts to {}", FormatAddress(broadcast)) : "");
 +  } else {
 +    REXSYS_WARN("System Link: no local network address found");
 +  }
-+  return address;
++  return choice;
++}
++
++const LanChoice& Lan() {
++  static const LanChoice choice = FindLan();
++  return choice;
 +}
 +
 +}  // namespace
@@ -25073,8 +25231,21 @@ index 0000000..20079e5
 +}
 +
 +uint32_t LanAddress() {
-+  static const uint32_t address = FindLanAddress();
-+  return address;
++  return Lan().address;
++}
++
++uint32_t LanBroadcastAddress() {
++  return SubnetBroadcast(Lan().address, Lan().netmask);
++}
++
++uint32_t SubnetBroadcast(uint32_t address, uint32_t netmask) {
++  // A /31 or /32 has no broadcast address, and neither has a subnet without a netmask.
++  if (!address || !netmask || (netmask & 0xFFFFFFFEu) == 0xFFFFFFFEu) return 0;
++  return address | ~netmask;
++}
++
++bool IsPrivateAddress(uint32_t address) {
++  return (address >> 24) == 10 || (address >> 20) == 0xAC1 || (address >> 16) == 0xC0A8;
 +}
 +
 +XnAddrBytes MakeXnAddr(uint32_t ip, const std::array<uint8_t, 6>& machine_id) {
@@ -25243,15 +25414,20 @@ index 7ed67aa..d5c61f0 100644
      auto setting_id = fmt::format("{:08X}", setting->setting_id);
      auto file_path = content_dir / setting_id;
 diff --git a/src/system/xsocket.cpp b/src/system/xsocket.cpp
-index 2d13ac8..3b4dd91 100644
+index 2d13ac8..b9d2548 100644
 --- a/src/system/xsocket.cpp
 +++ b/src/system/xsocket.cpp
-@@ -9,11 +9,15 @@
+@@ -9,11 +9,20 @@
   * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
   */
  
++#include <array>
++#include <atomic>
 +#include <cerrno>
  #include <cstring>
++#include <string>
++
++#include <fmt/format.h>
  
  #include <rex/kernel/xam/module.h>
 +#include <rex/logging.h>
@@ -25262,7 +25438,7 @@ index 2d13ac8..3b4dd91 100644
  #include <rex/system/xsocket.h>
  // #include <rex/system/xnet.h>
  
-@@ -28,11 +32,68 @@
+@@ -28,11 +37,128 @@
  #include <arpa/inet.h>
  #include <netinet/in.h>
  #include <netinet/ip.h>
@@ -25274,9 +25450,9 @@ index 2d13ac8..3b4dd91 100644
  
 +namespace {
 +
-+#if !REX_PLATFORM_WIN32
-+// Titles pass Winsock's numbers for socket options and ioctlsocket commands. macOS shares them with
-+// Winsock; Linux does not, so they are translated to the host's names here.
++// Titles pass Winsock's numbers for socket options and ioctlsocket commands. macOS and Windows share
++// them; Linux does not, so they are translated to the host's names here. The values are 32-bit
++// integers in the guest's big-endian memory on every host, so they are byte-swapped everywhere.
 +constexpr uint32_t kWinsockSolSocket = 0xFFFF;
 +constexpr uint32_t kWinsockFionbio = 0x8004667E;   // set non-blocking mode
 +constexpr uint32_t kWinsockFionread = 0x4004667F;  // bytes waiting to be read
@@ -25311,7 +25487,67 @@ index 2d13ac8..3b4dd91 100644
 +  }
 +}
 +
++// The value ioctl and ioctlsocket read and write for FIONBIO and FIONREAD.
++#if REX_PLATFORM_WIN32
++using IoctlValue = u_long;
++#else
++using IoctlValue = int;
 +#endif
++
++int HostIoctl(uint64_t handle, uint32_t cmd, IoctlValue* value) {
++#if REX_PLATFORM_WIN32
++  return ioctlsocket(static_cast<SOCKET>(handle), static_cast<long>(cmd), value);
++#else
++  return ioctl(static_cast<int>(handle), cmd == kWinsockFionbio ? FIONBIO : FIONREAD, value);
++#endif
++}
++
++// The host's error code for the last socket call that failed on this thread.
++int HostSocketError() {
++#if REX_PLATFORM_WIN32
++  return WSAGetLastError();
++#else
++  return errno;
++#endif
++}
++
++// Sets the host's error code back after logging, which may change it: the caller of a failed call
++// reads it afterwards (NetDll_recvfrom passes WSAGetLastError to the title on Windows).
++void RestoreHostSocketError(int error) {
++#if REX_PLATFORM_WIN32
++  WSASetLastError(error);
++#else
++  errno = error;
++#endif
++}
++
++// Whether `error` only says that a non-blocking socket has nothing to do yet.
++bool IsWouldBlock(int error) {
++#if REX_PLATFORM_WIN32
++  return error == WSAEWOULDBLOCK;
++#else
++  return error == EAGAIN || error == EWOULDBLOCK;
++#endif
++}
++
++// Failed socket calls are logged with the host's error code, up to kMaxLoggedFailures of each kind
++// in a session, so that a title polling a broken socket does not flood the log.
++enum class SocketCall { kCreate, kOption, kControl, kBind, kSend, kReceive, kCount };
++constexpr int kMaxLoggedFailures = 16;
++std::array<std::atomic<int>, static_cast<size_t>(SocketCall::kCount)> g_logged_failures{};
++
++bool ShouldLogFailure(SocketCall call) {
++  return g_logged_failures[static_cast<size_t>(call)].fetch_add(1, std::memory_order_relaxed) <
++         kMaxLoggedFailures;
++}
++
++std::string FormatAddress(uint32_t address) {
++  return fmt::format("{}.{}.{}.{}", address >> 24, (address >> 16) & 0xFF, (address >> 8) & 0xFF,
++                     address & 0xFF);
++}
++
++// The broadcast address titles use (255.255.255.255), as N_XSOCKADDR_IN holds it.
++constexpr uint32_t kLimitedBroadcast = 0xFFFFFFFF;
 +
 +// The host's address for a title's: the family and length the host expects, and the port and
 +// address in network byte order (N_XSOCKADDR_IN holds them as numbers).
@@ -25331,28 +25567,62 @@ index 2d13ac8..3b4dd91 100644
  XSocket::XSocket(KernelState* kernel_state) : XObject(kernel_state, kObjectType) {}
  
  XSocket::XSocket(KernelState* kernel_state, uint64_t native_handle)
-@@ -76,7 +137,20 @@ X_STATUS XSocket::SetOption(uint32_t level, uint32_t optname, void* optval_ptr,
+@@ -54,9 +180,28 @@ X_STATUS XSocket::Initialize(AddressFamily af, Type type, Protocol proto) {
+ 
+   native_handle_ = socket(af, type, proto);
+   if (native_handle_ == -1) {
++    const int error = HostSocketError();
++    if (ShouldLogFailure(SocketCall::kCreate)) {
++      REXKRNL_WARN("Socket: creating a socket (family {}, type {}, protocol {}) failed, host "
++                   "error {}",
++                   uint32_t(af), uint32_t(type), uint32_t(proto), error);
++    }
+     return X_STATUS_UNSUCCESSFUL;
+   }
+ 
++#if REX_PLATFORM_WIN32
++  if (type == Type::X_SOCK_DGRAM) {
++    // Windows makes the next receive on a datagram socket fail with WSAECONNRESET when a datagram it
++    // sent was answered with "port unreachable"; the console, like Linux and macOS, does not, and a
++    // title can take that error for a broken socket. SIO_UDP_CONNRESET turns it off.
++    constexpr DWORD kSioUdpConnReset = _WSAIOW(IOC_VENDOR, 12);
++    BOOL report = FALSE;
++    DWORD returned = 0;
++    WSAIoctl(static_cast<SOCKET>(native_handle_), kSioUdpConnReset, &report, sizeof(report),
++             nullptr, 0, &returned, nullptr, nullptr);
++  }
++#endif
++
+   return X_STATUS_SUCCESS;
+ }
+ 
+@@ -76,9 +221,23 @@ X_STATUS XSocket::SetOption(uint32_t level, uint32_t optname, void* optval_ptr,
      return X_STATUS_SUCCESS;
    }
  
-+#if !REX_PLATFORM_WIN32
+-  int ret = setsockopt(native_handle_, level, optname, (char*)optval_ptr, optlen);
 +  // Integer SOL_SOCKET options: the host's option number, and the value byte-swapped from the
 +  // guest's big-endian memory. Other options go through unchanged.
 +  const int host_optname = level == kWinsockSolSocket ? HostIntSocketOption(optname) : -1;
 +  int ret;
 +  if (host_optname >= 0 && optlen >= sizeof(uint32_t)) {
 +    const int value = static_cast<int32_t>(rex::memory::load_and_swap<uint32_t>(optval_ptr));
-+    ret = setsockopt(native_handle_, SOL_SOCKET, host_optname, &value, sizeof(value));
++    ret = setsockopt(native_handle_, SOL_SOCKET, host_optname, reinterpret_cast<const char*>(&value),
++                     sizeof(value));
 +  } else {
 +    ret = setsockopt(native_handle_, level, optname, (char*)optval_ptr, optlen);
 +  }
-+#else
-   int ret = setsockopt(native_handle_, level, optname, (char*)optval_ptr, optlen);
-+#endif
    if (ret < 0) {
-     // TODO: WSAGetLastError()
+-    // TODO: WSAGetLastError()
++    const int error = HostSocketError();
++    if (ShouldLogFailure(SocketCall::kOption)) {
++      REXKRNL_WARN("Socket: setting option {:X} at level {:X} failed, host error {}", optname,
++                   level, error);
++    }
      return X_STATUS_UNSUCCESSFUL;
-@@ -90,8 +164,53 @@ X_STATUS XSocket::SetOption(uint32_t level, uint32_t optname, void* optval_ptr,
+   }
+ 
+@@ -90,10 +249,54 @@ X_STATUS XSocket::SetOption(uint32_t level, uint32_t optname, void* optval_ptr,
    return X_STATUS_SUCCESS;
  }
  
@@ -25384,29 +25654,32 @@ index 2d13ac8..3b4dd91 100644
 +}
 +
  X_STATUS XSocket::IOControl(uint32_t cmd, uint8_t* arg_ptr) {
-+#if !REX_PLATFORM_WIN32
+-  int ret = rex::net::socket_ioctl(native_handle_, cmd, arg_ptr);
 +  // The argument is a big-endian 32-bit integer in guest memory: read for FIONBIO, written for
 +  // FIONREAD. Other commands go through unchanged.
 +  int ret;
 +  if (cmd == kWinsockFionbio) {
-+    int value = rex::memory::load_and_swap<uint32_t>(arg_ptr) != 0;
-+    ret = ioctl(static_cast<int>(native_handle_), FIONBIO, &value);
++    IoctlValue value = rex::memory::load_and_swap<uint32_t>(arg_ptr) != 0;
++    ret = HostIoctl(native_handle_, cmd, &value);
 +  } else if (cmd == kWinsockFionread) {
-+    int value = 0;
-+    ret = ioctl(static_cast<int>(native_handle_), FIONREAD, &value);
++    IoctlValue value = 0;
++    ret = HostIoctl(native_handle_, cmd, &value);
 +    if (ret >= 0) {
 +      rex::memory::store_and_swap<uint32_t>(arg_ptr, static_cast<uint32_t>(value));
 +    }
 +  } else {
 +    ret = rex::net::socket_ioctl(native_handle_, cmd, arg_ptr);
 +  }
-+#else
-   int ret = rex::net::socket_ioctl(native_handle_, cmd, arg_ptr);
-+#endif
    if (ret < 0) {
-     // TODO: Get last error
+-    // TODO: Get last error
++    const int error = HostSocketError();
++    if (ShouldLogFailure(SocketCall::kControl)) {
++      REXKRNL_WARN("Socket: control command {:08X} failed, host error {}", cmd, error);
++    }
      return X_STATUS_UNSUCCESSFUL;
-@@ -110,7 +229,15 @@ X_STATUS XSocket::Connect(N_XSOCKADDR* name, int name_len) {
+   }
+ 
+@@ -110,8 +313,21 @@ X_STATUS XSocket::Connect(N_XSOCKADDR* name, int name_len) {
  }
  
  X_STATUS XSocket::Bind(N_XSOCKADDR_IN* name, int name_len) {
@@ -25421,11 +25694,25 @@ index 2d13ac8..3b4dd91 100644
 +    REXKRNL_INFO("Socket port {} is bound as port {} on the network", port, host_port);
 +  }
    if (ret < 0) {
++    const int error = HostSocketError();
++    if (ShouldLogFailure(SocketCall::kBind)) {
++      REXKRNL_WARN("Socket: binding to {}:{} failed, host error {}",
++                   FormatAddress(name->sin_addr), host_port, error);
++    }
      return X_STATUS_UNSUCCESSFUL;
    }
-@@ -191,9 +318,10 @@ int XSocket::RecvFrom(uint8_t* buf, uint32_t buf_len, uint32_t flags, N_XSOCKADD
+ 
+@@ -190,10 +406,18 @@ int XSocket::RecvFrom(uint8_t* buf, uint32_t buf_len, uint32_t flags, N_XSOCKADD
+   socklen_t nfromlen = sizeof(sockaddr_in);
    int ret = recvfrom(native_handle_, reinterpret_cast<char*>(buf), buf_len, flags,
                       (sockaddr*)&nfrom, &nfromlen);
++  if (ret < 0) {
++    const int error = HostSocketError();
++    if (!IsWouldBlock(error) && ShouldLogFailure(SocketCall::kReceive)) {
++      REXKRNL_WARN("Socket: receiving on port {} failed, host error {}", bound_port_, error);
++    }
++    RestoreHostSocketError(error);
++  }
    if (from) {
 -    from->sin_family = nfrom.sin_family;
 -    from->sin_addr = ntohl(nfrom.sin_addr.s_addr);  // BE <- BE
@@ -25437,7 +25724,7 @@ index 2d13ac8..3b4dd91 100644
      std::memset(from->x_sin_zero, 0, sizeof(from->x_sin_zero));
    }
  
-@@ -221,15 +349,29 @@ int XSocket::SendTo(uint8_t* buf, uint32_t buf_len, uint32_t flags, N_XSOCKADDR_
+@@ -221,15 +445,52 @@ int XSocket::SendTo(uint8_t* buf, uint32_t buf_len, uint32_t flags, N_XSOCKADDR_
    }
    */
  
@@ -25448,12 +25735,36 @@ index 2d13ac8..3b4dd91 100644
 -    nto.sin_family = to->sin_family;
 -    nto.sin_port = to->sin_port;
 +    const uint16_t port = to->sin_port;
-+    nto = ToHostAddress(*to, type_ == Type::X_SOCK_DGRAM ? xam::NetworkPort(port) : port);
++    N_XSOCKADDR_IN destination = *to;
++    // With System Link, a broadcast goes to the local network's subnet broadcast address, which
++    // leaves through that network's adapter (see xam::LanBroadcastAddress).
++    if (destination.sin_addr == kLimitedBroadcast && xam::SystemLinkEnabled()) {
++      if (const uint32_t subnet_broadcast = xam::LanBroadcastAddress()) {
++        destination.sin_addr = subnet_broadcast;
++        static std::atomic<bool> logged{false};
++        if (!logged.exchange(true)) {
++          REXKRNL_INFO("System Link: broadcasts to 255.255.255.255 are sent to {} (first to port "
++                       "{})",
++                       FormatAddress(subnet_broadcast), port);
++        }
++      }
++    }
++    nto = ToHostAddress(destination, type_ == Type::X_SOCK_DGRAM ? xam::NetworkPort(port) : port);
    }
  
-   return sendto(native_handle_, reinterpret_cast<char*>(buf), buf_len, flags,
+-  return sendto(native_handle_, reinterpret_cast<char*>(buf), buf_len, flags,
 -                to ? (sockaddr*)&nto : nullptr, to_len);
-+                to ? reinterpret_cast<sockaddr*>(&nto) : nullptr, to ? sizeof(nto) : 0);
++  const int ret = sendto(native_handle_, reinterpret_cast<char*>(buf), buf_len, flags,
++                         to ? reinterpret_cast<sockaddr*>(&nto) : nullptr, to ? sizeof(nto) : 0);
++  if (ret < 0) {
++    const int error = HostSocketError();
++    if (!IsWouldBlock(error) && ShouldLogFailure(SocketCall::kSend)) {
++      REXKRNL_WARN("Socket: sending {} bytes to {}:{} failed, host error {}", buf_len,
++                   FormatAddress(ntohl(nto.sin_addr.s_addr)), ntohs(nto.sin_port), error);
++    }
++    RestoreHostSocketError(error);
++  }
++  return ret;
 +}
 +
 +int XSocket::GetName(N_XSOCKADDR_IN* name) {
@@ -26283,10 +26594,10 @@ index 0000000..e552449
 +}
 diff --git a/tests/unit/system/system_link_test.cpp b/tests/unit/system/system_link_test.cpp
 new file mode 100644
-index 0000000..574364e
+index 0000000..8d3a23c
 --- /dev/null
 +++ b/tests/unit/system/system_link_test.cpp
-@@ -0,0 +1,89 @@
+@@ -0,0 +1,112 @@
 +/**
 + * @file        system_link_test.cpp
 + * @brief       Unit tests for System Link's view of the network (rex/system/xam/system_link.h).
@@ -26375,4 +26686,27 @@ index 0000000..574364e
 +  for (uint16_t port = 1; port < kFirstUnprivilegedPort; ++port) {
 +    CHECK(TitlePort(NetworkPort(port)) == port);
 +  }
++}
++
++TEST_CASE("A subnet's broadcast address sets every host bit", "[system_link]") {
++  CHECK(SubnetBroadcast(0xC0A86403, 0xFFFFFF00) == 0xC0A864FF);  // 192.168.100.3/24
++  CHECK(SubnetBroadcast(0x0A000105, 0xFF000000) == 0x0AFFFFFF);  // 10.0.1.5/8
++  CHECK(SubnetBroadcast(0xAC100A02, 0xFFFFF000) == 0xAC100FFF);  // 172.16.10.2/20
++  // No netmask, or no host bits to set: no broadcast address.
++  CHECK(SubnetBroadcast(0xC0A86403, 0) == 0);
++  CHECK(SubnetBroadcast(0xC0A86403, 0xFFFFFFFE) == 0);
++  CHECK(SubnetBroadcast(0xC0A86403, 0xFFFFFFFF) == 0);
++  CHECK(SubnetBroadcast(0, 0xFFFFFF00) == 0);
++}
++
++TEST_CASE("Only the private ranges count as a local network", "[system_link]") {
++  CHECK(IsPrivateAddress(0x0A000001));        // 10.0.0.1
++  CHECK(IsPrivateAddress(0xAC100001));        // 172.16.0.1
++  CHECK(IsPrivateAddress(0xAC1FFFFF));        // 172.31.255.255
++  CHECK(IsPrivateAddress(0xC0A86403));        // 192.168.100.3
++  CHECK_FALSE(IsPrivateAddress(0xAC200001));  // 172.32.0.1
++  CHECK_FALSE(IsPrivateAddress(0x19000001));  // 25.0.0.1 (Hamachi)
++  CHECK_FALSE(IsPrivateAddress(0x1A000001));  // 26.0.0.1 (Radmin VPN)
++  CHECK_FALSE(IsPrivateAddress(0x64400001));  // 100.64.0.1 (Tailscale)
++  CHECK_FALSE(IsPrivateAddress(0x7F000001));  // 127.0.0.1
 +}

@@ -91,6 +91,11 @@ user_name = "User"
 # "system_link": play System Link (campaign co-op, Horde, Beast, private Versus) with the other
 # computers of the local network.
 network_mode = "offline"
+# This computer's IPv4 address on the local network System Link plays on (for example
+# "192.168.1.20"). Empty: chosen automatically, preferring a home network address over a VPN or
+# virtual adapter's. Set it when the log line "System Link: local network address" shows the wrong
+# one; the log lists every interface just above it.
+system_link_address = ""
 
 # ---------- Input ----------
 # Enable keyboard/mouse controller emulation. If a physical gamepad is plugged in,
