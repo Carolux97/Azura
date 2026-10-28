@@ -3472,10 +3472,10 @@ index 8f2fcb0..b0f3cb4 100644
  
 diff --git a/src/graphics/metal/metal_command_processor.h b/src/graphics/metal/metal_command_processor.h
 new file mode 100644
-index 0000000..728a7d8
+index 0000000..2c8c69c
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.h
-@@ -0,0 +1,402 @@
+@@ -0,0 +1,409 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.h
 + * @brief       Xenos command processing with Metal
@@ -3554,9 +3554,14 @@ index 0000000..728a7d8
 +  uint64_t GetCompletedFrame() const { return frame_completed_; }
 +
 +  // The encoder of the kind, ending the open one of another kind. A render encoder ended for this
-+  // is counted with end_reason.
-+  id<MTLComputeCommandEncoder> GetComputeEncoder(rex::perf::CounterId end_reason);
-+  id<MTLBlitCommandEncoder> GetBlitEncoder(rex::perf::CounterId end_reason);
++  // is counted with end_reason. With gpu_debug_markers, a debug_label gives the work an encoder of
++  // its own with that label, so GPU traces can attribute its time (debug_labels_enabled() says
++  // whether to build one).
++  id<MTLComputeCommandEncoder> GetComputeEncoder(rex::perf::CounterId end_reason,
++                                                 NSString* debug_label = nil);
++  id<MTLBlitCommandEncoder> GetBlitEncoder(rex::perf::CounterId end_reason,
++                                           NSString* debug_label = nil);
++  bool debug_labels_enabled() const { return debug_labels_enabled_; }
 +  // A render encoder for the render pass, continuing the open one if it has the same attachments,
 +  // for draws of the backend itself (transfers, clears): the guest draw state is set again before
 +  // the next guest draw.
@@ -3746,6 +3751,8 @@ index 0000000..728a7d8
 +  uint64_t submission_current_ = 1;
 +  uint64_t submission_completed_ = 0;
 +  // Whether the open submission has any GPU work encoded.
++  // gpu_debug_markers, read once: encoders of their own for labelled work (GetComputeEncoder).
++  bool debug_labels_enabled_ = false;
 +  bool submission_has_work_ = false;
 +
 +  // Guest fences written when the GPU is done (metal_gpu_accurate_fences): the command processor
@@ -3880,10 +3887,10 @@ index 0000000..728a7d8
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_command_processor.mm b/src/graphics/metal/metal_command_processor.mm
 new file mode 100644
-index 0000000..a7c2cf1
+index 0000000..2b2c550
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.mm
-@@ -0,0 +1,2882 @@
+@@ -0,0 +1,2886 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.mm
 + * @brief       Xenos command processing with Metal
@@ -4195,6 +4202,7 @@ index 0000000..a7c2cf1
 +  device_ = provider->device();
 +  queue_ = provider->queue();
 +  accurate_fences_ = REXCVAR_GET(metal_gpu_accurate_fences);
++  debug_labels_enabled_ = REXCVAR_GET(gpu_debug_markers);
 +  if (accurate_fences_) {
 +    REXGPU_INFO("Metal: guest fences are written when the GPU finishes the work before them");
 +  }
@@ -5163,31 +5171,34 @@ index 0000000..a7c2cf1
 +}
 +
 +id<MTLComputeCommandEncoder> MetalCommandProcessor::GetComputeEncoder(
-+    rex::perf::CounterId end_reason) {
++    rex::perf::CounterId end_reason, NSString* debug_label) {
 +  BeginSubmission(false);
 +  // Compute work may read the render targets: pending clears go first.
 +  ApplyPendingClears(end_reason);
-+  if (encoder_type_ == EncoderType::kCompute) {
++  bool labelled = debug_label && debug_labels_enabled_;
++  if (encoder_type_ == EncoderType::kCompute && !labelled) {
 +    return compute_encoder_;
 +  }
 +  EndEncoder(end_reason);
 +  compute_encoder_ = [command_buffer_ computeCommandEncoder];
-+  compute_encoder_.label = GetEncoderLabel(end_reason);
++  compute_encoder_.label = labelled ? debug_label : GetEncoderLabel(end_reason);
 +  encoder_type_ = EncoderType::kCompute;
 +  submission_has_work_ = true;
 +  return compute_encoder_;
 +}
 +
-+id<MTLBlitCommandEncoder> MetalCommandProcessor::GetBlitEncoder(rex::perf::CounterId end_reason) {
++id<MTLBlitCommandEncoder> MetalCommandProcessor::GetBlitEncoder(rex::perf::CounterId end_reason,
++                                                               NSString* debug_label) {
 +  BeginSubmission(false);
 +  // Copies may read the render targets: pending clears go first.
 +  ApplyPendingClears(end_reason);
-+  if (encoder_type_ == EncoderType::kBlit) {
++  bool labelled = debug_label && debug_labels_enabled_;
++  if (encoder_type_ == EncoderType::kBlit && !labelled) {
 +    return blit_encoder_;
 +  }
 +  EndEncoder(end_reason);
 +  blit_encoder_ = [command_buffer_ blitCommandEncoder];
-+  blit_encoder_.label = GetEncoderLabel(end_reason);
++  blit_encoder_.label = labelled ? debug_label : GetEncoderLabel(end_reason);
 +  encoder_type_ = EncoderType::kBlit;
 +  submission_has_work_ = true;
 +  return blit_encoder_;
@@ -9443,10 +9454,10 @@ index 0000000..d717bea
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_render_target_cache.h b/src/graphics/metal/metal_render_target_cache.h
 new file mode 100644
-index 0000000..53ff782
+index 0000000..cbb3964
 --- /dev/null
 +++ b/src/graphics/metal/metal_render_target_cache.h
-@@ -0,0 +1,666 @@
+@@ -0,0 +1,677 @@
 +/**
 + * @file        graphics/metal/metal_render_target_cache.h
 + * @brief       EDRAM emulation with sample-space host render targets for the Metal backend
@@ -9530,15 +9541,18 @@ index 0000000..53ff782
 +  // kDataTargetMaxSize guest pixels wide or tall while drawing at a resolution scale.
 +  bool IsCurrentDrawData() const;
 +
-+  // Performs the resolve to a shared memory area according to the current register values, and
-+  // also clears the render targets if needed.
-+  // gfx = hle (hle_native_resolves): after a resolve, the textures the texture cache holds with
-+  // exactly its destination's key take the render target's data instead of loading it back from
-+  // memory, when the resolve copies a whole 1x render target of a format that needs no conversion.
-+  // Returns the textures updated.
++  // How a resolve at a rational draw resolution scale is written (ResolveFromRenderTarget).
++  enum class RationalResolveMode { kNone, kGuestResolution, kScaledSurface };
++  // gfx = hle: after a resolve written from the render targets (owners, the native path), the
++  // textures the texture cache holds for exactly its destination are written from them too, as a
++  // load from the memory the resolve wrote would (MetalTextureCache::WriteTexturesFromResolve), so
++  // they are not loaded back. rational_mode gives the constants at a rational scale
++  // (kScaledSurface: host pixels); scaled says the textures are at the draw resolution scale.
++  // Only for a resolve to the start of its destination. Returns the textures written.
 +  uint32_t UpdateResolvedTextures(const draw_util::ResolveInfo& resolve_info,
-+                                  draw_util::ResolveCopyShaderIndex copy_shader,
-+                                  MetalTextureCache& texture_cache);
++                                  const std::vector<RangeOwner>& owners,
++                                  MetalTextureCache& texture_cache,
++                                  RationalResolveMode rational_mode, bool scaled);
 +
 +  bool Resolve(const memory::Memory& memory, MetalSharedMemory& shared_memory,
 +               MetalTextureCache& texture_cache, uint32_t& written_address_out,
@@ -9950,6 +9964,8 @@ index 0000000..53ff782
 +  static constexpr uint32_t kComputeBufferVerifyScratch = 4;
 +  static constexpr uint32_t kComputeTextureSource = 0;
 +  static constexpr uint32_t kComputeTextureSourceStencil = 1;
++  // The texture a resolve writes instead of the memory (resolve_to_texture).
++  static constexpr uint32_t kComputeTextureDest = 2;
 +
 +  struct ComputePipeline {
 +    id<MTLComputePipelineState> pipeline = nil;
@@ -10016,6 +10032,12 @@ index 0000000..53ff782
 +  ComputePipeline resolve_compare_pipeline_;
 +  // Depth targets (D24S8 and D24FS8), for depth resolves and bitwise color resolves of their EDRAM.
 +  ComputePipeline resolve_from_render_target_depth_pipeline_;
++  // The same four writing a texture of the texture cache instead (resolve_to_texture,
++  // UpdateResolvedTextures).
++  ComputePipeline resolve_to_texture_float_pipeline_;
++  ComputePipeline resolve_to_texture_uint_pipeline_;
++  ComputePipeline resolve_to_texture_64bpp_pipeline_;
++  ComputePipeline resolve_to_texture_depth_pipeline_;
 +  // Tile pipelines of ResolveInRenderPass, by packing, color index and the pass's color formats
 +  // (nil when one failed to build).
 +  std::unordered_map<uint64_t, id<MTLRenderPipelineState>> resolve_in_render_pass_pipelines_;
@@ -10046,12 +10068,12 @@ index 0000000..53ff782
 +  // memory at the guest resolution (each guest pixel reads the host pixel at its centre) or a
 +  // scaled surface of the texture cache (MetalTextureCache::RequestRationalScaledSurface, bound at
 +  // its start with dest_base 0, surface_pitch texels per row) at the host resolution.
-+  enum class RationalResolveMode { kNone, kGuestResolution, kScaledSurface };
 +  void ResolveFromRenderTarget(const draw_util::ResolveInfo& resolve_info,
 +                               const RangeOwner& owner, id<MTLBuffer> dest,
 +                               NSUInteger dest_offset, uint32_t dest_base, bool verify,
 +                               RationalResolveMode rational_mode = RationalResolveMode::kNone,
-+                               uint32_t surface_pitch = 0);
++                               uint32_t surface_pitch = 0, id<MTLTexture> dest_texture = nil,
++                               uint32_t texture_endian = 0, uint32_t texture_conversion = 0);
 +  // The copy of a resolve at a rational draw resolution scale, where there is no scaled resolve
 +  // buffer and no scaled copy shader: written straight from the render targets (the native path)
 +  // to the guest memory at the guest resolution, and, for a resolve textures may sample at the
@@ -10115,10 +10137,10 @@ index 0000000..53ff782
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_render_target_cache.mm b/src/graphics/metal/metal_render_target_cache.mm
 new file mode 100644
-index 0000000..3dad115
+index 0000000..8d14689
 --- /dev/null
 +++ b/src/graphics/metal/metal_render_target_cache.mm
-@@ -0,0 +1,5250 @@
+@@ -0,0 +1,5430 @@
 +/**
 + * @file        graphics/metal/metal_render_target_cache.mm
 + * @brief       EDRAM emulation with sample-space host render targets for the Metal backend
@@ -10163,6 +10185,11 @@ index 0000000..3dad115
 +#include "metal_shared_memory.h"
 +#include "metal_spirv.h"
 +#include "metal_texture_cache.h"
++
++REXCVAR_DEFINE_BOOL(metal_resolve_to_texture, true, "GPU/Metal",
++                    "gfx = hle: a resolve also writes the textures that read its destination, so "
++                    "they are not loaded back from the memory it wrote")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 +
 +namespace rex::graphics::metal {
 +
@@ -10235,6 +10262,11 @@ index 0000000..3dad115
 +NSString* const kRenderTargetShaderSource = @R"MSL(
 +#include <metal_stdlib>
 +using namespace metal;
++// The resolve_from_render_target_* variants that write a texture of the texture cache instead of
++// the memory (MetalTextureCache::WriteTexturesFromResolve); false when not given.
++constant bool resolve_to_texture_given [[function_constant(0)]];
++constant bool resolve_to_texture = is_function_constant_defined(resolve_to_texture_given) &&
++                                   resolve_to_texture_given;
 +struct PositionOut { float4 position [[position]]; };
 +vertex PositionOut transfer_vertex(uint vertex_id [[vertex_id]],
 +                                   const device float2* positions [[buffer(0)]]) {
@@ -10349,6 +10381,11 @@ index 0000000..3dad115
 +  uint reduce_num_x;
 +  uint reduce_num_y;
 +  uint reduce_den;
++  // resolve_to_texture: the texture's endianness (xenos::Endian) and the conversion its load
++  // shader makes (0 none, 1 24-bit unorm depth, 2 20e4 float depth), as the direct texture loads
++  // of the texture cache.
++  uint texture_endian;
++  uint texture_conversion;
 +};
 +// texture_util::GetTiledOffset2D.
 +int resolve_tiled_offset_2d(int x, int y, uint pitch, int bytes_per_block_log2) {
@@ -10462,6 +10499,49 @@ index 0000000..3dad115
 +                 edram % tile_size;
 +  return true;
 +}
++// resolve_to_texture: the texel of the destination texture for the dwords the resolve would write
++// to the memory (in the resolve's endianness), as a direct texture load would read them: swapped
++// to the texture's endianness and converted (depth). The texture is an integer view of its host
++// format, at the pixel (resolves to a texture start at its origin).
++uint resolve_texture_unorm24_to_float(uint n24) {
++  return as_type<uint>(float(n24 + (n24 >> 23)) * (1.0 / 16777216.0));
++}
++uint resolve_texture_float20e4_to_float(uint f24) {
++  f24 &= 0xFFFFFFu;
++  if (f24 == 0u) {
++    return 0u;
++  }
++  uint mantissa = f24 & 0xFFFFFu;
++  uint exponent = f24 >> 20;
++  if (exponent == 0u) {
++    uint mantissa_lzcnt = clz(mantissa) - (32u - 21u);
++    exponent = uint(1 - int(mantissa_lzcnt));
++    mantissa = (mantissa << mantissa_lzcnt) & 0xFFFFFu;
++  }
++  return ((exponent + 112u) << 23) | (mantissa << 3);
++}
++void resolve_texture_write(uint2 pixel, uint4 memory_dwords, texture2d<uint, access::write> texture,
++                           constant ResolveFromRenderTargetConstants& constants) {
++  uint4 texel = uint4(resolve_swap_endian(memory_dwords.x, constants.texture_endian),
++                      resolve_swap_endian(memory_dwords.y, constants.texture_endian),
++                      resolve_swap_endian(memory_dwords.z, constants.texture_endian),
++                      resolve_swap_endian(memory_dwords.w, constants.texture_endian));
++  if (constants.texture_conversion == 1u) {
++    texel.x = resolve_texture_unorm24_to_float(texel.x >> 8);
++  } else if (constants.texture_conversion == 2u) {
++    texel.x = resolve_texture_float20e4_to_float(texel.x >> 8);
++  }
++  texture.write(texel, pixel);
++}
++// resolve_store_32bpp for a texture.
++void resolve_texture_32bpp(uint2 pixel, uint value, texture2d<uint, access::write> texture,
++                           constant ResolveFromRenderTargetConstants& constants) {
++  if (constants.swap_red_blue != 0u) {
++    value = (value & 0xFF00FF00u) | ((value >> 16) & 0xFFu) | ((value & 0xFFu) << 16);
++  }
++  resolve_texture_write(pixel, uint4(resolve_swap_endian(value, constants.endian), 0u, 0u, 0u),
++                        texture, constants);
++}
 +void resolve_store_32bpp(uint2 pixel, uint value, device uint* dest, device atomic_uint* result,
 +                         constant ResolveFromRenderTargetConstants& constants) {
 +  if (constants.swap_red_blue != 0u) {
@@ -10475,7 +10555,8 @@ index 0000000..3dad115
 +    texture2d<float, access::read> source [[texture(0)]],
 +    device uint* dest [[buffer(1)]],
 +    constant ResolveFromRenderTargetConstants& constants [[buffer(2)]],
-+    device atomic_uint* result [[buffer(3)]]) {
++    device atomic_uint* result [[buffer(3)]],
++    texture2d<uint, access::write> dest_texture [[texture(2)]]) {
 +  if (pixel.x >= constants.width || pixel.y >= constants.height) {
 +    return;
 +  }
@@ -10507,12 +10588,21 @@ index 0000000..3dad115
 +      uint4 bytes = uint4(clamp(converted, float4(0.0), float4(1.0)) * 255.0 + 0.5);
 +      value = bytes.x | (bytes.y << 8) | (bytes.z << 16) | (bytes.w << 24);
 +    }
++    if (resolve_to_texture) {
++      resolve_texture_write(pixel, uint4(resolve_swap_endian(value, constants.endian), 0u, 0u, 0u),
++                            dest_texture, constants);
++      return;
++    }
 +    resolve_store_dword(resolve_dest_address(pixel, 2, constants),
 +                        resolve_swap_endian(value, constants.endian), dest, result, constants);
 +    return;
 +  } else {
 +    uint4 bytes = uint4(color * 255.0 + 0.5);
 +    value = bytes.x | (bytes.y << 8) | (bytes.z << 16) | (bytes.w << 24);
++  }
++  if (resolve_to_texture) {
++    resolve_texture_32bpp(pixel, value, dest_texture, constants);
++    return;
 +  }
 +  resolve_store_32bpp(pixel, value, dest, result, constants);
 +}
@@ -10521,7 +10611,8 @@ index 0000000..3dad115
 +    texture2d<uint, access::read> source [[texture(0)]],
 +    device uint* dest [[buffer(1)]],
 +    constant ResolveFromRenderTargetConstants& constants [[buffer(2)]],
-+    device atomic_uint* result [[buffer(3)]]) {
++    device atomic_uint* result [[buffer(3)]],
++    texture2d<uint, access::write> dest_texture [[texture(2)]]) {
 +  if (pixel.x >= constants.width || pixel.y >= constants.height) {
 +    return;
 +  }
@@ -10531,6 +10622,10 @@ index 0000000..3dad115
 +  }
 +  uint4 texel = source.read(source_pixel);
 +  uint value = constants.packing == 1u ? (texel.x & 0xFFFFu) | (texel.y << 16) : texel.x;
++  if (resolve_to_texture) {
++    resolve_texture_32bpp(pixel, value, dest_texture, constants);
++    return;
++  }
 +  resolve_store_32bpp(pixel, value, dest, result, constants);
 +}
 +// A depth target's EDRAM bits, as the dump packs them (the 24-bit depth, unsigned normalized for
@@ -10542,7 +10637,8 @@ index 0000000..3dad115
 +    texture2d<uint, access::read> source_stencil [[texture(1)]],
 +    device uint* dest [[buffer(1)]],
 +    constant ResolveFromRenderTargetConstants& constants [[buffer(2)]],
-+    device atomic_uint* result [[buffer(3)]]) {
++    device atomic_uint* result [[buffer(3)]],
++    texture2d<uint, access::write> dest_texture [[texture(2)]]) {
 +  if (pixel.x >= constants.width || pixel.y >= constants.height) {
 +    return;
 +  }
@@ -10567,11 +10663,14 @@ index 0000000..3dad115
 +    depth = (biased >> 3) & 0xFFFFFFu;
 +  }
 +  uint stencil = source_stencil.read(source_pixel).r & 0xFFu;
++  if (resolve_to_texture) {
++    resolve_texture_32bpp(pixel, (depth << 8) | stencil, dest_texture, constants);
++    return;
++  }
 +  resolve_store_32bpp(pixel, (depth << 8) | stencil, dest, result, constants);
 +}
-+// The conversion and store of the full 64bpp resolve copy, from the unpacked color.
-+void resolve_store_64bpp(uint2 pixel, float4 color, device uint* dest, device atomic_uint* result,
-+                         constant ResolveFromRenderTargetConstants& constants) {
++// The conversion of the full 64bpp resolve copy, from the unpacked color, before the endianness.
++uint2 resolve_pack_64bpp(float4 color, constant ResolveFromRenderTargetConstants& constants) {
 +  color *= constants.exp_scale;
 +  if (constants.swap_red_blue != 0u) {
 +    color = color.zyxw;
@@ -10583,6 +10682,12 @@ index 0000000..3dad115
 +  } else {
 +    value = uint2(as_type<uint>(half2(color.xy)), as_type<uint>(half2(color.zw)));
 +  }
++  return value;
++}
++// The conversion and store of the full 64bpp resolve copy, from the unpacked color.
++void resolve_store_64bpp(uint2 pixel, float4 color, device uint* dest, device atomic_uint* result,
++                         constant ResolveFromRenderTargetConstants& constants) {
++  uint2 value = resolve_pack_64bpp(color, constants);
 +  uint address = resolve_dest_address(pixel, 3, constants);
 +  resolve_store_dword(address, resolve_swap_endian(value.x, constants.endian), dest, result,
 +                      constants);
@@ -10597,7 +10702,8 @@ index 0000000..3dad115
 +    texture2d<uint, access::read> source [[texture(0)]],
 +    device uint* dest [[buffer(1)]],
 +    constant ResolveFromRenderTargetConstants& constants [[buffer(2)]],
-+    device atomic_uint* result [[buffer(3)]]) {
++    device atomic_uint* result [[buffer(3)]],
++    texture2d<uint, access::write> dest_texture [[texture(2)]]) {
 +  if (pixel.x >= constants.width || pixel.y >= constants.height) {
 +    return;
 +  }
@@ -10612,6 +10718,14 @@ index 0000000..3dad115
 +  } else {
 +    color = float4(float2(as_type<half2>((texel.x & 0xFFFFu) | (texel.y << 16))),
 +                   float2(as_type<half2>((texel.z & 0xFFFFu) | (texel.w << 16))));
++  }
++  if (resolve_to_texture) {
++    uint2 value = resolve_pack_64bpp(color, constants);
++    resolve_texture_write(pixel,
++                          uint4(resolve_swap_endian(value.x, constants.endian),
++                                resolve_swap_endian(value.y, constants.endian), 0u, 0u),
++                          dest_texture, constants);
++    return;
 +  }
 +  resolve_store_64bpp(pixel, color, dest, result, constants);
 +}
@@ -10676,6 +10790,8 @@ index 0000000..3dad115
 +  uint32_t reduce_num_x;
 +  uint32_t reduce_num_y;
 +  uint32_t reduce_den;
++  uint32_t texture_endian;
++  uint32_t texture_conversion;
 +};
 +
 +// The tile function of a resolve inside the render pass (appended to kRenderTargetShaderSource):
@@ -10706,6 +10822,20 @@ index 0000000..3dad115
 +  %BODY%
 +}
 +)MSL";
++
++// What a resolve copies, for the encoder labels of GPU traces (gpu_debug_markers): the source
++// format, the size, the destination format and address, and a note.
++NSString* DescribeResolve(const draw_util::ResolveInfo& resolve_info, const char* what) {
++  const draw_util::ResolveEdramInfo& edram_info =
++      resolve_info.IsCopyingDepth() ? resolve_info.depth_edram_info : resolve_info.color_edram_info;
++  return [NSString
++      stringWithFormat:@"%s: %s %u to %u, %ux%u at 0x%08X", what,
++                       resolve_info.IsCopyingDepth() ? "depth" : "color",
++                       uint32_t(edram_info.format),
++                       uint32_t(resolve_info.copy_dest_info.copy_dest_format),
++                       uint32_t(resolve_info.coordinate_info.width_div_8) << 3,
++                       uint32_t(resolve_info.height_div_8) << 3, resolve_info.copy_dest_base];
++}
 +
 +// The constants of a resolve written from its render target (see
 +// MetalRenderTargetCache::GetNativeResolveSource), or false for a render target format the native
@@ -11010,12 +11140,43 @@ index 0000000..3dad115
 +        {&resolve_compare_pipeline_, @"resolve_compare"},
 +        {&resolve_from_render_target_depth_pipeline_, @"resolve_from_render_target_depth"},
 +    };
++    // Functions with a function constant are specialized, here with resolve_to_texture false.
++    MTLFunctionConstantValues* to_memory_values = [MTLFunctionConstantValues new];
++    bool to_memory_to_texture = false;
++    [to_memory_values setConstantValue:&to_memory_to_texture type:MTLDataTypeBool atIndex:0];
 +    for (const auto& [pipeline, name] : resolve_from_render_target_pipelines) {
++      id<MTLFunction> function = [library newFunctionWithName:name
++                                               constantValues:to_memory_values
++                                                        error:&error];
 +      pipeline->pipeline =
-+          [device newComputePipelineStateWithFunction:[library newFunctionWithName:name]
-+                                                error:&error];
++          function ? [device newComputePipelineStateWithFunction:function error:&error] : nil;
 +      if (!pipeline->pipeline) {
 +        REXGPU_ERROR("MetalRenderTargetCache: Failed to create the {} pipeline: {}",
++                     name.UTF8String,
++                     error ? error.localizedDescription.UTF8String : "unknown error");
++        Shutdown();
++        return false;
++      }
++      pipeline->threads_per_threadgroup = MTLSizeMake(8, 8, 1);
++    }
++    // The variants writing textures (resolve_to_texture), with the function constant set.
++    MTLFunctionConstantValues* to_texture_values = [MTLFunctionConstantValues new];
++    bool to_texture = true;
++    [to_texture_values setConstantValue:&to_texture type:MTLDataTypeBool atIndex:0];
++    std::pair<ComputePipeline*, NSString*> resolve_to_texture_pipelines[] = {
++        {&resolve_to_texture_float_pipeline_, @"resolve_from_render_target_float"},
++        {&resolve_to_texture_uint_pipeline_, @"resolve_from_render_target_uint"},
++        {&resolve_to_texture_64bpp_pipeline_, @"resolve_from_render_target_64bpp"},
++        {&resolve_to_texture_depth_pipeline_, @"resolve_from_render_target_depth"},
++    };
++    for (const auto& [pipeline, name] : resolve_to_texture_pipelines) {
++      id<MTLFunction> function = [library newFunctionWithName:name
++                                               constantValues:to_texture_values
++                                                        error:&error];
++      pipeline->pipeline =
++          function ? [device newComputePipelineStateWithFunction:function error:&error] : nil;
++      if (!pipeline->pipeline) {
++        REXGPU_ERROR("MetalRenderTargetCache: Failed to create the {} pipeline writing textures: {}",
 +                     name.UTF8String,
 +                     error ? error.localizedDescription.UTF8String : "unknown error");
 +        Shutdown();
@@ -11089,6 +11250,10 @@ index 0000000..3dad115
 +  resolve_from_render_target_64bpp_pipeline_ = ComputePipeline();
 +  resolve_compare_pipeline_ = ComputePipeline();
 +  resolve_from_render_target_depth_pipeline_ = ComputePipeline();
++  resolve_to_texture_float_pipeline_ = ComputePipeline();
++  resolve_to_texture_uint_pipeline_ = ComputePipeline();
++  resolve_to_texture_64bpp_pipeline_ = ComputePipeline();
++  resolve_to_texture_depth_pipeline_ = ComputePipeline();
 +  resolve_in_render_pass_pipelines_.clear();
 +  for (ComputePipeline& pipeline : resolve_copy_pipelines_) {
 +    pipeline = ComputePipeline();
@@ -11422,45 +11587,37 @@ index 0000000..3dad115
 +}
 +
 +uint32_t MetalRenderTargetCache::UpdateResolvedTextures(const draw_util::ResolveInfo& resolve_info,
-+                                                       draw_util::ResolveCopyShaderIndex copy_shader,
-+                                                       MetalTextureCache& texture_cache) {
-+  // The texture copy is made for textures at the guest resolution only.
-+  if (!(REXCVAR_GET(hle_native_resolves) || REXCVAR_GET(hle_verify_resolves)) ||
-+      IsDrawResolutionScaled()) {
-+    return 0;
-+  }
-+  MetalRenderTarget* source = GetNativeResolveSource(resolve_info, copy_shader);
-+  reg::RB_COPY_DEST_INFO dest_info = resolve_info.copy_dest_info;
-+  // The texture cache's host format for the destination holds the render target's data with no
-+  // conversion for these formats and number formats (verified by hle_verify_resolves). A texture
-+  // starts at the destination base, so the copy must too.
-+  auto render_target_format = xenos::ColorRenderTargetFormat(resolve_info.color_edram_info.format);
-+  if (!source || resolve_info.IsCopyingDepth() || source->key().is_depth ||
-+      source->key().GetColorFormat() != render_target_format ||
-+      (render_target_format != xenos::ColorRenderTargetFormat::k_8_8_8_8 &&
-+       render_target_format != xenos::ColorRenderTargetFormat::k_16_16_FLOAT &&
-+       render_target_format != xenos::ColorRenderTargetFormat::k_32_FLOAT) ||
++                                                       const std::vector<RangeOwner>& owners,
++                                                       MetalTextureCache& texture_cache,
++                                                       RationalResolveMode rational_mode,
++                                                       bool scaled) {
++  // A texture starts at the destination's base, so the resolve must too.
++  if (!REXCVAR_GET(metal_resolve_to_texture) || owners.empty() ||
 +      resolve_info.copy_dest_coordinate_info.offset_x_div_8 ||
-+      resolve_info.copy_dest_coordinate_info.offset_y_div_8 ||
-+      dest_info.copy_dest_number !=
-+          (xenos::TextureFormat(dest_info.copy_dest_format) == xenos::TextureFormat::k_8_8_8_8
-+               ? xenos::SurfaceNumberFormat::kUnsignedRepeatingFraction
-+               : xenos::SurfaceNumberFormat::kFloat)) {
++      resolve_info.copy_dest_coordinate_info.offset_y_div_8) {
 +    return 0;
 +  }
-+  return texture_cache.UpdateTexturesFromResolve(
++  return texture_cache.WriteTexturesFromResolve(
 +      resolve_info.copy_dest_base, resolve_info.coordinate_info.width_div_8 << 3,
-+      resolve_info.height_div_8 << 3, xenos::TextureFormat(dest_info.copy_dest_format),
-+      xenos::Endian(uint32_t(dest_info.copy_dest_endian)), dest_info.copy_dest_swap != 0,
-+      source->texture(), resolve_info.coordinate_info.edram_offset_x_div_8 << 3,
-+      resolve_info.coordinate_info.edram_offset_y_div_8 << 3);
++      resolve_info.height_div_8 << 3, scaled,
++      [&](id<MTLTexture> view, uint32_t endian, uint32_t conversion) {
++        for (const RangeOwner& owner : owners) {
++          // The memory binding is not used by the texture variants, but every buffer the kernel
++          // declares is bound.
++          ResolveFromRenderTarget(resolve_info, owner, edram_buffer_, 0, 0, false, rational_mode,
++                                  0, view, endian, conversion);
++        }
++      });
 +}
 +
 +void MetalRenderTargetCache::ResolveFromRenderTarget(const draw_util::ResolveInfo& resolve_info,
 +                                                     const RangeOwner& owner, id<MTLBuffer> dest,
 +                                                     NSUInteger dest_offset, uint32_t dest_base,
 +                                                     bool verify, RationalResolveMode rational_mode,
-+                                                     uint32_t surface_pitch) {
++                                                     uint32_t surface_pitch,
++                                                     id<MTLTexture> dest_texture,
++                                                     uint32_t texture_endian,
++                                                     uint32_t texture_conversion) {
 +  MetalRenderTarget& source = *static_cast<MetalRenderTarget*>(owner.render_target);
 +  id<MTLTexture> source_view = source.transfer_view();
 +  ResolveFromRenderTargetConstants constants;
@@ -11506,6 +11663,18 @@ index 0000000..3dad115
 +  if (source_view.pixelFormat != expected_view_format) {
 +    assert_always();
 +    return;
++  }
++  // Writing a texture (UpdateResolvedTextures): the variant of the pipeline doing that, at the
++  // texture's origin, with its endianness and conversion.
++  if (dest_texture) {
++    pipeline = pipeline == &resolve_from_render_target_float_pipeline_  ? &resolve_to_texture_float_pipeline_
++               : pipeline == &resolve_from_render_target_uint_pipeline_ ? &resolve_to_texture_uint_pipeline_
++               : pipeline == &resolve_from_render_target_depth_pipeline_
++                   ? &resolve_to_texture_depth_pipeline_
++                   : &resolve_to_texture_64bpp_pipeline_;
++    constants.texture_endian = texture_endian;
++    constants.texture_conversion = texture_conversion;
++    verify = false;
 +  }
 +  if (rational_mode != RationalResolveMode::kNone) {
 +    // The constants are for the guest resolution (GetResolveInfo at the whole part, 1): the render
@@ -11556,8 +11725,18 @@ index 0000000..3dad115
 +    std::memset(result.contents, 0, result.length);
 +  }
 +  command_processor_.SetInNativeResolve(!verify);
-+  id<MTLComputeCommandEncoder> compute =
-+      command_processor_.GetComputeEncoder(rex::perf::CounterId::kRenderPassEndsResolve);
++  NSString* debug_label = nil;
++  if (command_processor_.debug_labels_enabled()) {
++    debug_label = DescribeResolve(
++        resolve_info, dest_texture ? "Resolve to texture"
++                      : rational_mode == RationalResolveMode::kScaledSurface
++                          ? "Resolve (scaled surface)"
++                      : rational_mode == RationalResolveMode::kGuestResolution
++                          ? "Resolve (guest resolution)"
++                          : "Resolve");
++  }
++  id<MTLComputeCommandEncoder> compute = command_processor_.GetComputeEncoder(
++      rex::perf::CounterId::kRenderPassEndsResolve, debug_label);
 +  command_processor_.SetInNativeResolve(false);
 +  [compute setComputePipelineState:pipeline->pipeline];
 +  [compute setTexture:source_view atIndex:kComputeTextureSource];
@@ -11565,6 +11744,9 @@ index 0000000..3dad115
 +    [compute setTexture:source.stencil_view() atIndex:kComputeTextureSourceStencil];
 +  }
 +  [compute setBuffer:dest offset:dest_offset atIndex:kComputeBufferDest];
++  if (dest_texture) {
++    [compute setTexture:dest_texture atIndex:kComputeTextureDest];
++  }
 +  [compute setBytes:&constants length:sizeof(constants) atIndex:kComputeBufferConstants];
 +  // Unused without verify, but every buffer the kernel declares is bound.
 +  [compute setBuffer:verify ? result : dest offset:0 atIndex:kComputeBufferVerifyResult];
@@ -11780,6 +11962,9 @@ index 0000000..3dad115
 +
 +  // Copying.
 +  bool copied = false;
++  if (resolve_info.copy_dest_extent_length) {
++    texture_cache.ForgetResolveTextureChecks(resolve_info.copy_dest_base);
++  }
 +  if (resolve_info.copy_dest_extent_length && !draw_resolution_scale().IsWhole()) {
 +    copied = ResolveCopyAtRationalScale(resolve_info, shared_memory, texture_cache,
 +                                        written_address_out, written_length_out);
@@ -11888,8 +12073,11 @@ index 0000000..3dad115
 +          }
 +        } else {
 +          const ComputePipeline& pipeline = resolve_copy_pipelines_[size_t(copy_shader)];
-+          compute =
-+              command_processor_.GetComputeEncoder(rex::perf::CounterId::kRenderPassEndsResolve);
++          compute = command_processor_.GetComputeEncoder(
++              rex::perf::CounterId::kRenderPassEndsResolve,
++              command_processor_.debug_labels_enabled()
++                  ? DescribeResolve(resolve_info, "Resolve copy")
++                  : nil);
 +          [compute setComputePipelineState:pipeline.pipeline];
 +          [compute setBuffer:edram_buffer_ offset:0 atIndex:kComputeBufferEdram];
 +          if (draw_resolution_scaled) {
@@ -11978,9 +12166,11 @@ index 0000000..3dad115
 +          texture_cache.MarkRangeAsResolvedUnscaled(written_start, written_length);
 +        } else {
 +          texture_cache.MarkRangeAsResolved(written_start, written_length);
-+          // gfx = hle: textures with exactly the resolve's key take the render target's data.
-+          if (!in_render_pass) {
-+            UpdateResolvedTextures(resolve_info, copy_shader, texture_cache);
++          // gfx = hle: textures with exactly the resolve's destination are written from the
++          // render targets too, at the scale when drawing at one.
++          if (from_render_target && !in_render_pass) {
++            UpdateResolvedTextures(resolve_info, native_owners, texture_cache,
++                                   RationalResolveMode::kNone, draw_resolution_scaled);
 +          }
 +        }
 +        written_address_out = written_start;
@@ -12048,8 +12238,11 @@ index 0000000..3dad115
 +      return false;
 +    }
 +    const ComputePipeline& pipeline = resolve_copy_pipelines_[size_t(copy_shader)];
-+    id<MTLComputeCommandEncoder> compute =
-+        command_processor_.GetComputeEncoder(rex::perf::CounterId::kRenderPassEndsResolve);
++    id<MTLComputeCommandEncoder> compute = command_processor_.GetComputeEncoder(
++        rex::perf::CounterId::kRenderPassEndsResolve,
++        command_processor_.debug_labels_enabled()
++            ? DescribeResolve(resolve_info, "Resolve copy (guest resolution)")
++            : nil);
 +    [compute setComputePipelineState:pipeline.pipeline];
 +    [compute setBuffer:edram_buffer_guest_ offset:0 atIndex:kComputeBufferEdram];
 +    // The whole shared memory is bound, so the destination base stays absolute.
@@ -12100,6 +12293,10 @@ index 0000000..3dad115
 +                              RationalResolveMode::kScaledSurface, surface_pitch);
 +    }
 +    texture_cache.MarkRangeAsResolved(written_start, written_length);
++    // The textures at the scale with exactly this destination are written too, so they are not
++    // loaded back from the surface.
++    UpdateResolvedTextures(resolve_info, owners, texture_cache,
++                           RationalResolveMode::kScaledSurface, true);
 +  } else {
 +    texture_cache.DropRationalScaledSurface(dest_base);
 +    texture_cache.MarkRangeAsResolvedUnscaled(written_start, written_length);
@@ -12727,8 +12924,13 @@ index 0000000..3dad115
 +  std::sort(dump_invocations_.begin(), dump_invocations_.end());
 +
 +  // Dump the render targets.
-+  id<MTLComputeCommandEncoder> compute =
-+      command_processor_.GetComputeEncoder(rex::perf::CounterId::kRenderPassEndsResolve);
++  id<MTLComputeCommandEncoder> compute = command_processor_.GetComputeEncoder(
++      rex::perf::CounterId::kRenderPassEndsResolve,
++      command_processor_.debug_labels_enabled()
++          ? [NSString stringWithFormat:@"Resolve dump: %u rectangles%s",
++                                       uint32_t(dump_rectangles_.size()),
++                                       guest_resolution ? " (guest resolution)" : ""]
++          : nil);
 +  [compute setBuffer:guest_resolution ? edram_buffer_guest_ : edram_buffer_
 +              offset:0
 +             atIndex:kComputeBufferEdram];
@@ -15831,10 +16033,10 @@ index 0000000..c2d1f96
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_texture_cache.h b/src/graphics/metal/metal_texture_cache.h
 new file mode 100644
-index 0000000..aee13b4
+index 0000000..030fb39
 --- /dev/null
 +++ b/src/graphics/metal/metal_texture_cache.h
-@@ -0,0 +1,296 @@
+@@ -0,0 +1,309 @@
 +/**
 + * @file        graphics/metal/metal_texture_cache.h
 + * @brief       Guest textures as Metal textures, loaded from the shared memory with compute shaders
@@ -15846,6 +16048,7 @@ index 0000000..aee13b4
 +#pragma once
 +
 +#include <array>
++#include <functional>
 +#include <cstdint>
 +#include <memory>
 +#include <unordered_map>
@@ -15941,18 +16144,22 @@ index 0000000..aee13b4
 +  // resolution): the older surface there is dropped.
 +  void DropRationalScaledSurface(uint32_t dest_base) { rational_scaled_surfaces_.erase(dest_base); }
 +
-+  // gfx = hle (hle_native_resolves): right after a resolve invalidated its destination, copies the
-+  // resolved rectangle of the render target (source, at source_x and source_y) into each texture
-+  // the cache holds whose base level is exactly the resolve's destination (2D, tiled, one level,
-+  // same size, format and endianness, same host pixel format as the render target), and marks it
-+  // up to date, so it is not loaded back from memory. With hle_verify_resolves, the textures are
-+  // still loaded from memory and compared with that copy instead. Returns the textures updated.
-+  // red_blue_swap: the resolve swaps red and blue (RB_COPY_DEST_INFO copy_dest_swap), which the
-+  // texture's views then do instead of the copy.
-+  uint32_t UpdateTexturesFromResolve(uint32_t dest_base, uint32_t width, uint32_t height,
-+                                     xenos::TextureFormat format, xenos::Endian endianness,
-+                                     bool red_blue_swap, id<MTLTexture> source, uint32_t source_x,
-+                                     uint32_t source_y);
++  // gfx = hle: right after a resolve invalidated its destination, for each texture the cache holds
++  // whose base level is exactly the resolve's destination (2D, tiled, one level not in a packed
++  // mip tail, the resolve's size, at the scale when scaled, and a format the direct loads take),
++  // calls write with an integer view of it, its endianness and its load's conversion (see
++  // GetDirectLoad), for the resolve to write the texture as a load from memory would, and marks it
++  // up to date, so it is not loaded back. With metal_texture_load_verify, write gets a texture of
++  // its own instead, compared with the texture's next load from memory. Returns the textures
++  // written.
++  // metal_texture_load_verify: a resolve to dest_base is about to write the memory, so the checks
++  // of what earlier resolves wrote for the textures there no longer apply (their next load reads
++  // this one's data). Called for every resolve; WriteTexturesFromResolve adds its own afterwards.
++  void ForgetResolveTextureChecks(uint32_t dest_base);
++  using ResolveTextureWriter =
++      std::function<void(id<MTLTexture> view, uint32_t endian, uint32_t conversion)>;
++  uint32_t WriteTexturesFromResolve(uint32_t dest_base, uint32_t width, uint32_t height,
++                                    bool scaled, const ResolveTextureWriter& write);
 +
 + protected:
 +  bool IsSignedVersionSeparateForFormat(TextureKey key) const override;
@@ -16004,12 +16211,6 @@ index 0000000..aee13b4
 +
 +    id<MTLTexture> texture() const { return texture_; }
 +
-+    // Whether the texture holds a render target's data with red and blue in the opposite order
-+    // from what a load from memory gives (a resolve that swaps them, copied from the render target
-+    // by hle_native_resolves): views then swap red and blue back.
-+    bool red_blue_swapped() const { return red_blue_swapped_; }
-+    void set_red_blue_swapped(bool swapped) { red_blue_swapped_ = swapped; }
-+
 +    // A view with the format of the signedness and the host swizzle; 1D and 2D textures are 2D
 +    // arrays for guest shaders, a single 2D slice when is_array is false.
 +    id<MTLTexture> GetView(bool is_signed, uint32_t host_swizzle, bool is_array = true);
@@ -16018,7 +16219,6 @@ index 0000000..aee13b4
 +
 +   private:
 +    id<MTLTexture> texture_;
-+    bool red_blue_swapped_ = false;
 +    // Key: is_signed_separate_view (1 bit), host_swizzle (12 bits), is_array (1 bit).
 +    std::unordered_map<uint32_t, id<MTLTexture>> views_;
 +    std::unique_ptr<MetalTexture> texture_3d_as_2d_;
@@ -16062,15 +16262,15 @@ index 0000000..aee13b4
 +
 +  MetalCommandProcessor& command_processor_;
 +
-+  // hle_verify_resolves: for each texture a resolve would have updated, the render target copy to
-+  // compare with its next load from memory.
-+  struct ResolveVerifyCopy {
++  // metal_texture_load_verify: for each texture a resolve wrote (WriteTexturesFromResolve), the
++  // texture it wrote instead, compared with the texture's next load from memory.
++  struct ResolveTextureCheck {
 +    id<MTLTexture> texture;
-+    bool red_blue_swap;
++    uint32_t dwords_log2;
 +  };
-+  std::unordered_map<const Texture*, ResolveVerifyCopy> resolve_verify_copies_;
-+  // Compares a texture just loaded from memory with its resolve_verify_copies_ copy.
-+  void VerifyResolvedTexture(const Texture& texture, id<MTLTexture> loaded);
++  std::unordered_map<const Texture*, ResolveTextureCheck> resolve_texture_checks_;
++  // The load shader of a texture's host format.
++  LoadShaderIndex GetLoadShader(TextureKey key) const;
 +
 +  static const HostFormatPair kBestHostFormats[64];
 +  static const HostFormatPair kHostFormatGBGRUnaligned;
@@ -16086,6 +16286,21 @@ index 0000000..aee13b4
 +    id<MTLComputePipelineState> pipeline = nil;
 +    MTLSize threads_per_threadgroup = {1, 1, 1};
 +  };
++  // Loading straight into the texture (metal_texture_load_direct, kTextureLoadDirectShaderSource),
++  // without the load shaders' scratch buffer and the copy from it: the formats a texel is copied
++  // bitwise for (32, 64 and 128 bits per block) and the two depth formats, in 2D textures.
++  LoadPipeline direct_load_pipeline_;
++  // metal_texture_load_verify: compares a direct load with the usual one.
++  LoadPipeline direct_load_compare_pipeline_;
++  // The texel size of a direct load, log2 of dwords (0 to 2), and its conversion (0 bitwise, 1
++  // 24-bit unorm depth, 2 20e4 float depth), for a load shader that has one; false otherwise.
++  static bool GetDirectLoad(LoadShaderIndex load_shader, uint32_t& dwords_log2_out,
++                            uint32_t& conversion_out);
++  // metal_texture_load_verify: compares a level and slice of a texture loaded directly with the
++  // same one loaded the usual way (into reference), and logs the first mismatch of each kind.
++  void CompareDirectLoad(const TextureKey& key, id<MTLTexture> direct, id<MTLTexture> reference,
++                         uint32_t dwords_log2, uint32_t level, uint32_t slice,
++                         const char* what = "Direct texture load check");
 +  std::array<LoadPipeline, kLoadShaderCount> load_pipelines_{};
 +  // Variants reading the scaled resolve buffer, for the shaders that have one.
 +  std::array<LoadPipeline, kLoadShaderCount> load_pipelines_scaled_{};
@@ -16133,10 +16348,10 @@ index 0000000..aee13b4
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_texture_cache.mm b/src/graphics/metal/metal_texture_cache.mm
 new file mode 100644
-index 0000000..0de9164
+index 0000000..052f1c9
 --- /dev/null
 +++ b/src/graphics/metal/metal_texture_cache.mm
-@@ -0,0 +1,1983 @@
+@@ -0,0 +1,2290 @@
 +/**
 + * @file        graphics/metal/metal_texture_cache.mm
 + * @brief       Guest textures as Metal textures, loaded from the shared memory with compute shaders
@@ -16175,6 +16390,16 @@ index 0000000..0de9164
 +
 +REXCVAR_DECLARE(bool, gpu_3d_to_2d_texture);
 +REXCVAR_DECLARE(int32_t, anisotropic_override);
++
++REXCVAR_DEFINE_BOOL(metal_texture_load_direct, true, "GPU/Metal",
++                    "Load textures of 32, 64 and 128 bits per texel and depth textures straight "
++                    "into the texture, without the load shaders' scratch buffer and the copy from "
++                    "it")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++REXCVAR_DEFINE_BOOL(metal_texture_load_verify, false, "GPU/Metal",
++                    "Debugging aid: load each texture metal_texture_load_direct loads the usual way "
++                    "too, compare the two and log the first mismatch of each kind")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 +
 +namespace rex::graphics::metal {
 +
@@ -16229,6 +16454,151 @@ index 0000000..0de9164
 +constexpr uint32_t kLoadBufferDestination = 0;
 +constexpr uint32_t kLoadBufferSource = 1;
 +constexpr uint32_t kLoadBufferConstants = 2;
++
++// The constants of texture_load_direct in kTextureLoadDirectShaderSource.
++struct TextureLoadDirectConstants {
++  uint32_t guest_offset;
++  uint32_t guest_pitch;
++  uint32_t width;
++  uint32_t height;
++  uint32_t tiled;
++  uint32_t endian;
++  uint32_t scale_x;
++  uint32_t scale_y;
++  uint32_t conversion;
++  uint32_t dwords_log2;
++};
++
++// Loads a level and slice of a texture straight into it, a texel per thread, through an unsigned
++// integer view of its host format: the guest texel is read where the load shaders read it (the
++// guest memory, a scaled surface, or the scaled resolve buffer at a whole scale), its bytes swapped
++// as the texture's endianness says, and for the depth formats converted to a 32-bit float as the
++// depth load shaders do. texture_load_compare checks it against the usual load.
++NSString* const kTextureLoadDirectShaderSource = @R"MSL(
++#include <metal_stdlib>
++using namespace metal;
++struct TextureLoadDirectConstants {
++  // Bytes from the source binding to the level and slice.
++  uint guest_offset;
++  // Tiled: the row pitch in texels (aligned to 32, of the guest texture). Linear: in bytes.
++  uint guest_pitch;
++  // The level's size in host texels.
++  uint width;
++  uint height;
++  uint tiled;
++  // xenos::Endian.
++  uint endian;
++  // The scaled resolve buffer's layout at a whole draw resolution scale (1 otherwise): each 16
++  // bytes of the guest texture are scale_x * scale_y blocks of 16 bytes, as the resolves write it.
++  uint scale_x;
++  uint scale_y;
++  // 0: bits copied, 1: 24-bit unorm depth to float, 2: 20e4 float depth to float.
++  uint conversion;
++  // log2 of the dwords of a texel (0 to 2).
++  uint dwords_log2;
++};
++// texture_util::GetTiledOffset2D.
++uint texture_load_tiled_offset_2d(uint x, uint y, uint pitch, uint bytes_per_block_log2) {
++  int ix = int(x);
++  int iy = int(y);
++  int macro_offset = ((ix >> 5) + (iy >> 5) * int(pitch >> 5)) << (bytes_per_block_log2 + 7);
++  int micro_offset = ((ix & 7) + ((iy & 0xE) << 2)) << bytes_per_block_log2;
++  int offset = macro_offset + ((micro_offset & ~0xF) << 1) + (micro_offset & 0xF) +
++               ((iy & 1) << 4);
++  return uint(((offset & ~0x1FF) << 3) + ((iy & 16) << 7) + ((offset & 0x1C0) << 2) +
++              (((((iy & 8) >> 2) + (ix >> 3)) & 3) << 6) + (offset & 0x3F));
++}
++uint texture_load_source_address(uint2 texel, constant TextureLoadDirectConstants& c) {
++  uint bytes_per_block_log2 = 2u + c.dwords_log2;
++  if (c.tiled == 0u) {
++    return c.guest_offset + texel.y * c.guest_pitch + (texel.x << bytes_per_block_log2);
++  }
++  if (c.scale_x == 1u && c.scale_y == 1u) {
++    return c.guest_offset +
++           texture_load_tiled_offset_2d(texel.x, texel.y, c.guest_pitch, bytes_per_block_log2);
++  }
++  uint2 scale = uint2(c.scale_x, c.scale_y);
++  uint texels_per_block_log2 = 4u - bytes_per_block_log2;
++  uint2 block = uint2(texel.x >> texels_per_block_log2, texel.y);
++  uint2 guest = block / scale;
++  uint2 sub = block - guest * scale;
++  uint tiled = texture_load_tiled_offset_2d(guest.x << texels_per_block_log2, guest.y,
++                                            c.guest_pitch, bytes_per_block_log2);
++  return c.guest_offset + tiled * scale.x * scale.y +
++         ((((sub.x * scale.y + sub.y) << texels_per_block_log2) +
++           (texel.x & ((1u << texels_per_block_log2) - 1u)))
++          << bytes_per_block_log2);
++}
++uint texture_load_swap_endian(uint value, uint endian) {
++  if (endian == 1u) {
++    value = ((value & 0x00FF00FFu) << 8) | ((value >> 8) & 0x00FF00FFu);
++  } else if (endian == 2u) {
++    value = (value << 24) | ((value & 0xFF00u) << 8) | ((value >> 8) & 0xFF00u) | (value >> 24);
++  } else if (endian == 3u) {
++    value = (value << 16) | (value >> 16);
++  }
++  return value;
++}
++// xenos::UNorm24To32: exact, as a division by 2^24 is an exponent shift.
++uint texture_load_unorm24_to_float(uint n24) {
++  return as_type<uint>(float(n24 + (n24 >> 23)) * (1.0 / 16777216.0));
++}
++// xenos::Float20e4To32.
++uint texture_load_float20e4_to_float(uint f24) {
++  f24 &= 0xFFFFFFu;
++  if (f24 == 0u) {
++    return 0u;
++  }
++  uint mantissa = f24 & 0xFFFFFu;
++  uint exponent = f24 >> 20;
++  if (exponent == 0u) {
++    uint mantissa_lzcnt = clz(mantissa) - (32u - 21u);
++    exponent = uint(1 - int(mantissa_lzcnt));
++    mantissa = (mantissa << mantissa_lzcnt) & 0xFFFFFu;
++  }
++  return ((exponent + 112u) << 23) | (mantissa << 3);
++}
++kernel void texture_load_direct(uint2 texel [[thread_position_in_grid]],
++                                const device uint* source [[buffer(0)]],
++                                constant TextureLoadDirectConstants& c [[buffer(1)]],
++                                texture2d<uint, access::write> dest [[texture(0)]]) {
++  if (texel.x >= c.width || texel.y >= c.height) {
++    return;
++  }
++  uint dword_index = texture_load_source_address(texel, c) >> 2;
++  uint4 value = uint4(0u);
++  uint dword_count = 1u << c.dwords_log2;
++  for (uint i = 0u; i < dword_count; ++i) {
++    value[i] = texture_load_swap_endian(source[dword_index + i], c.endian);
++  }
++  if (c.conversion == 1u) {
++    value.x = texture_load_unorm24_to_float(value.x >> 8);
++  } else if (c.conversion == 2u) {
++    value.x = texture_load_float20e4_to_float(value.x >> 8);
++  }
++  dest.write(value, texel);
++}
++// Counts the texels where two integer views differ, with the first one's position and values.
++kernel void texture_load_compare(uint2 texel [[thread_position_in_grid]],
++                                 texture2d<uint, access::read> direct [[texture(0)]],
++                                 texture2d<uint, access::read> reference [[texture(1)]],
++                                 device atomic_uint* result [[buffer(0)]]) {
++  if (texel.x >= direct.get_width() || texel.y >= direct.get_height()) {
++    return;
++  }
++  uint4 a = direct.read(texel);
++  uint4 b = reference.read(texel);
++  if (any(a != b) && atomic_fetch_add_explicit(result, 1u, memory_order_relaxed) == 0u) {
++    device uint* first = (device uint*)result;
++    first[1] = texel.x;
++    first[2] = texel.y;
++    first[3] = a.x;
++    first[4] = b.x;
++    first[5] = a.y;
++    first[6] = b.y;
++  }
++}
++)MSL";
 +
 +MTLTextureSwizzle GetSwizzleChannel(uint32_t host_swizzle, uint32_t component_index) {
 +  switch (xenos::XE_GPU_TEXTURE_SWIZZLE((host_swizzle >> (3 * component_index)) & 0b111)) {
@@ -16675,6 +17045,81 @@ index 0000000..0de9164
 +                               start_scaled, length_scaled);
 +}
 +
++bool MetalTextureCache::GetDirectLoad(LoadShaderIndex load_shader, uint32_t& dwords_log2_out,
++                                      uint32_t& conversion_out) {
++  conversion_out = 0;
++  switch (load_shader) {
++    case kLoadShaderIndex32bpb:
++      dwords_log2_out = 0;
++      return true;
++    case kLoadShaderIndex64bpb:
++      dwords_log2_out = 1;
++      return true;
++    case kLoadShaderIndex128bpb:
++      dwords_log2_out = 2;
++      return true;
++    case kLoadShaderIndexDepthUnorm:
++      dwords_log2_out = 0;
++      conversion_out = 1;
++      return true;
++    case kLoadShaderIndexDepthFloat:
++      dwords_log2_out = 0;
++      conversion_out = 2;
++      return true;
++    default:
++      return false;
++  }
++}
++
++void MetalTextureCache::CompareDirectLoad(const TextureKey& key, id<MTLTexture> direct,
++                                          id<MTLTexture> reference, uint32_t dwords_log2,
++                                          uint32_t level, uint32_t slice, const char* what_kind) {
++  static const MTLPixelFormat kViewFormats[] = {MTLPixelFormatR32Uint, MTLPixelFormatRG32Uint,
++                                                MTLPixelFormatRGBA32Uint};
++  NSRange levels = NSMakeRange(level, 1), slices = NSMakeRange(slice, 1);
++  id<MTLTexture> direct_view = [direct newTextureViewWithPixelFormat:kViewFormats[dwords_log2]
++                                                         textureType:MTLTextureType2D
++                                                              levels:levels
++                                                              slices:slices];
++  id<MTLTexture> reference_view =
++      [reference newTextureViewWithPixelFormat:kViewFormats[dwords_log2]
++                                   textureType:MTLTextureType2D
++                                        levels:levels
++                                        slices:slices];
++  id<MTLBuffer> result = [command_processor_.device() newBufferWithLength:8 * sizeof(uint32_t)
++                                                                  options:MTLResourceStorageModeShared];
++  std::memset(result.contents, 0, result.length);
++  id<MTLComputeCommandEncoder> compute =
++      command_processor_.GetComputeEncoder(rex::perf::CounterId::kRenderPassEndsTextureLoad);
++  [compute setComputePipelineState:direct_load_compare_pipeline_.pipeline];
++  [compute setTexture:direct_view atIndex:0];
++  [compute setTexture:reference_view atIndex:1];
++  [compute setBuffer:result offset:0 atIndex:0];
++  [compute dispatchThreads:MTLSizeMake(direct_view.width, direct_view.height, 1)
++      threadsPerThreadgroup:direct_load_compare_pipeline_.threads_per_threadgroup];
++  std::string what = fmt::format("{}: format {} {}x{} level {} endianness {}{}{}", what_kind,
++                                 uint32_t(key.format), direct_view.width, direct_view.height, level,
++                                 uint32_t(key.endianness), key.tiled ? "" : " linear",
++                                 key.scaled_resolve ? " scaled" : "");
++  command_processor_.AddCompletedHandler(^(id<MTLCommandBuffer>) {
++    const uint32_t* values = static_cast<const uint32_t*>(result.contents);
++    static std::mutex mutex;
++    static std::set<std::string> logged;
++    std::lock_guard<std::mutex> lock(mutex);
++    if (!logged.insert(fmt::format("{} {}", values[0] == 0, what)).second) {
++      return;
++    }
++    if (!values[0]) {
++      REXGPU_INFO("{} matches the usual load", what);
++    } else {
++      REXGPU_WARN("{} differs in {} texels, first at {},{}: direct {:08X} {:08X}, usual "
++                  "{:08X} {:08X}",
++                  what, values[0], values[1], values[2], values[3], values[5], values[4],
++                  values[6]);
++    }
++  });
++}
++
 +id<MTLBuffer> MetalTextureCache::RequestRationalScaledSurface(uint32_t dest_base, uint32_t width,
 +                                                              uint32_t height,
 +                                                              uint32_t bytes_per_texel,
@@ -16958,6 +17403,29 @@ index 0000000..0de9164
 +      load_pipelines_scaled_[i].pipeline = pipeline_scaled;
 +      load_pipelines_scaled_[i].threads_per_threadgroup =
 +          MTLSizeMake(threadgroup_size[0], threadgroup_size[1], threadgroup_size[2]);
++    }
++  }
++
++  // Direct loads (and their check). Without them, every texture is loaded the usual way.
++  if (REXCVAR_GET(metal_texture_load_direct)) {
++    NSError* error = nil;
++    id<MTLLibrary> library = [device newLibraryWithSource:kTextureLoadDirectShaderSource
++                                                  options:nil
++                                                    error:&error];
++    auto make_pipeline = [&](NSString* name, LoadPipeline& pipeline_out) {
++      id<MTLFunction> function = [library newFunctionWithName:name];
++      pipeline_out.pipeline =
++          function ? [device newComputePipelineStateWithFunction:function error:&error] : nil;
++      pipeline_out.threads_per_threadgroup = MTLSizeMake(8, 8, 1);
++      return pipeline_out.pipeline != nil;
++    };
++    if (!library || !make_pipeline(@"texture_load_direct", direct_load_pipeline_) ||
++        !make_pipeline(@"texture_load_compare", direct_load_compare_pipeline_)) {
++      REXGPU_ERROR("MetalTextureCache: Failed to create the direct texture load pipelines ({}); "
++                   "textures are loaded the usual way",
++                   error ? [[error localizedDescription] UTF8String] : "unknown");
++      direct_load_pipeline_ = LoadPipeline();
++      direct_load_compare_pipeline_ = LoadPipeline();
 +    }
 +  }
 +
@@ -17375,6 +17843,19 @@ index 0000000..0de9164
 +  descriptor.mipmapLevelCount = key.mip_max_level + 1;
 +  // Views reinterpret the format between the signednesses and apply the guest swizzle.
 +  descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView;
++  // Direct loads write the texture through an integer view, a texel per guest block: not for
++  // block-compressed or subsampled formats (the 64 bits per block load copies DXT1 blocks too).
++  uint32_t direct_dwords_log2, direct_conversion;
++  const FormatInfo* format_info = FormatInfo::Get(key.format);
++  if (direct_load_pipeline_.pipeline && descriptor.textureType == MTLTextureType2DArray &&
++      format_info->block_width == 1 && format_info->block_height == 1 &&
++      GetDirectLoad((format == host_format.format_signed.format &&
++                     format != host_format.format_unsigned.format)
++                        ? host_format.format_signed.load_shader
++                        : host_format.format_unsigned.load_shader,
++                    direct_dwords_log2, direct_conversion)) {
++    descriptor.usage |= MTLTextureUsageShaderWrite;
++  }
 +  descriptor.storageMode = MTLStorageModePrivate;
 +  id<MTLTexture> texture = [command_processor_.device() newTextureWithDescriptor:descriptor];
 +  if (!texture) {
@@ -17383,158 +17864,97 @@ index 0000000..0de9164
 +  return std::unique_ptr<Texture>(new MetalTexture(*this, key, texture));
 +}
 +
-+uint32_t MetalTextureCache::UpdateTexturesFromResolve(uint32_t dest_base, uint32_t width,
-+                                                      uint32_t height, xenos::TextureFormat format,
-+                                                      xenos::Endian endianness, bool red_blue_swap,
-+                                                      id<MTLTexture> source, uint32_t source_x,
-+                                                      uint32_t source_y) {
-+  bool verify = REXCVAR_GET(hle_verify_resolves);
-+  uint32_t updated = 0;
++void MetalTextureCache::ForgetResolveTextureChecks(uint32_t dest_base) {
++  for (auto it = resolve_texture_checks_.begin(); it != resolve_texture_checks_.end();) {
++    if ((it->first->key().base_page << 12) == dest_base) {
++      it = resolve_texture_checks_.erase(it);
++    } else {
++      ++it;
++    }
++  }
++}
++
++MetalTextureCache::LoadShaderIndex MetalTextureCache::GetLoadShader(TextureKey key) const {
++  const HostFormatPair& host_format_pair = GetHostFormatPair(key);
++  bool host_format_is_signed;
++  if (IsSignedVersionSeparateForFormat(key)) {
++    host_format_is_signed = bool(key.signed_separate);
++  } else {
++    host_format_is_signed = host_format_pair.format_unsigned.load_shader == kLoadShaderIndexUnknown;
++  }
++  return (host_format_is_signed ? host_format_pair.format_signed : host_format_pair.format_unsigned)
++      .load_shader;
++}
++
++uint32_t MetalTextureCache::WriteTexturesFromResolve(uint32_t dest_base, uint32_t width,
++                                                     uint32_t height, bool scaled,
++                                                     const ResolveTextureWriter& write) {
++  if (!direct_load_pipeline_.pipeline) {
++    return 0;
++  }
++  static const MTLPixelFormat kViewFormats[] = {MTLPixelFormatR32Uint, MTLPixelFormatRG32Uint,
++                                                MTLPixelFormatRGBA32Uint};
++  bool verify = REXCVAR_GET(metal_texture_load_verify);
++  uint32_t host_width = scaled ? draw_resolution_scale().ScaleXCeil(width) : width;
++  uint32_t host_height = scaled ? draw_resolution_scale().ScaleYCeil(height) : height;
++  uint32_t written = 0;
 +  ForEachTextureAtBasePage(
 +      dest_base >> 12,
 +      [&](Texture& texture, const std::unique_lock<std::recursive_mutex>& global_lock) {
 +        const TextureKey& key = texture.key();
 +        if (key.dimension != xenos::DataDimension::k2DOrStacked ||
-+            key.depth_or_array_size_minus_1 || !key.tiled || key.packed_mips ||
-+            key.mip_max_level || key.scaled_resolve || key.signed_separate ||
-+            key.width_minus_1 + 1 != width || key.height_minus_1 + 1 != height ||
-+            key.format != format || key.endianness != endianness) {
++            key.depth_or_array_size_minus_1 || !key.tiled || key.mip_max_level ||
++            bool(key.scaled_resolve) != scaled || key.width_minus_1 + 1 != width ||
++            key.height_minus_1 + 1 != height || (key.base_page << 12) != dest_base) {
 +          return;
 +        }
 +        // Only a texture this resolve just invalidated: one loaded before, now outdated.
 +        if (!texture.base_outdated(global_lock)) {
 +          return;
 +        }
-+        id<MTLTexture> dest = static_cast<MetalTexture&>(texture).texture();
-+        if (!dest || dest.pixelFormat != source.pixelFormat || dest.mipmapLevelCount != 1) {
++        // A base level in a packed mip tail is stored elsewhere in its tail.
++        if (key.packed_mips && key.GetGuestLayout().packed_level == 0) {
 +          return;
 +        }
-+        id<MTLTexture> target = dest;
++        const FormatInfo* format_info = FormatInfo::Get(key.format);
++        uint32_t dwords_log2, conversion;
++        id<MTLTexture> host_texture = static_cast<MetalTexture&>(texture).texture();
++        if (format_info->block_width != 1 || format_info->block_height != 1 || !host_texture ||
++            !(host_texture.usage & MTLTextureUsageShaderWrite) ||
++            host_texture.width != host_width || host_texture.height != host_height ||
++            !GetDirectLoad(GetLoadShader(key), dwords_log2, conversion)) {
++          return;
++        }
++        id<MTLTexture> target = host_texture;
 +        if (verify) {
-+          // Copy into a texture of its own, compared with the next load from memory.
-+          MTLTextureDescriptor* descriptor =
-+              [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:dest.pixelFormat
-+                                                                 width:width
-+                                                                height:height
-+                                                             mipmapped:NO];
++          MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
++          descriptor.textureType = host_texture.textureType;
++          descriptor.pixelFormat = host_texture.pixelFormat;
++          descriptor.width = host_texture.width;
++          descriptor.height = host_texture.height;
++          descriptor.arrayLength = host_texture.arrayLength;
++          descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite |
++                             MTLTextureUsagePixelFormatView;
 +          descriptor.storageMode = MTLStorageModePrivate;
 +          target = [command_processor_.device() newTextureWithDescriptor:descriptor];
-+          resolve_verify_copies_[&texture] = {target, red_blue_swap};
-+        }
-+        id<MTLBlitCommandEncoder> blit =
-+            command_processor_.GetBlitEncoder(rex::perf::CounterId::kRenderPassEndsResolve);
-+        [blit copyFromTexture:source
-+                  sourceSlice:0
-+                  sourceLevel:0
-+                 sourceOrigin:MTLOriginMake(source_x, source_y, 0)
-+                   sourceSize:MTLSizeMake(width, height, 1)
-+                    toTexture:target
-+             destinationSlice:0
-+             destinationLevel:0
-+            destinationOrigin:MTLOriginMake(0, 0, 0)];
-+        PERF_counter_inc(kHostCopies);
-+        if (!verify) {
-+          auto& metal_texture = static_cast<MetalTexture&>(texture);
-+          if (metal_texture.red_blue_swapped() != red_blue_swap) {
-+            metal_texture.set_red_blue_swapped(red_blue_swap);
-+            // The bound views of the texture change.
-+            TextureFetchConstantsWritten(0, 31);
++          if (!target) {
++            return;
 +          }
++          resolve_texture_checks_[&texture] = {target, dwords_log2};
++        }
++        write([target newTextureViewWithPixelFormat:kViewFormats[dwords_log2]
++                                        textureType:MTLTextureType2D
++                                             levels:NSMakeRange(0, 1)
++                                             slices:NSMakeRange(0, 1)],
++              uint32_t(key.endianness), conversion);
++        if (!verify) {
 +          texture.MakeUpToDateAndWatch(global_lock);
 +          static_cast<MetalTexture&>(texture).MarkAsUsed();
 +          PERF_counter_inc(kResolvesToTextures);
-+          ++updated;
++          ++written;
 +        }
 +      });
-+  return updated;
-+}
-+
-+void MetalTextureCache::VerifyResolvedTexture(const Texture& texture, id<MTLTexture> loaded) {
-+  auto it = resolve_verify_copies_.find(&texture);
-+  if (it == resolve_verify_copies_.end()) {
-+    return;
-+  }
-+  id<MTLTexture> copy = it->second.texture;
-+  bool red_blue_swap = it->second.red_blue_swap;
-+  resolve_verify_copies_.erase(it);
-+  if (red_blue_swap && copy.pixelFormat != MTLPixelFormatRGBA8Unorm) {
-+    return;
-+  }
-+  // Bytes of a texel of the formats a resolve copies (the render target formats).
-+  size_t bytes;
-+  switch (copy.pixelFormat) {
-+    case MTLPixelFormatRGBA8Unorm:
-+    case MTLPixelFormatBGRA8Unorm:
-+    case MTLPixelFormatRG16Float:
-+    case MTLPixelFormatR32Float:
-+    case MTLPixelFormatRGB10A2Unorm:
-+      bytes = 4;
-+      break;
-+    case MTLPixelFormatRGBA16Float:
-+    case MTLPixelFormatRG32Float:
-+      bytes = 8;
-+      break;
-+    default:
-+      return;
-+  }
-+  // A corner, the middle and a texel near the far corner.
-+  const TextureKey& key = texture.key();
-+  uint32_t width = key.width_minus_1 + 1, height = key.height_minus_1 + 1;
-+  const MTLOrigin texels[] = {MTLOriginMake(0, 0, 0), MTLOriginMake(width / 2, height / 2, 0),
-+                              MTLOriginMake(width - 1, height - 1, 0)};
-+  constexpr size_t kSlot = 16;
-+  constexpr size_t kTexels = sizeof(texels) / sizeof(texels[0]);
-+  id<MTLBuffer> readback = [command_processor_.device() newBufferWithLength:kSlot * kTexels * 2
-+                                                                    options:MTLResourceStorageModeShared];
-+  id<MTLBlitCommandEncoder> blit =
-+      command_processor_.GetBlitEncoder(rex::perf::CounterId::kRenderPassEndsTextureLoad);
-+  for (size_t i = 0; i < kTexels; ++i) {
-+    for (size_t j = 0; j < 2; ++j) {
-+      [blit copyFromTexture:j ? copy : loaded
-+                       sourceSlice:0
-+                       sourceLevel:0
-+                      sourceOrigin:texels[i]
-+                        sourceSize:MTLSizeMake(1, 1, 1)
-+                          toBuffer:readback
-+                 destinationOffset:(i * 2 + j) * kSlot
-+            destinationBytesPerRow:bytes
-+          destinationBytesPerImage:bytes];
-+    }
-+  }
-+  std::string what = fmt::format("format {} {}x{} endianness {}{}", uint32_t(key.format), width,
-+                                 height, uint32_t(key.endianness),
-+                                 red_blue_swap ? " red/blue swapped" : "");
-+  command_processor_.AddCompletedHandler(^(id<MTLCommandBuffer>) {
-+    uint8_t* data = static_cast<uint8_t*>(readback.contents);
-+    if (red_blue_swap) {
-+      // What the texture's views read from the copy: red and blue swapped back.
-+      for (size_t i = 0; i < kTexels; ++i) {
-+        std::swap(data[(i * 2 + 1) * kSlot], data[(i * 2 + 1) * kSlot + 2]);
-+      }
-+    }
-+    bool match = true;
-+    std::string loaded_bytes, copy_bytes;
-+    for (size_t i = 0; i < kTexels; ++i) {
-+      match &= !std::memcmp(data + i * 2 * kSlot, data + (i * 2 + 1) * kSlot, bytes);
-+      for (size_t b = 0; b < bytes; ++b) {
-+        loaded_bytes += fmt::format("{:02X}", data[i * 2 * kSlot + b]);
-+        copy_bytes += fmt::format("{:02X}", data[(i * 2 + 1) * kSlot + b]);
-+      }
-+      loaded_bytes += ' ';
-+      copy_bytes += ' ';
-+    }
-+    static std::mutex mutex;
-+    static std::set<std::string> logged;
-+    std::lock_guard<std::mutex> lock(mutex);
-+    if (logged.insert(fmt::format("{} {}", match, what)).second) {
-+      if (match) {
-+        REXGPU_INFO("HLE resolve check: {} matches the load from memory", what);
-+      } else {
-+        REXGPU_WARN("HLE resolve check: {} differs: loaded {}, render target copy {}", what,
-+                    loaded_bytes, copy_bytes);
-+      }
-+    }
-+  });
++  return written;
 +}
 +
 +bool MetalTextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture, bool load_base,
@@ -17673,12 +18093,6 @@ index 0000000..0de9164
 +                                         level_guest_z_extent_texels;
 +    host_buffer_size += level_host_layout.slice_size_bytes * array_size;
 +  }
-+  MetalCommandProcessor::ScratchBuffer scratch_buffer =
-+      command_processor_.AcquireScratchBuffer(host_buffer_size);
-+  if (!scratch_buffer.buffer) {
-+    return false;
-+  }
-+
 +  // Source ranges in the shared memory, or in the scaled resolve buffer for a texture resolved at
 +  // the draw resolution scale. Aligned because if the data for a vector is provided partially, the
 +  // value read may still be (0, 0, 0, 0), and small (especially linear) textures would not be
@@ -17727,9 +18141,130 @@ index 0000000..0de9164
 +                                    ? scaled_resolve_buffer_
 +                                    : static_cast<MetalSharedMemory&>(shared_memory()).buffer();
 +
++  // For the encoder labels of GPU traces (gpu_debug_markers): the format, size and address, and
++  // where it is read from.
++  NSString* debug_label = nil;
++  if (command_processor_.debug_labels_enabled()) {
++    debug_label = [NSString
++        stringWithFormat:@"Texture load%s: format %u %ux%u at 0x%08X%s",
++                         rational_surface ? " (scaled surface)"
++                         : read_scaled_resolve_buffer ? " (scaled resolve buffer)"
++                                                      : "",
++                         uint32_t(texture_key.format), texture_key.GetWidth(),
++                         texture_key.GetHeight(), texture_key.base_page << 12,
++                         texture_key.mip_max_level ? " with mips" : ""];
++  }
++
++  // What every load does at the end: the texture is in use, and compared with what a resolve
++  // wrote for it (metal_texture_load_verify, WriteTexturesFromResolve).
++  id<MTLTexture> host_texture = metal_texture.texture();
++  auto finish = [&]() {
++    metal_texture.MarkAsUsed();
++    auto check = resolve_texture_checks_.find(&texture);
++    if (check != resolve_texture_checks_.end()) {
++      if (load_base) {
++        CompareDirectLoad(texture_key, check->second.texture, host_texture,
++                          check->second.dwords_log2, 0, 0, "Resolve to texture check");
++      }
++      resolve_texture_checks_.erase(check);
++    }
++  };
++
++  // Straight into the texture (metal_texture_load_direct): the formats GetDirectLoad has, in a 2D
++  // texture (its usage then has shader writes), for levels none of which is in a packed mip tail
++  // (stored at an offset in the tail's own level).
++  uint32_t direct_dwords_log2 = 0, direct_conversion = 0;
++  bool direct = direct_load_pipeline_.pipeline && block_width == 1 && block_height == 1 &&
++                !host_format.block_compressed &&
++                (host_texture.usage & MTLTextureUsageShaderWrite) &&
++                host_texture.textureType == MTLTextureType2DArray && !is_3d_tiling &&
++                level_last < level_packed &&
++                GetDirectLoad(load_shader, direct_dwords_log2, direct_conversion);
++  bool direct_verify = direct && REXCVAR_GET(metal_texture_load_verify);
++  // The usual load writes the texture, or with metal_texture_load_verify one of its own compared
++  // with the direct load afterwards.
++  id<MTLTexture> usual_texture = host_texture;
++  if (direct) {
++    static const MTLPixelFormat kViewFormats[] = {MTLPixelFormatR32Uint, MTLPixelFormatRG32Uint,
++                                                  MTLPixelFormatRGBA32Uint};
++    id<MTLComputeCommandEncoder> direct_compute = command_processor_.GetComputeEncoder(
++        rex::perf::CounterId::kRenderPassEndsTextureLoad,
++        debug_label ? [debug_label stringByAppendingString:@" (direct)"] : nil);
++    [direct_compute setComputePipelineState:direct_load_pipeline_.pipeline];
++    TextureLoadDirectConstants direct_constants = {};
++    direct_constants.tiled = uint32_t(texture_key.tiled);
++    direct_constants.endian = uint32_t(texture_key.endianness);
++    direct_constants.scale_x = texture_resolution_scale_x;
++    direct_constants.scale_y = texture_resolution_scale_y;
++    direct_constants.conversion = direct_conversion;
++    direct_constants.dwords_log2 = direct_dwords_log2;
++    for (uint32_t level = level_first; level <= level_last; ++level) {
++      bool is_base = level == 0;
++      const texture_util::TextureGuestLayout::Level& level_guest_layout =
++          is_base ? guest_layout.base : guest_layout.mips[level];
++      // As the load shaders take it: texels for a tiled texture (one texel per block for these
++      // formats), bytes for a linear one; a scaled surface has its own.
++      uint32_t guest_pitch = level_guest_layout.row_pitch_bytes;
++      if (texture_key.tiled) {
++        guest_pitch /= bytes_per_block;
++      }
++      if (rational_surface) {
++        guest_pitch = rational_surface->pitch;
++      }
++      direct_constants.guest_pitch = guest_pitch;
++      direct_constants.width = std::max((width * texture_resolution_scale_x) >> level, UINT32_C(1));
++      direct_constants.height =
++          std::max((height * texture_resolution_scale_y) >> level, UINT32_C(1));
++      [direct_compute setBuffer:source_buffer
++                         offset:NSUInteger(is_base ? source_base_start : source_mips_start)
++                        atIndex:0];
++      uint32_t guest_offset =
++          is_base ? 0 : guest_layout.mip_offsets_bytes[level] * texture_resolution_scale_area;
++      for (uint32_t slice = 0; slice < array_size; ++slice) {
++        direct_constants.guest_offset = guest_offset;
++        id<MTLTexture> view =
++            [host_texture newTextureViewWithPixelFormat:kViewFormats[direct_dwords_log2]
++                                            textureType:MTLTextureType2D
++                                                 levels:NSMakeRange(level, 1)
++                                                 slices:NSMakeRange(slice, 1)];
++        [direct_compute setTexture:view atIndex:0];
++        [direct_compute setBytes:&direct_constants length:sizeof(direct_constants) atIndex:1];
++        [direct_compute dispatchThreads:MTLSizeMake(direct_constants.width,
++                                                    direct_constants.height, 1)
++                  threadsPerThreadgroup:direct_load_pipeline_.threads_per_threadgroup];
++        PERF_counter_inc(kHostDispatches);
++        guest_offset += level_guest_layout.array_slice_stride_bytes * texture_resolution_scale_area;
++      }
++    }
++    if (!direct_verify) {
++      finish();
++      return true;
++    }
++    MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
++    descriptor.textureType = host_texture.textureType;
++    descriptor.pixelFormat = host_texture.pixelFormat;
++    descriptor.width = host_texture.width;
++    descriptor.height = host_texture.height;
++    descriptor.arrayLength = host_texture.arrayLength;
++    descriptor.mipmapLevelCount = host_texture.mipmapLevelCount;
++    descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView;
++    descriptor.storageMode = MTLStorageModePrivate;
++    usual_texture = [command_processor_.device() newTextureWithDescriptor:descriptor];
++    if (!usual_texture) {
++      finish();
++      return true;
++    }
++  }
++
++  MetalCommandProcessor::ScratchBuffer scratch_buffer =
++      command_processor_.AcquireScratchBuffer(host_buffer_size);
++  if (!scratch_buffer.buffer) {
++    return false;
++  }
++
 +  // Untile and convert into the scratch buffer.
-+  id<MTLComputeCommandEncoder> compute =
-+      command_processor_.GetComputeEncoder(rex::perf::CounterId::kRenderPassEndsTextureLoad);
++  id<MTLComputeCommandEncoder> compute = command_processor_.GetComputeEncoder(
++      rex::perf::CounterId::kRenderPassEndsTextureLoad, debug_label);
 +  [compute setComputePipelineState:load_pipeline.pipeline];
 +  [compute setBuffer:scratch_buffer.buffer
 +              offset:scratch_buffer.offset
@@ -17820,9 +18355,9 @@ index 0000000..0de9164
 +  }
 +
 +  // Copy from the scratch buffer to the texture.
-+  id<MTLBlitCommandEncoder> blit =
-+      command_processor_.GetBlitEncoder(rex::perf::CounterId::kRenderPassEndsTextureLoad);
-+  id<MTLTexture> host_texture = metal_texture.texture();
++  id<MTLBlitCommandEncoder> blit = command_processor_.GetBlitEncoder(
++      rex::perf::CounterId::kRenderPassEndsTextureLoad,
++      debug_label ? [debug_label stringByAppendingString:@" (copy to texture)"] : nil);
 +  for (uint32_t level = level_first; level <= level_last; ++level) {
 +    const HostLayout& level_host_layout =
 +        level != 0 ? host_layout_mips[std::min(level, level_packed)] : host_layout_base;
@@ -17858,22 +18393,22 @@ index 0000000..0de9164
 +            sourceBytesPerRow:bytes_per_row
 +          sourceBytesPerImage:host_texture.textureType == MTLTextureType3D ? bytes_per_image : 0
 +                   sourceSize:level_size
-+                    toTexture:host_texture
++                    toTexture:usual_texture
 +             destinationSlice:slice
 +             destinationLevel:level
 +            destinationOrigin:MTLOriginMake(0, 0, 0)];
 +      PERF_counter_inc(kHostCopies);
 +    }
 +  }
-+  metal_texture.MarkAsUsed();
-+  if (metal_texture.red_blue_swapped()) {
-+    // Loaded from memory: the data is in the order the views expect again.
-+    metal_texture.set_red_blue_swapped(false);
-+    TextureFetchConstantsWritten(0, 31);
++  if (direct_verify) {
++    for (uint32_t level = level_first; level <= level_last; ++level) {
++      for (uint32_t slice = 0; slice < array_size; ++slice) {
++        CompareDirectLoad(texture_key, host_texture, usual_texture, direct_dwords_log2, level,
++                          slice);
++      }
++    }
 +  }
-+  if (!resolve_verify_copies_.empty()) {
-+    VerifyResolvedTexture(texture, host_texture);
-+  }
++  finish();
 +  return true;
 +}
 +
@@ -17999,19 +18534,6 @@ index 0000000..0de9164
 +  // If the unsigned and the signed formats are the same, one view serves both.
 +  bool is_signed_separate_view =
 +      is_signed && host_format_pair.format_signed.format != host_format_pair.format_unsigned.format;
-+  if (red_blue_swapped_) {
-+    // Each component that reads red reads blue instead, and the other way around.
-+    uint32_t swapped = host_swizzle;
-+    for (uint32_t i = 0; i < 4; ++i) {
-+      uint32_t source = (host_swizzle >> (3 * i)) & 0b111;
-+      if (source == uint32_t(xenos::XE_GPU_TEXTURE_SWIZZLE_R) ||
-+          source == uint32_t(xenos::XE_GPU_TEXTURE_SWIZZLE_B)) {
-+        source ^= uint32_t(xenos::XE_GPU_TEXTURE_SWIZZLE_R) ^ uint32_t(xenos::XE_GPU_TEXTURE_SWIZZLE_B);
-+        swapped = (swapped & ~(0b111u << (3 * i))) | (source << (3 * i));
-+      }
-+    }
-+    host_swizzle = swapped;
-+  }
 +  uint32_t view_key = uint32_t(is_signed_separate_view) | ((host_swizzle & 0xFFF) << 1) |
 +                      (uint32_t(is_array) << 13);
 +  auto it = views_.find(view_key);
