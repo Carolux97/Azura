@@ -66,6 +66,7 @@
 #include <rex/logging.h>
 #include <rex/ppc.h>
 #include <rex/system/kernel_state.h>
+#include <rex/system/xam/system_link.h>
 
 #include "class_dump.h"
 #include "dlc/class_fixups.h"
@@ -1262,7 +1263,8 @@ static void StripListenParam(std::string& s) {
 // (sp_hanover_p, sp_warehouse_p...) is loaded into it. When one chapter flows into the next
 // without a loading screen, the game swaps those chapter maps inside GearGame_P with
 // PrepareMapChange and CommitMapChange, which cannot work if a chapter map is the main map.
-// This hook has no verified single-player/co-op discriminator, so it also affects a co-op host.
+// A System Link host keeps ?listen (rex::system::xam::HostingSystemLinkSession): without it the
+// game accepts no clients.
 bool PatchTravelURL(uint8_t* base, uint32_t fstring_addr) {
   if (!fstring_addr) return false;
   const uint32_t data = LoadU32(base, fstring_addr);
@@ -1289,7 +1291,11 @@ bool PatchTravelURL(uint8_t* base, uint32_t fstring_addr) {
   }
 
   std::string new_url = url;
-  StripListenParam(new_url);
+  if (rex::system::xam::HostingSystemLinkSession()) {
+    REXLOG_INFO("[Azura campaign] System Link host: travel URL keeps listen: '{}'", url);
+  } else {
+    StripListenParam(new_url);
+  }
   // RAAM's Shadow, chosen from the campaign menu: its chapters are 31 to 35. A campaign of the main
   // game (a new one, its chapter selection, or its checkpoint to continue) starts the DLC's first.
   if (g_dlc_campaign_chosen.load(std::memory_order_relaxed)) {
@@ -1315,7 +1321,7 @@ bool PatchTravelURL(uint8_t* base, uint32_t fstring_addr) {
   base[data + new_url.size() * 2] = 0;
   base[data + new_url.size() * 2 + 1] = 0;
   StoreU32(base, fstring_addr + 4, static_cast<uint32_t>(new_url.size() + 1));
-  REXLOG_INFO("[Azura campaign] Travel URL without listen: '{}' -> '{}'", url, new_url);
+  REXLOG_INFO("[Azura campaign] Travel URL: '{}' -> '{}'", url, new_url);
   return true;
 }
 

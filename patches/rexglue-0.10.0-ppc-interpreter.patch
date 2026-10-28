@@ -1595,7 +1595,7 @@ index 201b623..0bf4d41 100644
    rex::cvar::RegisterCliOptions(app);
  
 diff --git a/src/system/CMakeLists.txt b/src/system/CMakeLists.txt
-index fc46d86..73f9a8e 100644
+index fc46d86..bc82bf7 100644
 --- a/src/system/CMakeLists.txt
 +++ b/src/system/CMakeLists.txt
 @@ -4,6 +4,7 @@ set(REXSYSTEM_SOURCES
@@ -1606,15 +1606,16 @@ index fc46d86..73f9a8e 100644
      xmemory.cpp
      kernel_module.cpp
      user_module.cpp
-@@ -31,6 +32,7 @@ set(REXSYSTEM_SOURCES
+@@ -31,6 +32,8 @@ set(REXSYSTEM_SOURCES
      # XAM services
      xam/app_manager.cpp
      xam/content_manager.cpp
 +    xam/player_identity.cpp
++    xam/system_link.cpp
      xam/user_profile.cpp
  
      ppc_types.cpp
-@@ -42,6 +44,7 @@ set(REXSYSTEM_SOURCES
+@@ -42,6 +45,7 @@ set(REXSYSTEM_SOURCES
      map_parser.cpp
      module.cpp
      function_dispatcher.cpp
@@ -1622,7 +1623,7 @@ index fc46d86..73f9a8e 100644
      gpu_plugin_loader.cpp
      thread.cpp
      thread_state.cpp
-@@ -88,6 +91,8 @@ target_link_libraries(rexruntime
+@@ -88,6 +92,8 @@ target_link_libraries(rexruntime
          aes128
          mspack
          xxHash::xxhash

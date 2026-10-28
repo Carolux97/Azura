@@ -1781,6 +1781,27 @@ index 0000000..a146aa8
 +void ApplyPadLayoutInPlay(DeviceId id, const PadLayout& layout, X_INPUT_GAMEPAD& pad);
 +
 +}  // namespace rex::input
+diff --git a/include/rex/kernel/xam/private.h b/include/rex/kernel/xam/private.h
+index 3df4776..0c21a2c 100644
+--- a/include/rex/kernel/xam/private.h
++++ b/include/rex/kernel/xam/private.h
+@@ -19,6 +19,16 @@ namespace xam {
+ 
+ bool xeXamIsUIActive();
+ 
++// Sessions (XamSessionCreateHandle) are not kernel objects yet: each one gets a handle of its own
++// and a made-up object address in this range, which the session messages use to tell them apart
++// (titles keep a party session and a game session at the same time) and ObDereferenceObject
++// leaves alone.
++constexpr uint32_t kSessionObjectBase = 0xDEADF000;
++constexpr uint32_t kSessionObjectMask = 0xFFFFF000;
++inline bool IsSessionObject(uint32_t native_ptr) {
++  return (native_ptr & kSessionObjectMask) == kSessionObjectBase;
++}
++
+ rex::runtime::Export* RegisterExport_xam(rex::runtime::Export* export_entry);
+ 
+ // Registration functions, one per file.
 diff --git a/include/rex/perf/counter.h b/include/rex/perf/counter.h
 index 83f0dff..8f91c48 100644
 --- a/include/rex/perf/counter.h
@@ -2041,10 +2062,10 @@ index 949d185..5337bf1 100644
  
 diff --git a/include/rex/system/xam/player_identity.h b/include/rex/system/xam/player_identity.h
 new file mode 100644
-index 0000000..162fe8c
+index 0000000..1d7d7fb
 --- /dev/null
 +++ b/include/rex/system/xam/player_identity.h
-@@ -0,0 +1,69 @@
+@@ -0,0 +1,74 @@
 +/**
 + * @file        system/xam/player_identity.h
 + * @brief       The identity of an installation: its players' XUID and its machine on the network
@@ -2113,6 +2134,120 @@ index 0000000..162fe8c
 +// for this run only.
 +PlayerIdentity LoadOrCreatePlayerIdentity(const std::filesystem::path& user_data_root);
 +
++// The identity kept in `user_data_root` if there is a valid one, or one for this run only. Writes
++// nothing: for tools (code generation, achievement export, content install) that start the
++// runtime on folders that are not the player's saves.
++PlayerIdentity LoadPlayerIdentity(const std::filesystem::path& user_data_root);
++
++}  // namespace rex::system::xam
+diff --git a/include/rex/system/xam/system_link.h b/include/rex/system/xam/system_link.h
+new file mode 100644
+index 0000000..77ffaeb
+--- /dev/null
++++ b/include/rex/system/xam/system_link.h
+@@ -0,0 +1,103 @@
++/**
++ * @file        system/xam/system_link.h
++ * @brief       System Link: the local network as XNet and the session services show it to a title
++ *
++ * @license     BSD 3-Clause License
++ *              See LICENSE file in the project root for full license text.
++ *
++ * @remarks     On the console, System Link games find each other with broadcasts on the local
++ *              network and then talk directly. A title sees the other consoles through XNet: each
++ *              one has an XNADDR (its IP address and network card address), turned into an IN_ADDR
++ *              the title can send to with XNetXnAddrToInAddr, and the host of a session hands its
++ *              XNADDR, the session's ID (XNKID) and key (XNKEY) to the others in its
++ *              XSESSION_INFO.
++ *
++ *              Here every installation is one console, with the machine ID of its player identity
++ *              (player_identity.h) as its network card address. On a local network the IN_ADDR of
++ *              an XNADDR is the computer's own IP address: there is no secure association or
++ *              encryption between installations. The address book below remembers the XNADDRs
++ *              seen, so that the reverse conversion (XNetInAddrToXnAddr) can answer for them.
++ *
++ *              Everything here is off unless network_mode is system_link: the title then sees no
++ *              network link, as before.
++ */
++
++#pragma once
++
++#include <array>
++#include <cstdint>
++#include <optional>
++#include <random>
++
++namespace rex::system::xam {
++
++// Size of an XNADDR in guest memory: IP, online IP, online port, network card address, online ID.
++constexpr size_t kXnAddrSize = 36;
++using XnAddrBytes = std::array<uint8_t, kXnAddrSize>;
++// Offsets inside an XNADDR.
++constexpr size_t kXnAddrIpOffset = 0;    // IN_ADDR, network byte order
++constexpr size_t kXnAddrEnetOffset = 10;  // 6-byte network card address
++
++// A session's ID (XNKID) and key exchange key (XNKEY).
++using XnKid = std::array<uint8_t, 8>;
++using XnKey = std::array<uint8_t, 16>;
++
++// Whether System Link is on (network_mode = system_link).
++bool SystemLinkEnabled();
++
++// IPv4 address (as a number: 192.168.1.2 is 0xC0A80102) of the interface that reaches the local
++// network, found once; 0 when there is none.
++uint32_t LanAddress();
++
++// The XNADDR of an installation with IPv4 address `ip` (as LanAddress) and `machine_id`.
++XnAddrBytes MakeXnAddr(uint32_t ip, const std::array<uint8_t, 6>& machine_id);
++
++// The IPv4 address (as LanAddress) in an XNADDR.
++uint32_t XnAddrIp(const XnAddrBytes& xnaddr);
++
++// --- Address book ---------------------------------------------------------------------------------
++
++// Remembers `xnaddr`, replacing any other with the same IP address.
++void RememberXnAddr(const XnAddrBytes& xnaddr);
++// The XNADDR remembered for `ip`, if any.
++std::optional<XnAddrBytes> FindXnAddr(uint32_t ip);
++
++// --- Sessions ---------------------------------------------------------------------------------------
++
++// A new System Link session ID: random, with the System Link type in its top bits.
++XnKid MakeSystemLinkKid(std::random_device& random);
++// A new key exchange key.
++XnKey MakeKey(std::random_device& random);
++// Whether `kid` is a System Link session ID.
++bool IsSystemLinkKid(const XnKid& kid);
++
++struct SystemLinkSession {
++  XnKid kid{};
++  XnKey key{};
++  XnAddrBytes host{};
++  bool hosting = false;  // this installation is its host
++};
++
++// The session the title knows by `handle` (its session object), until RemoveSession.
++void AddSession(uint32_t handle, const SystemLinkSession& session);
++void RemoveSession(uint32_t handle);
++// Whether this installation hosts a System Link session now.
++bool HostingSystemLinkSession();
++// The ID of the session whose host has IP address `ip`, or of any session when none matches.
++std::optional<XnKid> FindSessionKid(uint32_t ip);
++
++// --- Ports ------------------------------------------------------------------------------------------
++
++// The console let titles use any port, and Unreal Engine 3 titles bind ports 1000 to 1019 for their
++// game traffic (VDP sockets). Hosts reserve the ports below 1024 for privileged programs, so those
++// ports are used this much higher on every platform, by the one binding and by the one sending,
++// so installations on different systems still reach each other: 1000 is 11000 on the network.
++constexpr uint16_t kFirstUnprivilegedPort = 1024;
++constexpr uint16_t kPrivilegedPortOffset = 10000;
++
++// The network's port for a port a title uses.
++uint16_t NetworkPort(uint16_t title_port);
++// The port a title uses for a port on the network.
++uint16_t TitlePort(uint16_t network_port);
++
 +}  // namespace rex::system::xam
 diff --git a/include/rex/system/xam/user_profile.h b/include/rex/system/xam/user_profile.h
 index 06888b9..d4650bc 100644
@@ -2163,6 +2298,29 @@ index 06888b9..d4650bc 100644
    std::vector<std::unique_ptr<Setting>> setting_list_;
    std::unordered_map<uint32_t, Setting*> settings_;
    KernelState* kernel_state_ = nullptr;
+diff --git a/include/rex/system/xsocket.h b/include/rex/system/xsocket.h
+index a1b4443..abe55e8 100644
+--- a/include/rex/system/xsocket.h
++++ b/include/rex/system/xsocket.h
+@@ -101,6 +101,8 @@ class XSocket : public XObject {
+ 
+   X_STATUS SetOption(uint32_t level, uint32_t optname, void* optval_ptr, uint32_t optlen);
+   X_STATUS IOControl(uint32_t cmd, uint8_t* arg_ptr);
++  // An integer SOL_SOCKET option (getsockopt), stored big-endian at `optval_ptr`.
++  X_STATUS GetOption(uint32_t level, uint32_t optname, void* optval_ptr, uint32_t* optlen);
+ 
+   X_STATUS Connect(N_XSOCKADDR* name, int name_len);
+   X_STATUS Bind(N_XSOCKADDR_IN* name, int name_len);
+@@ -115,6 +117,9 @@ class XSocket : public XObject {
+                uint32_t* from_len);
+   int SendTo(uint8_t* buf, uint32_t buf_len, uint32_t flags, N_XSOCKADDR_IN* to, uint32_t to_len);
+ 
++  // The address the socket is bound to, as the title sees it (getsockname); -1 on failure.
++  int GetName(N_XSOCKADDR_IN* name);
++
+   struct packet {
+     // These values are in network byte order.
+     rex::be<uint16_t> src_port;
 diff --git a/include/rex/ui/imgui_dialog.h b/include/rex/ui/imgui_dialog.h
 index a7ab6b3..f4425b8 100644
 --- a/include/rex/ui/imgui_dialog.h
@@ -23627,10 +23785,52 @@ index 82a252c..3dcec80 100644
    if (event.gbutton.down) {
      if (xbutton == X_INPUT_GAMEPAD_GUIDE && !REXCVAR_GET(guide_button)) {
 diff --git a/src/kernel/xam/apps/xgi_app.cpp b/src/kernel/xam/apps/xgi_app.cpp
-index 2b222da..2c828d0 100644
+index 2b222da..71fd6a6 100644
 --- a/src/kernel/xam/apps/xgi_app.cpp
 +++ b/src/kernel/xam/apps/xgi_app.cpp
-@@ -83,9 +83,14 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -10,6 +10,12 @@
+  */
+ 
+ #include <rex/kernel/xam/apps/xgi_app.h>
++
++#include <cstring>
++#include <random>
++
++#include <rex/system/kernel_state.h>
++#include <rex/system/xam/system_link.h>
+ #include <rex/logging.h>
+ #include <rex/thread.h>
+ 
+@@ -23,6 +29,28 @@ using namespace rex::system;
+ 
+ XgiApp::XgiApp(KernelState* kernel_state) : App(kernel_state, 0xFB) {}
+ 
++namespace {
++
++// XSessionCreate flags.
++constexpr uint32_t kXSessionCreateHost = 0x00000001;
++constexpr uint32_t kXSessionCreateUsesPresence = 0x00000002;
++constexpr uint32_t kXSessionCreateUsesStats = 0x00000004;
++constexpr uint32_t kXSessionCreateUsesMatchmaking = 0x00000008;
++constexpr uint32_t kXSessionCreateUsesArbitration = 0x00000010;
++constexpr uint32_t kXSessionCreateUsesPeerNetwork = 0x00000020;
++// A System Link session uses the peer network and none of the Xbox Live services.
++constexpr uint32_t kXSessionCreateLiveServices = kXSessionCreateUsesPresence |
++                                                 kXSessionCreateUsesStats |
++                                                 kXSessionCreateUsesMatchmaking |
++                                                 kXSessionCreateUsesArbitration;
++
++// XSESSION_INFO: the session's ID, its host's XNADDR and its key exchange key.
++constexpr uint32_t kSessionInfoKidOffset = 0;
++constexpr uint32_t kSessionInfoHostOffset = kSessionInfoKidOffset + sizeof(XnKid);
++constexpr uint32_t kSessionInfoKeyOffset = kSessionInfoHostOffset + kXnAddrSize;
++
++}  // namespace
++
+ // http://mb.mirage.org/bugzilla/xliveless/main.c
+ 
+ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -83,9 +111,14 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
          }
          auto* base = memory_->TranslateVirtual(achievements_ptr);
          for (uint32_t i = 0; i < achievement_count; ++i) {
@@ -23647,6 +23847,53 @@ index 2b222da..2c828d0 100644
          }
        } else {
          REXKRNL_INFO("XGIUserWriteAchievements: skipped (count={} ptr={:08X})", achievement_count,
+@@ -113,6 +146,38 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+           "{:08X})",
+           session_ptr, flags, num_slots_public, num_slots_private, user_xuid, session_info_ptr,
+           nonce_ptr);
++      // With System Link, the console fills the XSESSION_INFO of a session it hosts (a new ID and
++      // key, and its own XNADDR), and keeps the one the title passes for a session it joins.
++      const bool system_link_session = (flags & kXSessionCreateUsesPeerNetwork) &&
++                                       !(flags & kXSessionCreateLiveServices);
++      if (SystemLinkEnabled() && system_link_session && session_info_ptr) {
++        auto info = memory_->TranslateVirtual(session_info_ptr);
++        SystemLinkSession session;
++        session.hosting = flags & kXSessionCreateHost;
++        if (session.hosting) {
++          std::random_device random;
++          session.kid = MakeSystemLinkKid(random);
++          session.key = MakeKey(random);
++          session.host = MakeXnAddr(LanAddress(), kernel_state_->player_identity().machine_id);
++          std::memcpy(info + kSessionInfoKidOffset, session.kid.data(), session.kid.size());
++          std::memcpy(info + kSessionInfoHostOffset, session.host.data(), session.host.size());
++          std::memcpy(info + kSessionInfoKeyOffset, session.key.data(), session.key.size());
++        } else {
++          std::memcpy(session.kid.data(), info + kSessionInfoKidOffset, session.kid.size());
++          std::memcpy(session.host.data(), info + kSessionInfoHostOffset, session.host.size());
++          std::memcpy(session.key.data(), info + kSessionInfoKeyOffset, session.key.size());
++        }
++        AddSession(session_ptr, session);
++        const uint32_t host_ip = XnAddrIp(session.host);
++        REXKRNL_INFO("System Link: {} session {:08X} (flags {:08X}), host {}.{}.{}.{}",
++                     session.hosting ? "hosting" : "joining", session_ptr, flags, host_ip >> 24,
++                     (host_ip >> 16) & 0xFF, (host_ip >> 8) & 0xFF, host_ip & 0xFF);
++        if (nonce_ptr) {
++          std::random_device random;
++          const uint64_t nonce = uint64_t(random()) << 32 | random();
++          memory::store_and_swap<uint64_t>(memory_->TranslateVirtual(nonce_ptr), nonce);
++        }
++      }
+       return X_E_SUCCESS;
+     }
+     case 0x000B0011: {
+@@ -123,6 +188,7 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+       uint64_t session_nonce = memory::load_and_swap<uint64_t>(buffer + 8);
+ 
+       REXKRNL_DEBUG("XGISessionDelete({:08X}, {:08X}, {:016X})", obj_ptr, flags, session_nonce);
++      RemoveSession(obj_ptr);
+ 
+       return X_E_SUCCESS;
+     }
 diff --git a/src/kernel/xam/xam_content.cpp b/src/kernel/xam/xam_content.cpp
 index 72a50cb..2a724c5 100644
 --- a/src/kernel/xam/xam_content.cpp
@@ -23719,11 +23966,351 @@ index 72a50cb..2a724c5 100644
    XCONTENT_AGGREGATE_DATA content_data = *content_data_ptr.as<XCONTENT_DATA*>();
  
    auto result = REX_KERNEL_STATE()->content_manager()->DeleteContent(xuid, content_data);
+diff --git a/src/kernel/xam/xam_misc.cpp b/src/kernel/xam/xam_misc.cpp
+index ff6cb56..46f05f5 100644
+--- a/src/kernel/xam/xam_misc.cpp
++++ b/src/kernel/xam/xam_misc.cpp
+@@ -243,7 +243,6 @@ REX_EXPORT_STUB(__imp__XNetLogonGetServiceInfo);
+ REX_EXPORT_STUB(__imp__XNetLogonGetServiceNetworkID);
+ REX_EXPORT_STUB(__imp__XNetLogonGetState);
+ REX_EXPORT_STUB(__imp__XNetLogonGetTicketOpt);
+-REX_EXPORT_STUB(__imp__XNetLogonGetTitleID);
+ REX_EXPORT_STUB(__imp__XNetLogonGetTitleVersion);
+ REX_EXPORT_STUB(__imp__XNetLogonGetUserPrivileges);
+ REX_EXPORT_STUB(__imp__XNetLogonInitOverrideInfo);
+diff --git a/src/kernel/xam/xam_net.cpp b/src/kernel/xam/xam_net.cpp
+index a1a3758..c2fba52 100644
+--- a/src/kernel/xam/xam_net.cpp
++++ b/src/kernel/xam/xam_net.cpp
+@@ -13,6 +13,10 @@
+ #pragma GCC diagnostic ignored "-Wunused-parameter"
+ 
+ #include <cstring>
++#include <random>
++#include <string>
++
++#include <fmt/format.h>
+ 
+ #if REX_PLATFORM_MAC
+ #include <sys/select.h>
+@@ -29,6 +33,7 @@
+ #include <rex/types.h>
+ #include <rex/string.h>
+ #include <rex/system/kernel_state.h>
++#include <rex/system/xam/system_link.h>
+ #include <rex/system/xevent.h>
+ #include <rex/system/xsocket.h>
+ #include <rex/system/xthread.h>
+@@ -70,6 +75,7 @@ typedef struct {
+   uint8_t abEnet[6];              // Ethernet MAC address
+   uint8_t abOnline[20];           // Online identification
+ } XNADDR;
++static_assert(sizeof(XNADDR) == kXnAddrSize);
+ 
+ typedef struct {
+   rex::be<int32_t> status;
+@@ -439,27 +445,19 @@ struct XnAddrStatus {
+   static const uint32_t XNET_GET_XNADDR_TROUBLESHOOT = 0x00008000;
+ };
+ 
+-u32 NetDll_XNetGetTitleXnAddr_entry(u32 caller, ppc_ptr_t<XNADDR> addr_ptr) {
+-  // Just return a loopback address atm.
+-  addr_ptr->ina.s_addr = htonl(INADDR_LOOPBACK);
+-  addr_ptr->inaOnline.s_addr = 0;
+-  addr_ptr->wPortOnline = 0;
+-
+-  // TODO(gibbed): A proper mac address.
+-  // RakNet's 360 version appears to depend on abEnet to create "random" 64-bit
+-  // numbers. A zero value will cause RakPeer::Startup to fail. This causes
+-  // 58411436 to crash on startup.
+-  // The 360-specific code is scrubbed from the RakNet repo, but there's still
+-  // traces of what it's doing which match the game code.
+-  // https://github.com/facebookarchive/RakNet/blob/master/Source/RakPeer.cpp#L382
+-  // https://github.com/facebookarchive/RakNet/blob/master/Source/RakPeer.cpp#L4527
+-  // https://github.com/facebookarchive/RakNet/blob/master/Source/RakPeer.cpp#L4467
+-  // "Mac address is a poor solution because you can't have multiple connections
+-  // from the same system"
+-  std::memset(addr_ptr->abEnet, 0xCC, 6);
+-
+-  std::memset(addr_ptr->abOnline, 0, 20);
++// The XNADDR of this installation: its local network address with System Link (the loopback one
++// without), and the machine ID of its player identity as the network card address.
++// RakNet's 360 version appears to depend on abEnet to create "random" 64-bit numbers, and a zero
++// value makes RakPeer::Startup fail (58411436 crashed on startup), so it is never zero.
++// https://github.com/facebookarchive/RakNet/blob/master/Source/RakPeer.cpp#L382
++XnAddrBytes TitleXnAddr() {
++  const uint32_t ip = SystemLinkEnabled() && LanAddress() ? LanAddress() : INADDR_LOOPBACK;
++  return MakeXnAddr(ip, REX_KERNEL_STATE()->player_identity().machine_id);
++}
+ 
++u32 NetDll_XNetGetTitleXnAddr_entry(u32 caller, ppc_ptr_t<XNADDR> addr_ptr) {
++  const XnAddrBytes xnaddr = TitleXnAddr();
++  std::memcpy(addr_ptr.host_address(), xnaddr.data(), sizeof(XNADDR));
+   return XnAddrStatus::XNET_GET_XNADDR_STATIC;
+ }
+ 
+@@ -475,23 +473,98 @@ u32 NetDll_XNetXnAddrToMachineId_entry(u32 caller, ppc_ptr_t<XNADDR> addr_ptr, m
+   return 1;
+ }
+ 
++// The IN_ADDR (passed by value, so as a number: 192.168.1.2 is 0xC0A80102) in dotted form.
+ void NetDll_XNetInAddrToString_entry(u32 caller, u32 in_addr, mapped_string string_out,
+                                      u32 string_size) {
+-  rex::string::copy_truncating(string_out, "666.666.666.666", string_size);
++  const std::string text = fmt::format("{}.{}.{}.{}", in_addr >> 24, (in_addr >> 16) & 0xFF,
++                                       (in_addr >> 8) & 0xFF, in_addr & 0xFF);
++  rex::string::copy_truncating(string_out, text.c_str(), string_size);
+ }
+ 
+ // This converts a XNet address to an IN_ADDR. The IN_ADDR is used for
+-// subsequent socket calls (like a handle to a XNet address)
++// subsequent socket calls (like a handle to a XNet address). With System Link it is the other
++// installation's own address on the local network (see rex/system/xam/system_link.h).
+ u32 NetDll_XNetXnAddrToInAddr_entry(u32 caller, ppc_ptr_t<XNADDR> xn_addr, mapped_void xid,
+-                                    mapped_void in_addr) {
+-  return 1;
++                                    mapped_u32 in_addr) {
++  if (!SystemLinkEnabled() || !xn_addr || !in_addr) {
++    return 1;
++  }
++  XnAddrBytes xnaddr;
++  std::memcpy(xnaddr.data(), xn_addr.host_address(), xnaddr.size());
++  RememberXnAddr(xnaddr);
++  *in_addr = XnAddrIp(xnaddr);
++  return 0;
+ }
+ 
+-// Does the reverse of the above.
+-// FIXME: Arguments may not be correct.
+-u32 NetDll_XNetInAddrToXnAddr_entry(u32 caller, mapped_void in_addr, ppc_ptr_t<XNADDR> xn_addr,
++// Does the reverse of the above: the XNADDR of an installation the title has seen (by its own
++// XNADDR, a session's host or a conversion above), or one made from the address alone, and the
++// ID of the session it is in.
++u32 NetDll_XNetInAddrToXnAddr_entry(u32 caller, u32 in_addr, ppc_ptr_t<XNADDR> xn_addr,
+                                     mapped_void xid) {
+-  return 1;
++  if (!SystemLinkEnabled() || !xn_addr) {
++    return 1;
++  }
++  XnAddrBytes xnaddr = TitleXnAddr();
++  if (in_addr != XnAddrIp(xnaddr)) {
++    const auto known = FindXnAddr(in_addr);
++    if (known) {
++      xnaddr = *known;
++    } else {
++      REXKRNL_WARN("XNetInAddrToXnAddr: {:08X} has not been seen; its XNADDR has no machine ID",
++                   in_addr);
++      xnaddr = MakeXnAddr(in_addr, {});
++    }
++  }
++  std::memcpy(xn_addr.host_address(), xnaddr.data(), xnaddr.size());
++  if (xid) {
++    const auto kid = FindSessionKid(in_addr);
++    std::memset(xid.host_address(), 0, sizeof(XnKid));
++    if (kid) {
++      std::memcpy(xid.host_address(), kid->data(), kid->size());
++    }
++  }
++  return 0;
++}
++
++// Keys and secure associations: there is no encryption between installations, so registering a
++// session's key, connecting to an address or forgetting one always works.
++u32 NetDll_XNetCreateKey_entry(u32 caller, mapped_void xid, mapped_void key) {
++  std::random_device random;
++  if (xid) {
++    const XnKid kid = MakeSystemLinkKid(random);
++    std::memcpy(xid.host_address(), kid.data(), kid.size());
++  }
++  if (key) {
++    const XnKey new_key = MakeKey(random);
++    std::memcpy(key.host_address(), new_key.data(), new_key.size());
++  }
++  return 0;
++}
++
++u32 NetDll_XNetRegisterKey_entry(u32 caller, mapped_void xid, mapped_void key) {
++  return 0;
++}
++
++u32 NetDll_XNetUnregisterKey_entry(u32 caller, mapped_void xid) {
++  return 0;
++}
++
++u32 NetDll_XNetUnregisterInAddr_entry(u32 caller, u32 in_addr) {
++  return 0;
++}
++
++u32 NetDll_XNetConnect_entry(u32 caller, u32 in_addr) {
++  return 0;
++}
++
++// The title's ID, which titles read as part of their network setup.
++u32 XNetLogonGetTitleID_entry() {
++  return REX_KERNEL_STATE()->title_id();
++}
++
++u32 NetDll_XNetGetConnectStatus_entry(u32 caller, u32 in_addr) {
++  constexpr uint32_t kXnetConnectStatusConnected = 2;
++  return kXnetConnectStatusConnected;
+ }
+ 
+ // https://www.google.com/patents/WO2008112448A1?cl=en
+@@ -509,8 +582,14 @@ struct XEthernetStatus {
+   static const uint32_t XNET_ETHERNET_LINK_HALF_DUPLEX = 0x10;
+ };
+ 
++// A link only with System Link: titles offer their network modes when there is one (Gears of War
++// 3's System Link party type, through HasLinkConnection).
+ u32 NetDll_XNetGetEthernetLinkStatus_entry(u32 caller) {
+-  return 0;
++  if (!SystemLinkEnabled()) {
++    return 0;
++  }
++  return XEthernetStatus::XNET_ETHERNET_LINK_ACTIVE | XEthernetStatus::XNET_ETHERNET_LINK_100MBPS |
++         XEthernetStatus::XNET_ETHERNET_LINK_FULL_DUPLEX;
+ }
+ 
+ u32 NetDll_XNetDnsLookup_entry(u32 caller, mapped_string host, u32 event_handle, mapped_u32 pdns) {
+@@ -561,9 +640,11 @@ u32 NetDll_XNetQosRelease_entry(u32 caller, ppc_ptr_t<XNQOS> qos) {
+   return 0;
+ }
+ 
++// A host answers quality of service probes for its session; the probes are not emulated, so
++// listening only succeeds, with System Link.
+ u32 NetDll_XNetQosListen_entry(u32 caller, mapped_void id, mapped_void data, u32 data_size, u32 r7,
+                                u32 flags) {
+-  return X_ERROR_FUNCTION_FAILED;
++  return SystemLinkEnabled() ? 0 : X_ERROR_FUNCTION_FAILED;
+ }
+ 
+ u32 NetDll_inet_addr_entry(mapped_string addr_ptr) {
+@@ -923,6 +1004,57 @@ u32 NetDll_sendto_entry(u32 caller, u32 socket_handle, mapped_void buf_ptr, u32
+   return socket->SendTo(buf_ptr, buf_len, flags, &native_to, to_len);
+ }
+ 
++u32 NetDll_getsockopt_entry(u32 caller, u32 socket_handle, u32 level, u32 optname,
++                            mapped_void optval_ptr, mapped_u32 optlen_ptr) {
++  auto socket = REX_KERNEL_OBJECTS()->LookupObject<XSocket>(socket_handle);
++  if (!socket) {
++    // WSAENOTSOCK
++    XThread::SetLastError(0x2736);
++    return -1;
++  }
++  if (!optval_ptr || !optlen_ptr) {
++    // WSAEFAULT
++    XThread::SetLastError(0x271E);
++    return -1;
++  }
++  uint32_t optlen = *optlen_ptr;
++  const X_STATUS status = socket->GetOption(level, optname, optval_ptr, &optlen);
++  if (XFAILED(status)) {
++    // WSAENOPROTOOPT
++    XThread::SetLastError(0x273A);
++    return -1;
++  }
++  *optlen_ptr = optlen;
++  return 0;
++}
++
++u32 NetDll_getsockname_entry(u32 caller, u32 socket_handle, ppc_ptr_t<XSOCKADDR_IN> name,
++                             mapped_u32 namelen) {
++  auto socket = REX_KERNEL_OBJECTS()->LookupObject<XSocket>(socket_handle);
++  if (!socket) {
++    // WSAENOTSOCK
++    XThread::SetLastError(0x2736);
++    return -1;
++  }
++  if (!name || !namelen || *namelen < sizeof(XSOCKADDR_IN)) {
++    // WSAEFAULT
++    XThread::SetLastError(0x271E);
++    return -1;
++  }
++  N_XSOCKADDR_IN native_name;
++  if (socket->GetName(&native_name) < 0) {
++    // WSAEINVAL: not bound
++    XThread::SetLastError(0x2726);
++    return -1;
++  }
++  name->sin_family = native_name.sin_family;
++  name->sin_port = native_name.sin_port;
++  name->sin_addr = native_name.sin_addr;
++  std::memset(name->x_sin_zero, 0, sizeof(name->x_sin_zero));
++  *namelen = sizeof(XSOCKADDR_IN);
++  return 0;
++}
++
+ u32 NetDll___WSAFDIsSet_entry(u32 socket_handle, ppc_ptr_t<x_fd_set> fd_set) {
+   const uint8_t max_fd_count = std::min((uint32_t)fd_set->fd_count, uint32_t(64));
+   for (uint8_t i = 0; i < max_fd_count; i++) {
+@@ -972,6 +1104,13 @@ REX_EXPORT(__imp__NetDll_XNetDnsRelease, rex::kernel::xam::NetDll_XNetDnsRelease
+ REX_EXPORT(__imp__NetDll_XNetQosServiceLookup, rex::kernel::xam::NetDll_XNetQosServiceLookup_entry)
+ REX_EXPORT(__imp__NetDll_XNetQosRelease, rex::kernel::xam::NetDll_XNetQosRelease_entry)
+ REX_EXPORT(__imp__NetDll_XNetQosListen, rex::kernel::xam::NetDll_XNetQosListen_entry)
++REX_EXPORT(__imp__NetDll_XNetCreateKey, rex::kernel::xam::NetDll_XNetCreateKey_entry)
++REX_EXPORT(__imp__NetDll_XNetRegisterKey, rex::kernel::xam::NetDll_XNetRegisterKey_entry)
++REX_EXPORT(__imp__NetDll_XNetUnregisterKey, rex::kernel::xam::NetDll_XNetUnregisterKey_entry)
++REX_EXPORT(__imp__NetDll_XNetUnregisterInAddr, rex::kernel::xam::NetDll_XNetUnregisterInAddr_entry)
++REX_EXPORT(__imp__NetDll_XNetConnect, rex::kernel::xam::NetDll_XNetConnect_entry)
++REX_EXPORT(__imp__NetDll_XNetGetConnectStatus, rex::kernel::xam::NetDll_XNetGetConnectStatus_entry)
++REX_EXPORT(__imp__XNetLogonGetTitleID, rex::kernel::xam::XNetLogonGetTitleID_entry)
+ REX_EXPORT(__imp__NetDll_inet_addr, rex::kernel::xam::NetDll_inet_addr_entry)
+ REX_EXPORT(__imp__NetDll_socket, rex::kernel::xam::NetDll_socket_entry)
+ REX_EXPORT(__imp__NetDll_closesocket, rex::kernel::xam::NetDll_closesocket_entry)
+@@ -988,6 +1127,8 @@ REX_EXPORT(__imp__NetDll_recvfrom, rex::kernel::xam::NetDll_recvfrom_entry)
+ REX_EXPORT(__imp__NetDll_send, rex::kernel::xam::NetDll_send_entry)
+ REX_EXPORT(__imp__NetDll_sendto, rex::kernel::xam::NetDll_sendto_entry)
+ REX_EXPORT(__imp__NetDll___WSAFDIsSet, rex::kernel::xam::NetDll___WSAFDIsSet_entry)
++REX_EXPORT(__imp__NetDll_getsockname, rex::kernel::xam::NetDll_getsockname_entry)
++REX_EXPORT(__imp__NetDll_getsockopt, rex::kernel::xam::NetDll_getsockopt_entry)
+ REX_EXPORT(__imp__NetDll_WSASetLastError, rex::kernel::xam::NetDll_WSASetLastError_entry)
+ 
+ REX_EXPORT_STUB(__imp__NetDll_UpnpActionCalculateWorkBufferSize);
+@@ -1034,25 +1175,19 @@ REX_EXPORT_STUB(__imp__NetDll_XHttpSetStatusCallback);
+ REX_EXPORT_STUB(__imp__NetDll_XHttpShutdown);
+ REX_EXPORT_STUB(__imp__NetDll_XHttpStartup);
+ REX_EXPORT_STUB(__imp__NetDll_XHttpWriteData);
+-REX_EXPORT_STUB(__imp__NetDll_XNetConnect);
+-REX_EXPORT_STUB(__imp__NetDll_XNetCreateKey);
+ REX_EXPORT_STUB(__imp__NetDll_XNetDnsReverseLookup);
+ REX_EXPORT_STUB(__imp__NetDll_XNetDnsReverseRelease);
+ REX_EXPORT_STUB(__imp__NetDll_XNetGetBroadcastVersionStatus);
+-REX_EXPORT_STUB(__imp__NetDll_XNetGetConnectStatus);
+ REX_EXPORT_STUB(__imp__NetDll_XNetGetSystemLinkPort);
+ REX_EXPORT_STUB(__imp__NetDll_XNetGetXnAddrPlatform);
+ REX_EXPORT_STUB(__imp__NetDll_XNetInAddrToServer);
+ REX_EXPORT_STUB(__imp__NetDll_XNetQosGetListenStats);
+ REX_EXPORT_STUB(__imp__NetDll_XNetQosLookup);
+-REX_EXPORT_STUB(__imp__NetDll_XNetRegisterKey);
+ REX_EXPORT_STUB(__imp__NetDll_XNetReplaceKey);
+ REX_EXPORT_STUB(__imp__NetDll_XNetServerToInAddr);
+ REX_EXPORT_STUB(__imp__NetDll_XNetSetOpt);
+ REX_EXPORT_STUB(__imp__NetDll_XNetStartupEx);
+ REX_EXPORT_STUB(__imp__NetDll_XNetTsAddrToInAddr);
+-REX_EXPORT_STUB(__imp__NetDll_XNetUnregisterInAddr);
+-REX_EXPORT_STUB(__imp__NetDll_XNetUnregisterKey);
+ REX_EXPORT_STUB(__imp__NetDll_XmlDownloadContinue);
+ REX_EXPORT_STUB(__imp__NetDll_XmlDownloadGetParseTime);
+ REX_EXPORT_STUB(__imp__NetDll_XmlDownloadGetReceivedDataSize);
+@@ -1102,5 +1237,3 @@ REX_EXPORT_STUB(__imp__NetDll_XnpToolSetCallbacks);
+ REX_EXPORT_STUB(__imp__NetDll_XnpUnregisterKeyForCallerType);
+ REX_EXPORT_STUB(__imp__NetDll_XnpUpdateConfigParams);
+ REX_EXPORT_STUB(__imp__NetDll_getpeername);
+-REX_EXPORT_STUB(__imp__NetDll_getsockname);
+-REX_EXPORT_STUB(__imp__NetDll_getsockopt);
 diff --git a/src/kernel/xam/xam_user.cpp b/src/kernel/xam/xam_user.cpp
-index 94468e6..151f680 100644
+index 94468e6..6a3d72b 100644
 --- a/src/kernel/xam/xam_user.cpp
 +++ b/src/kernel/xam/xam_user.cpp
-@@ -46,8 +46,7 @@ i32 XamUserGetXUID_entry(u32 user_index, u32 type_mask, mapped_u64 xuid_ptr) {
+@@ -12,6 +12,7 @@
+ // Disable warnings about unused parameters for kernel functions
+ #pragma GCC diagnostic ignored "-Wunused-parameter"
+ 
++#include <atomic>
+ #include <cstring>
+ 
+ #include <rex/cvar.h>
+@@ -46,8 +47,7 @@ i32 XamUserGetXUID_entry(u32 user_index, u32 type_mask, mapped_u64 xuid_ptr) {
    uint32_t result = X_E_NO_SUCH_USER;
    uint64_t xuid = 0;
    if (user_index < 4) {
@@ -23733,7 +24320,7 @@ index 94468e6..151f680 100644
        auto type = user_profile->type() & type_mask;
        if (type & (2 | 4)) {
          // maybe online profile?
-@@ -67,14 +66,8 @@ i32 XamUserGetXUID_entry(u32 user_index, u32 type_mask, mapped_u64 xuid_ptr) {
+@@ -67,14 +67,8 @@ i32 XamUserGetXUID_entry(u32 user_index, u32 type_mask, mapped_u64 xuid_ptr) {
  }
  
  u32 XamUserGetSigninState_entry(u32 user_index) {
@@ -23750,7 +24337,7 @@ index 94468e6..151f680 100644
  }
  
  typedef struct {
-@@ -93,11 +86,11 @@ i32 XamUserGetSigninInfo_entry(u32 user_index, u32 flags, ppc_ptr_t<X_USER_SIGNI
+@@ -93,11 +87,11 @@ i32 XamUserGetSigninInfo_entry(u32 user_index, u32 flags, ppc_ptr_t<X_USER_SIGNI
    }
  
    std::memset(info, 0, sizeof(X_USER_SIGNIN_INFO));
@@ -23764,7 +24351,7 @@ index 94468e6..151f680 100644
    info->xuid = user_profile->xuid();
    info->signin_state = user_profile->signin_state();
    rex::string::copy_truncating(info->name, user_profile->name(), rex::countof(info->name));
-@@ -109,11 +102,11 @@ u32 XamUserGetName_entry(u32 user_index, mapped_string buffer, u32 buffer_len) {
+@@ -109,11 +103,11 @@ u32 XamUserGetName_entry(u32 user_index, mapped_string buffer, u32 buffer_len) {
      return X_E_INVALIDARG;
    }
  
@@ -23778,7 +24365,7 @@ index 94468e6..151f680 100644
    const auto& user_name = user_profile->name();
    rex::string::copy_truncating(buffer, user_name, std::min(buffer_len, uint32_t(16)));
    return X_E_SUCCESS;
-@@ -124,7 +117,8 @@ u32 XamUserGetGamerTag_entry(u32 user_index, mapped_wstring buffer, u32 buffer_l
+@@ -124,7 +118,8 @@ u32 XamUserGetGamerTag_entry(u32 user_index, mapped_wstring buffer, u32 buffer_l
      return X_E_INVALIDARG;
    }
  
@@ -23788,7 +24375,7 @@ index 94468e6..151f680 100644
      return X_E_NO_SUCH_USER;
    }
  
-@@ -132,7 +126,6 @@ u32 XamUserGetGamerTag_entry(u32 user_index, mapped_wstring buffer, u32 buffer_l
+@@ -132,7 +127,6 @@ u32 XamUserGetGamerTag_entry(u32 user_index, mapped_wstring buffer, u32 buffer_l
      return X_E_INVALIDARG;
    }
  
@@ -23796,7 +24383,7 @@ index 94468e6..151f680 100644
    auto user_name = rex::string::to_utf16(user_profile->name());
    rex::string::copy_and_swap_truncating(buffer, user_name, std::min(buffer_len, uint32_t(16)));
    return X_E_SUCCESS;
-@@ -156,8 +149,6 @@ uint32_t XamUserReadProfileSettingsEx(uint32_t title_id, uint32_t user_index, ui
+@@ -156,8 +150,6 @@ uint32_t XamUserReadProfileSettingsEx(uint32_t title_id, uint32_t user_index, ui
      assert_true(xuid_count == 1);
      assert_not_null(xuids);
      // TODO(gibbed): allow proper lookup of arbitrary XUIDs
@@ -23805,7 +24392,7 @@ index 94468e6..151f680 100644
      // TODO(gibbed): we assert here, but in case a title passes xuid_count > 1
      // until it's implemented for release builds...
      xuid_count = 1;
-@@ -212,8 +203,21 @@ uint32_t XamUserReadProfileSettingsEx(uint32_t title_id, uint32_t user_index, ui
+@@ -212,8 +204,21 @@ uint32_t XamUserReadProfileSettingsEx(uint32_t title_id, uint32_t user_index, ui
    // Title ID = 0 means us.
    // 0xfffe07d1 = profile?
  
@@ -23829,7 +24416,7 @@ index 94468e6..151f680 100644
      if (overlapped) {
        REX_KERNEL_STATE()->CompleteOverlappedImmediate(
            REX_KERNEL_MEMORY()->HostToGuestVirtual(overlapped), X_ERROR_NO_SUCH_USER);
-@@ -222,8 +226,6 @@ uint32_t XamUserReadProfileSettingsEx(uint32_t title_id, uint32_t user_index, ui
+@@ -222,8 +227,6 @@ uint32_t XamUserReadProfileSettingsEx(uint32_t title_id, uint32_t user_index, ui
      return X_ERROR_NO_SUCH_USER;
    }
  
@@ -23838,7 +24425,7 @@ index 94468e6..151f680 100644
    // First call asks for size (fill buffer_size_ptr).
    // Second call asks for buffer contents with that size.
  
-@@ -309,8 +311,8 @@ u32 XamUserWriteProfileSettings_entry(u32 title_id, u32 user_index, u32 setting_
+@@ -309,8 +312,8 @@ u32 XamUserWriteProfileSettings_entry(u32 title_id, u32 user_index, u32 setting_
      return X_ERROR_INVALID_PARAMETER;
    }
  
@@ -23849,7 +24436,7 @@ index 94468e6..151f680 100644
      if (overlapped) {
        REX_KERNEL_STATE()->CompleteOverlappedImmediate(overlapped.guest_address(),
                                                        X_ERROR_NO_SUCH_USER);
-@@ -320,7 +322,6 @@ u32 XamUserWriteProfileSettings_entry(u32 title_id, u32 user_index, u32 setting_
+@@ -320,7 +323,6 @@ u32 XamUserWriteProfileSettings_entry(u32 title_id, u32 user_index, u32 setting_
    }
  
    // Update and save settings.
@@ -23857,7 +24444,7 @@ index 94468e6..151f680 100644
  
    for (uint32_t n = 0; n < setting_count; ++n) {
      const X_USER_PROFILE_SETTING& setting = settings[n];
-@@ -378,7 +379,7 @@ u32 XamUserCheckPrivilege_entry(u32 user_index, u32 mask, mapped_u32 out_value)
+@@ -378,7 +380,7 @@ u32 XamUserCheckPrivilege_entry(u32 user_index, u32 mask, mapped_u32 out_value)
        return X_ERROR_INVALID_PARAMETER;
      }
  
@@ -23866,7 +24453,7 @@ index 94468e6..151f680 100644
        return X_ERROR_NO_SUCH_USER;
      }
    }
-@@ -389,7 +390,7 @@ u32 XamUserCheckPrivilege_entry(u32 user_index, u32 mask, mapped_u32 out_value)
+@@ -389,7 +391,7 @@ u32 XamUserCheckPrivilege_entry(u32 user_index, u32 mask, mapped_u32 out_value)
  }
  
  u32 XamUserContentRestrictionGetFlags_entry(u32 user_index, mapped_u32 out_flags) {
@@ -23875,7 +24462,7 @@ index 94468e6..151f680 100644
      return X_ERROR_NO_SUCH_USER;
    }
  
-@@ -400,7 +401,7 @@ u32 XamUserContentRestrictionGetFlags_entry(u32 user_index, mapped_u32 out_flags
+@@ -400,7 +402,7 @@ u32 XamUserContentRestrictionGetFlags_entry(u32 user_index, mapped_u32 out_flags
  
  u32 XamUserContentRestrictionGetRating_entry(u32 user_index, u32 unk1, mapped_u32 out_unk2,
                                               mapped_u32 out_unk3) {
@@ -23884,7 +24471,7 @@ index 94468e6..151f680 100644
      return X_ERROR_NO_SUCH_USER;
    }
  
-@@ -431,7 +432,7 @@ u32 XamUserGetMembershipTier_entry(u32 user_index) {
+@@ -431,7 +433,7 @@ u32 XamUserGetMembershipTier_entry(u32 user_index) {
    if (user_index >= 4) {
      return X_ERROR_INVALID_PARAMETER;
    }
@@ -23893,7 +24480,7 @@ index 94468e6..151f680 100644
      return X_ERROR_NO_SUCH_USER;
    }
    return 6 /* 6 appears to be Gold */;
-@@ -445,18 +446,13 @@ u32 XamUserAreUsersFriends_entry(u32 user_index, u32 unk1, u32 unk2, mapped_u32
+@@ -445,18 +447,13 @@ u32 XamUserAreUsersFriends_entry(u32 user_index, u32 unk1, u32 unk2, mapped_u32
    if (user_index >= 4) {
      result = X_ERROR_INVALID_PARAMETER;
    } else {
@@ -23918,7 +24505,7 @@ index 94468e6..151f680 100644
      }
    }
  
-@@ -481,8 +477,8 @@ u32 XamShowSigninUI_entry(u32 unk, u32 unk_mask) {
+@@ -481,8 +478,8 @@ u32 XamShowSigninUI_entry(u32 unk, u32 unk_mask) {
  
    // To fix game modes that display a 4 profile signin UI (even if playing
    // alone):
@@ -23929,11 +24516,62 @@ index 94468e6..151f680 100644
    // Games seem to sit and loop until we trigger this notification:
    // XN_SYS_UI (off)
    REX_KERNEL_STATE()->BroadcastNotification(0x00000009, 0);
+@@ -713,16 +710,22 @@ u32 XamWriteGamerTile_entry(u32 arg1, u32 arg2, u32 arg3, u32 arg4, u32 arg5, u3
+   return X_ERROR_SUCCESS;
+ }
+ 
++// Session handles: 0xCAFE0000 plus a number from 1 to 0xFFF, reused after 4095 sessions.
++constexpr uint32_t kSessionHandleBase = 0xCAFE0000;
++constexpr uint32_t kSessionNumberMask = 0x00000FFF;
++
+ u32 XamSessionCreateHandle_entry(mapped_u32 handle_ptr) {
+-  *handle_ptr = 0xCAFEDEAD;
++  static std::atomic<uint32_t> sessions{0};
++  const uint32_t number = sessions.fetch_add(1) % kSessionNumberMask + 1;
++  *handle_ptr = kSessionHandleBase | number;
+   return X_ERROR_SUCCESS;
+ }
+ 
++// The session's made-up object (see IsSessionObject), which the title passes to the session
++// messages.
+ u32 XamSessionRefObjByHandle_entry(u32 handle, mapped_u32 obj_ptr) {
+-  assert_true(handle == 0xCAFEDEAD);
+-  // TODO(PermaNull): Implement this properly,
+-  // For the time being returning 0xDEADF00D will prevent crashing.
+-  *obj_ptr = 0xDEADF00D;
++  assert_true((handle & ~kSessionNumberMask) == kSessionHandleBase);
++  *obj_ptr = kSessionObjectBase | (handle & kSessionNumberMask);
+   return X_ERROR_SUCCESS;
+ }
+ 
+diff --git a/src/kernel/xboxkrnl/xboxkrnl_ob.cpp b/src/kernel/xboxkrnl/xboxkrnl_ob.cpp
+index 5709e6d..6ef67ba 100644
+--- a/src/kernel/xboxkrnl/xboxkrnl_ob.cpp
++++ b/src/kernel/xboxkrnl/xboxkrnl_ob.cpp
+@@ -13,6 +13,7 @@
+ #pragma GCC diagnostic ignored "-Wunused-parameter"
+ 
+ #include <rex/assert.h>
++#include <rex/kernel/xam/private.h>
+ #include <rex/kernel/xboxkrnl/private.h>
+ #include <rex/logging.h>
+ #include <rex/hook.h>
+@@ -156,8 +157,8 @@ u32 ObReferenceObjectByName_entry(mapped_string name, u32 attributes, u32 object
+ 
+ u32 ObDereferenceObject_entry(u32 native_ptr) {
+   REXKRNL_IMPORT_TRACE("ObDereferenceObject", "ptr={:#x}", (uint32_t)native_ptr);
+-  // Check if a dummy value from ObReferenceObjectByHandle.
+-  if (native_ptr == 0xDEADF00D) {
++  // A session's made-up object (XamSessionRefObjByHandle).
++  if (rex::kernel::xam::IsSessionObject(native_ptr)) {
+     return 0;
+   }
+ 
 diff --git a/src/system/kernel_state.cpp b/src/system/kernel_state.cpp
-index 697399c..84c210c 100644
+index 697399c..2c61ee5 100644
 --- a/src/system/kernel_state.cpp
 +++ b/src/system/kernel_state.cpp
-@@ -65,13 +65,22 @@ KernelState::KernelState(Runtime* emulator)
+@@ -65,13 +65,25 @@ KernelState::KernelState(Runtime* emulator)
    file_system_ = emulator->file_system();
  
    app_manager_ = std::make_unique<xam::AppManager>();
@@ -23944,7 +24582,10 @@ index 697399c..84c210c 100644
    if (!user_data_root.empty()) {
      user_data_root = std::filesystem::absolute(user_data_root);
    }
-+  player_identity_ = xam::LoadOrCreatePlayerIdentity(user_data_root);
++  // Tools start the runtime on folders that are not the player's saves (code generation on the
++  // game folder): they read an identity there but never make one.
++  player_identity_ = emulator_->is_tool_mode() ? xam::LoadPlayerIdentity(user_data_root)
++                                               : xam::LoadOrCreatePlayerIdentity(user_data_root);
 +  user_profiles_[0] =
 +      std::make_unique<xam::UserProfile>(player_identity_.xuid, REXCVAR_GET(user_name));
 +  for (uint32_t i = 1; i < user_profiles_.size(); ++i) {
@@ -23958,7 +24599,7 @@ index 697399c..84c210c 100644
    content_manager_ = std::make_unique<xam::ContentManager>(this, user_data_root);
  
    if (shared_kernel_state_ != nullptr) {
-@@ -1118,6 +1127,45 @@ void KernelState::UnregisterNotifyListener(XNotifyListener* listener) {
+@@ -1118,6 +1130,45 @@ void KernelState::UnregisterNotifyListener(XNotifyListener* listener) {
    }
  }
  
@@ -24096,10 +24737,10 @@ index 5f44a44..1dd7abd 100644
    // content_root/title_id/profile/user_name
 diff --git a/src/system/xam/player_identity.cpp b/src/system/xam/player_identity.cpp
 new file mode 100644
-index 0000000..8009139
+index 0000000..1cfbf15
 --- /dev/null
 +++ b/src/system/xam/player_identity.cpp
-@@ -0,0 +1,169 @@
+@@ -0,0 +1,191 @@
 +/**
 + * @file        system/xam/player_identity.cpp
 + * @brief       The identity of an installation (rex/system/xam/player_identity.h)
@@ -24177,6 +24818,19 @@ index 0000000..8009139
 +  return xuid;
 +}
 +
++// The identity in `path`, if the file exists; `exists` says whether it does.
++std::optional<PlayerIdentity> ReadPlayerIdentity(const std::filesystem::path& path, bool& exists) {
++  std::error_code error;
++  exists = std::filesystem::exists(path, error);
++  if (!exists) {
++    return std::nullopt;
++  }
++  std::ifstream in(path, std::ios::binary);
++  std::stringstream text;
++  text << in.rdbuf();
++  return ParsePlayerIdentity(text.str());
++}
++
 +}  // namespace
 +
 +bool IsValidPlayerXuid(uint64_t xuid) {
@@ -24241,14 +24895,12 @@ index 0000000..8009139
 +  }
 +  const auto path = user_data_root / kPlayerIdentityFileName;
 +  std::error_code error;
-+  if (std::filesystem::exists(path, error)) {
-+    std::ifstream in(path, std::ios::binary);
-+    std::stringstream text;
-+    text << in.rdbuf();
-+    if (auto identity = ParsePlayerIdentity(text.str())) {
-+      REXSYS_INFO("Player identity: XUID {:016X}", identity->xuid);
-+      return *identity;
-+    }
++  bool exists = false;
++  if (auto identity = ReadPlayerIdentity(path, exists)) {
++    REXSYS_INFO("Player identity: XUID {:016X}", identity->xuid);
++    return *identity;
++  }
++  if (exists) {
 +    auto bad = path;
 +    bad += ".bad";
 +    std::filesystem::rename(path, bad, error);
@@ -24266,6 +24918,241 @@ index 0000000..8009139
 +    REXSYS_INFO("Player identity: new XUID {:016X}, saved in {}", identity.xuid, path.string());
 +  }
 +  return identity;
++}
++
++PlayerIdentity LoadPlayerIdentity(const std::filesystem::path& user_data_root) {
++  bool exists = false;
++  if (!user_data_root.empty()) {
++    if (auto identity = ReadPlayerIdentity(user_data_root / kPlayerIdentityFileName, exists)) {
++      return *identity;
++    }
++  }
++  std::random_device random;
++  return GeneratePlayerIdentity(random);
++}
++
++}  // namespace rex::system::xam
+diff --git a/src/system/xam/system_link.cpp b/src/system/xam/system_link.cpp
+new file mode 100644
+index 0000000..20079e5
+--- /dev/null
++++ b/src/system/xam/system_link.cpp
+@@ -0,0 +1,218 @@
++/**
++ * @file        system/xam/system_link.cpp
++ * @brief       System Link: the local network as XNet and the session services show it to a title
++ *              (rex/system/xam/system_link.h)
++ *
++ * @license     BSD 3-Clause License
++ *              See LICENSE file in the project root for full license text.
++ */
++
++#include <rex/system/xam/system_link.h>
++
++#include <cstring>
++#include <map>
++#include <mutex>
++#include <string>
++
++#include <rex/cvar.h>
++#include <rex/logging.h>
++#include <rex/platform.h>
++
++#if REX_PLATFORM_WIN32
++#include <WinSock2.h>
++
++#include <WS2tcpip.h>
++#else
++#include <arpa/inet.h>
++#include <ifaddrs.h>
++#include <net/if.h>
++#include <netinet/in.h>
++#include <sys/socket.h>
++#include <unistd.h>
++#endif
++
++REXCVAR_DEFINE_STRING(network_mode, "offline", "Network",
++                      "offline: the title sees no network link, so System Link stays off; "
++                      "system_link: System Link games with the other computers of the local "
++                      "network")
++    .allowed({"offline", "system_link"})
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++
++namespace rex::system::xam {
++namespace {
++
++// Top bits of an XNKID that say what kind of session it is; System Link sessions have none set.
++constexpr uint8_t kXnKidTypeMask = 0xF0;
++constexpr uint8_t kXnKidSystemLink = 0x00;
++
++std::mutex g_mutex;
++std::map<uint32_t, XnAddrBytes> g_address_book;  // by IP address
++std::map<uint32_t, SystemLinkSession> g_sessions;  // by the title's session handle
++
++// The local address of a UDP socket "connected" to `ip`: the address of the interface the host
++// would send to it from. A UDP connect sends nothing.
++uint32_t RouteSourceAddress(uint32_t ip) {
++  const auto handle = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
++#if REX_PLATFORM_WIN32
++  if (handle == INVALID_SOCKET) return 0;
++#else
++  if (handle < 0) return 0;
++#endif
++  sockaddr_in to{};
++  to.sin_family = AF_INET;
++  to.sin_port = htons(9);
++  to.sin_addr.s_addr = htonl(ip);
++  uint32_t address = 0;
++  if (connect(handle, reinterpret_cast<sockaddr*>(&to), sizeof(to)) == 0) {
++    sockaddr_in local{};
++    socklen_t length = sizeof(local);
++    if (getsockname(handle, reinterpret_cast<sockaddr*>(&local), &length) == 0) {
++      address = ntohl(local.sin_addr.s_addr);
++    }
++  }
++#if REX_PLATFORM_WIN32
++  closesocket(handle);
++#else
++  close(handle);
++#endif
++  return address;
++}
++
++// The first IPv4 address of an interface that is up and is not the loopback one.
++uint32_t FirstInterfaceAddress() {
++#if REX_PLATFORM_WIN32
++  return 0;
++#else
++  ifaddrs* interfaces = nullptr;
++  if (getifaddrs(&interfaces) != 0) return 0;
++  uint32_t address = 0;
++  for (auto* entry = interfaces; entry && !address; entry = entry->ifa_next) {
++    if (!entry->ifa_addr || entry->ifa_addr->sa_family != AF_INET) continue;
++    if (!(entry->ifa_flags & IFF_UP) || (entry->ifa_flags & IFF_LOOPBACK)) continue;
++    address = ntohl(reinterpret_cast<const sockaddr_in*>(entry->ifa_addr)->sin_addr.s_addr);
++  }
++  freeifaddrs(interfaces);
++  return address;
++#endif
++}
++
++uint32_t FindLanAddress() {
++  // The interface of the default route is the one the local network is on; a network without one
++  // (no router to the internet) still has its interfaces.
++  constexpr uint32_t kOutsideAddress = 0xC0000201;  // 192.0.2.1, an address for documentation
++  uint32_t address = RouteSourceAddress(kOutsideAddress);
++  if (!address || (address >> 24) == 127) {
++    address = FirstInterfaceAddress();
++  }
++  if (address) {
++    REXSYS_INFO("System Link: local network address {}.{}.{}.{}", address >> 24,
++                (address >> 16) & 0xFF, (address >> 8) & 0xFF, address & 0xFF);
++  } else {
++    REXSYS_WARN("System Link: no local network address found");
++  }
++  return address;
++}
++
++}  // namespace
++
++bool SystemLinkEnabled() {
++  return REXCVAR_GET(network_mode) == "system_link";
++}
++
++uint32_t LanAddress() {
++  static const uint32_t address = FindLanAddress();
++  return address;
++}
++
++XnAddrBytes MakeXnAddr(uint32_t ip, const std::array<uint8_t, 6>& machine_id) {
++  XnAddrBytes xnaddr{};
++  xnaddr[kXnAddrIpOffset + 0] = uint8_t(ip >> 24);
++  xnaddr[kXnAddrIpOffset + 1] = uint8_t(ip >> 16);
++  xnaddr[kXnAddrIpOffset + 2] = uint8_t(ip >> 8);
++  xnaddr[kXnAddrIpOffset + 3] = uint8_t(ip);
++  std::memcpy(xnaddr.data() + kXnAddrEnetOffset, machine_id.data(), machine_id.size());
++  return xnaddr;
++}
++
++uint32_t XnAddrIp(const XnAddrBytes& xnaddr) {
++  return uint32_t(xnaddr[kXnAddrIpOffset]) << 24 | uint32_t(xnaddr[kXnAddrIpOffset + 1]) << 16 |
++         uint32_t(xnaddr[kXnAddrIpOffset + 2]) << 8 | xnaddr[kXnAddrIpOffset + 3];
++}
++
++void RememberXnAddr(const XnAddrBytes& xnaddr) {
++  std::lock_guard<std::mutex> lock(g_mutex);
++  g_address_book[XnAddrIp(xnaddr)] = xnaddr;
++}
++
++std::optional<XnAddrBytes> FindXnAddr(uint32_t ip) {
++  std::lock_guard<std::mutex> lock(g_mutex);
++  const auto it = g_address_book.find(ip);
++  if (it == g_address_book.end()) return std::nullopt;
++  return it->second;
++}
++
++XnKid MakeSystemLinkKid(std::random_device& random) {
++  XnKid kid;
++  for (auto& byte : kid) {
++    byte = uint8_t(random());
++  }
++  kid[0] = uint8_t((kid[0] & ~kXnKidTypeMask) | kXnKidSystemLink);
++  return kid;
++}
++
++XnKey MakeKey(std::random_device& random) {
++  XnKey key;
++  for (auto& byte : key) {
++    byte = uint8_t(random());
++  }
++  return key;
++}
++
++bool IsSystemLinkKid(const XnKid& kid) {
++  return (kid[0] & kXnKidTypeMask) == kXnKidSystemLink;
++}
++
++void AddSession(uint32_t handle, const SystemLinkSession& session) {
++  {
++    std::lock_guard<std::mutex> lock(g_mutex);
++    g_sessions[handle] = session;
++  }
++  RememberXnAddr(session.host);
++}
++
++void RemoveSession(uint32_t handle) {
++  std::lock_guard<std::mutex> lock(g_mutex);
++  g_sessions.erase(handle);
++}
++
++bool HostingSystemLinkSession() {
++  std::lock_guard<std::mutex> lock(g_mutex);
++  for (const auto& [handle, session] : g_sessions) {
++    if (session.hosting) return true;
++  }
++  return false;
++}
++
++std::optional<XnKid> FindSessionKid(uint32_t ip) {
++  std::lock_guard<std::mutex> lock(g_mutex);
++  for (const auto& [handle, session] : g_sessions) {
++    if (XnAddrIp(session.host) == ip) return session.kid;
++  }
++  if (!g_sessions.empty()) return g_sessions.begin()->second.kid;
++  return std::nullopt;
++}
++
++uint16_t NetworkPort(uint16_t title_port) {
++  if (title_port == 0 || title_port >= kFirstUnprivilegedPort) return title_port;
++  return uint16_t(title_port + kPrivilegedPortOffset);
++}
++
++uint16_t TitlePort(uint16_t network_port) {
++  if (network_port > kPrivilegedPortOffset &&
++      network_port < kPrivilegedPortOffset + kFirstUnprivilegedPort) {
++    return uint16_t(network_port - kPrivilegedPortOffset);
++  }
++  return network_port;
 +}
 +
 +}  // namespace rex::system::xam
@@ -24343,10 +25230,10 @@ index 7ed67aa..d5c61f0 100644
      auto setting_id = fmt::format("{:08X}", setting->setting_id);
      auto file_path = content_dir / setting_id;
 diff --git a/src/system/xsocket.cpp b/src/system/xsocket.cpp
-index 2d13ac8..492ba5b 100644
+index 2d13ac8..3b4dd91 100644
 --- a/src/system/xsocket.cpp
 +++ b/src/system/xsocket.cpp
-@@ -9,9 +9,12 @@
+@@ -9,11 +9,15 @@
   * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
   */
  
@@ -24358,8 +25245,11 @@ index 2d13ac8..492ba5b 100644
 +#include <rex/memory/utils.h>
  #include <rex/platform.h>
  #include <rex/system/kernel_state.h>
++#include <rex/system/xam/system_link.h>
  #include <rex/system/xsocket.h>
-@@ -28,11 +31,56 @@
+ // #include <rex/system/xnet.h>
+ 
+@@ -28,11 +32,68 @@
  #include <arpa/inet.h>
  #include <netinet/in.h>
  #include <netinet/ip.h>
@@ -24399,24 +25289,36 @@ index 2d13ac8..492ba5b 100644
 +      return SO_SNDLOWAT;
 +    case 0x1004:
 +      return SO_RCVLOWAT;
++    case 0x1007:
++      return SO_ERROR;
++    case 0x1008:
++      return SO_TYPE;
 +    default:
 +      return -1;
 +  }
 +}
 +
-+// Linux lets only privileged processes bind ports below this one (net.ipv4.ip_unprivileged_port_start);
-+// the console had no such limit, and titles bind them (Unreal Engine 3 tries ports 1000 to 1019).
-+constexpr uint16_t kFirstUnprivilegedPort = 1024;
-+// A privileged port the host refuses is bound this much higher instead: 1000 becomes 11000.
-+constexpr uint16_t kPrivilegedPortOffset = 10000;
 +#endif
++
++// The host's address for a title's: the family and length the host expects, and the port and
++// address in network byte order (N_XSOCKADDR_IN holds them as numbers).
++sockaddr_in ToHostAddress(const N_XSOCKADDR_IN& address, uint16_t port) {
++  sockaddr_in host{};
++#if REX_PLATFORM_MAC
++  host.sin_len = sizeof(host);
++#endif
++  host.sin_family = AF_INET;
++  host.sin_port = htons(port);
++  host.sin_addr.s_addr = htonl(address.sin_addr);
++  return host;
++}
 +
 +}  // namespace
 +
  XSocket::XSocket(KernelState* kernel_state) : XObject(kernel_state, kObjectType) {}
  
  XSocket::XSocket(KernelState* kernel_state, uint64_t native_handle)
-@@ -76,7 +124,20 @@ X_STATUS XSocket::SetOption(uint32_t level, uint32_t optname, void* optval_ptr,
+@@ -76,7 +137,20 @@ X_STATUS XSocket::SetOption(uint32_t level, uint32_t optname, void* optval_ptr,
      return X_STATUS_SUCCESS;
    }
  
@@ -24437,9 +25339,37 @@ index 2d13ac8..492ba5b 100644
    if (ret < 0) {
      // TODO: WSAGetLastError()
      return X_STATUS_UNSUCCESSFUL;
-@@ -91,7 +152,25 @@ X_STATUS XSocket::SetOption(uint32_t level, uint32_t optname, void* optval_ptr,
+@@ -90,8 +164,53 @@ X_STATUS XSocket::SetOption(uint32_t level, uint32_t optname, void* optval_ptr,
+   return X_STATUS_SUCCESS;
  }
  
++X_STATUS XSocket::GetOption(uint32_t level, uint32_t optname, void* optval_ptr,
++                            uint32_t* optlen) {
++  // Only the integer SOL_SOCKET options, which are what titles read; the value goes to the guest's
++  // big-endian memory.
++  constexpr uint32_t kSolSocket = 0xFFFF;
++  if (level != kSolSocket || *optlen < sizeof(uint32_t)) {
++    return X_STATUS_INVALID_PARAMETER;
++  }
++#if REX_PLATFORM_WIN32
++  const int host_optname = static_cast<int>(optname);
++#else
++  const int host_optname = HostIntSocketOption(optname);
++  if (host_optname < 0) {
++    return X_STATUS_INVALID_PARAMETER;
++  }
++#endif
++  int value = 0;
++  socklen_t length = sizeof(value);
++  if (getsockopt(native_handle_, SOL_SOCKET, host_optname, reinterpret_cast<char*>(&value),
++                 &length) < 0) {
++    return X_STATUS_UNSUCCESSFUL;
++  }
++  rex::memory::store_and_swap<uint32_t>(optval_ptr, static_cast<uint32_t>(value));
++  *optlen = sizeof(uint32_t);
++  return X_STATUS_SUCCESS;
++}
++
  X_STATUS XSocket::IOControl(uint32_t cmd, uint8_t* arg_ptr) {
 +#if !REX_PLATFORM_WIN32
 +  // The argument is a big-endian 32-bit integer in guest memory: read for FIONBIO, written for
@@ -24463,27 +25393,72 @@ index 2d13ac8..492ba5b 100644
    if (ret < 0) {
      // TODO: Get last error
      return X_STATUS_UNSUCCESSFUL;
-@@ -111,6 +190,20 @@ X_STATUS XSocket::Connect(N_XSOCKADDR* name, int name_len) {
+@@ -110,7 +229,15 @@ X_STATUS XSocket::Connect(N_XSOCKADDR* name, int name_len) {
+ }
  
  X_STATUS XSocket::Bind(N_XSOCKADDR_IN* name, int name_len) {
-   int ret = bind(native_handle_, (sockaddr*)name, name_len);
-+#if !REX_PLATFORM_WIN32
-+  // A privileged port the host refuses is bound higher instead; the title keeps the port it asked
-+  // for (bound_port_), since nothing it reads tells it the host's.
+-  int ret = bind(native_handle_, (sockaddr*)name, name_len);
++  // A datagram socket on a privileged port is bound on its network port (xam::NetworkPort), the
++  // one the others send it to; the title keeps the port it asked for (bound_port_).
 +  const uint16_t port = name->sin_port;
-+  if (ret < 0 && errno == EACCES && port != 0 && port < kFirstUnprivilegedPort) {
-+    N_XSOCKADDR_IN host_name = *name;
-+    host_name.sin_port = static_cast<uint16_t>(port + kPrivilegedPortOffset);
-+    ret = bind(native_handle_, (sockaddr*)&host_name, name_len);
-+    if (ret == 0) {
-+      REXKRNL_INFO("Socket port {} is bound as host port {}: ports below {} need privileges here",
-+                   port, port + kPrivilegedPortOffset, kFirstUnprivilegedPort);
-+    }
++  const uint16_t host_port = type_ == Type::X_SOCK_DGRAM ? xam::NetworkPort(port) : port;
++  sockaddr_in host_name = ToHostAddress(*name, host_port);
++  int ret = bind(native_handle_, reinterpret_cast<sockaddr*>(&host_name), sizeof(host_name));
++  if (ret == 0 && host_port != port) {
++    REXKRNL_INFO("Socket port {} is bound as port {} on the network", port, host_port);
 +  }
-+#endif
    if (ret < 0) {
      return X_STATUS_UNSUCCESSFUL;
    }
+@@ -191,9 +318,10 @@ int XSocket::RecvFrom(uint8_t* buf, uint32_t buf_len, uint32_t flags, N_XSOCKADD
+   int ret = recvfrom(native_handle_, reinterpret_cast<char*>(buf), buf_len, flags,
+                      (sockaddr*)&nfrom, &nfromlen);
+   if (from) {
+-    from->sin_family = nfrom.sin_family;
+-    from->sin_addr = ntohl(nfrom.sin_addr.s_addr);  // BE <- BE
+-    from->sin_port = nfrom.sin_port;
++    from->sin_family = XSocket::X_AF_INET;
++    from->sin_addr = ntohl(nfrom.sin_addr.s_addr);
++    const uint16_t port = ntohs(nfrom.sin_port);
++    from->sin_port = type_ == Type::X_SOCK_DGRAM ? xam::TitlePort(port) : port;
+     std::memset(from->x_sin_zero, 0, sizeof(from->x_sin_zero));
+   }
+ 
+@@ -221,15 +349,29 @@ int XSocket::SendTo(uint8_t* buf, uint32_t buf_len, uint32_t flags, N_XSOCKADDR_
+   }
+   */
+ 
+-  sockaddr_in nto;
++  sockaddr_in nto{};
+   if (to) {
+-    nto.sin_addr.s_addr = to->sin_addr;
+-    nto.sin_family = to->sin_family;
+-    nto.sin_port = to->sin_port;
++    const uint16_t port = to->sin_port;
++    nto = ToHostAddress(*to, type_ == Type::X_SOCK_DGRAM ? xam::NetworkPort(port) : port);
+   }
+ 
+   return sendto(native_handle_, reinterpret_cast<char*>(buf), buf_len, flags,
+-                to ? (sockaddr*)&nto : nullptr, to_len);
++                to ? reinterpret_cast<sockaddr*>(&nto) : nullptr, to ? sizeof(nto) : 0);
++}
++
++int XSocket::GetName(N_XSOCKADDR_IN* name) {
++  sockaddr_in host{};
++  socklen_t length = sizeof(host);
++  const int ret = getsockname(native_handle_, reinterpret_cast<sockaddr*>(&host), &length);
++  if (ret < 0) {
++    return ret;
++  }
++  name->sin_family = XSocket::X_AF_INET;
++  name->sin_addr = ntohl(host.sin_addr.s_addr);
++  const uint16_t port = ntohs(host.sin_port);
++  name->sin_port = type_ == Type::X_SOCK_DGRAM ? xam::TitlePort(port) : port;
++  std::memset(name->x_sin_zero, 0, sizeof(name->x_sin_zero));
++  return 0;
+ }
+ 
+ bool XSocket::QueuePacket(uint32_t src_ip, uint16_t src_port, const uint8_t* buf, size_t len) {
 diff --git a/src/ui/imgui_drawer.cpp b/src/ui/imgui_drawer.cpp
 index f270f3c..1e4d411 100644
 --- a/src/ui/imgui_drawer.cpp
@@ -25159,23 +26134,24 @@ index 9eeb902..6337da5 100644
        }
      }
 diff --git a/tests/unit/CMakeLists.txt b/tests/unit/CMakeLists.txt
-index 7bd264b..094cf77 100644
+index 7bd264b..272dbb8 100644
 --- a/tests/unit/CMakeLists.txt
 +++ b/tests/unit/CMakeLists.txt
-@@ -14,6 +14,7 @@ add_executable(unit_tests
+@@ -14,6 +14,8 @@ add_executable(unit_tests
      ppc/stack_test.cpp
      system/guest_path_test.cpp
      system/achievement_manager_test.cpp
 +    system/player_identity_test.cpp
++    system/system_link_test.cpp
      system/function_dispatcher_test.cpp
      input/input_assignment_test.cpp
      codegen/codegen_writer_test.cpp
 diff --git a/tests/unit/system/player_identity_test.cpp b/tests/unit/system/player_identity_test.cpp
 new file mode 100644
-index 0000000..c445934
+index 0000000..e552449
 --- /dev/null
 +++ b/tests/unit/system/player_identity_test.cpp
-@@ -0,0 +1,108 @@
+@@ -0,0 +1,116 @@
 +/**
 + * @file        player_identity_test.cpp
 + * @brief       Unit tests for the installation's identity (rex/system/xam/player_identity.h).
@@ -25283,4 +26259,107 @@ index 0000000..c445934
 +  CHECK(IsValidPlayerXuid(identity.xuid));
 +  CHECK(ReadFile(folder / "identity.toml.bad") == "xuid = \"broken\"\n");
 +  CHECK(ParsePlayerIdentity(ReadFile(folder / kPlayerIdentityFileName)));
++}
++
++TEST_CASE("Tools read the identity but never make one", "[player_identity]") {
++  const auto folder = FreshFolder("tools");
++  LoadPlayerIdentity(folder);
++  CHECK_FALSE(std::filesystem::exists(folder / kPlayerIdentityFileName));
++  const PlayerIdentity kept = LoadOrCreatePlayerIdentity(folder);
++  CHECK(LoadPlayerIdentity(folder).xuid == kept.xuid);
++}
+diff --git a/tests/unit/system/system_link_test.cpp b/tests/unit/system/system_link_test.cpp
+new file mode 100644
+index 0000000..574364e
+--- /dev/null
++++ b/tests/unit/system/system_link_test.cpp
+@@ -0,0 +1,89 @@
++/**
++ * @file        system_link_test.cpp
++ * @brief       Unit tests for System Link's view of the network (rex/system/xam/system_link.h).
++ *
++ * @license     BSD 3-Clause License
++ *              See LICENSE file in the project root for full license text.
++ */
++
++#include <random>
++
++#include <catch2/catch_test_macros.hpp>
++
++#include <rex/system/xam/system_link.h>
++
++using namespace rex::system::xam;
++
++TEST_CASE("An XNADDR holds the address and the machine ID", "[system_link]") {
++  const std::array<uint8_t, 6> machine_id = {0x02, 0x11, 0x22, 0x33, 0x44, 0x55};
++  const XnAddrBytes xnaddr = MakeXnAddr(0xC0A80102, machine_id);
++  // 192.168.1.2 in network byte order, as the title reads an IN_ADDR.
++  CHECK(xnaddr[0] == 192);
++  CHECK(xnaddr[1] == 168);
++  CHECK(xnaddr[2] == 1);
++  CHECK(xnaddr[3] == 2);
++  CHECK(XnAddrIp(xnaddr) == 0xC0A80102);
++  for (size_t i = 0; i < machine_id.size(); ++i) {
++    CHECK(xnaddr[kXnAddrEnetOffset + i] == machine_id[i]);
++  }
++}
++
++TEST_CASE("The address book answers for the XNADDRs it has seen", "[system_link]") {
++  const XnAddrBytes first = MakeXnAddr(0x0A000005, {0x02, 1, 2, 3, 4, 5});
++  const XnAddrBytes second = MakeXnAddr(0x0A000005, {0x06, 1, 2, 3, 4, 5});
++  CHECK_FALSE(FindXnAddr(0x0A000006));
++  RememberXnAddr(first);
++  REQUIRE(FindXnAddr(0x0A000005));
++  CHECK(*FindXnAddr(0x0A000005) == first);
++  // The same address seen again with another machine ID: the newer one is kept.
++  RememberXnAddr(second);
++  CHECK(*FindXnAddr(0x0A000005) == second);
++}
++
++TEST_CASE("Session IDs are System Link ones", "[system_link]") {
++  std::random_device random;
++  const XnKid a = MakeSystemLinkKid(random);
++  const XnKid b = MakeSystemLinkKid(random);
++  CHECK(IsSystemLinkKid(a));
++  CHECK(a != b);
++  CHECK_FALSE(IsSystemLinkKid(XnKid{0x80}));  // an online peer session
++  CHECK(MakeKey(random) != MakeKey(random));
++}
++
++TEST_CASE("Hosting lasts while the hosted session exists", "[system_link]") {
++  std::random_device random;
++  SystemLinkSession hosted;
++  hosted.kid = MakeSystemLinkKid(random);
++  hosted.host = MakeXnAddr(0xC0A80110, {0x02, 0, 0, 0, 0, 1});
++  hosted.hosting = true;
++  SystemLinkSession joined;
++  joined.kid = MakeSystemLinkKid(random);
++  joined.host = MakeXnAddr(0xC0A80120, {0x02, 0, 0, 0, 0, 2});
++
++  CHECK_FALSE(HostingSystemLinkSession());
++  AddSession(0x1000, joined);
++  CHECK_FALSE(HostingSystemLinkSession());
++  AddSession(0x2000, hosted);
++  CHECK(HostingSystemLinkSession());
++  // A session's host is in the address book, and its ID answers for it.
++  CHECK(FindXnAddr(0xC0A80120));
++  CHECK(*FindSessionKid(0xC0A80120) == joined.kid);
++  CHECK(*FindSessionKid(0xC0A80110) == hosted.kid);
++  RemoveSession(0x2000);
++  CHECK_FALSE(HostingSystemLinkSession());
++  RemoveSession(0x1000);
++  CHECK_FALSE(FindSessionKid(0xC0A80120));
++}
++
++TEST_CASE("Privileged ports are moved the same way on every platform", "[system_link]") {
++  CHECK(NetworkPort(1000) == 11000);
++  CHECK(NetworkPort(1019) == 11019);
++  CHECK(NetworkPort(14001) == 14001);
++  CHECK(NetworkPort(0) == 0);
++  CHECK(TitlePort(11000) == 1000);
++  CHECK(TitlePort(14001) == 14001);
++  CHECK(TitlePort(10000) == 10000);
++  for (uint16_t port = 1; port < kFirstUnprivilegedPort; ++port) {
++    CHECK(TitlePort(NetworkPort(port)) == port);
++  }
 +}
