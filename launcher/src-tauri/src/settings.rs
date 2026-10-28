@@ -45,7 +45,8 @@ const KEY_USER_LANGUAGE: &str = "user_language";
 const KEY_USER_COUNTRY: &str = "user_country";
 const KEY_GPU_PLUGIN: &str = "gpu_plugin";
 const KEY_FULLSCREEN: &str = "fullscreen";
-/// Render resolution of the game's Video menu ("auto", "1280x720", "2560x1440" or "3840x2160").
+/// Render resolution of the game's Video menu ("auto", "1280x720", "1920x1080" on macOS, "2560x1440"
+/// or "3840x2160").
 /// Defined by the runtime, which sets the draw resolution scale and texture memory from it.
 const KEY_RENDER_RESOLUTION: &str = "render_resolution";
 // What older launchers wrote in its place; the runtime now sets them itself at start-up.
