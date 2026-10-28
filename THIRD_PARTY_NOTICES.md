@@ -28,6 +28,7 @@ the SDK bundles, each under its own license, which ships with the SDK's source t
 | FFmpeg (libavutil and libavcodec only, built without GPL parts) | LGPL 2.1 or later |
 | Dear ImGui, {fmt}, spdlog, toml++, inja, Vulkan Memory Allocator | MIT |
 | stb_truetype (Dear ImGui's `imstb_truetype.h`, also compiled into the runtime's button prompts) | MIT or public domain |
+| RenderDoc's in-application API header (`renderdoc/renderdoc_app.h`, Copyright (c) 2015-2016 Baldur Karlsson), in the SDK's headers and so in the player kit; RenderDoc itself is not included | MIT |
 | glslang, SPIRV-Headers, Vulkan Headers | Khronos and BSD/MIT-style licenses (see each one's license file) |
 | utfcpp, Catch2 | Boost Software License 1.0 |
 | Tracy | BSD 3-Clause |
