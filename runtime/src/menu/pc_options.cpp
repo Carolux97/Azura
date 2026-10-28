@@ -28,7 +28,8 @@ REXCVAR_DEFINE_BOOL(motion_blur, true, "Azura/Graphics",
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_STRING(render_resolution, "auto", "Azura/Graphics",
                       "Resolution the game is drawn at: auto (chosen for this computer), 1280x720 (the "
-                      "Xbox 360's), 1920x1080 (macOS only, with gfx = hle; elsewhere 1280x720), "
+                      "Xbox 360's), 1920x1080 (drawn at 3/2 on macOS with gfx = hle, at 2560x1440 "
+                      "and scaled down to the window on Vulkan), "
                       "2560x1440 or 3840x2160. Sets the draw resolution scale and the texture cache "
                       "limits when the game starts")
     .allowed({"auto", "1280x720", "1920x1080", "2560x1440", "3840x2160"})
@@ -115,13 +116,9 @@ struct Option {
 };
 
 // The render resolutions the Video menu offers, in order. 1920x1080 is a draw resolution scale of
-// 3/2, which only the Metal renderer draws (macOS); Vulkan draws its whole part, 1280x720.
+// 3/2: the Metal renderer (macOS) draws it as it is, Vulkan at 2 and scales the image down.
 std::vector<const char*> RenderResolutionChoices() {
-#if defined(__APPLE__)
   return {"auto", "1280x720", "1920x1080", "2560x1440", "3840x2160"};
-#else
-  return {"auto", "1280x720", "2560x1440", "3840x2160"};
-#endif
 }
 
 // The upscaling effects present_effect accepts in this build of the SDK, in menu order. Others it
@@ -1388,8 +1385,8 @@ int AutoResolutionScale() {
 
 void ApplyRenderResolution() {
   const std::string chosen = REXCVAR_GET(render_resolution);
-  // The scale as numerator / denominator: 1920x1080 is 3/2 (the renderer draws its whole part, 1,
-  // where it cannot draw a rational scale).
+  // The scale as numerator / denominator: 1920x1080 is 3/2 (Vulkan draws it at 2 and scales the
+  // image down to the window).
   const int numerator = chosen == "1280x720"    ? 1
                         : chosen == "1920x1080" ? 3
                         : chosen == "2560x1440" ? 2
