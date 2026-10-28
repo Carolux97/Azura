@@ -33,6 +33,10 @@
 // the menu's bytecode is patched where it would refuse to show Video and Keyboard and mouse as
 // lists. The layouts and bytecode involved are in docs/reverse-engineering.md.
 //
+// Online parties (Alboria): with network_mode = online, the Joinable and Invite only party types
+// are offered without Xbox LIVE, and choosing one hosts a room on Alboria and creates a System
+// Link party, whose traffic the room's relay carries (see "Online parties" below).
+//
 // Field of view: just before a gameplay camera mode answers GetDesiredFOV, its FOVAngle is set to
 // the mode's own value scaled by the Video menu's field_of_view (see "Field of view" below).
 //
@@ -44,6 +48,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -66,6 +71,7 @@
 #include <rex/logging.h>
 #include <rex/ppc.h>
 #include <rex/system/kernel_state.h>
+#include <rex/system/xam/alboria.h>
 #include <rex/system/xam/system_link.h>
 
 #include "class_dump.h"
@@ -89,6 +95,8 @@ REXCVAR_DEFINE_BOOL(script_dump_code, false, "Azura/Debug",
                     "With script_dump_classes: also log a rough listing of each function's bytecode");
 REXCVAR_DECLARE(double, field_of_view);
 REXCVAR_DECLARE(bool, film_grain);
+REXCVAR_DECLARE(std::string, network_mode);
+REXCVAR_DECLARE(uint32_t, user_language);
 
 extern "C" void __imp__sub_822DF4D0(PPCContext& __restrict ctx, uint8_t* base);
 extern "C" void __imp__sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base);
@@ -238,6 +246,14 @@ std::function<void()> g_quit_handler;
 std::function<void()> g_restart_handler;
 // Opens the Local co-op menu (SetLocalCoopHandler).
 std::function<void()> g_local_coop_handler;
+// Opens the Join by code screen (SetJoinByCodeHandler).
+std::function<void()> g_join_by_code_handler;
+// A join in a room on Alboria (JoinSystemLinkPartyInRoom, "Join by code" below): the System Link
+// browser is to open, and how many searches it may still run (0 when not joining). Searches after
+// the first run while the host's party has not answered yet.
+constexpr int kJoinSearches = 3;
+std::atomic<bool> g_open_browser{false};
+std::atomic<int> g_join_searches{0};
 // Opens a controls menu (SetControlsMenuHandler).
 std::function<void(azura::script::ControlsMenu)> g_controls_handler;
 std::atomic<bool> g_quit_requested{false};
@@ -283,6 +299,18 @@ enum WatchedName {
   kAddEnemyLocators,         // RAAM's Shadow's satellite camera: marks the enemies it sees
   kCompleteChapterByDifficulty,   // GearProfileSettings: a campaign chapter is completed
   kUpdateAchievementProgression,  // GearProfileSettings: progress towards a counted achievement
+  kCanAllPlayersPlayOnline,  // GearPC: whether every local player may play on Xbox LIVE
+  kCreateLiveParty,          // UIScene_FrontEnd: the Joinable or Invite only party is created
+  kDialogItemPress,          // UIScene_FrontEnd: a party type is chosen in the party options
+  kOpenPartyOptions,         // UIScene_FrontEnd: the party options open
+  kBuildPartyOptions,        // UIScene_FrontEnd: the party options' list is built
+  kRefreshManageInviteBar,   // UIScene_WhatsUp: Manage/Invite's button bar is built
+  kCanInviteGearsPlayers,    // UIScene_WhatsUp: whether LB (invite Gears friends) is active
+  kCanInviteLiveParty,       // UIScene_WhatsUp: whether RB (invite the Xbox LIVE party) is active
+  kInviteGearsPlayers,       // UIScene_WhatsUp: LB is pressed
+  kInviteLiveParty,          // UIScene_WhatsUp: RB is pressed
+  kUpdatePanelTitle,         // UIWidget_SmallPartyPanel: the party panel names the party's type
+  kFindOnlineGamesComplete,  // UIScene_SystemLink: the System Link search is over
   kWatchedNameCount,
 };
 constexpr const char* kWatchedNames[kWatchedNameCount] = {
@@ -299,7 +327,10 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "PlayerInput",           "Callback_ViewController", "Callback_ResetTutorials",
     "PopulateOptionsMenu",   "OnClose",     "WidgetInitialized",
     "GetDesiredFOV",         "AddEnemyLocators",       "CompleteChapterByDifficulty",
-    "UpdateAchievementProgression"};
+    "UpdateAchievementProgression", "CanAllPlayersPlayOnline", "CreateLIVEParty",
+    "Callback_DialogItemPress", "OpenPartyOptions", "BuildPartyOptions",
+    "RefreshButtonBarAndPlayerOptions", "CanInviteGearsPlayers", "CanInviteLivePartyPlayers",
+    "InviteGearsPlayers", "InviteLivePartyPlayers", "UpdatePanelTitle", "OnFindOnlineGamesComplete"};
 
 // FName index of each watched name, -1 until found (0 is a valid index: None).
 std::atomic<int32_t> g_names[kWatchedNameCount];
@@ -402,6 +433,8 @@ std::atomic<bool> g_options_open{false};
 // The main menu's scene (UIScene_FrontEnd), as it last set up a widget or got a button, whose
 // bOnTitleScreen tells the title screen from the main menu.
 std::atomic<uint32_t> g_front_end_scene{0};
+// Its class (UIScene_FrontEnd), whose functions the hooks run on it.
+std::atomic<uint32_t> g_front_end_class{0};
 // The controller (ControllerId) that last pressed a button on the main menu's scene: the one that
 // chose a main menu option.
 std::atomic<int32_t> g_front_end_controller{0};
@@ -1481,6 +1514,16 @@ void SetLocalCoopHandler(std::function<void()> handler) {
   g_local_coop_handler = std::move(handler);
 }
 
+void JoinSystemLinkPartyInRoom() {
+  g_join_searches.store(kJoinSearches + 1);
+  g_open_browser.store(true);
+}
+
+void SetJoinByCodeHandler(std::function<void()> handler) {
+  std::lock_guard lock(g_quit_mutex);
+  g_join_by_code_handler = std::move(handler);
+}
+
 void SetControlsMenuHandler(std::function<void(ControlsMenu)> handler) {
   std::lock_guard lock(g_quit_mutex);
   g_controls_handler = std::move(handler);
@@ -1588,6 +1631,479 @@ extern "C" void sub_82319958(PPCContext& __restrict ctx, uint8_t* base) {
   __imp__sub_82319958(ctx, base);
 }
 
+// --- Online parties (Alboria) ---
+//
+// The party options offer Joinable and Invite only when GearPC.CanAllPlayersPlayOnline() says
+// every local player may play on Xbox LIVE (docs/reverse-engineering.md, "Party types, System
+// Link and Manage/Invite"). With network_mode = online it says yes. Choosing one of them runs
+// UIScene_FrontEnd.Callback_DialogItemPress, which checks the Xbox LIVE sign-in (natively, out of
+// reach of these hooks) and shows the Gold message: while Alboria answers (CheckService, asked as
+// the options open) the choice skips those checks and goes, as the script would after them, to
+// TransitionToLIVEParty with the type pending. When Alboria does not answer, the script runs and
+// its message says so (menu_patches.cpp). TransitionToLIVEParty destroys the party and runs
+// CreateLIVEParty, which hosts a room on Alboria and runs CreateSystemLinkParty instead: the party
+// is a System Link one, and its local network is the room's relay (rex/system/xam/alboria.h). The
+// host's address is the room's first one from the start, so the session the party creates right
+// away already has it. Choosing System Link or Local leaves the room.
+//
+// The party is a System Link one, so the party options would tick System Link and the party panel
+// name it: while a room is hosted, both compare the party type against the one chosen instead
+// (their byte constants are changed for that one call). In Manage/Invite (UIScene_WhatsUp), the
+// Xbox LIVE friends' Join (Y) and Invite (X) leave the button bar, kept for Alboria's own friends
+// later; LB ("Show ID" / "Hide ID") shows or hides the room's code next to the Current players
+// heading ("(LOBBY ID: ****-****)"), hidden whenever the scene opens, so a stream never shows it
+// by chance; RB joins a friend's room by its code, only from a party already on Alboria (the
+// Local and System Link parties stay off it).
+
+// Players a room takes: the most a Versus private match has.
+constexpr int kOnlineRoomMembers = 10;
+// The party type the player chose for the online party (kFriendsOnlyType or kInviteRequiredType;
+// -1 none yet), which the party options and the party panel show while the room lasts.
+std::atomic<int> g_online_party_type{-1};
+// Whether the room's code shows next to Manage/Invite's Current players heading (LB toggles it).
+std::atomic<bool> g_show_room_code{false};
+// UIScene_FrontEnd.PendingPartyType, Callback_DialogItemPress's list positions, and the party types
+// (EGearVersusPartyType) they stand for.
+constexpr uint32_t kFrontEndPendingPartyType = 1009;
+constexpr int32_t kJoinableItem = 0;
+constexpr int32_t kInviteOnlyItem = 1;
+constexpr int kInviteRequiredType = 0;
+constexpr int kFriendsOnlyType = 1;  // "Joinable" in the party options
+constexpr int kSystemLinkType = 3;
+// Guest memory for the locals of UIScene_FrontEnd.TransitionToLIVEParty, larger than they are.
+constexpr uint32_t kTransitionLocalsSize = 64;
+uint32_t g_transition_locals = 0;
+// Guest memory for the locals of UIScene_FrontEnd.CreateSystemLinkParty, larger than they are.
+constexpr uint32_t kSystemLinkPartyLocalsSize = 64;
+uint32_t g_system_link_party_locals = 0;
+
+bool OnlineMode() {
+  return REXCVAR_GET(network_mode) == "online";
+}
+
+// Answers CanAllPlayersPlayOnline with yes when online. The frame is about to run it; returns
+// whether it was answered.
+bool AnswerCanPlayOnline(PPCContext& ctx, uint8_t* base) {
+  if (!OnlineMode()) return false;
+  if (ctx.r5.u32) StoreU32(base, ctx.r5.u32, 1);  // ReturnValue
+  return true;
+}
+
+// A party type chosen in the party options, about to be handled by Callback_DialogItemPress on the
+// front end scene in `ctx`. Returns whether it was handled here instead.
+bool ChooseOnlinePartyType(PPCContext& ctx, uint8_t* base, uint32_t dialog_item_press) {
+  if (!OnlineMode()) return false;
+  namespace alboria = rex::system::xam::alboria;
+  const int32_t item = SmallParam(base, dialog_item_press, ctx.r4.u32, "Idx");
+  if (item != kJoinableItem && item != kInviteOnlyItem) {
+    // System Link or Local: the party leaves Alboria.
+    if (alboria::InRoom()) {
+      REXLOG_INFO("[Azura online] Leaving the Alboria room for another party type");
+      alboria::Leave();
+    }
+    return false;
+  }
+  if (!alboria::ServiceReachable()) {
+    // The script's message, which with online play on says Alboria cannot be reached.
+    alboria::CheckService();
+    return false;
+  }
+  const uint32_t cls = LoadU32(base, dialog_item_press + kObjectOuter);
+  const uint32_t transition = FindClassFunction(base, cls, "TransitionToLIVEParty");
+  const uint32_t close_options = FindClassFunction(base, cls, "ClosePartyOptions");
+  if (!transition || !close_options) {
+    REXLOG_WARN("[Azura online] TransitionToLIVEParty or ClosePartyOptions not found");
+    return false;
+  }
+  if (!g_transition_locals) {
+    g_transition_locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kTransitionLocalsSize);
+    if (!g_transition_locals) return false;
+  }
+  std::memset(base + g_transition_locals, 0, kTransitionLocalsSize);
+  const auto status = alboria::GetStatus();
+  if (status.host && alboria::InRoom()) {
+    // Already hosting a room: Joinable and Invite only are the same party on Alboria.
+    RunInstead(ctx, base, close_options, g_transition_locals);
+    return true;
+  }
+  const int type = item == kJoinableItem ? kFriendsOnlyType : kInviteRequiredType;
+  base[ctx.r3.u32 + kFrontEndPendingPartyType] = static_cast<uint8_t>(type);
+  g_online_party_type.store(type);
+  g_show_room_code.store(false);
+  RunInstead(ctx, base, transition, g_transition_locals);
+  return true;
+}
+
+// Runs `function` (in `ctx`, about to run) seeing the chosen online party type where the party is
+// System Link, while the player hosts a room: the party options' BuildPartyOptions, which ticks the
+// party's type, and the party panel's UpdatePanelTitle, which names it. Both compare
+// PartyGRI.CurrPartyType with a byte constant for each type (docs/reverse-engineering.md, "Party
+// options"): for this call the System Link one can never match and the chosen type's one is
+// System Link's. Returns whether it ran.
+bool RunWithOnlinePartyType(PPCContext& ctx, uint8_t* base, uint32_t function) {
+  namespace alboria = rex::system::xam::alboria;
+  const int chosen = g_online_party_type.load();
+  if (chosen < 0 || !alboria::InRoom() || !alboria::GetStatus().host) return false;
+  const uint32_t code = LoadU32(base, function + kStructScript);
+  const uint32_t size = LoadU32(base, function + kStructScript + 4);
+  // Each `CurrPartyType == <byte>`, compared as integers: the property's 8-byte reference, the
+  // byte-to-int cast (0x38 0x3A), then the byte constant token.
+  constexpr uint8_t kTokenPrimitiveCast = 0x38;
+  constexpr uint8_t kCastByteToInt = 0x3A;
+  std::vector<std::pair<uint32_t, uint8_t>> changed;
+  for (uint32_t i = 0; i + 12 <= size; ++i) {
+    if (LoadU32(base, code + i) != 0 || base[code + i + 8] != kTokenPrimitiveCast ||
+        base[code + i + 9] != kCastByteToInt || base[code + i + 10] != kTokenByteConst) {
+      continue;
+    }
+    if (ObjectName(base, LoadU32(base, code + i + 4)) != "CurrPartyType") continue;
+    const uint32_t at = code + i + 11;
+    if (base[at] == kSystemLinkType) {
+      changed.emplace_back(at, base[at]);
+      base[at] = 0xFF;
+    } else if (base[at] == chosen) {
+      changed.emplace_back(at, base[at]);
+      base[at] = kSystemLinkType;
+    }
+  }
+  if (changed.size() != 2) {
+    for (const auto& [at, value] : changed) base[at] = value;
+    REXLOG_WARN("[Azura online] {} is not as expected ({} party type constants changed); it shows System Link",
+                ObjectName(base, function), changed.size());
+    return false;
+  }
+  __imp__sub_822DF9E0(ctx, base);
+  for (const auto& [at, value] : changed) base[at] = value;
+  return true;
+}
+
+// --- Manage/Invite ---
+
+// UIScene_WhatsUp.ButtonList (array<byte> at +896) and the button kinds that leave it online: the
+// Xbox LIVE friends' Invite (X) and Join (Y).
+constexpr uint32_t kManageInviteButtonList = 896;
+constexpr uint8_t kInviteButton = 3;
+constexpr uint8_t kJoinButton = 4;
+// Guest memory for the locals of UIScene_WhatsUp.RefreshButtonBarAndPlayerOptions, larger than
+// they are. Cleared before each run, as the script expects: it appends the bar to its ButtonString
+// local.
+constexpr uint32_t kButtonBarLocalsSize = 128;
+uint32_t g_button_bar_locals = 0;
+// The scene's heading as the game has it (UIScene_WhatsUp.CurrentGameTitle), before ours; how to
+// hand a new one to the party list (from WidgetInitialized); and the properties our bytecode sets.
+std::mutex g_heading_mutex;
+std::u16string g_players_heading;
+std::vector<uint8_t> g_heading_refresh;
+uint32_t g_heading_property = 0;
+uint32_t g_lb_text_property = 0;
+std::map<std::u16string, uint32_t> g_heading_code;  // guest bytecode for each heading and button
+
+// Texts in the player's language (Xbox 360 language IDs), upper case as the game's.
+struct ManageInviteTexts {
+  const char16_t* lobby_id;
+  const char16_t* show_id;
+  const char16_t* hide_id;
+};
+
+ManageInviteTexts ManageInviteTextsFor(uint32_t language) {
+  switch (language) {
+    case 2: return {u"ロビー ID", u"IDを表示", u"IDを非表示"};
+    case 3: return {u"LOBBY-ID", u"ID ANZEIGEN", u"ID AUSBLENDEN"};
+    case 4: return {u"ID DU SALON", u"AFFICHER L'ID", u"MASQUER L'ID"};
+    case 5: return {u"ID DE SALA", u"MOSTRAR ID", u"OCULTAR ID"};
+    case 6: return {u"ID STANZA", u"MOSTRA ID", u"NASCONDI ID"};
+    case 7: return {u"로비 ID", u"ID 표시", u"ID 숨기기"};
+    case 8: return {u"大廳 ID", u"顯示 ID", u"隱藏 ID"};
+    case 9: return {u"ID DA SALA", u"MOSTRAR ID", u"OCULTAR ID"};
+    case 10: return {u"大厅 ID", u"显示 ID", u"隐藏 ID"};
+    case 11: return {u"ID POKOJU", u"POKAŻ ID", u"UKRYJ ID"};
+    case 12: return {u"ID ЛОББИ", u"ПОКАЗАТЬ ID", u"СКРЫТЬ ID"};
+    default: return {u"LOBBY ID", u"SHOW ID", u"HIDE ID"};
+  }
+}
+
+std::u16string Utf16(const std::string& ascii) {
+  return std::u16string(ascii.begin(), ascii.end());
+}
+
+// The game's heading (read once from `scene`'s CurrentGameTitle, a UTF-16 FString), with the
+// room's code, or stars, after it while the player is in a room.
+std::u16string PlayersHeading(const uint8_t* base, uint32_t scene, uint32_t heading_property) {
+  std::lock_guard lock(g_heading_mutex);
+  if (g_players_heading.empty()) {
+    const uint32_t at = scene + LoadU32(base, heading_property + kPropertyOffset);
+    const uint32_t data = LoadU32(base, at);
+    const uint32_t count = LoadU32(base, at + 4);
+    for (uint32_t i = 0; data && i + 1 < count && i < 128; ++i) {
+      g_players_heading += static_cast<char16_t>(base[data + i * 2] << 8 | base[data + i * 2 + 1]);
+    }
+  }
+  const auto status = rex::system::xam::alboria::GetStatus();
+  if (status.state != rex::system::xam::alboria::State::kConnected || status.code.empty()) return g_players_heading;
+  const std::string code = g_show_room_code.load() ? status.code : std::string("****-****");
+  return g_players_heading + u" <font color='#E3A63B'>(" +
+         ManageInviteTextsFor(REXCVAR_GET(user_language)).lobby_id + u": " + Utf16(code) + u")</font>";
+}
+
+// LB's text (UIScene_WhatsUp.InviteGearsButtonActive): the button's controller font character,
+// which the button prompts replace, and "Show ID" or "Hide ID".
+std::u16string ShowIdButton() {
+  const ManageInviteTexts texts = ManageInviteTextsFor(REXCVAR_GET(user_language));
+  return std::u16string(u"<Font:$ControllerFont>_</Font> ") + (g_show_room_code.load() ? texts.hide_id : texts.show_id);
+}
+
+// Guest bytecode that sets the scene's CurrentGameTitle to `heading` and LB's text to `button`
+// and, with `refresh`, hands the heading to the party list (`refresh` is the script's own
+// `PartyList.SetString("HeaderHtml", CurrentGameTitle)`, copied from WidgetInitialized). Built
+// once for each.
+uint32_t HeadingCode(uint8_t* base, const std::u16string& heading, const std::u16string& button,
+                     const std::vector<uint8_t>& refresh) {
+  std::lock_guard lock(g_heading_mutex);
+  if (!g_heading_property || !g_lb_text_property) return 0;
+  const std::u16string key = heading + u'\0' + button + (refresh.empty() ? u"" : u"\1");
+  if (const auto found = g_heading_code.find(key); found != g_heading_code.end()) return found->second;
+  std::vector<uint8_t> code;
+  auto u32 = [&code](uint32_t v) {
+    for (int shift = 24; shift >= 0; shift -= 8) code.push_back(static_cast<uint8_t>(v >> shift));
+  };
+  auto let = [&](uint32_t property, const std::u16string& text) {
+    constexpr uint8_t kTokenInstanceVariable = 0x01;
+    code.push_back(kTokenLet);
+    code.push_back(kTokenInstanceVariable);
+    u32(0);
+    u32(property);
+    // UTF-16, big-endian like the rest of the console's bytecode, zero-terminated.
+    code.push_back(kTokenUnicodeStringConst);
+    for (char16_t c : text) {
+      code.push_back(static_cast<uint8_t>(c >> 8));
+      code.push_back(static_cast<uint8_t>(c));
+    }
+    code.push_back(0);
+    code.push_back(0);
+  };
+  let(g_heading_property, heading);
+  let(g_lb_text_property, button);
+  code.insert(code.end(), refresh.begin(), refresh.end());
+  code.push_back(kTokenReturn);
+  code.push_back(kTokenNothing);
+  code.push_back(kTokenEndOfScript);
+  const uint32_t address = rex::system::kernel_state()->memory()->SystemHeapAlloc(static_cast<uint32_t>(code.size()));
+  if (!address) return 0;
+  std::memcpy(base + address, code.data(), code.size());
+  g_heading_code.emplace(key, address);
+  return address;
+}
+
+// The bytes of `PartyList.SetString("HeaderHtml", CurrentGameTitle)` in WidgetInitialized's
+// bytecode: from the context token (0x19) whose object is the PartyList instance variable, through
+// the call, the "HeaderHtml" string and the CurrentGameTitle instance variable, to the end of the
+// parameters. Empty when the bytecode is not as expected.
+std::vector<uint8_t> HeadingRefreshCall(const uint8_t* base, uint32_t widget_initialized) {
+  constexpr uint8_t kTokenContext = 0x19;
+  constexpr uint8_t kTokenInstanceVariable = 0x01;
+  const uint32_t code = LoadU32(base, widget_initialized + kStructScript);
+  const uint32_t size = LoadU32(base, widget_initialized + kStructScript + 4);
+  const int64_t text = FindStringConst(base, code, size, "HeaderHtml");
+  if (text < 0) return {};
+  // After the string: its terminator, CurrentGameTitle (token and 8-byte reference), a marker for
+  // each optional parameter left out, and the end of the parameters.
+  const uint32_t after = static_cast<uint32_t>(text) + sizeof("HeaderHtml");
+  if (after + 9 >= size || base[code + after] != kTokenInstanceVariable) return {};
+  uint32_t end = after + 9;
+  while (end < size && end < after + 13 && base[code + end] != kTokenEndFunctionParms) ++end;
+  if (end >= size || base[code + end] != kTokenEndFunctionParms) return {};
+  ++end;
+  for (int64_t start = text - 2; start >= 0 && start >= text - 64; --start) {
+    if (base[code + start] == kTokenContext && base[code + start + 1] == kTokenInstanceVariable &&
+        LoadU32(base, code + start + 2) == 0 && ObjectName(base, LoadU32(base, code + start + 6)) == "PartyList") {
+      return std::vector<uint8_t>(base + code + start, base + code + end);
+    }
+  }
+  return {};
+}
+
+// Runs `code` on the frame in `ctx` in place of its function's own bytecode, then puts it back.
+void RunCode(PPCContext& ctx, uint8_t* base, uint32_t code) {
+  const uint32_t frame = ctx.r4.u32;
+  const uint32_t own_code = LoadU32(base, frame + kFrameCode);
+  StoreU32(base, frame + kFrameCode, code);
+  __imp__sub_822DF9E0(ctx, base);
+  StoreU32(base, frame + kFrameCode, own_code);
+}
+
+// Before UIScene_WhatsUp.WidgetInitialized sets up a widget: the code is hidden again (each time
+// the scene opens), the heading gets the stars and LB "Show ID". Also remembers what refreshing
+// them later needs.
+void PrepareManageInviteHeading(PPCContext& ctx, uint8_t* base, uint32_t widget_initialized) {
+  const uint32_t cls = LoadU32(base, widget_initialized + kObjectOuter);
+  {
+    std::lock_guard lock(g_heading_mutex);
+    if (!g_heading_property) g_heading_property = FindClassFunction(base, cls, "CurrentGameTitle");
+    if (!g_lb_text_property) g_lb_text_property = FindClassFunction(base, cls, "InviteGearsButtonActive");
+    if (g_heading_refresh.empty()) g_heading_refresh = HeadingRefreshCall(base, widget_initialized);
+  }
+  g_show_room_code.store(false);
+  if (const uint32_t code = HeadingCode(base, PlayersHeading(base, ctx.r3.u32, g_heading_property), ShowIdButton(), {})) {
+    RunCode(ctx, base, code);
+  }
+}
+
+// LB in Manage/Invite (InviteGearsPlayers, in `ctx` about to run): shows or hides the room's code
+// in the heading, and LB's text and the button bar follow. The scene runs it twice for one press,
+// so a second run within a moment is the same press.
+void ToggleRoomCode(PPCContext& ctx, uint8_t* base, uint32_t invite_gears_players) {
+  using Clock = std::chrono::steady_clock;
+  static std::atomic<int64_t> last_toggle{0};
+  const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count();
+  if (now - last_toggle.load() < 300) return;
+  last_toggle.store(now);
+  g_show_room_code.store(!g_show_room_code.load());
+  std::vector<uint8_t> refresh;
+  {
+    std::lock_guard lock(g_heading_mutex);
+    refresh = g_heading_refresh;
+  }
+  const uint32_t refresh_bar =
+      FindClassFunction(base, LoadU32(base, invite_gears_players + kObjectOuter), "RefreshButtonBarAndPlayerOptions");
+  const uint32_t code =
+      refresh.empty() ? 0 : HeadingCode(base, PlayersHeading(base, ctx.r3.u32, g_heading_property), ShowIdButton(), refresh);
+  if (!code || !refresh_bar) {
+    REXLOG_WARN("[Azura online] Manage/Invite's heading cannot be refreshed");
+    return;
+  }
+  RunCode(ctx, base, code);
+  if (!g_button_bar_locals) {
+    g_button_bar_locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kButtonBarLocalsSize);
+    if (!g_button_bar_locals) return;
+  }
+  std::memset(base + g_button_bar_locals, 0, kButtonBarLocalsSize);
+  RunInstead(ctx, base, refresh_bar, g_button_bar_locals);
+}
+
+// --- Join by code ---
+//
+// RB in Manage/Invite closes the scene (its ActionScript_CloseView) and opens the Join by code
+// screen. Once the player is in the room, the front end's AttemptSystemLinkTransition opens the
+// System Link browser, as choosing System Link in the party options does; it runs on the next
+// player input frame, borrowing that frame for the front end scene. When the browser's search ends
+// (OnFindOnlineGamesComplete) with a party, the first one (the room's host, the only one there) is
+// joined through Callback_OnJoinSelected(0), as choosing it in the list does.
+
+// UIScene_SystemLink.SearchResults (array at +1056).
+constexpr uint32_t kSystemLinkSearchResults = 1056;
+// Guest memory for the locals of the functions run here (ActionScript_CloseView,
+// AttemptSystemLinkTransition, Callback_OnJoinSelected, RefreshSearch), larger than any of them.
+constexpr uint32_t kJoinLocalsSize = 64;
+uint32_t g_join_locals = 0;
+
+uint32_t JoinLocals(uint8_t* base) {
+  if (!g_join_locals) g_join_locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kJoinLocalsSize);
+  if (g_join_locals) std::memset(base + g_join_locals, 0, kJoinLocalsSize);
+  return g_join_locals;
+}
+
+// RB in Manage/Invite (InviteLivePartyPlayers, in `ctx` about to run).
+void OpenJoinByCode(PPCContext& ctx, uint8_t* base, uint32_t invite_live_party) {
+  const uint32_t close_view =
+      FindClassFunction(base, LoadU32(base, invite_live_party + kObjectOuter), "ActionScript_CloseView");
+  if (close_view && JoinLocals(base)) RunInstead(ctx, base, close_view, g_join_locals);
+  std::function<void()> handler;
+  {
+    std::lock_guard lock(g_quit_mutex);
+    handler = g_join_by_code_handler;
+  }
+  REXLOG_INFO("[Azura online] Opening Join by code");
+  if (handler) handler();
+}
+
+// On a player input frame (`ctx`, about to run PlayerInput): opens the System Link browser on the
+// front end scene when a join asked for it.
+void OpenSystemLinkBrowserForJoin(PPCContext& ctx, uint8_t* base) {
+  const uint32_t front_end = g_front_end_scene.load(std::memory_order_relaxed);
+  if (!front_end || !g_open_browser.exchange(false)) return;
+  const uint32_t front_end_class = g_front_end_class.load(std::memory_order_relaxed);
+  const uint32_t attempt =
+      front_end_class ? FindClassFunction(base, front_end_class, "AttemptSystemLinkTransition") : 0;
+  if (!attempt || !JoinLocals(base)) {
+    REXLOG_WARN("[Azura online] AttemptSystemLinkTransition not found; the System Link browser does not open");
+    g_join_searches.store(0);
+    return;
+  }
+  REXLOG_INFO("[Azura online] Opening the System Link browser to join the room's party");
+  const uint32_t frame = ctx.r4.u32;
+  const uint32_t own_object = LoadU32(base, frame + kFrameObject);
+  const uint64_t own_r3 = ctx.r3.u64;
+  StoreU32(base, frame + kFrameObject, front_end);
+  ctx.r3.u64 = front_end;
+  RunInstead(ctx, base, attempt, g_join_locals);
+  StoreU32(base, frame + kFrameObject, own_object);
+  ctx.r3.u64 = own_r3;
+}
+
+// UIScene_SystemLink.OnFindOnlineGamesComplete has just run (`ctx`): joins the first party found,
+// or searches again.
+void JoinFoundParty(PPCContext& ctx, uint8_t* base, uint32_t find_complete) {
+  if (g_join_searches.load() <= 0) return;
+  const uint32_t scene = ctx.r3.u32;
+  const uint32_t cls = LoadU32(base, find_complete + kObjectOuter);
+  const uint32_t results = LoadU32(base, scene + kSystemLinkSearchResults + 4);
+  if (results > 0) {
+    g_join_searches.store(0);
+    const uint32_t join_selected = FindClassFunction(base, cls, "Callback_OnJoinSelected");
+    if (!join_selected || !JoinLocals(base)) return;
+    REXLOG_INFO("[Azura online] Joining the room's party ({} found)", results);
+    // SelectedIndex, the first parameter, stays 0.
+    RunInstead(ctx, base, join_selected, g_join_locals);
+    return;
+  }
+  if (g_join_searches.fetch_sub(1) > 1) {
+    const uint32_t refresh = FindClassFunction(base, cls, "RefreshSearch");
+    if (refresh && JoinLocals(base)) {
+      REXLOG_INFO("[Azura online] No party in the room yet; searching again");
+      RunInstead(ctx, base, refresh, g_join_locals);
+    }
+    return;
+  }
+  REXLOG_WARN("[Azura online] No party found in the room; leaving it");
+  rex::system::xam::alboria::Leave();
+}
+
+// Removes the Xbox LIVE friends' Invite and Join from Manage/Invite's button list (scene in
+// `scene`), before the bar is built from it.
+void TrimManageInviteButtons(uint8_t* base, uint32_t scene) {
+  const uint32_t data = LoadU32(base, scene + kManageInviteButtonList);
+  const uint32_t count = LoadU32(base, scene + kManageInviteButtonList + 4);
+  if (!data || count > 64) return;
+  uint32_t kept = 0;
+  for (uint32_t i = 0; i < count; ++i) {
+    const uint8_t button = base[data + i];
+    if (button != kInviteButton && button != kJoinButton) base[data + kept++] = button;
+  }
+  if (kept != count) StoreU32(base, scene + kManageInviteButtonList + 4, kept);
+}
+
+// Hosts a room and creates a System Link party where CreateLIVEParty was about to run. Returns
+// whether it did.
+bool CreateOnlineParty(PPCContext& ctx, uint8_t* base, uint32_t create_live_party) {
+  if (!OnlineMode()) return false;
+  const uint32_t create_system_link_party =
+      FindClassFunction(base, LoadU32(base, create_live_party + kObjectOuter), "CreateSystemLinkParty");
+  if (!create_system_link_party) {
+    REXLOG_WARN("[Azura online] CreateSystemLinkParty not found; the party is left to the game");
+    return false;
+  }
+  if (!g_system_link_party_locals) {
+    g_system_link_party_locals =
+        rex::system::kernel_state()->memory()->SystemHeapAlloc(kSystemLinkPartyLocalsSize);
+    if (!g_system_link_party_locals) return false;
+  }
+  std::memset(base + g_system_link_party_locals, 0, kSystemLinkPartyLocalsSize);
+  REXLOG_INFO("[Azura online] Hosting an online party on Alboria");
+  rex::system::xam::alboria::HostGame(rex::system::kernel_state()->title_id(), kOnlineRoomMembers);
+  RunInstead(ctx, base, create_system_link_party, g_system_link_party_locals);
+  return true;
+}
+
 extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   if (g_names_missing.load(std::memory_order_relaxed) > 0 &&
       (g_calls.fetch_add(1, std::memory_order_relaxed) & 0x3FF) == 0) {
@@ -1596,6 +2112,7 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   const uint32_t function = LoadU32(base, ctx.r4.u32 + kFrameNode);
   // Before it runs: it reads aMouseX and aMouseY.
   if (function && IsEnginePlayerInput(base, function)) {
+    if (g_open_browser.load(std::memory_order_relaxed)) OpenSystemLinkBrowserForJoin(ctx, base);
     const uint32_t player_input = ctx.r3.u32;
     ApplyMouseLookFor(base, player_input);
     __imp__sub_822DF9E0(ctx, base);
@@ -1653,6 +2170,54 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
       PatchTravelURL(base, locals + static_cast<uint32_t>(url_offset));
     }
   }
+  if (Is(base, function, kCanAllPlayersPlayOnline) && AnswerCanPlayOnline(ctx, base)) return;
+  if (Is(base, function, kFindOnlineGamesComplete) && g_join_searches.load(std::memory_order_relaxed) > 0 &&
+      ObjectName(base, LoadU32(base, function + kObjectOuter)) == "UIScene_SystemLink") {
+    __imp__sub_822DF9E0(ctx, base);
+    JoinFoundParty(ctx, base, function);
+    return;
+  }
+  if (Is(base, function, kOpenPartyOptions) && OnlineMode()) rex::system::xam::alboria::CheckService();
+  if ((Is(base, function, kBuildPartyOptions) || Is(base, function, kUpdatePanelTitle)) && OnlineMode() &&
+      RunWithOnlinePartyType(ctx, base, function)) {
+    return;
+  }
+  // Manage/Invite with online play on.
+  if (OnlineMode() && ObjectName(base, LoadU32(base, function + kObjectOuter)) == "UIScene_WhatsUp") {
+    namespace alboria = rex::system::xam::alboria;
+    if (Is(base, function, kWidgetInitialized)) PrepareManageInviteHeading(ctx, base, function);
+    if (Is(base, function, kRefreshManageInviteBar)) TrimManageInviteButtons(base, ctx.r3.u32);
+    if (Is(base, function, kCanInviteGearsPlayers)) {
+      if (ctx.r5.u32) StoreU32(base, ctx.r5.u32, alboria::Connected() ? 1 : 0);
+      return;
+    }
+    // Joining by code moves an Alboria party (Joinable or Invite only) to a friend's room; the
+    // Local and System Link parties stay off Alboria.
+    if (Is(base, function, kCanInviteLiveParty)) {
+      const bool can_join = alboria::ServiceReachable() && alboria::Connected();
+      if (ctx.r5.u32) StoreU32(base, ctx.r5.u32, can_join ? 1 : 0);
+      return;
+    }
+    if (Is(base, function, kInviteGearsPlayers)) {
+      if (alboria::Connected()) ToggleRoomCode(ctx, base, function);
+      return;
+    }
+    if (Is(base, function, kInviteLiveParty)) {
+      // Greyed out (above) the button still reaches here: it does nothing then.
+      if (alboria::ServiceReachable() && alboria::Connected()) OpenJoinByCode(ctx, base, function);
+      return;
+    }
+  }
+  if (Is(base, function, kDialogItemPress) &&
+      ObjectName(base, LoadU32(base, function + kObjectOuter)) == "UIScene_FrontEnd" &&
+      ChooseOnlinePartyType(ctx, base, function)) {
+    return;
+  }
+  if (Is(base, function, kCreateLiveParty) &&
+      ObjectName(base, LoadU32(base, function + kObjectOuter)) == "UIScene_FrontEnd" &&
+      CreateOnlineParty(ctx, base, function)) {
+    return;
+  }
   if (Is(base, function, kHandleMenuSelection)) NoteCampaignChoice(base, ctx.r4.u32);
   // The main menu's Options option opens the Options as Start does there (the script, which does
   // not know the option, does not run).
@@ -1677,6 +2242,7 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   if ((Is(base, function, kWidgetInitialized) || Is(base, function, kFilterButtonInput)) &&
       ObjectName(base, LoadU32(base, function + kObjectOuter)) == "UIScene_FrontEnd") {
     g_front_end_scene.store(ctx.r3.u32, std::memory_order_relaxed);
+    g_front_end_class.store(LoadU32(base, function + kObjectOuter), std::memory_order_relaxed);
     if (Is(base, function, kFilterButtonInput)) {
       const int32_t controller = SmallParam(base, function, ctx.r4.u32, "ControllerId");
       if (controller >= 0 && controller < 4) g_front_end_controller.store(controller, std::memory_order_relaxed);

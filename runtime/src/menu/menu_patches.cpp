@@ -31,6 +31,8 @@ REXCVAR_DEFINE_BOOL(menu_coming_soon, true, "Azura/Menu",
 REXCVAR_DEFINE_BOOL(dlc_campaign, false, "Azura/DLC",
                     "RAAM's Shadow is installed and Azura's script patch for it is mounted: the "
                     "campaign menu's DLC option opens it (set by the launcher)");
+// Defined by the SDK (system/xam/system_link.cpp).
+REXCVAR_DECLARE(std::string, network_mode);
 
 namespace azura::menu {
 
@@ -56,6 +58,43 @@ struct Texts {
   const char* not_installed;  // the option's whole title while it is not installed
   const char* not_installed_tooltip;
 };
+
+// Texts of online play on Alboria (network_mode = online), for each localization.
+struct OnlineTexts {
+  // The message box the party options show when Joinable or Invite only cannot be chosen, which
+  // with online play on only happens when Alboria cannot be reached.
+  const char* unreachable_title;
+  const char* unreachable_message;
+  // Manage/Invite's LB and RB buttons (UIScene_WhatsUp), in upper case as the game's are. LB shows
+  // the room's code and then hides it (its texts change in script_hooks.cpp); this is its first.
+  const char* show_id;
+  const char* join_by_code;
+};
+
+const std::map<std::string, OnlineTexts>& LocalizedOnlineTexts() {
+  static const std::map<std::string, OnlineTexts> texts = {
+      {"int", {"Cannot reach Alboria", "Online play needs a connection to Alboria. Check your internet connection and try again; if it keeps failing, Alboria may be down for a while.", "SHOW ID", "JOIN BY CODE"}},
+      {"esn", {"No se puede conectar con Alboria", "Para jugar online hace falta conectar con Alboria. Comprueba tu conexión a internet y vuelve a intentarlo; si sigue fallando, puede que Alboria no esté disponible ahora mismo.", "MOSTRAR ID", "UNIRSE POR CÓDIGO"}},
+      {"esm", {"No se puede conectar con Alboria", "Para jugar en línea hace falta conectar con Alboria. Revisa tu conexión a internet y vuelve a intentarlo; si sigue fallando, puede que Alboria no esté disponible en este momento.", "MOSTRAR ID", "UNIRSE CON CÓDIGO"}},
+      {"deu", {"Keine Verbindung zu Alboria", "Für das Online-Spiel ist eine Verbindung zu Alboria nötig. Prüfe deine Internetverbindung und versuche es erneut; wenn es weiter fehlschlägt, ist Alboria vielleicht gerade nicht erreichbar.", "ID ANZEIGEN", "PER CODE BEITRETEN"}},
+      {"ita", {"Impossibile raggiungere Alboria", "Per giocare online serve una connessione ad Alboria. Controlla la connessione a internet e riprova; se continua a non funzionare, Alboria potrebbe essere momentaneamente non disponibile.", "MOSTRA ID", "UNISCITI CON CODICE"}},
+      {"fra", {"Impossible de joindre Alboria", "Le jeu en ligne nécessite une connexion à Alboria. Vérifiez votre connexion internet et réessayez ; si le problème persiste, Alboria est peut-être indisponible pour le moment.", "AFFICHER L'ID", "REJOINDRE PAR CODE"}},
+      {"ptb", {"Não foi possível conectar ao Alboria", "Para jogar online é preciso conectar ao Alboria. Verifique sua conexão com a internet e tente de novo; se continuar falhando, o Alboria pode estar indisponível no momento.", "MOSTRAR ID", "ENTRAR COM CÓDIGO"}},
+      {"pol", {"Brak połączenia z Alborią", "Gra online wymaga połączenia z Alborią. Sprawdź połączenie z internetem i spróbuj ponownie; jeśli problem nie ustąpi, Alboria może być chwilowo niedostępna.", "POKAŻ ID", "DOŁĄCZ KODEM"}},
+      {"rus", {"Нет связи с Alboria", "Для игры по сети нужно подключение к Alboria. Проверьте подключение к интернету и попробуйте снова; если ошибка повторяется, Alboria может быть временно недоступна.", "ПОКАЗАТЬ ID", "ВОЙТИ ПО КОДУ"}},
+      {"cze", {"Nelze se připojit k Alborii", "Hra online vyžaduje připojení k Alborii. Zkontrolujte připojení k internetu a zkuste to znovu; pokud to stále nejde, Alboria může být dočasně nedostupná.", "ZOBRAZIT ID", "PŘIPOJIT SE KÓDEM"}},
+      {"hun", {"Nem érhető el az Alboria", "Az online játékhoz kapcsolódni kell az Alboriához. Ellenőrizd az internetkapcsolatot, és próbáld újra; ha továbbra sem megy, lehet, hogy az Alboria átmenetileg nem érhető el.", "AZONOSÍTÓ MEGJELENÍTÉSE", "CSATLAKOZÁS KÓDDAL"}},
+      {"jpn", {"Alboria に接続できません", "オンラインプレイには Alboria への接続が必要です。インターネット接続を確認してもう一度お試しください。解決しない場合は、Alboria が一時的に利用できない可能性があります。", "IDを表示", "コードで参加"}},
+      {"chn", {"無法連線至 Alboria", "線上遊玩需要連線至 Alboria。請檢查網際網路連線後再試一次；若仍失敗，Alboria 可能暫時無法使用。", "顯示 ID", "以代碼加入"}},
+      {"kor", {"Alboria에 연결할 수 없습니다", "온라인 플레이를 하려면 Alboria에 연결해야 합니다. 인터넷 연결을 확인하고 다시 시도하세요. 계속 실패하면 Alboria를 일시적으로 사용할 수 없는 것일 수 있습니다.", "ID 표시", "코드로 참가"}},
+  };
+  return texts;
+}
+
+const OnlineTexts& OnlineTextsFor(const std::string& language) {
+  const auto it = LocalizedOnlineTexts().find(language);
+  return it != LocalizedOnlineTexts().end() ? it->second : LocalizedOnlineTexts().at("int");
+}
 
 // Texts for each localization, keyed by the extension of its files.
 const std::map<std::string, Texts>& LocalizedTexts() {
@@ -248,9 +287,9 @@ void PatchMenuTexts(CoalescedSection& section, const Texts& texts) {
     if (name == "TOOLTIP_CampaignDLC") {
       key.value = CoalescedString::FromUtf8(dlc ? texts.dlc_tooltip : texts.not_installed_tooltip);
     }
-    if (coming_soon && (name == "VS" || name == "TITLE_VS_Competitiveness" || name == "CreatePublic" ||
-                        name == "JoinPublic" || name == "HordeStandard" || name == "SiegeStandard" ||
-                        name == "Recreational" || name == "Competitive")) {
+    // Versus itself is not marked: its private matches play locally and over System Link.
+    if (coming_soon && (name == "CreatePublic" || name == "JoinPublic" || name == "HordeStandard" ||
+                        name == "SiegeStandard" || name == "Recreational" || name == "Competitive")) {
       key.value.text += soon.text;
       key.value.wide = key.value.wide || soon.wide;
       key.value.empty_marker = false;
@@ -282,7 +321,37 @@ bool ReadGameFile(rex::filesystem::Entry* entry, std::vector<uint8_t>& out) {
 
 }  // namespace
 
+// With online play on, the Xbox LIVE Gold message of the party options says that Alboria cannot
+// be reached: in [MessageBoxErrorStrings] of a GearGameUI localization file.
+void PatchOnlineMessages(CoalescedSection& section, const std::string& language) {
+  const OnlineTexts& texts = OnlineTextsFor(language);
+  for (auto& key : section.keys) {
+    const std::string name = key.name.Ascii();
+    if (name == "NeedGoldTier_Title" || name == "SignedOut_Title") {
+      key.value = CoalescedString::FromUtf8(texts.unreachable_title);
+    } else if (name == "NeedGoldTierFunctionality_Message") {
+      key.value = CoalescedString::FromUtf8(texts.unreachable_message);
+    }
+  }
+}
+
+// With online play on, Manage/Invite's LB and RB buttons show a room's code and join one instead of
+// inviting Xbox LIVE friends and parties: in [UIScene_WhatsUp] of a GearGame localization file.
+// Each keeps its button's controller font character, which the button prompts replace.
+void PatchManageInviteButtons(CoalescedSection& section, const std::string& language) {
+  const OnlineTexts& texts = OnlineTextsFor(language);
+  for (auto& key : section.keys) {
+    const std::string name = key.name.Ascii();
+    if (name == "InviteGearsButtonActive") {
+      key.value = CoalescedString::FromUtf8(std::string("<Font:$ControllerFont>_</Font> ") + texts.show_id);
+    } else if (name == "InvitePartyButtonActive") {
+      key.value = CoalescedString::FromUtf8(std::string("<Font:$ControllerFont>`</Font> ") + texts.join_by_code);
+    }
+  }
+}
+
 int PatchMenus(Coalesced& coalesced) {
+  const bool online = REXCVAR_GET(network_mode) == "online";
   int quit_option = -1;
   for (auto& file : coalesced.files) {
     const std::string name = BaseName(file.name);
@@ -311,6 +380,10 @@ int PatchMenus(Coalesced& coalesced) {
         PatchSystemSettings(section);
       } else if (engine_config && section_name == "Engine.Engine") {
         PatchEngineSettings(section);
+      } else if (online && ui_texts && section_name == "MessageBoxErrorStrings") {
+        PatchOnlineMessages(section, language);
+      } else if (online && game_texts && section_name == "UIScene_WhatsUp") {
+        PatchManageInviteButtons(section, language);
       } else if (ui_texts && section_name == "MessageBoxStrings") {
         PatchMessageBoxTexts(section, language);
       } else if (ui_texts && section_name == "MainMenu") {

@@ -26,6 +26,15 @@ enum class ControlsMenu { kKeyboardMouse, kController };
 // nullptr to stop.
 void SetControlsMenuHandler(std::function<void(ControlsMenu)> handler);
 
+// What Manage/Invite's RB runs with online play on (from the game's script thread), once the scene
+// has closed: it opens the Join by code screen (join_by_code_menu.h). nullptr to stop.
+void SetJoinByCodeHandler(std::function<void()> handler);
+
+// Once the player is in a friend's room on Alboria: opens the game's System Link browser, which
+// finds the host's party in the room, and joins the first party it finds (searching again a few
+// times while there is none). Any thread; it happens on the game's script thread soon after.
+void JoinSystemLinkPartyInRoom();
+
 // Where player 1 is, as of their last input: the title screen (where Return is Start), a menu (the
 // front end and what it opens, or the game paused), or playing. Any thread.
 enum class Menus { kPlaying, kTitleScreen, kMenu };

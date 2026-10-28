@@ -327,6 +327,102 @@ float DrawConfirmGlyph(ImDrawList* draw_list, ImFont* font, ImVec2 top_left, flo
   return 16.0f * unit;
 }
 
+const char* ControlName(rex::input::PadControl control, PadLook look) {
+  const bool playstation = look == PadLook::kDualSense || look == PadLook::kDualShock4;
+  const bool nintendo = look == PadLook::kSwitchPro;
+  switch (control) {
+    case rex::input::PadControl::kLeftShoulder: return playstation ? "L1" : nintendo ? "L" : "LB";
+    case rex::input::PadControl::kRightShoulder: return playstation ? "R1" : nintendo ? "R" : "RB";
+    case rex::input::PadControl::kLeftTrigger: return playstation ? "L2" : nintendo ? "ZL" : "LT";
+    case rex::input::PadControl::kRightTrigger: return playstation ? "R2" : nintendo ? "ZR" : "RT";
+    case rex::input::PadControl::kLeftThumb: return playstation ? "L3" : "LS";
+    case rex::input::PadControl::kRightThumb: return playstation ? "R3" : "RS";
+    case rex::input::PadControl::kBack:
+      return look == PadLook::kDualSense ? "Create" : look == PadLook::kDualShock4 ? "Share" : nintendo ? "-" : look == PadLook::kXbox ? "View" : "Select";
+    case rex::input::PadControl::kStart:
+      return playstation ? "Options" : nintendo ? "+" : look == PadLook::kXbox ? "Menu" : "Start";
+    default: return "";
+  }
+}
+
+float DrawPadGlyph(ImDrawList* draw_list, ImFont* font, ImVec2 center, float height, PadLook look, rex::input::PadControl control,
+                   int alpha, float unit) {
+  auto col = [&](int r, int g, int b) { return IM_COL32(r, g, b, alpha); };
+  const float radius = height * 0.5f;
+  const bool face = control == rex::input::PadControl::kA || control == rex::input::PadControl::kB || control == rex::input::PadControl::kX ||
+                    control == rex::input::PadControl::kY;
+  if (!face) {
+    const std::string name = ControlName(control, look);
+    const float size = height * 0.52f;
+    const float text_width = font->CalcTextSizeA(size, FLT_MAX, 0.0f, name.c_str()).x;
+    const float width = std::max(height * 1.3f, text_width + 10.0f * unit);
+    const ImVec2 min(center.x - width * 0.5f, center.y - radius);
+    draw_list->AddRectFilled(min, ImVec2(min.x + width, center.y + radius), col(58, 63, 70), 5.0f * unit);
+    AddTextCentered(draw_list, font, size, center, Text(alpha), name.c_str());
+    return width;
+  }
+  // The face buttons by position: A at the bottom, B on the right, X on the left, Y at the top.
+  const int position = control == rex::input::PadControl::kY ? 0 : control == rex::input::PadControl::kB ? 1 : control == rex::input::PadControl::kA ? 2 : 3;
+  switch (look) {
+    case PadLook::kDualSense:
+    case PadLook::kDualShock4: {
+      // The PlayStation shapes: triangle, circle, cross, square; coloured on the DualShock 4.
+      const ImU32 colours[4] = {col(63, 191, 154), col(228, 90, 98), col(122, 167, 230), col(217, 138, 201)};
+      const ImU32 shape = look == PadLook::kDualShock4 ? colours[position] : col(217, 219, 224);
+      draw_list->AddCircleFilled(center, radius, col(42, 44, 49), 24);
+      const float s = radius * 0.5f;
+      const float t = 1.6f * unit;
+      switch (position) {
+        case 0:
+          draw_list->AddTriangle(ImVec2(center.x, center.y - s * 1.05f), ImVec2(center.x + s, center.y + s * 0.7f),
+                                 ImVec2(center.x - s, center.y + s * 0.7f), shape, t);
+          break;
+        case 1: draw_list->AddCircle(center, s, shape, 20, t); break;
+        case 2:
+          draw_list->AddLine(ImVec2(center.x - s, center.y - s), ImVec2(center.x + s, center.y + s), shape, t);
+          draw_list->AddLine(ImVec2(center.x - s, center.y + s), ImVec2(center.x + s, center.y - s), shape, t);
+          break;
+        default: draw_list->AddRect(ImVec2(center.x - s * 0.85f, center.y - s * 0.85f), ImVec2(center.x + s * 0.85f, center.y + s * 0.85f), shape, 0, 0, t); break;
+      }
+      return height;
+    }
+    case PadLook::kXbox: {
+      const char* letters[4] = {"Y", "B", "A", "X"};
+      const ImU32 colours[4] = {col(232, 181, 44), col(216, 64, 58), col(95, 179, 60), col(59, 119, 216)};
+      draw_list->AddCircleFilled(center, radius, colours[position], 24);
+      const float size = height * 0.6f;
+      AddTextCentered(draw_list, font, size, center, col(17, 17, 17), letters[position]);
+      return height;
+    }
+    default: {
+      // Switch Pro: X at the top, A on the right, B at the bottom, Y on the left. Others: 4, 2, 1, 3.
+      const char* switch_letters[4] = {"X", "A", "B", "Y"};
+      const char* numbers[4] = {"4", "2", "1", "3"};
+      const char* label = look == PadLook::kSwitchPro ? switch_letters[position] : numbers[position];
+      draw_list->AddCircleFilled(center, radius, col(70, 74, 81), 24);
+      const float size = height * 0.6f;
+      AddTextCentered(draw_list, font, size, center, Text(alpha), label);
+      return height;
+    }
+  }
+}
+
+float DrawCancelGlyph(ImDrawList* draw_list, ImFont* font, ImVec2 top_left, float unit,
+                      const rex::input::DeviceInfo* pad, const char* escape, int alpha) {
+  if (!pad) {
+    return DrawConfirmGlyph(draw_list, font, top_left, unit, nullptr, escape, alpha);
+  }
+  const ImVec2 center(top_left.x + 8.0f * unit, top_left.y + 8.0f * unit);
+  draw_list->AddCircleFilled(center, 8.0f * unit, Imulsion(alpha), 24);
+  const PadLook look = LookOf(*pad);
+  if (look == PadLook::kDualSense || look == PadLook::kDualShock4) {
+    draw_list->AddCircle(ImVec2(center.x - 0.5f, center.y - 0.5f), 3.8f * unit, Panel(alpha), 24, 1.8f * unit);
+  } else {
+    AddTextCentered(draw_list, font, 11.0f * unit, center, Panel(alpha), "B");
+  }
+  return 16.0f * unit;
+}
+
 bool CloseInputHeld(rex::input::InputSystem* input, const std::vector<rex::input::DeviceId>& pads) {
   if (ImGui::IsKeyDown(ImGuiKey_Enter) || ImGui::IsKeyDown(ImGuiKey_KeypadEnter) || ImGui::IsKeyDown(ImGuiKey_Escape) ||
       ImGui::IsKeyDown(ImGuiKey_Backspace)) {

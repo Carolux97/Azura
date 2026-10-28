@@ -66,6 +66,8 @@ set(AZURA_SOURCES
     src/perf_overlay.cpp
     src/perf_stats.cpp
     src/shader_compile_overlay.cpp
+    src/online_room_overlay.cpp
+    src/join_by_code_menu.cpp
     src/shader_precompile.cpp
     src/system_settings.cpp
     src/local_coop_menu.cpp
