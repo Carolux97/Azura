@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 
 import {
   RESOLUTION_SCALES,
+  resolutionScalesFor,
   autoResolutionScale,
   choosableGpus,
   gpuChoiceVisible,
@@ -23,6 +24,7 @@ test("render size multiplies the console's 1280x720", () => {
   assert.deepEqual(renderSize(1), { width: 1280, height: 720 });
   assert.deepEqual(renderSize(2), { width: 2560, height: 1440 });
   assert.deepEqual(renderSize(3), { width: 3840, height: 2160 });
+  assert.deepEqual(renderSize(1.5), { width: 1920, height: 1080 });
 });
 
 test("automatic resolution doubles on Pro, Max and Ultra chips", () => {
@@ -43,11 +45,24 @@ test("every offered resolution is one the automatic choice can produce or larger
 });
 
 test("resolutions are written as the game's Video menu names them", () => {
-  assert.deepEqual(RESOLUTION_SCALES.map(resolutionValue), ["1280x720", "2560x1440", "3840x2160"]);
+  assert.deepEqual(RESOLUTION_SCALES.map(resolutionValue), [
+    "1280x720",
+    "1920x1080",
+    "2560x1440",
+    "3840x2160",
+  ]);
   assert.equal(scaleOfResolution("2560x1440"), 2);
+  assert.equal(scaleOfResolution("1920x1080"), 1.5);
   assert.equal(scaleOfResolution("auto"), null);
-  assert.equal(scaleOfResolution("1920x1080"), null);
+  assert.equal(scaleOfResolution("1600x900"), null);
   assert.equal(scaleOfResolution(undefined), null);
+});
+
+test("1920 x 1080 is offered on macOS only (the Metal renderer draws a scale of 3/2)", () => {
+  assert.deepEqual(resolutionScalesFor("macos"), [1, 1.5, 2, 3]);
+  assert.deepEqual(resolutionScalesFor("linux"), [1, 2, 3]);
+  assert.deepEqual(resolutionScalesFor("windows"), [1, 2, 3]);
+  assert.deepEqual(resolutionScalesFor(undefined), [1, 2, 3]);
 });
 
 const hybrid = {
