@@ -2062,10 +2062,10 @@ index 949d185..5337bf1 100644
  
 diff --git a/include/rex/system/xam/player_identity.h b/include/rex/system/xam/player_identity.h
 new file mode 100644
-index 0000000..162fe8c
+index 0000000..1d7d7fb
 --- /dev/null
 +++ b/include/rex/system/xam/player_identity.h
-@@ -0,0 +1,69 @@
+@@ -0,0 +1,74 @@
 +/**
 + * @file        system/xam/player_identity.h
 + * @brief       The identity of an installation: its players' XUID and its machine on the network
@@ -2133,6 +2133,11 @@ index 0000000..162fe8c
 +// be read is kept aside as identity.toml.bad and replaced. With no folder, the identity is made
 +// for this run only.
 +PlayerIdentity LoadOrCreatePlayerIdentity(const std::filesystem::path& user_data_root);
++
++// The identity kept in `user_data_root` if there is a valid one, or one for this run only. Writes
++// nothing: for tools (code generation, achievement export, content install) that start the
++// runtime on folders that are not the player's saves.
++PlayerIdentity LoadPlayerIdentity(const std::filesystem::path& user_data_root);
 +
 +}  // namespace rex::system::xam
 diff --git a/include/rex/system/xam/system_link.h b/include/rex/system/xam/system_link.h
@@ -24563,10 +24568,10 @@ index 5709e6d..6ef67ba 100644
    }
  
 diff --git a/src/system/kernel_state.cpp b/src/system/kernel_state.cpp
-index 697399c..84c210c 100644
+index 697399c..2c61ee5 100644
 --- a/src/system/kernel_state.cpp
 +++ b/src/system/kernel_state.cpp
-@@ -65,13 +65,22 @@ KernelState::KernelState(Runtime* emulator)
+@@ -65,13 +65,25 @@ KernelState::KernelState(Runtime* emulator)
    file_system_ = emulator->file_system();
  
    app_manager_ = std::make_unique<xam::AppManager>();
@@ -24577,7 +24582,10 @@ index 697399c..84c210c 100644
    if (!user_data_root.empty()) {
      user_data_root = std::filesystem::absolute(user_data_root);
    }
-+  player_identity_ = xam::LoadOrCreatePlayerIdentity(user_data_root);
++  // Tools start the runtime on folders that are not the player's saves (code generation on the
++  // game folder): they read an identity there but never make one.
++  player_identity_ = emulator_->is_tool_mode() ? xam::LoadPlayerIdentity(user_data_root)
++                                               : xam::LoadOrCreatePlayerIdentity(user_data_root);
 +  user_profiles_[0] =
 +      std::make_unique<xam::UserProfile>(player_identity_.xuid, REXCVAR_GET(user_name));
 +  for (uint32_t i = 1; i < user_profiles_.size(); ++i) {
@@ -24591,7 +24599,7 @@ index 697399c..84c210c 100644
    content_manager_ = std::make_unique<xam::ContentManager>(this, user_data_root);
  
    if (shared_kernel_state_ != nullptr) {
-@@ -1118,6 +1127,45 @@ void KernelState::UnregisterNotifyListener(XNotifyListener* listener) {
+@@ -1118,6 +1130,45 @@ void KernelState::UnregisterNotifyListener(XNotifyListener* listener) {
    }
  }
  
@@ -24729,10 +24737,10 @@ index 5f44a44..1dd7abd 100644
    // content_root/title_id/profile/user_name
 diff --git a/src/system/xam/player_identity.cpp b/src/system/xam/player_identity.cpp
 new file mode 100644
-index 0000000..8009139
+index 0000000..1cfbf15
 --- /dev/null
 +++ b/src/system/xam/player_identity.cpp
-@@ -0,0 +1,169 @@
+@@ -0,0 +1,191 @@
 +/**
 + * @file        system/xam/player_identity.cpp
 + * @brief       The identity of an installation (rex/system/xam/player_identity.h)
@@ -24810,6 +24818,19 @@ index 0000000..8009139
 +  return xuid;
 +}
 +
++// The identity in `path`, if the file exists; `exists` says whether it does.
++std::optional<PlayerIdentity> ReadPlayerIdentity(const std::filesystem::path& path, bool& exists) {
++  std::error_code error;
++  exists = std::filesystem::exists(path, error);
++  if (!exists) {
++    return std::nullopt;
++  }
++  std::ifstream in(path, std::ios::binary);
++  std::stringstream text;
++  text << in.rdbuf();
++  return ParsePlayerIdentity(text.str());
++}
++
 +}  // namespace
 +
 +bool IsValidPlayerXuid(uint64_t xuid) {
@@ -24874,14 +24895,12 @@ index 0000000..8009139
 +  }
 +  const auto path = user_data_root / kPlayerIdentityFileName;
 +  std::error_code error;
-+  if (std::filesystem::exists(path, error)) {
-+    std::ifstream in(path, std::ios::binary);
-+    std::stringstream text;
-+    text << in.rdbuf();
-+    if (auto identity = ParsePlayerIdentity(text.str())) {
-+      REXSYS_INFO("Player identity: XUID {:016X}", identity->xuid);
-+      return *identity;
-+    }
++  bool exists = false;
++  if (auto identity = ReadPlayerIdentity(path, exists)) {
++    REXSYS_INFO("Player identity: XUID {:016X}", identity->xuid);
++    return *identity;
++  }
++  if (exists) {
 +    auto bad = path;
 +    bad += ".bad";
 +    std::filesystem::rename(path, bad, error);
@@ -24899,6 +24918,17 @@ index 0000000..8009139
 +    REXSYS_INFO("Player identity: new XUID {:016X}, saved in {}", identity.xuid, path.string());
 +  }
 +  return identity;
++}
++
++PlayerIdentity LoadPlayerIdentity(const std::filesystem::path& user_data_root) {
++  bool exists = false;
++  if (!user_data_root.empty()) {
++    if (auto identity = ReadPlayerIdentity(user_data_root / kPlayerIdentityFileName, exists)) {
++      return *identity;
++    }
++  }
++  std::random_device random;
++  return GeneratePlayerIdentity(random);
 +}
 +
 +}  // namespace rex::system::xam
@@ -26118,10 +26148,10 @@ index 7bd264b..272dbb8 100644
      codegen/codegen_writer_test.cpp
 diff --git a/tests/unit/system/player_identity_test.cpp b/tests/unit/system/player_identity_test.cpp
 new file mode 100644
-index 0000000..c445934
+index 0000000..e552449
 --- /dev/null
 +++ b/tests/unit/system/player_identity_test.cpp
-@@ -0,0 +1,108 @@
+@@ -0,0 +1,116 @@
 +/**
 + * @file        player_identity_test.cpp
 + * @brief       Unit tests for the installation's identity (rex/system/xam/player_identity.h).
@@ -26229,6 +26259,14 @@ index 0000000..c445934
 +  CHECK(IsValidPlayerXuid(identity.xuid));
 +  CHECK(ReadFile(folder / "identity.toml.bad") == "xuid = \"broken\"\n");
 +  CHECK(ParsePlayerIdentity(ReadFile(folder / kPlayerIdentityFileName)));
++}
++
++TEST_CASE("Tools read the identity but never make one", "[player_identity]") {
++  const auto folder = FreshFolder("tools");
++  LoadPlayerIdentity(folder);
++  CHECK_FALSE(std::filesystem::exists(folder / kPlayerIdentityFileName));
++  const PlayerIdentity kept = LoadOrCreatePlayerIdentity(folder);
++  CHECK(LoadPlayerIdentity(folder).xuid == kept.xuid);
 +}
 diff --git a/tests/unit/system/system_link_test.cpp b/tests/unit/system/system_link_test.cpp
 new file mode 100644
