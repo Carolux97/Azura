@@ -76,5 +76,7 @@ class PerfOverlay : public rex::ui::ImGuiDialog {
 // left corner, in pixels at 720p; 0 when it shows elsewhere or not at all. The shader compilation
 // notice moves down by this much so the two do not overlap.
 float PerfOverlayTopLeftHeight();
+// The same for the top right corner, where the online room notice shows (online_room_overlay.h).
+float PerfOverlayTopRightHeight();
 
 }  // namespace azura

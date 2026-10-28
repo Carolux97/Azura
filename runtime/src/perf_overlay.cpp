@@ -121,9 +121,11 @@ double TargetFramesPerSecond() {
   return (limit <= 0.0 || limit >= menu::kFrameRateUnlimited) ? 60.0 : limit;
 }
 
-// The panel's height below the top of the game image while it shows in the top left corner, in
-// pixels at 720p (PerfOverlayTopLeftHeight). Only the UI thread reads and writes it.
+// The panel's height below the top of the game image while it shows in the top left or the top
+// right corner, in pixels at 720p (PerfOverlayTopLeftHeight, PerfOverlayTopRightHeight). Only the
+// UI thread reads and writes them.
 float g_top_left_height = 0.0f;
+float g_top_right_height = 0.0f;
 
 // Draws text with extra space between its letters, as the panel's "FPS" label; returns its width.
 float DrawSpacedText(ImDrawList* draw_list, ImFont* font, float size, ImVec2 position, ImU32 color,
@@ -143,6 +145,10 @@ float PerfOverlayTopLeftHeight() {
   return g_top_left_height;
 }
 
+float PerfOverlayTopRightHeight() {
+  return g_top_right_height;
+}
+
 PerfOverlay::PerfOverlay(rex::ui::ImGuiDrawer* drawer, ImFont* const* number_font,
                          ImFont* const* text_font)
     : ImGuiDialog(drawer), number_font_(number_font), text_font_(text_font) {}
@@ -150,6 +156,7 @@ PerfOverlay::PerfOverlay(rex::ui::ImGuiDrawer* drawer, ImFont* const* number_fon
 PerfOverlay::~PerfOverlay() {
   g_timing.store(false, std::memory_order_relaxed);
   g_top_left_height = 0.0f;
+  g_top_right_height = 0.0f;
 }
 
 void PerfOverlay::OnDraw(ImGuiIO& io) {
@@ -164,6 +171,7 @@ void PerfOverlay::OnDraw(ImGuiIO& io) {
     g_timing.store(on, std::memory_order_relaxed);
   }
   g_top_left_height = 0.0f;
+  g_top_right_height = 0.0f;
   if (!reading) {
     was_reading_ = false;
   } else if (!was_reading_) {
@@ -308,6 +316,7 @@ void PerfOverlay::OnDraw(ImGuiIO& io) {
                          bottom ? game_top + game_height - margin - panel_size.y : game_top + margin);
   const ImVec2 panel_max(panel_min.x + panel_size.x, panel_min.y + panel_size.y);
   if (!right && !bottom) g_top_left_height = (panel_max.y - game_top) / unit;
+  if (right && !bottom) g_top_right_height = (panel_max.y - game_top) / unit;
 
   // The launcher's panel (coop_ui.h), with rounded corners.
   ImDrawList* draw_list = ImGui::GetForegroundDrawList();
