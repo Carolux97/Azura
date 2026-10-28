@@ -94,6 +94,28 @@ Gears 3 is an Unreal Engine 3 game: the engine's online subsystem for Live drive
 the game's own network driver sends the gameplay traffic. That the travel URL of a co-op host
 carries `?listen` (verified in our travel hook) is how Unreal makes the host's game accept clients.
 
+### 2.2.1 How Gears 3 starts a System Link party (verified)
+
+Found on 2026-10-27 by running the game on macOS and disassembling its scripts (`GearGame`,
+`OnlineSubsystemLive`):
+
+- **The party options open with Back** (Tab on the keyboard, Create on the DualSense) from the main
+  menu's lobby (`UIScene_FrontEnd.CanOpenPartyOptions`, with no Live condition). "Create public
+  party" asks for Xbox Live Gold; System Link is a party type in these options, not a menu of its own.
+- **The party types** (`EGearVersusPartyType`): InviteRequired 0, FriendsOnly 1, Public 2,
+  SystemLink 3, Local 4. The chosen one is profile setting 102; `GearProfileSettings.SetPartyType`
+  sets `bPartyTypeIsSystemLink` when it is 3.
+- **System Link is offered only with a network link.** `BuildPartyOptions` enables it when every
+  player is signed in, the player is not a guest and `UIInteraction.HasLinkConnection()` is true.
+  `HasLinkConnection` is native: it calls `XNetGetEthernetLinkStatus` and tests bit 0. The runtime's
+  stub returns 0, so the option stayed greyed out until the stub was changed for the experiment.
+- **The party session** is created by `UIScene_FrontEnd.ConditionalCreatePartySession` when the
+  player can play online or `bPartyTypeIsSystemLink` is set, the party type is not Local, the player
+  is not a guest and there is a link. With the link reported, the game created the System Link party
+  (`XSessionCreate` through the XGI app) and showed its lobby; nothing answered for a client, because
+  the session messages are only logged (section 3).
+- **What a client does** has not been observed: it needs two computers.
+
 ### 2.3 What depends on Xbox Live
 
 | Feature | System Link | Xbox Live | Notes |
@@ -123,10 +145,11 @@ Verified in the SDK (`src/kernel/xam/xam_net.cpp`, `apps/xgi_app.cpp`, `src/syst
 - **Sessions are only logged.** Every `XSession*` message returns success without doing anything:
   `XSessionCreate` does not fill `XSESSION_INFO`, and a search finds nothing. So not even System
   Link can work today.
-- **Every player has the same identity.** Player 1's XUID is the constant `0xB13EBABEBABEBABE` in
-  every installation, and players 2 to 4 get that plus 1 to 3. Two Azura players in one session would
-  be the same player for the game. The saves folder is named after the XUID, so changing it has to
-  keep the saves where they are (the content code already separates the two with `ContentXuid`).
+- **Each installation has an identity of its own** (card 111, since 2026-10-28): a random offline
+  XUID for player 1 (`0xE000` followed by 48 random bits, players 2 to 4 the next three), a random
+  machine ID for the `XNADDR` and a key seed, kept in `identity.toml` in the saves folder. The saves
+  stay in the folder named after the old shared XUID, `0xB13EBABEBABEBABE`
+  (`ContentManager::ContentFolderXuid`).
 - **The travel hook strips `?listen`** from campaign URLs (`PatchTravelURL` in
   `runtime/src/script_hooks.cpp`), because keeping it hung the game after loading a chapter on macOS
   (2026-10-21). A co-op host needs it. Why it hung is not known; inferred: the game waits for a network
