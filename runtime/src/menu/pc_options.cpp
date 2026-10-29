@@ -3,12 +3,15 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <functional>
 #include <map>
 #include <mutex>
 #include <sstream>
 #include <vector>
+
+#include <SDL3/SDL.h>
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
@@ -33,6 +36,14 @@ REXCVAR_DEFINE_STRING(render_resolution, "auto", "Azura/Graphics",
                       "2560x1440 or 3840x2160. Sets the draw resolution scale and the texture cache "
                       "limits when the game starts")
     .allowed({"auto", "1280x720", "1920x1080", "2560x1440", "3840x2160"})
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_STRING(upscaling_preset, "custom", "Azura/Graphics",
+                      "Quality preset of the image scaling: custom (render_resolution and present_effect "
+                      "as set), native, quality, balanced or performance. A preset draws the game at the "
+                      "screen's resolution divided by 1, 1.5, 1.7 or 2, rounded to the nearest render "
+                      "resolution this build draws and never below 1280x720, and scales it with AMD FSR 1 "
+                      "(Apple MetalFX on macOS) when that is below the screen's")
+    .allowed({"custom", "native", "quality", "balanced", "performance"})
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_DOUBLE(upscaling_sharpness, 0.0, "Azura/Graphics",
                       "Extra sharpening of the image scaling effects that sharpen (AMD CAS, and AMD FSR 1 "
@@ -96,6 +107,7 @@ enum class Label {
   kAmbientOcclusion,
   kBloom,
   kLensFlares,
+  kUpscalingPreset,
   kCount
 };
 
@@ -175,23 +187,27 @@ const std::vector<Option>& Options() {
       // Generic Xbox profile settings with three values that Gears never reads: Controller
       // Sensitivity (it has its own, 368, 59 and 60) and Voice Via Speakers.
       {kVideoCategory, 12, Label::kAnisotropic, "anisotropic_override", Kind::kChoice, 13, 2, {"0", "3", "5"}},
+      // A list of our own (ID 9119), above the two rows it decides for: with a preset other than
+      // custom, ApplyRenderResolution picks the render resolution and the image scaling.
+      {kVideoCategory, 13, Label::kUpscalingPreset, "upscaling_preset", Kind::kChoice, 9119, -1,
+       {"custom", "native", "quality", "balanced", "performance"}},
       // Lists of our own too: the resolution's value names include "Automatic" in the player's
       // language, and the resolution and upscaling values depend on the platform
       // (RenderResolutionChoices, UpscalingChoices).
-      {kVideoCategory, 13, Label::kRenderResolution, "render_resolution", Kind::kChoice, 9108, -1,
+      {kVideoCategory, 14, Label::kRenderResolution, "render_resolution", Kind::kChoice, 9108, -1,
        RenderResolutionChoices()},
       // Right above the sharpness row, which belongs to it.
-      {kVideoCategory, 14, Label::kUpscaling, "present_effect", Kind::kChoice, 9107, -1, UpscalingChoices()},
+      {kVideoCategory, 15, Label::kUpscaling, "present_effect", Kind::kChoice, 9107, -1, UpscalingChoices()},
       // Applies while the game runs, so the player sees the sharpening change (ApplyUpscalingSharpness).
       // Only shown with an image scaling effect that sharpens; the rows below it then move up one.
-      {kVideoCategory, 15, Label::kSharpness, "upscaling_sharpness", Kind::kSlider, 9109, -1, {}, 0.0f, 1.0f,
+      {kVideoCategory, 16, Label::kSharpness, "upscaling_sharpness", Kind::kSlider, 9109, -1, {}, 0.0f, 1.0f,
        0.1f},
       // A list of our own (ID 9110): its values grow as the overlay gets more modes. Last in the
       // list, with its position below it.
-      {kVideoCategory, 16, Label::kPerformanceOverlay, "performance_overlay", Kind::kChoice, 9110, -1,
+      {kVideoCategory, 17, Label::kPerformanceOverlay, "performance_overlay", Kind::kChoice, 9110, -1,
        {"off", "fps", "detailed", "advanced"}},
       // Our own list too (ID 9111): the corner the overlay is shown in.
-      {kVideoCategory, 17, Label::kPerformanceOverlayPosition, "performance_overlay_position", Kind::kChoice, 9111, -1,
+      {kVideoCategory, 18, Label::kPerformanceOverlayPosition, "performance_overlay_position", Kind::kChoice, 9111, -1,
        {"top_left", "top_right", "bottom_left", "bottom_right"}},
   };
   return options;
@@ -212,6 +228,7 @@ struct Texts {
   const char* corners[4];  // the performance overlay's positions: top left, top right, bottom left, bottom right
   const char* detailed;    // the performance overlay's mode with the CPU and GPU use
   const char* advanced;    // the performance overlay's mode with memory use, frame time graph and 1% low
+  const char* presets[5];  // the upscaling presets: custom, native, quality, balanced, performance
 };
 
 // Keyed by the extension of the localization files. Labels are upper case like the game's own.
@@ -240,8 +257,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"DYNAMIC SHADOWS", "The shadows of characters and moving objects. Turn them off to make the game run faster."},
          {"AMBIENT OCCLUSION", "The soft shadows in corners and where objects meet."},
          {"BLOOM", "The glow around bright lights."},
-         {"LENS FLARES", "The flares bright lights draw over the image."}},
-        "Off", "On", "FXAA", "FXAA extreme", "Open", "Bilinear (original)", "AMD CAS (sharpening)", "AMD FSR 1", "Automatic", {"Top left", "Top right", "Bottom left", "Bottom right"}, "Detailed", "Advanced"}},
+         {"LENS FLARES", "The flares bright lights draw over the image."},
+         {"UPSCALING PRESET",
+          "Draw the game below the screen's resolution and scale it up to the screen. Custom keeps Render resolution and Image scaling as set. Takes effect the next time the game starts."}},
+        "Off", "On", "FXAA", "FXAA extreme", "Open", "Bilinear (original)", "AMD CAS (sharpening)", "AMD FSR 1", "Automatic", {"Top left", "Top right", "Bottom left", "Bottom right"}, "Detailed", "Advanced", {"Custom", "Native", "Quality", "Balanced", "Performance"}}},
       {"esn",
        {{"TECLADO Y RATÓN", "Ajuste las opciones del teclado y el ratón."},
         {{"CALIBRAR BRILLO", "Abra la pantalla de calibración del brillo."},
@@ -266,8 +285,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"SOMBRAS DINÁMICAS", "Las sombras de los personajes y de los objetos que se mueven. Desactívelas para que el juego vaya más rápido."},
          {"OCLUSIÓN AMBIENTAL", "Las sombras suaves en las esquinas y donde se juntan los objetos."},
          {"RESPLANDOR", "El halo que rodea las luces intensas."},
-         {"DESTELLOS DE LENTE", "Los destellos que las luces intensas dibujan sobre la imagen."}},
-        "Desactivado", "Activado", "FXAA", "FXAA extremo", "Abrir", "Bilineal (original)", "AMD CAS (nitidez)", "AMD FSR 1", "Automática", {"Arriba a la izquierda", "Arriba a la derecha", "Abajo a la izquierda", "Abajo a la derecha"}, "Detallado", "Avanzado"}},
+         {"DESTELLOS DE LENTE", "Los destellos que las luces intensas dibujan sobre la imagen."},
+         {"CALIDAD DE ESCALADO",
+          "Dibuje el juego por debajo de la resolución de la pantalla y escálelo hasta ella. Personalizado usa la resolución de renderizado y el escalado de imagen elegidos. Se aplica la próxima vez que inicie el juego."}},
+        "Desactivado", "Activado", "FXAA", "FXAA extremo", "Abrir", "Bilineal (original)", "AMD CAS (nitidez)", "AMD FSR 1", "Automática", {"Arriba a la izquierda", "Arriba a la derecha", "Abajo a la izquierda", "Abajo a la derecha"}, "Detallado", "Avanzado", {"Personalizado", "Nativo", "Calidad", "Equilibrado", "Rendimiento"}}},
       {"deu",
        {{"TASTATUR UND MAUS", "Passen Sie die Einstellungen für Tastatur und Maus an."},
         {{"HELLIGKEIT KALIBRIEREN", "Öffnet den Bildschirm zur Kalibrierung der Helligkeit."},
@@ -291,8 +312,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"DYNAMISCHE SCHATTEN", "Die Schatten von Figuren und bewegten Objekten. Ausgeschaltet läuft das Spiel schneller."},
          {"UMGEBUNGSVERDECKUNG", "Die weichen Schatten in Ecken und dort, wo Objekte aufeinandertreffen."},
          {"BLOOM", "Das Leuchten um helle Lichter."},
-         {"LINSENREFLEXE", "Die Reflexe, die helle Lichter über das Bild legen."}},
-        "Aus", "Ein", "FXAA", "FXAA extrem", "Öffnen", "Bilinear (Original)", "AMD CAS (Schärfung)", "AMD FSR 1", "Automatisch", {"Oben links", "Oben rechts", "Unten links", "Unten rechts"}, "Detailliert", "Erweitert"}},
+         {"LINSENREFLEXE", "Die Reflexe, die helle Lichter über das Bild legen."},
+         {"SKALIERUNGSQUALITÄT",
+          "Das Spiel unter der Bildschirmauflösung rendern und auf sie hochskalieren. Benutzerdefiniert verwendet die gewählte Renderauflösung und Bildskalierung. Wird beim nächsten Spielstart wirksam."}},
+        "Aus", "Ein", "FXAA", "FXAA extrem", "Öffnen", "Bilinear (Original)", "AMD CAS (Schärfung)", "AMD FSR 1", "Automatisch", {"Oben links", "Oben rechts", "Unten links", "Unten rechts"}, "Detailliert", "Erweitert", {"Benutzerdefiniert", "Nativ", "Qualität", "Ausgewogen", "Leistung"}}},
       {"ita",
        {{"TASTIERA E MOUSE", "Regola le impostazioni di tastiera e mouse."},
         {{"CALIBRA LUMINOSITÀ", "Apri la schermata di calibrazione della luminosità."},
@@ -316,8 +339,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"OMBRE DINAMICHE", "Le ombre dei personaggi e degli oggetti in movimento. Disattivale per rendere il gioco più veloce."},
          {"OCCLUSIONE AMBIENTALE", "Le ombre morbide negli angoli e dove gli oggetti si incontrano."},
          {"BLOOM", "Il bagliore attorno alle luci intense."},
-         {"RIFLESSI DELLA LENTE", "I riflessi che le luci intense disegnano sull'immagine."}},
-        "Disattivato", "Attivato", "FXAA", "FXAA estremo", "Apri", "Bilineare (originale)", "AMD CAS (nitidezza)", "AMD FSR 1", "Automatica", {"In alto a sinistra", "In alto a destra", "In basso a sinistra", "In basso a destra"}, "Dettagliato", "Avanzato"}},
+         {"RIFLESSI DELLA LENTE", "I riflessi che le luci intense disegnano sull'immagine."},
+         {"QUALITÀ DI UPSCALING",
+          "Disegna il gioco sotto la risoluzione dello schermo e lo scala fino ad essa. Personalizzato usa la risoluzione di rendering e il ridimensionamento scelti. Ha effetto al prossimo avvio del gioco."}},
+        "Disattivato", "Attivato", "FXAA", "FXAA estremo", "Apri", "Bilineare (originale)", "AMD CAS (nitidezza)", "AMD FSR 1", "Automatica", {"In alto a sinistra", "In alto a destra", "In basso a sinistra", "In basso a destra"}, "Dettagliato", "Avanzato", {"Personalizzato", "Nativo", "Qualità", "Bilanciato", "Prestazioni"}}},
       {"jpn",
        {{"キーボードとマウス", "キーボードとマウスの設定を調整します。"},
         {{"明るさの調整", "明るさの調整画面を開きます。"},
@@ -341,8 +366,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"動的な影", "キャラクターや動く物体の影です。オフにするとゲームが軽くなります。"},
          {"アンビエントオクルージョン", "隅や物が接する部分の柔らかい影です。"},
          {"ブルーム", "明るい光のまわりの輝きです。"},
-         {"レンズフレア", "明るい光が画面に描くフレアです。"}},
-        "オフ", "オン", "FXAA", "FXAA (最大)", "開く", "バイリニア（オリジナル）", "AMD CAS（シャープ化）", "AMD FSR 1", "自動", {"左上", "右上", "左下", "右下"}, "詳細", "高度"}},
+         {"レンズフレア", "明るい光が画面に描くフレアです。"},
+         {"アップスケーリング品質",
+          "画面より低い解像度でゲームを描画し、画面の解像度まで拡大します。カスタムは選択したレンダリング解像度と画像スケーリングを使用します。次回ゲーム起動時に適用されます。"}},
+        "オフ", "オン", "FXAA", "FXAA (最大)", "開く", "バイリニア（オリジナル）", "AMD CAS（シャープ化）", "AMD FSR 1", "自動", {"左上", "右上", "左下", "右下"}, "詳細", "高度", {"カスタム", "ネイティブ", "クオリティ", "バランス", "パフォーマンス"}}},
       {"fra",
        {{"CLAVIER ET SOURIS", "Réglez les options du clavier et de la souris."},
         {{"CALIBRER LA LUMINOSITÉ", "Ouvrez l'écran de calibrage de la luminosité."},
@@ -366,8 +393,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"OMBRES DYNAMIQUES", "Les ombres des personnages et des objets en mouvement. Désactivez-les pour que le jeu soit plus rapide."},
          {"OCCLUSION AMBIANTE", "Les ombres douces dans les coins et là où les objets se touchent."},
          {"BLOOM", "Le halo autour des lumières vives."},
-         {"REFLETS DE LENTILLE", "Les reflets que les lumières vives dessinent sur l'image."}},
-        "Désactivé", "Activé", "FXAA", "FXAA extrême", "Ouvrir", "Bilinéaire (d'origine)", "AMD CAS (netteté)", "AMD FSR 1", "Automatique", {"En haut à gauche", "En haut à droite", "En bas à gauche", "En bas à droite"}, "Détaillé", "Avancé"}},
+         {"REFLETS DE LENTILLE", "Les reflets que les lumières vives dessinent sur l'image."},
+         {"QUALITÉ DE MISE À L'ÉCHELLE",
+          "Affiche le jeu sous la résolution de l'écran puis l'agrandit à celle-ci. Personnalisé utilise la résolution de rendu et la mise à l'échelle choisies. Prend effet au prochain démarrage du jeu."}},
+        "Désactivé", "Activé", "FXAA", "FXAA extrême", "Ouvrir", "Bilinéaire (d'origine)", "AMD CAS (netteté)", "AMD FSR 1", "Automatique", {"En haut à gauche", "En haut à droite", "En bas à gauche", "En bas à droite"}, "Détaillé", "Avancé", {"Personnalisé", "Natif", "Qualité", "Équilibré", "Performances"}}},
       {"ptb",
        {{"TECLADO E MOUSE", "Ajuste as opções do teclado e do mouse."},
         {{"CALIBRAR BRILHO", "Abra a tela de calibração do brilho."},
@@ -392,8 +421,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"SOMBRAS DINÂMICAS", "As sombras dos personagens e dos objetos em movimento. Desative para o jogo ficar mais rápido."},
          {"OCLUSÃO DE AMBIENTE", "As sombras suaves nos cantos e onde os objetos se encontram."},
          {"BLOOM", "O brilho em volta das luzes fortes."},
-         {"REFLEXOS DE LENTE", "Os reflexos que as luzes fortes desenham sobre a imagem."}},
-        "Desativado", "Ativado", "FXAA", "FXAA extremo", "Abrir", "Bilinear (original)", "AMD CAS (nitidez)", "AMD FSR 1", "Automática", {"Superior esquerdo", "Superior direito", "Inferior esquerdo", "Inferior direito"}, "Detalhado", "Avançado"}},
+         {"REFLEXOS DE LENTE", "Os reflexos que as luzes fortes desenham sobre a imagem."},
+         {"QUALIDADE DE ESCALA",
+          "Desenha o jogo abaixo da resolução da tela e o amplia até ela. Personalizado usa a resolução de renderização e a escala de imagem escolhidas. É aplicado na próxima vez que o jogo iniciar."}},
+        "Desativado", "Ativado", "FXAA", "FXAA extremo", "Abrir", "Bilinear (original)", "AMD CAS (nitidez)", "AMD FSR 1", "Automática", {"Superior esquerdo", "Superior direito", "Inferior esquerdo", "Inferior direito"}, "Detalhado", "Avançado", {"Personalizado", "Nativo", "Qualidade", "Equilibrado", "Desempenho"}}},
       {"pol",
        {{"KLAWIATURA I MYSZ", "Dostosuj ustawienia klawiatury i myszy."},
         {{"KALIBRACJA JASNOŚCI", "Otwórz ekran kalibracji jasności."},
@@ -417,8 +448,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"DYNAMICZNE CIENIE", "Cienie postaci i ruchomych obiektów. Wyłącz, aby gra działała szybciej."},
          {"OKLUZJA OTOCZENIA", "Miękkie cienie w narożnikach i tam, gdzie stykają się obiekty."},
          {"POŚWIATA", "Blask wokół jasnych świateł."},
-         {"ODBLASKI SOCZEWKI", "Odblaski, które jasne światła rysują na obrazie."}},
-        "Wyłączone", "Włączone", "FXAA", "FXAA ekstremalne", "Otwórz", "Dwuliniowe (oryginalne)", "AMD CAS (wyostrzanie)", "AMD FSR 1", "Automatyczna", {"Lewy górny róg", "Prawy górny róg", "Lewy dolny róg", "Prawy dolny róg"}, "Szczegółowy", "Zaawansowany"}},
+         {"ODBLASKI SOCZEWKI", "Odblaski, które jasne światła rysują na obrazie."},
+         {"JAKOŚĆ SKALOWANIA",
+          "Renderuje grę poniżej rozdzielczości ekranu i skaluje ją do niej. Niestandardowe używa wybranej rozdzielczości renderowania i skalowania obrazu. Zadziała przy następnym uruchomieniu gry."}},
+        "Wyłączone", "Włączone", "FXAA", "FXAA ekstremalne", "Otwórz", "Dwuliniowe (oryginalne)", "AMD CAS (wyostrzanie)", "AMD FSR 1", "Automatyczna", {"Lewy górny róg", "Prawy górny róg", "Lewy dolny róg", "Prawy dolny róg"}, "Szczegółowy", "Zaawansowany", {"Niestandardowe", "Natywne", "Jakość", "Zrównoważone", "Wydajność"}}},
       {"rus",
        {{"КЛАВИАТУРА И МЫШЬ", "Настройте параметры клавиатуры и мыши."},
         {{"КАЛИБРОВКА ЯРКОСТИ", "Откройте экран калибровки яркости."},
@@ -442,8 +475,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"ДИНАМИЧЕСКИЕ ТЕНИ", "Тени персонажей и движущихся объектов. Выключите, чтобы игра работала быстрее."},
          {"ФОНОВОЕ ЗАТЕНЕНИЕ", "Мягкие тени в углах и там, где соприкасаются предметы."},
          {"СВЕЧЕНИЕ", "Ореол вокруг ярких источников света."},
-         {"БЛИКИ ОБЪЕКТИВА", "Блики, которые яркий свет рисует поверх изображения."}},
-        "Выкл.", "Вкл.", "FXAA", "FXAA (макс.)", "Открыть", "Билинейное (оригинал)", "AMD CAS (резкость)", "AMD FSR 1", "Автоматически", {"Сверху слева", "Сверху справа", "Снизу слева", "Снизу справа"}, "Подробно", "Расширенный"}},
+         {"БЛИКИ ОБЪЕКТИВА", "Блики, которые яркий свет рисует поверх изображения."},
+         {"КАЧЕСТВО МАСШТАБИРОВАНИЯ",
+          "Игра рисуется в разрешении ниже экранного и масштабируется до него. «Своё» использует выбранные разрешение рендеринга и масштабирование. Вступит в силу при следующем запуске игры."}},
+        "Выкл.", "Вкл.", "FXAA", "FXAA (макс.)", "Открыть", "Билинейное (оригинал)", "AMD CAS (резкость)", "AMD FSR 1", "Автоматически", {"Сверху слева", "Сверху справа", "Снизу слева", "Снизу справа"}, "Подробно", "Расширенный", {"Своё", "Родное", "Качество", "Баланс", "Производительность"}}},
       {"cze",
        {{"KLÁVESNICE A MYŠ", "Upravte nastavení klávesnice a myši."},
         {{"KALIBRACE JASU", "Otevřete obrazovku kalibrace jasu."},
@@ -467,8 +502,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"DYNAMICKÉ STÍNY", "Stíny postav a pohyblivých objektů. Vypněte je, aby hra běžela rychleji."},
          {"OKOLNÍ ZASTÍNĚNÍ", "Měkké stíny v rozích a tam, kde se objekty stýkají."},
          {"ZÁŘE", "Záře kolem jasných světel."},
-         {"ODLESKY OBJEKTIVU", "Odlesky, které jasná světla kreslí přes obraz."}},
-        "Vypnuto", "Zapnuto", "FXAA", "FXAA extrémní", "Otevřít", "Bilineární (původní)", "AMD CAS (zostření)", "AMD FSR 1", "Automaticky", {"Vlevo nahoře", "Vpravo nahoře", "Vlevo dole", "Vpravo dole"}, "Podrobný", "Pokročilý"}},
+         {"ODLESKY OBJEKTIVU", "Odlesky, které jasná světla kreslí přes obraz."},
+         {"KVALITA ŠKÁLOVÁNÍ",
+          "Vykreslí hru pod rozlišením obrazovky a zvětší ji na něj. Vlastní použije zvolené rozlišení vykreslování a škálování obrazu. Projeví se při příštím spuštění hry."}},
+        "Vypnuto", "Zapnuto", "FXAA", "FXAA extrémní", "Otevřít", "Bilineární (původní)", "AMD CAS (zostření)", "AMD FSR 1", "Automaticky", {"Vlevo nahoře", "Vpravo nahoře", "Vlevo dole", "Vpravo dole"}, "Podrobný", "Pokročilý", {"Vlastní", "Nativní", "Kvalita", "Vyvážené", "Výkon"}}},
       {"hun",
        {{"BILLENTYŰZET ÉS EGÉR", "A billentyűzet és az egér beállításai."},
         {{"FÉNYERŐ KALIBRÁLÁSA", "Megnyitja a fényerő kalibrálási képernyőjét."},
@@ -492,8 +529,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"DINAMIKUS ÁRNYÉKOK", "A szereplők és a mozgó tárgyak árnyékai. Kapcsold ki őket, hogy gyorsabban fusson a játék."},
          {"KÖRNYEZETI TAKARÁS", "A lágy árnyékok a sarkokban és ott, ahol a tárgyak összeérnek."},
          {"RAGYOGÁS", "Az erős fények körüli fényudvar."},
-         {"LENCSECSILLANÁS", "A csillanások, amelyeket az erős fények a képre rajzolnak."}},
-        "Ki", "Be", "FXAA", "FXAA (extrém)", "Megnyitás", "Bilineáris (eredeti)", "AMD CAS (élesítés)", "AMD FSR 1", "Automatikus", {"Bal felső sarok", "Jobb felső sarok", "Bal alsó sarok", "Jobb alsó sarok"}, "Részletes", "Haladó"}},
+         {"LENCSECSILLANÁS", "A csillanások, amelyeket az erős fények a képre rajzolnak."},
+         {"FELSKÁLÁZÁSI MINŐSÉG",
+          "A játékot a képernyő felbontása alatt rajzolja meg, majd felnagyítja arra. Az Egyéni a kiválasztott renderelési felbontást és képméretezést használja. A játék következő indításakor lép életbe."}},
+        "Ki", "Be", "FXAA", "FXAA (extrém)", "Megnyitás", "Bilineáris (eredeti)", "AMD CAS (élesítés)", "AMD FSR 1", "Automatikus", {"Bal felső sarok", "Jobb felső sarok", "Bal alsó sarok", "Jobb alsó sarok"}, "Részletes", "Haladó", {"Egyéni", "Natív", "Minőség", "Kiegyensúlyozott", "Teljesítmény"}}},
       {"chn",
        {{"鍵盤與滑鼠", "調整鍵盤與滑鼠設定。"},
         {{"校正亮度", "開啟亮度校正畫面。"},
@@ -517,8 +556,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"動態陰影", "角色與移動物體的陰影。關閉可讓遊戲執行得更快。"},
          {"環境光遮蔽", "角落與物體相接處的柔和陰影。"},
          {"光暈", "明亮光源周圍的光暈。"},
-         {"鏡頭光暈", "明亮光源在畫面上產生的鏡頭光斑。"}},
-        "關閉", "開啟", "FXAA", "FXAA 極致", "開啟", "雙線性（原始）", "AMD CAS（銳利化）", "AMD FSR 1", "自動", {"左上角", "右上角", "左下角", "右下角"}, "詳細", "進階"}},
+         {"鏡頭光暈", "明亮光源在畫面上產生的鏡頭光斑。"},
+         {"升頻品質",
+          "以低於螢幕的解析度繪製遊戲，再放大至螢幕解析度。自訂會使用選擇的渲染解析度與影像縮放。下次啟動遊戲時生效。"}},
+        "關閉", "開啟", "FXAA", "FXAA 極致", "開啟", "雙線性（原始）", "AMD CAS（銳利化）", "AMD FSR 1", "自動", {"左上角", "右上角", "左下角", "右下角"}, "詳細", "進階", {"自訂", "原生", "品質", "平衡", "效能"}}},
       {"kor",
        {{"키보드 및 마우스", "키보드 및 마우스 설정을 조정합니다."},
         {{"밝기 보정", "밝기 보정 화면을 엽니다."},
@@ -542,8 +583,10 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"동적 그림자", "캐릭터와 움직이는 물체의 그림자입니다. 끄면 게임이 더 빨리 실행됩니다."},
          {"앰비언트 오클루전", "구석과 물체가 맞닿는 곳의 부드러운 그림자입니다."},
          {"블룸", "밝은 빛 주위의 번짐입니다."},
-         {"렌즈 플레어", "밝은 빛이 화면 위에 그리는 플레어입니다."}},
-        "끔", "켬", "FXAA", "FXAA 최대", "열기", "바이리니어 (원본)", "AMD CAS (선명화)", "AMD FSR 1", "자동", {"왼쪽 위", "오른쪽 위", "왼쪽 아래", "오른쪽 아래"}, "상세", "고급"}},
+         {"렌즈 플레어", "밝은 빛이 화면 위에 그리는 플레어입니다."},
+         {"업스케일링 품질",
+          "화면보다 낮은 해상도로 게임을 그린 뒤 화면 해상도로 확대합니다. 사용자 지정은 선택한 렌더링 해상도와 이미지 스케일링을 사용합니다. 다음에 게임을 시작할 때 적용됩니다."}},
+        "끔", "켬", "FXAA", "FXAA 최대", "열기", "바이리니어 (원본)", "AMD CAS (선명화)", "AMD FSR 1", "자동", {"왼쪽 위", "오른쪽 위", "왼쪽 아래", "오른쪽 아래"}, "상세", "고급", {"사용자 지정", "네이티브", "품질", "균형", "성능"}}},
   };
   return texts;
 }
@@ -611,7 +654,8 @@ bool Valid(int option) {
 // Options that the runtime only reads when the game starts.
 bool NeedsRestart(const Option& option) {
   return option.label == Label::kAntialiasing || option.label == Label::kUpscaling ||
-         option.label == Label::kMotionBlur || option.label == Label::kRenderResolution;
+         option.label == Label::kMotionBlur || option.label == Label::kRenderResolution ||
+         option.label == Label::kUpscalingPreset;
 }
 
 // Rows whose changes the script hears of while the menu is open (bHasOnChangeCallback): Flash runs
@@ -893,6 +937,10 @@ bool PcOptionValueNames(int psid, std::vector<std::u16string>& names) {
     if (option.label == Label::kPerformanceOverlayPosition) {
       const std::string language = PlayerLanguage();
       for (const char* corner : TextsFor(language).corners) names.push_back(CoalescedString::FromUtf8(corner).text);
+    }
+    if (option.label == Label::kUpscalingPreset) {
+      const std::string language = PlayerLanguage();
+      for (const char* preset : TextsFor(language).presets) names.push_back(CoalescedString::FromUtf8(preset).text);
     }
     if (option.label == Label::kRenderResolution) {
       // "Automatic" in the player's language, then the sizes as "1920 × 1080".
@@ -1381,10 +1429,79 @@ int AutoResolutionScale() {
   return 1;
 }
 
+// The size in pixels of the screen the game is shown on: in a window with window_width and
+// window_height set, that size; otherwise the desktop mode of the monitor the window opens on (the
+// monitor setting, counted from 1; 0 for the primary one). {0, 0} when SDL cannot tell.
+std::pair<int, int> ScreenSize() {
+  const std::string fullscreen = rex::cvar::GetFlagByName("fullscreen");
+  if (fullscreen != "true" && fullscreen != "1") {
+    const int width = std::atoi(rex::cvar::GetFlagByName("window_width").c_str());
+    const int height = std::atoi(rex::cvar::GetFlagByName("window_height").c_str());
+    if (width > 0 && height > 0) return {width, height};
+  }
+  int count = 0;
+  SDL_DisplayID* displays = SDL_GetDisplays(&count);
+  if (!displays) return {0, 0};
+  const int monitor = std::atoi(rex::cvar::GetFlagByName("monitor").c_str());
+  const SDL_DisplayID display = monitor > 0 && monitor <= count ? displays[monitor - 1] : SDL_GetPrimaryDisplay();
+  SDL_free(displays);
+  const SDL_DisplayMode* mode = display ? SDL_GetDesktopDisplayMode(display) : nullptr;
+  if (!mode) return {0, 0};
+  // The mode's size is in points; the pixel density turns it into pixels on high-density screens.
+  return {static_cast<int>(std::lround(mode->w * mode->pixel_density)),
+          static_cast<int>(std::lround(mode->h * mode->pixel_density))};
+}
+
+// The render resolution an upscaling preset picks for a screen `screen_height` pixels tall: that
+// height divided by the preset's factor, rounded to the nearest height among the render resolutions
+// this build offers (RenderResolutionChoices), the lower one on a tie, and never below 1280x720.
+std::string PresetRenderResolution(const std::string& preset, int screen_height) {
+  const double factor = preset == "quality"       ? 1.5
+                        : preset == "balanced"    ? 1.7
+                        : preset == "performance" ? 2.0
+                                                  : 1.0;
+  const double target = screen_height / factor;
+  std::string best = "1280x720";
+  double best_distance = std::abs(720 - target);
+  for (const char* choice : RenderResolutionChoices()) {
+    const std::string value = choice;
+    const size_t x = value.find('x');
+    if (x == std::string::npos) continue;
+    const double distance = std::abs(std::atoi(value.c_str() + x + 1) - target);
+    if (distance < best_distance) {
+      best = value;
+      best_distance = distance;
+    }
+  }
+  return best;
+}
+
 }  // namespace
 
 void ApplyRenderResolution() {
-  const std::string chosen = REXCVAR_GET(render_resolution);
+  std::string chosen = REXCVAR_GET(render_resolution);
+  // An upscaling preset decides the render resolution and, when the game is drawn below the
+  // screen's resolution, the image scaling, for this run only: azura.toml keeps the player's own.
+  const std::string preset = REXCVAR_GET(upscaling_preset);
+  if (preset != "custom") {
+    const auto [screen_width, screen_height] = ScreenSize();
+    if (screen_height > 0) {
+      chosen = PresetRenderResolution(preset, screen_height);
+      const int render_height = std::atoi(chosen.c_str() + chosen.find('x') + 1);
+#if defined(__APPLE__)
+      // The Metal presenter scales with MetalFX; it does not draw FSR.
+      const char* effect = "metalfx";
+#else
+      const char* effect = "fsr";
+#endif
+      if (render_height < screen_height) rex::cvar::SetFlagByName("present_effect", effect);
+      REXLOG_INFO("[Azura options] Upscaling preset {} for a {}x{} screen: render resolution {}, image scaling {}",
+                  preset, screen_width, screen_height, chosen, rex::cvar::GetFlagByName("present_effect"));
+    } else {
+      REXLOG_WARN("[Azura options] Upscaling preset {}: the screen size is unknown, using render_resolution",
+                  preset);
+    }
+  }
   // The scale as numerator / denominator: 1920x1080 is 3/2 (Vulkan draws it at 2 and scales the
   // image down to the window).
   const int numerator = chosen == "1280x720"    ? 1

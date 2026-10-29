@@ -1595,7 +1595,7 @@ index 201b623..0bf4d41 100644
    rex::cvar::RegisterCliOptions(app);
  
 diff --git a/src/system/CMakeLists.txt b/src/system/CMakeLists.txt
-index fc46d86..bc82bf7 100644
+index fc46d86..2da979b 100644
 --- a/src/system/CMakeLists.txt
 +++ b/src/system/CMakeLists.txt
 @@ -4,6 +4,7 @@ set(REXSYSTEM_SOURCES
@@ -1632,6 +1632,15 @@ index fc46d86..bc82bf7 100644
  )
  
  if(REXGLUE_ENABLE_TRACY)
+@@ -106,7 +112,7 @@ if(REXGLUE_ENABLE_PERF_COUNTERS)
+ endif()
+ 
+ if(WIN32)
+-    target_link_libraries(rexruntime PRIVATE ws2_32)
++    target_link_libraries(rexruntime PRIVATE ws2_32 iphlpapi)
+     target_link_libraries(rexruntime PUBLIC dxgi dxguid)
+     target_compile_definitions(rexruntime PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
+ endif()
 diff --git a/src/system/function_dispatcher.cpp b/src/system/function_dispatcher.cpp
 index 1fb0d77..58db8ef 100644
 --- a/src/system/function_dispatcher.cpp

@@ -46,6 +46,11 @@ fullscreen = true
 # (macOS only), 2560x1440 or 3840x2160. It sets the draw resolution scale and the texture cache
 # limits at start-up.
 render_resolution = "auto"
+# The Video menu's Upscaling preset: custom (render_resolution and the image scaling as set),
+# native, quality, balanced or performance. A preset draws the game at the screen's resolution
+# divided by 1, 1.5, 1.7 or 2 (the nearest render resolution, never below 1280x720) and scales it
+# up with AMD FSR 1 (MetalFX on macOS) when that is below the screen's. It applies at start-up.
+upscaling_preset = "custom"
 # Extra sharpening of AMD CAS and AMD FSR 1, from 0.0 (the effect's own) to 1.0 (the most): the
 # Video menu's Sharpness. It applies while the game runs.
 upscaling_sharpness = 0.0
@@ -91,6 +96,11 @@ user_name = "User"
 # "system_link": play System Link (campaign co-op, Horde, Beast, private Versus) with the other
 # computers of the local network.
 network_mode = "offline"
+# This computer's IPv4 address on the local network System Link plays on (for example
+# "192.168.1.20"). Empty: chosen automatically, preferring a home network address over a VPN or
+# virtual adapter's. Set it when the log line "System Link: local network address" shows the wrong
+# one; the log lists every interface just above it.
+system_link_address = ""
 
 # ---------- Input ----------
 # Enable keyboard/mouse controller emulation. If a physical gamepad is plugged in,
