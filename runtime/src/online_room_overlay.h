@@ -3,8 +3,9 @@
 // title and a line below, white with a soft shadow and no panel. Below the performance overlay
 // when that one shows in the same corner.
 //
-// It shows while a room is being set up, and for a few seconds when an attempt fails or the room
-// ends, with the reason. Once connected it draws nothing: the room's code shows, hidden until the
+// It shows while a room is being set up, and for a few seconds when an attempt fails, the room
+// ends or Alboria refuses the sign-in (the game then stays in Local), with the reason. Once
+// connected it draws nothing: the room's code shows, hidden until the
 // player asks, in Manage/Invite (script_hooks.cpp).
 //
 // The app creates it at start-up when network_mode is online and it lives as long as the app. It

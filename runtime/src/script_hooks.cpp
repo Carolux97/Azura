@@ -2262,8 +2262,9 @@ extern "C" void sub_82319958(PPCContext& __restrict ctx, uint8_t* base) {
 // UIScene_FrontEnd.Callback_DialogItemPress, which checks the Xbox LIVE sign-in (natively, out of
 // reach of these hooks) and shows the Gold message: while Alboria answers (CheckService, asked as
 // the options open) the choice skips those checks and goes, as the script would after them, to
-// TransitionToLIVEParty with the type pending. When Alboria does not answer, the script runs and
-// its message says so (menu_patches.cpp). TransitionToLIVEParty destroys the party and runs
+// TransitionToLIVEParty with the type pending. When Alboria does not answer, or refused the
+// sign-in, the script runs and its message says online play is not possible (menu_patches.cpp),
+// and the room overlay names a refusal. TransitionToLIVEParty destroys the party and runs
 // CreateLIVEParty, which hosts a room on Alboria and runs CreateSystemLinkParty instead: the party
 // is a System Link one, and its local network is the room's relay (rex/system/xam/alboria.h). The
 // host's address is the room's first one from the start, so the session the party creates right
@@ -2322,8 +2323,32 @@ enum BootParty { kBootNone, kBootOnline, kBootSystemLink, kBootLocal };
 std::atomic<int> g_boot_party{kBootNone};
 // The party type the profile answers outside a room (GetPartyType), when the party the game
 // started with is not the profile's: System Link or Local from startup_party, or Local forced
-// because Alboria did not answer. -1 once the player chooses a type in the party options.
+// because Alboria did not answer or cannot be played on. -1 once the player chooses a type in the
+// party options.
 std::atomic<int> g_startup_party_type{-1};
+// The sign-in refusal the game stays in Local for, from the moment the start-up party fell back to
+// Local or the player asked for a room, until the room overlay takes it (TakeRefusalNotice).
+// Guarded by g_refusal_notice_mutex.
+std::mutex g_refusal_notice_mutex;
+std::string g_refusal_notice;
+
+// Has the room overlay show `refusal` from now on.
+void NoticeRefusal(const std::string& refusal) {
+  std::lock_guard lock(g_refusal_notice_mutex);
+  g_refusal_notice = refusal;
+}
+
+namespace azura::script {
+std::string TakeRefusalNotice() {
+  std::lock_guard lock(g_refusal_notice_mutex);
+  return std::exchange(g_refusal_notice, {});
+}
+}  // namespace azura::script
+
+// A room failed (alboria::TakeFailedRoom), so the party the game creates next is Local instead of
+// another room that would most likely fail the same way, until the player chooses Joinable or
+// Invite only again.
+std::atomic<bool> g_room_failed{false};
 
 bool AnswerCanPlayOnline(PPCContext& ctx, uint8_t* base) {
   if (!OnlineMode()) return false;
@@ -2357,10 +2382,20 @@ bool ChooseOnlinePartyType(PPCContext& ctx, uint8_t* base, uint32_t dialog_item_
     return false;
   }
   if (!alboria::ServiceReachable()) {
-    // The script's message, which with online play on says Alboria cannot be reached.
+    // The script's message, which with online play on says online play on Alboria is not possible.
     alboria::CheckService();
     return false;
   }
+  if (const std::string refusal = alboria::SignInRefusal(); !refusal.empty()) {
+    // Alboria refused the sign-in (checked again as the party options opened): a room would fail
+    // the same way. The party stays as it is; the script's message says why in general, and the
+    // room overlay the refusal itself.
+    REXLOG_INFO("[Azura online] Alboria refused the sign-in ({}): no room", refusal);
+    NoticeRefusal(refusal);
+    return false;
+  }
+  // The player asks for a room again: one that fails sends the party back to Local once more.
+  g_room_failed.store(false);
   const uint32_t cls = LoadU32(base, dialog_item_press + kObjectOuter);
   const uint32_t transition = FindClassFunction(base, cls, "TransitionToLIVEParty");
   const uint32_t close_options = FindClassFunction(base, cls, "ClosePartyOptions");
@@ -2733,7 +2768,7 @@ void OpenSystemLinkBrowserForJoin(PPCContext& ctx, uint8_t* base) {
   ctx.r3.u64 = own_r3;
 }
 
-// --- A room that ended under its member ---
+// --- A room that ended under its member, or one that failed ---
 //
 // A player who joined another's party (an Alboria room) is in that host's party. When the room ends
 // without the player leaving (the host closed it or left, the player was removed, or the relay went
@@ -2742,20 +2777,113 @@ void OpenSystemLinkBrowserForJoin(PPCContext& ctx, uint8_t* base) {
 // GearPC.ReturnToMainMenu(bReturnToStartScreen = false, bClearMenuHistory = true): it leaves the
 // party, goes back to the main menu and, with no room, creates the player's own party there as at
 // start-up.
+//
+// A room that failed (alboria::TakeFailedRoom: hosting or joining did not get it connected, or the
+// hosted room ended) leaves the player in a System Link party with no room behind it, where nobody
+// can join and the menus still offer what only a room has. The same return to the main menu
+// replaces it, with g_room_failed set so that the party created there is Local (CreateStartupParty);
+// the room overlay tells why the room failed.
+//
+// Either way the player then gets the game's message box of an invite that failed, which with
+// online play on says the room on Alboria failed and how to try again (menu_patches.cpp): GearPC's
+// NotifyInviteFailed, on the first input frame in the main menu (g_room_message_pending), so that a
+// return from a match, which closes every message box, does not take it away.
+//
+// ReturnToMainMenu travels to the front end's map again, as leaving a match does, and the front end
+// then starts over at its title screen. A player already in the main menu stays there instead, and
+// gets a Local party the way choosing Local in the party options makes one: the front end's
+// DestroyPartyForLocal destroys the party, then its CreateLocalParty runs LocalPartyCreated. The
+// profile's party type answers Local (g_startup_party_type) until the player chooses another, or
+// the party would show the System Link type the room's party had.
 constexpr uint32_t kReturnToMainMenuLocalsSize = 64;  // bReturnToStartScreen, bClearMenuHistory, locals
 uint32_t g_return_to_menu_locals = 0;
+// The message box of a room that failed or ended is still to be shown in the main menu.
+std::atomic<bool> g_room_message_pending{false};
+
+// The function `name` of the player controller's class or one it extends; 0 when none has it.
+uint32_t FindControllerFunction(uint8_t* base, uint32_t controller, const char* name) {
+  uint32_t function = 0;
+  for (uint32_t cls = controller ? LoadU32(base, controller + kObjectClass) : 0; cls && !function;
+       cls = LoadU32(base, cls + kStructSuper)) {
+    function = FindClassFunction(base, cls, name);
+  }
+  return function;
+}
+
+// Whether player 1 is in the front end's main menu, past its title screen.
+bool InMainMenu(uint8_t* base) {
+  const uint32_t scene = g_front_end_scene.load(std::memory_order_relaxed);
+  return g_front_end.load(std::memory_order_relaxed) && scene &&
+         !(LoadU32(base, scene + kFrontEndFlags) & kOnTitleScreenBit);
+}
+
+// On a player input frame (`ctx`, about to run PlayerInput) in the main menu: shows the message box
+// of a room that failed or ended, when one is pending, with GearPC.NotifyInviteFailed.
+void ShowRoomMessage(PPCContext& ctx, uint8_t* base) {
+  if (!g_room_message_pending.load() || !InMainMenu(base) || !g_return_to_menu_locals) return;
+  g_room_message_pending.store(false);
+  const uint32_t controller = LoadU32(base, ctx.r3.u32 + kObjectOuter);
+  const uint32_t notify = FindControllerFunction(base, controller, "NotifyInviteFailed");
+  if (!notify) {
+    REXLOG_WARN("[Azura online] NotifyInviteFailed not found; the room's message box is not shown");
+    return;
+  }
+  REXLOG_INFO("[Azura online] Showing the room's message box");
+  std::memset(base + g_return_to_menu_locals, 0, kReturnToMainMenuLocalsSize);
+  const uint32_t frame = ctx.r4.u32;
+  const uint32_t own_object = LoadU32(base, frame + kFrameObject);
+  const uint64_t own_r3 = ctx.r3.u64;
+  StoreU32(base, frame + kFrameObject, controller);
+  ctx.r3.u64 = controller;
+  RunInstead(ctx, base, notify, g_return_to_menu_locals);
+  StoreU32(base, frame + kFrameObject, own_object);
+  ctx.r3.u64 = own_r3;
+}
+
+// On a player input frame (`ctx`, about to run PlayerInput) in the front end's main menu: runs
+// UIScene_FrontEnd.DestroyPartyForLocal and then CreateLocalParty on its scene, with
+// g_return_to_menu_locals (zeroed) as their locals. Returns whether it did; not in the front end, or
+// on its title screen, it does not.
+bool DestroyPartyInFrontEnd(PPCContext& ctx, uint8_t* base, bool failed) {
+  const uint32_t scene = g_front_end_scene.load(std::memory_order_relaxed);
+  const uint32_t front_end_class = g_front_end_class.load(std::memory_order_relaxed);
+  if (!InMainMenu(base) || !front_end_class) return false;
+  const uint32_t destroy = FindClassFunction(base, front_end_class, "DestroyPartyForLocal");
+  const uint32_t create = FindClassFunction(base, front_end_class, "CreateLocalParty");
+  if (!destroy || !create) {
+    REXLOG_WARN("[Azura online] DestroyPartyForLocal or CreateLocalParty not found; back to the main menu instead");
+    return false;
+  }
+  g_startup_party_type.store(kLocalPartyType);
+  REXLOG_INFO("[Azura online] {}: the party in the main menu becomes Local",
+              failed ? "The room failed" : "The room ended");
+  const uint32_t frame = ctx.r4.u32;
+  const uint32_t own_object = LoadU32(base, frame + kFrameObject);
+  const uint64_t own_r3 = ctx.r3.u64;
+  StoreU32(base, frame + kFrameObject, scene);
+  ctx.r3.u64 = scene;
+  RunInstead(ctx, base, destroy, g_return_to_menu_locals);
+  std::memset(base + g_return_to_menu_locals, 0, kReturnToMainMenuLocalsSize);
+  RunInstead(ctx, base, create, g_return_to_menu_locals);
+  StoreU32(base, frame + kFrameObject, own_object);
+  ctx.r3.u64 = own_r3;
+  return true;
+}
 
 // On a player input frame (`ctx`, about to run PlayerInput): sends the player back to the main menu
-// when the room it was a member of ended.
+// when the room it was a member of ended, or when a room failed.
 void ReturnToMainMenuWhenRoomLost(PPCContext& ctx, uint8_t* base) {
-  if (!rex::system::xam::alboria::TakeLostRoom()) return;
+  namespace alboria = rex::system::xam::alboria;
+  const bool failed = alboria::TakeFailedRoom();
+  if (failed) {
+    g_room_failed.store(true);
+  } else if (!alboria::TakeLostRoom()) {
+    return;
+  }
+  g_room_message_pending.store(true);
   const uint32_t player_input = ctx.r3.u32;
   const uint32_t controller = LoadU32(base, player_input + kObjectOuter);
-  uint32_t return_to_menu = 0;
-  for (uint32_t cls = controller ? LoadU32(base, controller + kObjectClass) : 0; cls && !return_to_menu;
-       cls = LoadU32(base, cls + kStructSuper)) {
-    return_to_menu = FindClassFunction(base, cls, "ReturnToMainMenu");
-  }
+  const uint32_t return_to_menu = FindControllerFunction(base, controller, "ReturnToMainMenu");
   if (!return_to_menu) {
     REXLOG_WARN("[Azura online] The room ended, but ReturnToMainMenu was not found on the player controller");
     return;
@@ -2765,8 +2893,9 @@ void ReturnToMainMenuWhenRoomLost(PPCContext& ctx, uint8_t* base) {
     if (!g_return_to_menu_locals) return;
   }
   std::memset(base + g_return_to_menu_locals, 0, kReturnToMainMenuLocalsSize);
+  if (DestroyPartyInFrontEnd(ctx, base, failed)) return;
   StoreU32(base, g_return_to_menu_locals + 4, 1);  // bClearMenuHistory; bReturnToStartScreen stays 0
-  REXLOG_INFO("[Azura online] The room ended: back to the main menu");
+  REXLOG_INFO("[Azura online] {}: back to the main menu", failed ? "The room failed" : "The room ended");
   const uint32_t frame = ctx.r4.u32;
   const uint32_t own_object = LoadU32(base, frame + kFrameObject);
   const uint64_t own_r3 = ctx.r3.u64;
@@ -2856,8 +2985,10 @@ bool CreateOnlineParty(PPCContext& ctx, uint8_t* base, uint32_t create_live_part
 
 // Runs ConditionalCreatePartySession (`ctx`, about to run) for the party at start-up (BootParty):
 // the one startup_party names, which the player chose last time, Joinable the first time. A room's
-// party (Joinable or Invite only) when Alboria answered the start-up check; Local when it did not,
-// which startup_party does not keep.
+// party (Joinable or Invite only) when Alboria answered the start-up check and accepted the
+// sign-in; Local when it did not answer, refused the sign-in (alboria::SignInRefusal: no account
+// linked, banned, an old client) or a room failed (g_room_failed), which startup_party does not
+// keep.
 void CreateStartupParty(PPCContext& ctx, uint8_t* base) {
   namespace alboria = rex::system::xam::alboria;
   const std::string wanted = REXCVAR_GET(startup_party);
@@ -2872,6 +3003,15 @@ void CreateStartupParty(PPCContext& ctx, uint8_t* base) {
     boot = kBootLocal;
     g_startup_party_type.store(kLocalPartyType);
     REXLOG_INFO("[Azura online] Alboria did not answer: starting in Local");
+  } else if (const std::string refusal = alboria::SignInRefusal(); !refusal.empty()) {
+    boot = kBootLocal;
+    g_startup_party_type.store(kLocalPartyType);
+    REXLOG_INFO("[Azura online] Alboria refused the sign-in ({}): starting in Local", refusal);
+    NoticeRefusal(refusal);
+  } else if (g_room_failed.load()) {
+    boot = kBootLocal;
+    g_startup_party_type.store(kLocalPartyType);
+    REXLOG_INFO("[Azura online] The last room failed: starting in Local");
   } else {
     g_online_party_type.store(wanted == "invite_only" ? kInviteRequiredType : kFriendsOnlyType);
     g_show_room_code.store(false);
@@ -2917,6 +3057,7 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   if (function && IsEnginePlayerInput(base, function)) {
     if (g_open_browser.load(std::memory_order_relaxed)) OpenSystemLinkBrowserForJoin(ctx, base);
     ReturnToMainMenuWhenRoomLost(ctx, base);
+    ShowRoomMessage(ctx, base);
     const uint32_t player_input = ctx.r3.u32;
     const int32_t delta_time_at = ParamOffset(base, function, "DeltaTime");
     const float delta_time =
