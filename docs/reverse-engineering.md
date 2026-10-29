@@ -685,6 +685,16 @@ in `script_hooks.cpp`):
   froze the Options opened from the main menu with Return still held (**observed**; why is
   **inferred**: the scene opening with A down). Each key keeps what it was when pressed
   until it is released, so the Escape that pauses is not also B in the pause menu it opens.
+- **The pre-game lobby** (`UIScene_PregameLobby`, after a Horde, Versus or custom match is created)
+  counts as play for the keyboard: Return reaches its `FilterButtonInput` as Start and is turned
+  into A there. The host's map selection control is Flash (`bIsInCustomMapSelection`): the mouse
+  wheel changes the map and the control calls `OnCustomMapChanged(MapId)` (**verified**, it is in
+  the log), but accepting it never reached `OnCustomMapSelected(MapId)`, the function that sends
+  the choice (`GRI.SubmitMapSelectionByName`, `GRI.SubmitHostFinishedMapSelection`), with the
+  keyboard (**verified**: it never appears in the log of a session that pressed Return). Why the
+  control does not take the injected A is not known. With the control open, Return calls
+  `OnCustomMapSelected` itself with the last `MapId` the control reported
+  (`ConfirmCustomMapWithReturn`).
 
 ## Profile settings
 
