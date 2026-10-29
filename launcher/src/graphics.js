@@ -18,14 +18,13 @@
 export const BASE_RENDER_SIZE = { width: 1280, height: 720 };
 
 /**
- * Resolution scales the launcher offers, in order. 1.5 (1920 × 1080) only on macOS, where the
- * Metal renderer draws that scale (3/2); Vulkan (Linux, Windows) draws whole scales.
+ * Resolution scales the launcher offers, in order. 1.5 (1920 × 1080) is drawn at 3/2 by the Metal
+ * renderer (macOS) and at 2 by Vulkan (Linux, Windows), which scales the image down to the window.
  */
 export const RESOLUTION_SCALES = [1, 1.5, 2, 3];
 
-/** The resolution scales offered on an operating system ("macos", "linux" or "windows"). */
-export const resolutionScalesFor = (os) =>
-  os === "macos" ? RESOLUTION_SCALES : RESOLUTION_SCALES.filter(Number.isInteger);
+/** The resolution scales offered on an operating system ("macos", "linux" or "windows"): all. */
+export const resolutionScalesFor = (_os) => RESOLUTION_SCALES;
 
 /**
  * Resolution scale "Automatic" stands for on a machine described by `system` (see
