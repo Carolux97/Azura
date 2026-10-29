@@ -91,6 +91,8 @@ REXCVAR_DEFINE_BOOL(script_dump_code, false, "Azura/Debug",
                     "With script_dump_classes: also log a rough listing of each function's bytecode");
 REXCVAR_DECLARE(double, field_of_view);
 REXCVAR_DECLARE(bool, film_grain);
+REXCVAR_DECLARE(double, mnk_run_sensitivity);
+REXCVAR_DECLARE(double, mnk_run_turn_limit);
 
 extern "C" void __imp__sub_822DF4D0(PPCContext& __restrict ctx, uint8_t* base);
 extern "C" void __imp__sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base);
@@ -472,6 +474,12 @@ struct MouseShare {
   float carry_pitch = 0.0f;
   // The profile multiplier last taken out, for a frame where it cannot be measured.
   float multiplier = 1.0f;
+  // The player camera's view angle this frame (ApplyMouseLookFor), 0 when unknown.
+  float view_fov = 0.0f;
+  // Whether the player is roadie running, and the turn A or D at full steer gives then, in aTurn's
+  // units before the profile multiplier (RecordMouseShare): the mouse never turns faster than that.
+  bool running = false;
+  float steer_cap = 0.0f;
 };
 std::unordered_map<uint32_t, MouseShare> g_mouse_shares;  // guarded by g_mouse_look_mutex
 
@@ -554,6 +562,8 @@ void ApplyMouseLookFor(uint8_t* base, uint32_t player_input) {
   share.user = user_index;
   share.yaw = share.pitch = 0.0f;
   share.taken_out = false;
+  share.running = false;
+  share.view_fov = target.view_fov;
   share.on_mouse = azura::input::ApplyMouseLook(base, user, target);
   if (share.on_mouse) {
     // SmoothMouse averages the mouse axes with the frames before: the view would trail the mouse.
@@ -841,6 +851,10 @@ void CompensateFieldOfView(uint8_t* base, uint32_t player_input) {
 
 // --- Mouse share (MouseShare) ---
 
+// GearPawn.SpecialMove while roadie running (GearPlayerInput.AutoPitchCentering tests
+// IsDoingSpecialMove(4) for it).
+constexpr uint8_t kSpecialMoveRoadieRun = 4;
+
 float LoadF32(const uint8_t* base, uint32_t address) {
   const uint32_t bits = LoadU32(base, address);
   float value;
@@ -848,12 +862,74 @@ float LoadF32(const uint8_t* base, uint32_t address) {
   return value;
 }
 
+// WorldInfo.TimeDilation of `controller`'s world, 1 when it cannot be read. Called with
+// g_mouse_look_mutex held.
+float TimeDilationOf(const uint8_t* base, uint32_t controller) {
+  const int32_t world_at = CachedOffset(base, LoadU32(base, controller + kObjectClass), 7, "WorldInfo");
+  const uint32_t world = world_at >= 0 ? LoadU32(base, controller + static_cast<uint32_t>(world_at)) : 0;
+  if (!world) return 1.0f;
+  const int32_t dilation_at = CachedOffset(base, LoadU32(base, world + kObjectClass), 24, "TimeDilation");
+  const float value = dilation_at >= 0 ? LoadF32(base, world + static_cast<uint32_t>(dilation_at)) : 1.0f;
+  return value > 0.0f ? value : 1.0f;
+}
+
+// While `controller`'s pawn is roadie running, GSM_RoadieRun.PreProcessInput replaces aTurn with
+// aStrafe * SteeringPct (0 while bDisableSteering): the right stick does not turn, the left one
+// steers. Records that the player is running and the turn a full steer gives this frame, as
+// PlayerInput.PlayerInput scales it (SteeringPct even while bDisableSteering, at the start of the
+// run, so the mouse is not locked then): times 100 * DeltaTime * LookRightScale, then FOVScale
+// (GetFOVAngle() * 0.01111 with bEnableFOVScaling), then CompensateFieldOfView's division by
+// `scale`. `delta_time` is PlayerInput's parameter, which it divides by TimeDilation first. Called
+// with g_mouse_look_mutex held.
+void RecordRoadieRun(const uint8_t* base, uint32_t player_input, uint32_t controller, float delta_time, float scale,
+                     MouseShare& share) {
+  const int32_t pawn_at = CachedOffset(base, LoadU32(base, controller + kObjectClass), 27, "MyGearPawn");
+  const uint32_t pawn = pawn_at >= 0 ? LoadU32(base, controller + static_cast<uint32_t>(pawn_at)) : 0;
+  if (!pawn) return;
+  const uint32_t pawn_class = LoadU32(base, pawn + kObjectClass);
+  const int32_t special_move_at = CachedOffset(base, pawn_class, 28, "SpecialMove");
+  if (special_move_at < 0 || base[pawn + static_cast<uint32_t>(special_move_at)] != kSpecialMoveRoadieRun) return;
+  // GearPawn.SpecialMoves, an array of the special move objects by ESpecialMove.
+  const int32_t moves_at = CachedOffset(base, pawn_class, 29, "SpecialMoves");
+  const uint32_t moves = moves_at >= 0 ? LoadU32(base, pawn + static_cast<uint32_t>(moves_at)) : 0;
+  const uint32_t move_count = moves_at >= 0 ? LoadU32(base, pawn + static_cast<uint32_t>(moves_at) + 4) : 0;
+  const uint32_t move = moves && kSpecialMoveRoadieRun < move_count ? LoadU32(base, moves + kSpecialMoveRoadieRun * 4) : 0;
+  const uint32_t input_class = LoadU32(base, player_input + kObjectClass);
+  const int32_t look_right = CachedOffset(base, input_class, 32, "LookRightScale");
+  const BoolField fov_scaling = CachedBool(base, input_class, 33, "bEnableFOVScaling");
+  const int32_t steering = move ? CachedOffset(base, LoadU32(base, move + kObjectClass), 30, "SteeringPct") : -1;
+  static std::atomic<bool> logged{false};
+  if (!move || steering < 0 || look_right < 0) {
+    if (!logged.exchange(true)) {
+      REXLOG_WARN("[Azura mouse] Roadie run: cannot find its steering (SpecialMoves {}, SteeringPct {}, "
+                  "LookRightScale {}); the mouse turn is not capped",
+                  moves_at, steering, look_right);
+    }
+    return;
+  }
+  const float steering_pct = LoadF32(base, move + static_cast<uint32_t>(steering));
+  const bool fov_scaled = fov_scaling.offset >= 0 &&
+                          (LoadU32(base, player_input + static_cast<uint32_t>(fov_scaling.offset)) & fov_scaling.mask) != 0;
+  const float fov_scale = fov_scaled && share.view_fov > 0.0f ? share.view_fov * 0.01111f : 1.0f;
+  const float dt = delta_time / TimeDilationOf(base, controller);
+  share.running = true;
+  share.steer_cap = steering_pct * 100.0f * dt *
+                    LoadF32(base, player_input + static_cast<uint32_t>(look_right)) * fov_scale / scale;
+  if (dt > 0.0f && !logged.exchange(true)) {
+    // Rotator units per second to degrees per second, at the profile multiplier last measured.
+    const float degrees = share.steer_cap * share.multiplier / dt * 360.0f / 65536.0f;
+    REXLOG_INFO("[Azura mouse] Roadie run: SteeringPct {:.3f}, a full A/D steer turns {:.0f} degrees/s, the "
+                "mouse at most {:.0f}",
+                steering_pct, degrees, degrees * REXCVAR_GET(mnk_run_turn_limit));
+  }
+}
+
 // As the engine's PlayerInput.PlayerInput returns on `player_input` (after CompensateFieldOfView):
 // records how much of aTurn and aLookUp the mouse is. That function adds aMouseX and aMouseY to
 // them as AdjustMouseSensitivity left them, then flips them with bInvertTurn and bInvertMouse; with
 // bStrafe the mouse's x strafes instead, bLockTurnUntilRelease zeroes aTurn, and
 // IsLookInputIgnored (bIgnoreLookInput) zeroes both.
-void RecordMouseShare(uint8_t* base, uint32_t player_input) {
+void RecordMouseShare(uint8_t* base, uint32_t player_input, float delta_time) {
   std::lock_guard lock(g_mouse_look_mutex);
   const auto it = g_mouse_shares.find(player_input);
   if (it == g_mouse_shares.end() || !it->second.on_mouse) return;
@@ -886,6 +962,7 @@ void RecordMouseShare(uint8_t* base, uint32_t player_input) {
   if (LoadF32(base, player_input + static_cast<uint32_t>(look_up)) == 0.0f) pitch = 0.0f;
   share.yaw = yaw;
   share.pitch = pitch;
+  RecordRoadieRun(base, player_input, controller, delta_time, scale, share);
 }
 
 // A player's aTurn and aLookUp as GearPC.ApplySensitivityScaling is about to scale them.
@@ -963,19 +1040,25 @@ void PutBackMouseShare(uint8_t* base, uint32_t player_input) {
   const uint32_t input_class = LoadU32(base, player_input + kObjectClass);
   const uint32_t turn = player_input + static_cast<uint32_t>(CachedOffset(base, input_class, 9, "aTurn"));
   const uint32_t look_up = player_input + static_cast<uint32_t>(CachedOffset(base, input_class, 10, "aLookUp"));
-  float time_dilation = 1.0f;
   const uint32_t controller = LoadU32(base, player_input + kObjectOuter);
-  const int32_t world_at = CachedOffset(base, LoadU32(base, controller + kObjectClass), 7, "WorldInfo");
-  const uint32_t world = world_at >= 0 ? LoadU32(base, controller + static_cast<uint32_t>(world_at)) : 0;
-  if (world) {
-    const int32_t dilation_at = CachedOffset(base, LoadU32(base, world + kObjectClass), 24, "TimeDilation");
-    const float value = dilation_at >= 0 ? LoadF32(base, world + static_cast<uint32_t>(dilation_at)) : 1.0f;
-    if (value > 0.0f) time_dilation = value;
+  const float time_dilation = TimeDilationOf(base, controller);
+  // While roadie running the mouse turns slower, and never faster sideways than mnk_run_turn_limit
+  // times a full A or D steer (with the stick's own steer, if any): what goes beyond is dropped, so
+  // a flick cannot turn round.
+  const float run = share.running ? static_cast<float>(REXCVAR_GET(mnk_run_sensitivity)) : 1.0f;
+  float turn_value = LoadF32(base, turn) + share.yaw * run * time_dilation;
+  if (share.running) {
+    const float limit = std::max(share.steer_cap * share.multiplier * static_cast<float>(REXCVAR_GET(mnk_run_turn_limit)),
+                                 std::fabs(LoadF32(base, turn)));
+    if (std::fabs(turn_value) > limit) {
+      turn_value = std::copysign(limit, turn_value);
+      share.carry_yaw = 0.0f;
+    }
   }
   // UpdateRotation turns aTurn and aLookUp into the int DeltaRot, dropping the fraction: kept for
   // the next frame.
-  const float yaw = LoadF32(base, turn) + share.yaw * time_dilation + share.carry_yaw;
-  const float pitch = LoadF32(base, look_up) + share.pitch * time_dilation + share.carry_pitch;
+  const float yaw = turn_value + share.carry_yaw;
+  const float pitch = LoadF32(base, look_up) + share.pitch * run * time_dilation + share.carry_pitch;
   share.carry_yaw = yaw - std::trunc(yaw);
   share.carry_pitch = pitch - std::trunc(pitch);
   StoreU32(base, turn, FloatBits(yaw));
@@ -1928,11 +2011,16 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   // Before it runs: it reads aMouseX and aMouseY.
   if (function && IsEnginePlayerInput(base, function)) {
     const uint32_t player_input = ctx.r3.u32;
+    const int32_t delta_time_at = ParamOffset(base, function, "DeltaTime");
+    const float delta_time =
+        delta_time_at >= 0
+            ? LoadF32(base, LoadU32(base, ctx.r4.u32 + kFrameLocals) + static_cast<uint32_t>(delta_time_at))
+            : 0.0f;
     ApplyMouseLookFor(base, player_input);
     __imp__sub_822DF9E0(ctx, base);
     // After it: it has scaled the look input by the field of view and added the mouse to it.
     CompensateFieldOfView(base, player_input);
-    RecordMouseShare(base, player_input);
+    RecordMouseShare(base, player_input, delta_time);
     return;
   }
   // The mouse's share of the look input is kept out of what the game does to it for the stick

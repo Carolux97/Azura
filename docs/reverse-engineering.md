@@ -948,4 +948,16 @@ the mouse. For a player on the keyboard and mouse it gives `ViewAdhesion`'s out 
 values they came in with and zeroes the weapon's `AimAssistScale` and
 `AimAssistScaleWhileTargeting` while `GetAdjustedAimFor` runs. A player on a controller keeps
 both.
+While roadie running (`GearPawn.SpecialMove` 4, the value `AutoPitchCentering` tests with
+`IsDoingSpecialMove`), `GSM_RoadieRun.PreProcessInput` (called from `GearPlayerInput.PreProcessInput`
+through `GearPawn.SpecialMoves[SpecialMove]`) sets `aBaseY` to 1, replaces `aTurn` with
+`aStrafe * SteeringPct` (0 while `bDisableSteering`, at the start of the run) and zeroes
+`aStrafe` (**verified**, `script_dump_code` of `GSM_RoadieRun`): the right stick does not turn
+sideways, the left one steers, and `aLookUp` is left alone. The runtime multiplies the mouse's
+share by `mnk_run_sensitivity` (1, no change, by default) then, and caps the sideways turn, with the
+stick's steer, at what a full steer gives that frame (`SteeringPct * 100 * DeltaTime *
+LookRightScale * FOVScale`, over the `field_of_view` compensation, times the profile
+multiplier) times `mnk_run_turn_limit` (2 by default), dropping the rest: the mouse steers better
+than A or D, but a flick cannot turn round. `SteeringPct` is used while `bDisableSteering` too, so
+the mouse is not locked at the start of the run.
 
