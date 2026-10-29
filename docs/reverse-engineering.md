@@ -907,3 +907,45 @@ are always zero.
 The player a `PlayerInput` belongs to is its outer `PlayerController`'s `Player` (a `LocalPlayer`),
 whose `ControllerId` is the guest user index.
 
+### What the game does to the mouse after `aMouseX`
+
+Read from the bytecode of `script_dump_code` (`GearPC`, `GearPlayerInput`, `PlayerInput`,
+`PlayerController`; **verified** as listings, the effects marked *inferred* are read from the
+order of the listing, not traced):
+
+- `PlayerInput.PlayerInput` runs `SmoothMouse` on both mouse axes when `bEnableMouseSmoothing`
+  (a bool of `PlayerInput`) is set, then adds them to `aTurn`/`aLookUp` and flips those with
+  `bInvertTurn` and `bInvertMouse`. With `bStrafe` the mouse's x goes to `aStrafe`.
+  `bLockTurnUntilRelease` zeroes `aTurn` while `RawJoyLookRight` is held, and `IsLookInputIgnored`
+  (`PlayerController.bIgnoreLookInput` > 0) zeroes both.
+- `GearPlayerInput.PlayerInput` then runs `AutoPitchCentering` and `IsIdle`, which read `aLookUp`
+  and the mouse axes, then `GearPC.ApplySensitivityScaling`: `aTurn` and `aLookUp` times
+  `GetSensitivityMultiplier()`, the profile's look, aim or zoom sensitivity
+  (`RotationSensitivity*`, `TargettingRotationSensitivity*`, `ZoomRotationSensitivity*`), or
+  `GetSensitivityMultiplierForConfig(0)` during some special moves. Then `aLookUp` times
+  `LookPitchSensivityRatio` when `bNewInput`.
+- `GearPC.UpdateRotation` copies `aTurn` and `aLookUp` into the int `DeltaRot` (the fraction of a
+  rotator unit is dropped), divides it by `WorldInfo.TimeDilation` when that is not 1, calls
+  `ApplyAdhesion` and then `ProcessViewRotation` (`LimitViewRotation`, the camera's and the pawn's
+  own).
+- `GearPC.ApplyAdhesion` calls `GearPlayerInput.ViewAdhesion(DeltaTime, W, out_YawRot,
+  out_PitchRot)`, the view adhesion of the aim assist: it turns the view towards the target it
+  finds (`GetFrictionAdhesionTarget`) while the player turns. Forced and melee adhesion are its
+  other paths.
+- `GearPlayerInput.ViewFriction` slows the turn near a target. It runs in `PreProcessInput`, before
+  the mouse axes are added, so it never touches the mouse.
+- `GearPC.GetAdjustedAimFor(W, StartFireLoc)` bends a shot towards the target's aim attractors
+  by `AimAssistScale` (or `AimAssistScaleWhileTargeting`), the bullet aim assist (*inferred*:
+  those are properties of the weapon `W`, which was not dumped).
+
+The runtime keeps the mouse out of all of it (`MouseShare` in `script_hooks.cpp`): it clears
+`bEnableMouseSmoothing`, records the mouse's share of `aTurn` and `aLookUp` as the engine's
+`PlayerInput` returns, takes it out right after `ApplySensitivityScaling` (measuring the
+multiplier as the ratio that function scaled the look input by), so the pitch ratio is the
+stick's alone, and puts it back as `GearPlayerInput.PlayerInput` returns, times `TimeDilation`, with
+the fraction of a rotator unit the last frame dropped. `AutoPitchCentering` and `IsIdle` still see
+the mouse. For a player on the keyboard and mouse it gives `ViewAdhesion`'s out parameters back the
+values they came in with and zeroes the weapon's `AimAssistScale` and
+`AimAssistScaleWhileTargeting` while `GetAdjustedAimFor` runs. A player on a controller keeps
+both.
+
