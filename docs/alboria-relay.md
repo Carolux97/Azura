@@ -147,6 +147,7 @@ another game; the request then has to carry `title_id` too).
   "virtual_ip": "10.77.0.2",
   "host": false,
   "party_type": "joinable",
+  "session": null,
   "expires_in": 300
 }
 ```
@@ -154,12 +155,27 @@ another game; the request then has to carry `title_id` too).
 - `connection_id`: identifies this member on the relay, in every packet.
 - `party_type`: the room's, the same for every member: a member who joins by code shows the host's
   Joinable or Invite only in the game's party options and party panel.
+- `session`: the host's Xbox Live party session once the host has published it (section 4.5), as
+  base64; `null` before, and for rooms of System Link parties. Clients read every field of an
+  answer without assuming its type: a field may be `null`.
 - `key`: the member's key for the relay (section 5.2). It only travels inside HTTPS and is never
   written to logs or files.
 - `expires_in`: seconds to send the first packet to the relay. Once connected, the member stays
   while it keeps sending.
 
 The runtime keeps the ticket in memory only.
+
+### 4.5 Xbox Live parties (work in progress)
+
+With `alboria_live` (off by default while it is being built) the game believes the player is
+signed in to Xbox Live, and its own Joinable and Invite only parties are Alboria's: no System Link
+party underneath (section 6.1).
+
+`POST /v1/rooms/session` with `{ "code": "K7QM-2XPA", "session": "<60 bytes>" }` stores the
+session of the Live party the player hosts in the room: its XSESSION_INFO, that is the session ID
+(XNKID, 8 bytes), the host's XNADDR (36) and the key (XNKEY, 16). Members who join afterwards get it
+in the ticket's `session`. Answer: `{}`. Errors: `400 bad_request`, `403 not_host`,
+`404 room_not_found`.
 
 ## 5. Relay protocol (UDP)
 
@@ -271,6 +287,26 @@ it is in a room the game sees:
 
 Stream (TCP) sockets are not carried. Whether Gears 3 uses them for System Link has not been
 checked yet.
+
+### 6.1 Xbox Live parties (work in progress, `alboria_live`)
+
+- **Sign-in.** Player 1 is signed in to Live (`XamUserGetSigninState` 2, the Live enabled flag in
+  `XamUserGetSigninInfo`, an online XUID with the top bits `0x0009` and the offline XUID's low 48
+  bits when the title asks for it) and every privilege `XamUserCheckPrivilege` is asked for is
+  granted. The game then offers and creates Joinable and Invite only parties by itself, and private
+  Horde and Versus matches start (**verified** on 29 October 2026, one player).
+- **Hosting.** When the title creates a hosted Live session that uses the peer network
+  (`XSessionCreate` with the host, peer network and Live service flags), the runtime hosts a room
+  (Joinable when the session has public slots, Invite only when it only has private ones), fills
+  the session's XSESSION_INFO (an online peer XNKID, a key, and an XNADDR with the virtual address
+  10.77.0.1) and publishes it (section 4.5). The session's traffic goes through the room as System
+  Link's does.
+- **Joining by code.** The ticket brings the host's session. The runtime broadcasts
+  `XN_LIVE_INVITE_ACCEPTED` (`0x02000002`, user 0), and answers the title's
+  `XInviteGetAcceptedInfo` (XLIVEBASE message `0x58023`) with an XINVITE_INFO: the invitee's online
+  XUID, the title ID, the host's XSESSION_INFO and "from a game invite". The game then joins the
+  host's party as after accepting an invite on the console. Where the title expects the
+  XINVITE_INFO in that message is not checked yet: the runtime logs the message's buffer.
 
 ## 7. Limits
 
