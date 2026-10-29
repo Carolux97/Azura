@@ -20,6 +20,7 @@
 #include <rex/filesystem/vfs.h>
 #include <rex/logging.h>
 #include <rex/runtime.h>
+#include <rex/string.h>
 
 #include "coalesced.h"
 #include "pc_options.h"
@@ -361,6 +362,57 @@ void PatchManageInviteButtons(CoalescedSection& section, const std::string& lang
   }
 }
 
+// The party panel's title is "<PPTitlePartyType> <the party type>", in a box of fixed width. Some
+// translations do not fit: in Spanish "TIPO DE GRUPO: SOLO POR INVITACIÓN" overflows it, while "TIPO
+// DE GRUPO: INTERCONEXIÓN" fits. So in any language whose longest title is wider than
+// kPartyTitleWidth characters (CJK ones counting double), the prefix becomes a short word of ours,
+// or goes when even that does not fit; the party types keep the names the party options give them.
+constexpr size_t kPartyTitleWidth = 30;
+
+// The width of `text` in characters, the CJK ones counting double.
+size_t TitleWidth(const std::u16string& text) {
+  size_t width = 0;
+  for (const char16_t c : text) width += (c >= 0x1100 && c <= 0xFFDC) ? 2 : 1;
+  return width;
+}
+
+// "Party:" in each language of the game, short.
+const char* ShortPartyPrefix(const std::string& language) {
+  static const std::map<std::string, const char*> prefixes = {
+      {"int", "PARTY:"},   {"esn", "GRUPO:"},    {"esm", "GRUPO:"},     {"deu", "GRUPPE:"},
+      {"fra", "GROUPE :"}, {"ita", "GRUPPO:"},   {"ptb", "GRUPO:"},     {"pol", "GRUPA:"},
+      {"rus", "ГРУППА:"},  {"cze", "SKUPINA:"},  {"hun", "CSOPORT:"},   {"jpn", "グループ:"},
+      {"kor", "그룹:"},     {"chn", "隊伍："},
+  };
+  const auto found = prefixes.find(language);
+  return found != prefixes.end() ? found->second : "";
+}
+
+void PatchPartyPanelTitle(CoalescedSection& section, const std::string& language) {
+  CoalescedKey* prefix = nullptr;
+  size_t longest_type = 0;
+  for (auto& key : section.keys) {
+    const std::string name = key.name.Ascii();
+    if (name == "PPTitlePartyType") {
+      prefix = &key;
+    } else if (name == "PPTitleFriends" || name == "PPTitleInvite" || name == "PPTitleSystemLink" ||
+               name == "PPTitleNoParty") {
+      longest_type = std::max(longest_type, TitleWidth(key.value.text));
+    }
+  }
+  if (!prefix || longest_type == 0) return;
+  const std::u16string original = prefix->value.text;
+  if (TitleWidth(original) + 1 + longest_type <= kPartyTitleWidth) return;
+  std::string shorter = ShortPartyPrefix(language);
+  // A space when even the short word does not fit: the engine keeps the cooked text for an empty one.
+  if (shorter.empty() || TitleWidth(rex::string::to_utf16(shorter)) + 1 + longest_type > kPartyTitleWidth) {
+    shorter = " ";
+  }
+  prefix->value = CoalescedString::FromUtf8(shorter);
+  REXLOG_INFO("[Azura menu] Party panel title in {}: \"{}\" becomes \"{}\" so the longest fits", language,
+              rex::string::to_utf8(original), shorter);
+}
+
 int PatchMenus(Coalesced& coalesced) {
   const bool online = REXCVAR_GET(network_mode) == "online";
   int quit_option = -1;
@@ -395,6 +447,8 @@ int PatchMenus(Coalesced& coalesced) {
         PatchOnlineMessages(section, language);
       } else if (online && game_texts && section_name == "UIScene_WhatsUp") {
         PatchManageInviteButtons(section, language);
+      } else if ((game_texts || ui_texts) && section_name == "UIWidget_SmallPartyPanel") {
+        PatchPartyPanelTitle(section, language);
       } else if (ui_texts && section_name == "MessageBoxStrings") {
         PatchMessageBoxTexts(section, language);
       } else if (ui_texts && section_name == "MainMenu") {
