@@ -14,7 +14,8 @@
 // System Link browser opens on its own, which finds the host's party in the room and joins it
 // (script_hooks.cpp). A failure shows in the screen, which stays open to try again.
 //
-// Opened from Manage/Invite's RB (script::SetJoinByCodeHandler), in a party on Alboria: joining
+// Opened from Manage/Invite's RB (script::SetJoinByCodeHandler), in a party on Alboria, over
+// Manage/Invite: going back returns to it, and joining closes it before the browser opens. Joining
 // leaves the room the player was in.
 
 #pragma once
