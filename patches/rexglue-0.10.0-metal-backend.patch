@@ -581,7 +581,7 @@ index dd90ef7..6169777 100644
    std::atomic_flag bindings_setup_entered_ = ATOMIC_FLAG_INIT;
    std::vector<TextureBinding> texture_bindings_;
 diff --git a/include/rex/graphics/pipeline/shader/spirv_translator.h b/include/rex/graphics/pipeline/shader/spirv_translator.h
-index 3a9b681..fc77731 100644
+index 3a9b681..a3951c2 100644
 --- a/include/rex/graphics/pipeline/shader/spirv_translator.h
 +++ b/include/rex/graphics/pipeline/shader/spirv_translator.h
 @@ -94,6 +94,12 @@ class SpirvShaderTranslator : public ShaderTranslator {
@@ -625,7 +625,7 @@ index 3a9b681..fc77731 100644
  
    uint64_t GetDefaultVertexShaderModification(
        uint32_t dynamic_addressable_register_count,
-@@ -444,6 +458,11 @@ class SpirvShaderTranslator : public ShaderTranslator {
+@@ -444,6 +458,16 @@ class SpirvShaderTranslator : public ShaderTranslator {
        Modification::DepthStencilMode depth_stencil_mode =
            Modification::DepthStencilMode::kNoModifiers);
  
@@ -633,11 +633,16 @@ index 3a9b681..fc77731 100644
 +  // between two texels: towards the right/lower texel, or towards the left/upper one for the pixel
 +  // shaders known to expect it (shared by this translator and XSC).
 +  static float GetPointSamplingRoundingOffset(uint64_t ucode_data_hash);
++  // Whether the pixel shader makes the half-resolution depth the occlusion queries are tested
++  // against (the shaders GetPointSamplingRoundingOffset rounds to the left/upper texel): at a draw
++  // resolution scale it is evaluated at the guest pixel centers, so every host pixel of a guest
++  // pixel reads the guest block under it, as on the console.
++  static bool IsOcclusionDepthDownsample(uint64_t ucode_data_hash);
 +
    // Common functions useful not only for the translator, but also for EDRAM
    // emulation via conventional render targets.
  
-@@ -697,6 +716,11 @@ class SpirvShaderTranslator : public ShaderTranslator {
+@@ -697,6 +721,11 @@ class SpirvShaderTranslator : public ShaderTranslator {
    // set internally, optionally doing linear interpolation between the an
    // existing value and the new one (the result location may be the same as for
    // the first lerp endpoint, but not across signedness).
@@ -649,7 +654,7 @@ index 3a9b681..fc77731 100644
    void SampleTexture(spv::Builder::TextureParameters& texture_parameters,
                       spv::ImageOperandsMask image_operands_mask, spv::Id image_unsigned,
                       spv::Id image_signed, spv::Id sampler, spv::Id is_any_unsigned,
-@@ -762,8 +786,22 @@ class SpirvShaderTranslator : public ShaderTranslator {
+@@ -762,8 +791,22 @@ class SpirvShaderTranslator : public ShaderTranslator {
    // flow of the main function, and that there are no returns before either
    // (there's a single return from the shader).
    bool edram_fragment_shader_interlock_;
@@ -672,7 +677,7 @@ index 3a9b681..fc77731 100644
  
    // Is currently writing the empty depth-only pixel shader, such as for depth
    // and stencil testing with fragment shader interlock.
-@@ -1061,6 +1099,14 @@ class SpirvShaderTranslator : public ShaderTranslator {
+@@ -1061,6 +1104,14 @@ class SpirvShaderTranslator : public ShaderTranslator {
    std::unique_ptr<spv::Instruction> main_switch_op_;
    spv::Block* main_switch_merge_;
    std::vector<spv::Id> main_switch_next_pc_phi_operands_;
@@ -19920,7 +19925,7 @@ index d2ea876..6592e71 100644
      param_gen_y = builder_->createUnaryBuiltinCall(type_float_, ext_inst_glsl_std_450_,
                                                     GLSLstd450FAbs, param_gen_y);
 diff --git a/src/graphics/pipeline/shader/spirv_translator_fetch.cpp b/src/graphics/pipeline/shader/spirv_translator_fetch.cpp
-index 9ce3bb4..55f6706 100644
+index 9ce3bb4..e66bcd7 100644
 --- a/src/graphics/pipeline/shader/spirv_translator_fetch.cpp
 +++ b/src/graphics/pipeline/shader/spirv_translator_fetch.cpp
 @@ -19,6 +19,7 @@
@@ -20174,10 +20179,25 @@ index 9ce3bb4..55f6706 100644
  void SpirvShaderTranslator::SampleTexture(spv::Builder::TextureParameters& texture_parameters,
                                            spv::ImageOperandsMask image_operands_mask,
                                            spv::Id image_unsigned, spv::Id image_signed,
-@@ -2246,4 +2370,23 @@ spv::Id SpirvShaderTranslator::QueryTextureLod(spv::Builder::TextureParameters&
+@@ -2246,4 +2370,35 @@ spv::Id SpirvShaderTranslator::QueryTextureLod(spv::Builder::TextureParameters&
    return if_signed.createMergePhi(lod_signed, lod_unsigned);
  }
  
++namespace {
++// The shaders making the half-resolution depth of the occlusion queries (see
++// GetPointSamplingRoundingOffset).
++constexpr uint64_t kOcclusionDepthDownsampleShaders[] = {0x9E098197F6FAC270ull};
++}  // namespace
++
++bool SpirvShaderTranslator::IsOcclusionDepthDownsample(uint64_t ucode_data_hash) {
++  for (uint64_t hash : kOcclusionDepthDownsampleShaders) {
++    if (hash == ucode_data_hash) {
++      return true;
++    }
++  }
++  return false;
++}
++
 +float SpirvShaderTranslator::GetPointSamplingRoundingOffset(uint64_t ucode_data_hash) {
 +  // Gears of War 3 (4D5308AB) makes the half-resolution depth its occlusion queries are tested
 +  // against with this shader: it point-samples the scene depth with offsets (0,0), (1,0), (0,1)
@@ -20188,11 +20208,8 @@ index 9ce3bb4..55f6706 100644
 +  // the block by a texel, so flat objects on distant floors fail their own occlusion query every
 +  // other frame and flicker. Public documentation of the Xenos does not say how it rounds there
 +  // (AMD's R600 family rounds point sampling coordinates to 6 fractional bits by default).
-+  constexpr uint64_t kRoundLeftUpper[] = {0x9E098197F6FAC270ull};
-+  for (uint64_t hash : kRoundLeftUpper) {
-+    if (hash == ucode_data_hash) {
-+      return -1.5f / 1024.0f;
-+    }
++  if (IsOcclusionDepthDownsample(ucode_data_hash)) {
++    return -1.5f / 1024.0f;
 +  }
 +  return 1.5f / 1024.0f;
 +}
@@ -22800,7 +22817,7 @@ index 17a847c..af67e08 100644
          auto& args = *reinterpret_cast<const ArgsVkResetQueryPool*>(stream);
          dfn.vkCmdResetQueryPool(command_buffer, args.query_pool, args.first_query,
 diff --git a/src/graphics/vulkan/pipeline_cache.cpp b/src/graphics/vulkan/pipeline_cache.cpp
-index 4e7ad78..ddb38b5 100644
+index 4e7ad78..618cfd8 100644
 --- a/src/graphics/vulkan/pipeline_cache.cpp
 +++ b/src/graphics/vulkan/pipeline_cache.cpp
 @@ -12,6 +12,7 @@
@@ -23028,17 +23045,23 @@ index 4e7ad78..ddb38b5 100644
    shader_translator_.reset();
  }
  
-@@ -995,6 +1046,9 @@ SpirvShaderTranslator::Modification VulkanPipelineCache::GetCurrentPixelShaderMo
+@@ -995,6 +1046,15 @@ SpirvShaderTranslator::Modification VulkanPipelineCache::GetCurrentPixelShaderMo
    modification.pixel.sample_space_y_log2 =
        render_target_cache_.GetSampleSpaceYLog2(guest_msaa_samples);
  
-+  // Draws computing data at a draw resolution scale are evaluated at the guest pixel centers.
-+  modification.pixel.guest_pixel_center = uint32_t(render_target_cache_.IsCurrentDrawData());
++  // Draws computing data at a draw resolution scale are evaluated at the guest pixel centers, and
++  // so is the half-resolution depth of the occlusion queries: a host pixel of a half-resolution
++  // guest pixel would otherwise read the 2x2 guest texels shifted by a texel when its own center
++  // falls past the guest one, and flat objects on distant floors would fail their own queries
++  // every other frame.
++  modification.pixel.guest_pixel_center =
++      uint32_t(render_target_cache_.IsCurrentDrawData() ||
++               SpirvShaderTranslator::IsOcclusionDepthDownsample(shader.ucode_data_hash()));
 +
    if (render_target_cache_.GetPath() == RenderTargetCache::Path::kHostRenderTargets) {
      using DepthStencilMode = SpirvShaderTranslator::Modification::DepthStencilMode;
      if (render_target_cache_.depth_float24_convert_in_pixel_shader() &&
-@@ -1064,9 +1118,14 @@ bool VulkanPipelineCache::ConfigurePipeline(
+@@ -1064,9 +1124,14 @@ bool VulkanPipelineCache::ConfigurePipeline(
  #endif  // XE_GPU_FINE_GRAINED_DRAW_SCOPES
  
    // Ensure shaders are translated - needed now for GetCurrentStateDescription.
@@ -23055,7 +23078,7 @@ index 4e7ad78..ddb38b5 100644
    if (shader_storage_file_ &&
        vertex_shader->shader().ucode_storage_index() != shader_storage_index_) {
      vertex_shader->shader().set_ucode_storage_index(shader_storage_index_);
-@@ -1119,8 +1178,8 @@ bool VulkanPipelineCache::ConfigurePipeline(
+@@ -1119,8 +1184,8 @@ bool VulkanPipelineCache::ConfigurePipeline(
      }
    }
  
@@ -23066,7 +23089,7 @@ index 4e7ad78..ddb38b5 100644
    uint8_t async_priority = pipeline_util::kPriorityLowest;
    if (use_async) {
      uint32_t bound_rts =
-@@ -1136,6 +1195,47 @@ bool VulkanPipelineCache::ConfigurePipeline(
+@@ -1136,6 +1201,47 @@ bool VulkanPipelineCache::ConfigurePipeline(
    auto it = pipelines_.find(description);
    if (it != pipelines_.end()) {
      VkPipeline found_pipeline = it->second.pipeline.load(std::memory_order_acquire);
@@ -23114,7 +23137,7 @@ index 4e7ad78..ddb38b5 100644
      if (found_pipeline == VK_NULL_HANDLE) {
        PipelineCreationArguments creation_arguments;
        if (!TryGetPipelineCreationArgumentsForDescription(description, &*it, creation_arguments) ||
-@@ -1166,22 +1266,22 @@ bool VulkanPipelineCache::ConfigurePipeline(
+@@ -1166,22 +1272,22 @@ bool VulkanPipelineCache::ConfigurePipeline(
  
    bool queued_async_creation = false;
    if (use_async) {
@@ -23151,7 +23174,7 @@ index 4e7ad78..ddb38b5 100644
    }
  
    if (!queued_async_creation && !EnsurePipelineCreated(creation_arguments_real)) {
-@@ -1210,7 +1310,9 @@ bool VulkanPipelineCache::ConfigurePipeline(
+@@ -1210,7 +1316,9 @@ bool VulkanPipelineCache::ConfigurePipeline(
    if (pipeline_handle_out) {
      *pipeline_handle_out = &pipeline.second;
    }
@@ -23162,7 +23185,7 @@ index 4e7ad78..ddb38b5 100644
  }
  
  bool VulkanPipelineCache::IsCreatingPipelines() const {
-@@ -1244,13 +1346,22 @@ bool VulkanPipelineCache::TranslateAnalyzedShader(SpirvShaderTranslator& transla
+@@ -1244,13 +1352,22 @@ bool VulkanPipelineCache::TranslateAnalyzedShader(SpirvShaderTranslator& transla
                                                    VulkanShader::VulkanTranslation& translation) {
    VulkanShader& shader = static_cast<VulkanShader&>(translation.shader());
  
@@ -23188,7 +23211,7 @@ index 4e7ad78..ddb38b5 100644
      return false;
    }
  
-@@ -3026,6 +3137,34 @@ bool VulkanPipelineCache::EnsurePipelineCreated(const PipelineCreationArguments&
+@@ -3026,6 +3143,34 @@ bool VulkanPipelineCache::EnsurePipelineCreated(const PipelineCreationArguments&
        return true;
      }
    }
@@ -23223,7 +23246,7 @@ index 4e7ad78..ddb38b5 100644
  
    // This function preferably should validate the description to prevent
    // unsupported behavior that may be dangerous/crashing because pipelines can
-@@ -3488,8 +3627,11 @@ bool VulkanPipelineCache::EnsurePipelineCreated(const PipelineCreationArguments&
+@@ -3488,8 +3633,11 @@ bool VulkanPipelineCache::EnsurePipelineCreated(const PipelineCreationArguments&
    const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
    const VkDevice device = vulkan_device->device();
    VkPipeline pipeline;
@@ -23235,7 +23258,7 @@ index 4e7ad78..ddb38b5 100644
    if (create_result != VK_SUCCESS) {
      uint64_t ps_hash = creation_arguments.pixel_shader
                             ? creation_arguments.pixel_shader->shader().ucode_data_hash()
-@@ -3546,20 +3688,7 @@ void VulkanPipelineCache::CreationThread(size_t thread_index) {
+@@ -3546,20 +3694,7 @@ void VulkanPipelineCache::CreationThread(size_t thread_index) {
        ++creation_threads_busy_;
      }
  
@@ -23257,7 +23280,7 @@ index 4e7ad78..ddb38b5 100644
  
      {
        std::lock_guard<std::mutex> lock(creation_request_lock_);
-@@ -3568,30 +3697,24 @@ void VulkanPipelineCache::CreationThread(size_t thread_index) {
+@@ -3568,30 +3703,24 @@ void VulkanPipelineCache::CreationThread(size_t thread_index) {
    }
  }
  
