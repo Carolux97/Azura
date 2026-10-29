@@ -39,9 +39,24 @@ struct Texts {
   const char* assign;
 };
 
-// Fonts carry Latin-1 only, so the languages written in other scripts use the English texts.
+// The Xbox 360 language IDs; the fonts draw Cyrillic and, for those languages, Japanese, Korean and
+// traditional Chinese behind Barlow (OnConfigureFonts in azura_app.h).
 Texts LocalizedTexts(uint32_t language) {
   switch (language) {
+    case 2:  // Japanese
+      return {"コントローラーの接続が切れました", "プレイヤー %d", "コントローラーを再接続するか、別のコントローラーで",
+              "ボタンを押して使用してください。", "コントローラーが接続されました",
+              "オプション > ローカル協力プレイでプレイヤーに割り当ててください。"};
+    case 7:  // Korean
+      return {"컨트롤러 연결 끊김", "플레이어 %d", "컨트롤러를 다시 연결하거나 다른 컨트롤러에서",
+              "버튼을 눌러 사용하세요.", "컨트롤러 연결됨", "옵션 > 로컬 협동에서 플레이어에게 할당하세요."};
+    case 8:  // Traditional Chinese
+      return {"控制器已中斷連線", "玩家 %d", "請重新連接控制器，或在另一個控制器上按下", "以使用該控制器。",
+              "控制器已連線", "請在「選項 > 本機合作」中將它指派給玩家。"};
+    case 12:  // Russian
+      return {"КОНТРОЛЛЕР ОТКЛЮЧЁН", "ИГРОК %d", "Подключите контроллер снова или нажмите",
+              "на другом контроллере, чтобы использовать его.", "КОНТРОЛЛЕР ПОДКЛЮЧЁН",
+              "Назначьте его игроку в меню Параметры > Локальный кооператив."};
     case 3:  // German
       return {"CONTROLLER GETRENNT", "SPIELER %d", "Verbinde den Controller erneut oder drücke",
               "auf einem anderen Controller, um ihn zu verwenden.", "CONTROLLER VERBUNDEN",

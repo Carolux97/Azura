@@ -11,6 +11,8 @@ that work.
 | `patches/rexglue-0.10.0*.patch` | Changes to the [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk), Copyright (c) 2026 Tom Clay, with portions derived from [Xenia](https://xenia.jp), Copyright (c) 2022 Ben Vanik and Xenia project contributors | BSD 3-Clause (the SDK's license) |
 | `patches/moltenvk-*.patch` | Changes to [MoltenVK](https://github.com/KhronosGroup/MoltenVK), Copyright The Brenwill Workshop Ltd. and contributors | Apache License 2.0 |
 | `runtime/assets/fonts/Barlow-*.ttf` | [Barlow](https://github.com/jpt/barlow), Copyright 2017 The Barlow Project Authors | SIL Open Font License 1.1, see [runtime/assets/fonts/Barlow-OFL.txt](runtime/assets/fonts/Barlow-OFL.txt) |
+| `runtime/assets/fonts/NotoSansCyrillic-*.ttf` | [Noto Sans](https://github.com/notofonts/latin-greek-cyrillic), Copyright 2022 The Noto Project Authors (Cyrillic subset made by `scripts/subset_fonts.py`) | SIL Open Font License 1.1, see [runtime/assets/fonts/NotoSans-OFL.txt](runtime/assets/fonts/NotoSans-OFL.txt) |
+| `runtime/assets/fonts/NotoSans{JP,KR,TC}-Medium.ttf` | [Noto Sans CJK](https://github.com/notofonts/noto-cjk), Copyright 2014-2021 Adobe (subsets made by `scripts/subset_fonts.py`) | SIL Open Font License 1.1, see [runtime/assets/fonts/NotoSansCJK-OFL.txt](runtime/assets/fonts/NotoSansCJK-OFL.txt) |
 | `tools/extract-xiso` | [extract-xiso](https://github.com/XboxDev/extract-xiso), Copyright (c) 2003 in <in@fishtank.com> | BSD-style, see [tools/LICENSE.TXT](tools/LICENSE.TXT) |
 
 ## Used by the runtime
@@ -28,6 +30,7 @@ the SDK bundles, each under its own license, which ships with the SDK's source t
 | FFmpeg (libavutil and libavcodec only, built without GPL parts) | LGPL 2.1 or later |
 | Dear ImGui, {fmt}, spdlog, toml++, inja, Vulkan Memory Allocator | MIT |
 | stb_truetype (Dear ImGui's `imstb_truetype.h`, also compiled into the runtime's button prompts) | MIT or public domain |
+| RenderDoc's in-application API header (`renderdoc/renderdoc_app.h`, Copyright (c) 2015-2016 Baldur Karlsson), in the SDK's headers and so in the player kit; RenderDoc itself is not included | MIT |
 | glslang, SPIRV-Headers, Vulkan Headers | Khronos and BSD/MIT-style licenses (see each one's license file) |
 | utfcpp, Catch2 | Boost Software License 1.0 |
 | Tracy | BSD 3-Clause |

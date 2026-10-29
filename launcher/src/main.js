@@ -1208,8 +1208,7 @@ const renderGraphics = () => {
   select.add(new Option(t("graphics.resolutionAuto", { size: resolutionLabel(resolveAutoScale()) }), "auto"));
   const scales = resolutionScalesFor(state.system?.os);
   for (const scale of scales) select.add(new Option(resolutionLabel(scale), resolutionValue(scale)));
-  // A resolution this platform does not offer (1920 × 1080 set on a Mac, settings moved to a PC)
-  // shows as Automatic; the runtime draws its whole part there.
+  // A resolution this platform does not offer shows as Automatic.
   const offered = scales.some((scale) => resolutionValue(scale) === state.renderResolution);
   select.value = offered ? state.renderResolution : "auto";
   document.getElementById("display-mode").value = state.fullscreen ? "fullscreen" : "windowed";

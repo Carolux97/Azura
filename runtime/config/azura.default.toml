@@ -135,10 +135,15 @@ mnk_sensitivity = 1.0
 # matching keybind below, so put the key you want shown first.
 controller_icons = "auto"
 
-# Mouse look while aiming and while zoomed in, as mnk_sensitivity is the rest of the time; moving
-# the mouse forward looks down with mnk_invert_y; mnk_mouse_acceleration from 0 (none) to 1.
+# Mouse look while aiming and while zoomed in, as mnk_sensitivity is the rest of the time;
+# mnk_run_sensitivity, the share of it while roadie running; moving the mouse forward looks down
+# with mnk_invert_y; mnk_mouse_acceleration from 0 (none) to 1.
 mnk_aim_sensitivity = 1.0
 mnk_zoom_sensitivity = 1.0
+mnk_run_sensitivity = 1.0
+# While roadie running, the mouse turns sideways at most this many times as fast as a full A or D
+# steer, so it cannot flick round.
+mnk_run_turn_limit = 2.0
 mnk_invert_y = false
 mnk_mouse_acceleration = 0.0
 # Aim with a press to start and another to stop; zoom while the bind is held (the game's own zoom

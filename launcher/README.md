@@ -256,10 +256,14 @@ version's notes. When it is merged, the Release workflow (`.github/workflows/rel
 version that is not released yet and:
 
 1. builds the player kits of that commit (the Runtime kit workflow);
-2. builds the launcher on macOS (the `.dmg`, and the `.app.tar.gz` the updater downloads) and on
-   Linux (the AppImage, which is both), each with its kit inside (`scripts/release-launcher.sh`);
-3. publishes both in one release, `launcher-v<version>`, and uploads the `latest.json` that lists
-   both platforms to `launcher-updates` (`scripts/publish-launcher.sh`).
+2. builds the launcher on macOS (the `.dmg`, and the `.app.tar.gz` the updater downloads), on
+   Linux (the AppImage, which is both) and on Windows (the `-setup.exe` installer, which is both),
+   each with its kit inside (`scripts/release-launcher.sh`);
+3. publishes them in one release, `launcher-v<version>`, together with
+   `Azura-Launcher_<version>_all-platforms.zip`, which holds the three platforms' installers, and
+   uploads the `latest.json` that lists the platforms to `launcher-updates`
+   (`scripts/publish-launcher.sh`). When a platform missing from a release is added later, the
+   archive is packed again with the installers already published and replaced.
 
 Other pushes to main do not start it. To check the whole pipeline without publishing, run
 the workflow by hand (Actions, Release, Run workflow) with "Publish" off; with it on, it publishes a
