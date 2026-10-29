@@ -1689,8 +1689,9 @@ extern "C" void sub_82319958(PPCContext& __restrict ctx, uint8_t* base) {
 
 // Players a room takes: the most a Versus private match has.
 constexpr int kOnlineRoomMembers = 10;
-// The party type the player chose for the online party (kFriendsOnlyType or kInviteRequiredType;
-// -1 none yet), which the party options and the party panel show while the room lasts.
+// The party type of the online party (kFriendsOnlyType or kInviteRequiredType; -1 none yet): the
+// one the player chose when hosting, or the room's when joined by code. The party options and the
+// party panel show it while the room lasts.
 std::atomic<int> g_online_party_type{-1};
 // Whether the room's code shows next to Manage/Invite's Current players heading (LB toggles it).
 std::atomic<bool> g_show_room_code{false};
@@ -1753,12 +1754,14 @@ bool ChooseOnlinePartyType(PPCContext& ctx, uint8_t* base, uint32_t dialog_item_
   }
   std::memset(base + g_transition_locals, 0, kTransitionLocalsSize);
   const auto status = alboria::GetStatus();
+  const int type = item == kJoinableItem ? kFriendsOnlyType : kInviteRequiredType;
   if (status.host && alboria::InRoom()) {
-    // Already hosting a room: Joinable and Invite only are the same party on Alboria.
+    // Already hosting a room: the party stays, and shows the type chosen now. The room keeps the
+    // type it was created with on Alboria, which members who join see.
+    g_online_party_type.store(type);
     RunInstead(ctx, base, close_options, g_transition_locals);
     return true;
   }
-  const int type = item == kJoinableItem ? kFriendsOnlyType : kInviteRequiredType;
   base[ctx.r3.u32 + kFrontEndPendingPartyType] = static_cast<uint8_t>(type);
   g_online_party_type.store(type);
   g_show_room_code.store(false);
@@ -1767,15 +1770,16 @@ bool ChooseOnlinePartyType(PPCContext& ctx, uint8_t* base, uint32_t dialog_item_
 }
 
 // Runs `function` (in `ctx`, about to run) seeing the chosen online party type where the party is
-// System Link, while the player hosts a room: the party options' BuildPartyOptions, which ticks the
-// party's type, and the party panel's UpdatePanelTitle, which names it. Both compare
+// System Link, while the player is in a room (hosting it, or joined by code): the party options'
+// BuildPartyOptions, which ticks the party's type, and the party panel's UpdatePanelTitle, which
+// names it. Both compare
 // PartyGRI.CurrPartyType with a byte constant for each type (docs/reverse-engineering.md, "Party
 // options"): for this call the System Link one can never match and the chosen type's one is
 // System Link's. Returns whether it ran.
 bool RunWithOnlinePartyType(PPCContext& ctx, uint8_t* base, uint32_t function) {
   namespace alboria = rex::system::xam::alboria;
   const int chosen = g_online_party_type.load();
-  if (chosen < 0 || !alboria::InRoom() || !alboria::GetStatus().host) return false;
+  if (chosen < 0 || !alboria::InRoom()) return false;
   const uint32_t code = LoadU32(base, function + kStructScript);
   const uint32_t size = LoadU32(base, function + kStructScript + 4);
   // Each `CurrPartyType == <byte>`, compared as integers: the property's 8-byte reference, the
@@ -2078,6 +2082,13 @@ void OpenSystemLinkBrowserForJoin(PPCContext& ctx, uint8_t* base) {
   const uint32_t front_end = g_front_end_scene.load(std::memory_order_relaxed);
   if (!front_end || !g_open_browser.exchange(false)) return;
   CloseManageInviteForJoin(ctx, base);
+  // The party joined by code is the host's room on Alboria: it shows the room's type (Joinable or
+  // Invite only), never System Link, which is the party underneath.
+  g_online_party_type.store(rex::system::xam::alboria::GetStatus().party_type ==
+                                    rex::system::xam::alboria::PartyType::kInviteOnly
+                                ? kInviteRequiredType
+                                : kFriendsOnlyType);
+  g_show_room_code.store(false);
   const uint32_t front_end_class = g_front_end_class.load(std::memory_order_relaxed);
   const uint32_t attempt =
       front_end_class ? FindClassFunction(base, front_end_class, "AttemptSystemLinkTransition") : 0;
@@ -2156,7 +2167,10 @@ bool CreateOnlineParty(PPCContext& ctx, uint8_t* base, uint32_t create_live_part
   }
   std::memset(base + g_system_link_party_locals, 0, kSystemLinkPartyLocalsSize);
   REXLOG_INFO("[Azura online] Hosting an online party on Alboria");
-  rex::system::xam::alboria::HostGame(rex::system::kernel_state()->title_id(), kOnlineRoomMembers);
+  rex::system::xam::alboria::HostGame(rex::system::kernel_state()->title_id(), kOnlineRoomMembers,
+                                      g_online_party_type.load() == kInviteRequiredType
+                                          ? rex::system::xam::alboria::PartyType::kInviteOnly
+                                          : rex::system::xam::alboria::PartyType::kJoinable);
   RunInstead(ctx, base, create_system_link_party, g_system_link_party_locals);
   return true;
 }

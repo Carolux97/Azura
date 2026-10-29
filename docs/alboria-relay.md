@@ -110,10 +110,13 @@ Errors: `400 bad_request`, `401 bad_signature`, `401 challenge_expired`, `403 ba
 `POST /v1/rooms`
 
 ```json
-{ "title_id": "4D5308AB", "max_members": 4 }
+{ "title_id": "4D5308AB", "max_members": 4, "party_type": "joinable" }
 ```
 
-`max_members` is 2 to 10. Answer: a ticket (section 4.4).
+`max_members` is 2 to 10. `party_type` is who may join, as the host chose it in the game's party
+options: `joinable` (anyone with the code) or `invite_only` (who the host invites; for now also with
+the code). It is `joinable` when missing, as the first clients send it. A room is never System Link,
+which is the local network. Answer: a ticket (section 4.4).
 
 ### 4.3 Join a game
 
@@ -138,11 +141,14 @@ another game; the request then has to carry `title_id` too).
   "key": "<32 bytes>",
   "virtual_ip": "10.77.0.2",
   "host": false,
+  "party_type": "joinable",
   "expires_in": 300
 }
 ```
 
 - `connection_id`: identifies this member on the relay, in every packet.
+- `party_type`: the room's, the same for every member: a member who joins by code shows the host's
+  Joinable or Invite only in the game's party options and party panel.
 - `key`: the member's key for the relay (section 5.2). It only travels inside HTTPS and is never
   written to logs or files.
 - `expires_in`: seconds to send the first packet to the relay. Once connected, the member stays
