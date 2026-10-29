@@ -283,16 +283,37 @@ class AzuraApp : public rex::ReXApp {
   // Barlow (installed in assets/fonts) for the shader compilation notice and the performance
   // overlay, rasterized large and drawn smaller so it stays sharp on high-DPI displays. ImGui's default font stays the first one, so
   // the SDK's own overlays are unchanged.
+  // Barlow only draws Latin scripts, so Noto is merged behind it: Cyrillic always, and the
+  // Japanese, Korean or traditional Chinese font when that is the player's language (each is
+  // several megabytes, and their Han characters differ in shape between the three).
   void OnConfigureFonts(ImFontAtlas* atlas) override {
-    auto load = [&](const char* name) -> ImFont* {
+    // `merge` adds the file's glyphs to the font added last instead of making a new font.
+    auto load = [&](const char* name, bool merge) -> ImFont* {
       std::filesystem::path path = exe_dir_ / "assets" / "fonts" / name;
       std::error_code error_code;
-      return std::filesystem::exists(path, error_code)
-                 ? atlas->AddFontFromFileTTF(path.string().c_str(), 48.0f)
-                 : nullptr;
+      if (!std::filesystem::exists(path, error_code)) {
+        return nullptr;
+      }
+      ImFontConfig config;
+      config.MergeMode = merge;
+      return atlas->AddFontFromFileTTF(path.string().c_str(), 48.0f, &config);
     };
-    title_font_ = load("Barlow-SemiBold.ttf");
-    body_font_ = load("Barlow-Medium.ttf");
+    const char* cjk = nullptr;
+    switch (REXCVAR_GET(user_language)) {
+      case 2: cjk = "NotoSansJP-Medium.ttf"; break;
+      case 7: cjk = "NotoSansKR-Medium.ttf"; break;
+      case 8: cjk = "NotoSansTC-Medium.ttf"; break;
+    }
+    auto load_with_fallbacks = [&](const char* barlow, const char* cyrillic) -> ImFont* {
+      ImFont* font = load(barlow, false);
+      if (font) {
+        load(cyrillic, true);
+        if (cjk) load(cjk, true);
+      }
+      return font;
+    };
+    title_font_ = load_with_fallbacks("Barlow-SemiBold.ttf", "NotoSansCyrillic-SemiBold.ttf");
+    body_font_ = load_with_fallbacks("Barlow-Medium.ttf", "NotoSansCyrillic-Medium.ttf");
   }
 
   // The notice for unlocked achievements, in place of the SDK's toast.

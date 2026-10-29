@@ -27,9 +27,18 @@ struct Texts {
   const char* progress;
 };
 
-// Fonts carry Latin-1 only, so the languages written in other scripts use the English texts.
+// The Xbox 360 language IDs; the fonts draw Cyrillic and, for those languages, Japanese, Korean and
+// traditional Chinese behind Barlow (OnConfigureFonts in azura_app.h).
 Texts LocalizedTexts(uint32_t language) {
   switch (language) {
+    case 2:  // Japanese
+      return {"シェーダーをコンパイル中", "グラフィックを準備しています (%d%%)"};
+    case 7:  // Korean
+      return {"셰이더 컴파일 중", "그래픽 준비 중 (%d%%)"};
+    case 8:  // Traditional Chinese
+      return {"正在編譯著色器", "正在準備圖形 (%d%%)"};
+    case 12:  // Russian
+      return {"КОМПИЛЯЦИЯ ШЕЙДЕРОВ", "Подготовка графики (%d %%)"};
     case 3:  // German
       return {"SHADER WERDEN KOMPILIERT", "Grafik wird vorbereitet (%d %%)"};
     case 4:  // French

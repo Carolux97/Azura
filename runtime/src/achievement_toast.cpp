@@ -29,10 +29,18 @@ constexpr auto kGap = std::chrono::milliseconds(500);
 // The gold of the launcher's accent colour.
 constexpr ImU32 Gold(int alpha) { return IM_COL32(255, 184, 28, alpha); }
 
-// "ACHIEVEMENT UNLOCKED" in each language of the Xbox 360 language IDs, for the languages the
-// Barlow fonts can draw. The others (Japanese, Korean, Chinese, Russian) use the English text.
+// "ACHIEVEMENT UNLOCKED" in each language of the Xbox 360 language IDs. Simplified Chinese (10)
+// has no font and uses the English text.
 const char* LocalizedHeading(uint32_t language) {
   switch (language) {
+    case 2:  // Japanese
+      return "実績のロックが解除されました";
+    case 7:  // Korean
+      return "도전 과제 잠금 해제";
+    case 8:  // Traditional Chinese
+      return "成就已解鎖";
+    case 12:  // Russian
+      return "ДОСТИЖЕНИЕ ПОЛУЧЕНО";
     case 3:  // German
       return "ERFOLG FREIGESCHALTET";
     case 4:  // French
