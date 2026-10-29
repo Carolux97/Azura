@@ -2035,10 +2035,16 @@ uint32_t JoinLocals(uint8_t* base) {
 }
 
 // RB in Manage/Invite (InviteLivePartyPlayers, in `ctx` about to run).
+// Manage/Invite while the Join by code screen is open over it, and its function that closes it: it
+// stays open under the screen, so going back returns to it, and closes once the code joins a room
+// (CloseManageInviteForJoin). 0 when it closed by itself in the meantime (its OnClose ran).
+std::atomic<uint32_t> g_manage_invite_scene{0};
+std::atomic<uint32_t> g_manage_invite_close_view{0};
+
 void OpenJoinByCode(PPCContext& ctx, uint8_t* base, uint32_t invite_live_party) {
-  const uint32_t close_view =
-      FindClassFunction(base, LoadU32(base, invite_live_party + kObjectOuter), "ActionScript_CloseView");
-  if (close_view && JoinLocals(base)) RunInstead(ctx, base, close_view, g_join_locals);
+  g_manage_invite_close_view.store(
+      FindClassFunction(base, LoadU32(base, invite_live_party + kObjectOuter), "ActionScript_CloseView"));
+  g_manage_invite_scene.store(ctx.r3.u32);
   std::function<void()> handler;
   {
     std::lock_guard lock(g_quit_mutex);
@@ -2048,11 +2054,30 @@ void OpenJoinByCode(PPCContext& ctx, uint8_t* base, uint32_t invite_live_party) 
   if (handler) handler();
 }
 
+// On a player input frame (`ctx`): closes Manage/Invite, left open under the Join by code screen,
+// before the System Link browser opens for the room the code joined. Only while it is still the
+// scene it was (its class is checked too, in case its object was reused).
+void CloseManageInviteForJoin(PPCContext& ctx, uint8_t* base) {
+  const uint32_t scene = g_manage_invite_scene.exchange(0);
+  const uint32_t close_view = g_manage_invite_close_view.load();
+  if (!scene || !close_view || !JoinLocals(base)) return;
+  if (ObjectName(base, LoadU32(base, scene + kObjectClass)) != "UIScene_WhatsUp") return;
+  const uint32_t frame = ctx.r4.u32;
+  const uint32_t own_object = LoadU32(base, frame + kFrameObject);
+  const uint64_t own_r3 = ctx.r3.u64;
+  StoreU32(base, frame + kFrameObject, scene);
+  ctx.r3.u64 = scene;
+  RunInstead(ctx, base, close_view, g_join_locals);
+  StoreU32(base, frame + kFrameObject, own_object);
+  ctx.r3.u64 = own_r3;
+}
+
 // On a player input frame (`ctx`, about to run PlayerInput): opens the System Link browser on the
 // front end scene when a join asked for it.
 void OpenSystemLinkBrowserForJoin(PPCContext& ctx, uint8_t* base) {
   const uint32_t front_end = g_front_end_scene.load(std::memory_order_relaxed);
   if (!front_end || !g_open_browser.exchange(false)) return;
+  CloseManageInviteForJoin(ctx, base);
   const uint32_t front_end_class = g_front_end_class.load(std::memory_order_relaxed);
   const uint32_t attempt =
       front_end_class ? FindClassFunction(base, front_end_class, "AttemptSystemLinkTransition") : 0;
@@ -2270,6 +2295,11 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   // binds it to a function of its own (the main menu's OptionsMenuClosed).
   if (Is(base, function, kOnClose) && ObjectName(base, LoadU32(base, function + kObjectOuter)) == "UIScene_Options") {
     g_options_open.store(false, std::memory_order_relaxed);
+  }
+  // Manage/Invite closed while the Join by code screen was open over it: nothing to close later.
+  if (Is(base, function, kOnClose)) {
+    uint32_t scene = ctx.r3.u32;
+    g_manage_invite_scene.compare_exchange_strong(scene, 0);
   }
   if ((Is(base, function, kWidgetInitialized) || Is(base, function, kFilterButtonInput)) &&
       ObjectName(base, LoadU32(base, function + kObjectOuter)) == "UIScene_FrontEnd") {
