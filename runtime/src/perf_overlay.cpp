@@ -27,9 +27,9 @@ REXCVAR_DEFINE_STRING(performance_overlay, "off", "Azura/Graphics",
                       "add the game's CPU and GPU use, or advanced to add its memory use, a graph of "
                       "frame times, the average frame rate and the 1% low");
 REXCVAR_DEFINE_BOOL(latency_overlay, false, "Network",
-                    "In an Alboria room, show the round trip to the other side (the host, or for the "
-                    "host the member furthest away) in the performance overlay's corner, and whether "
-                    "it is a direct connection or goes through the relay");
+                    "Show the latency in the performance overlay's corner: in an Alboria room a "
+                    "member's round trip to the host, direct or through the relay; 0 ms for the host, "
+                    "which runs the game, and for a game in no room");
 REXCVAR_DEFINE_STRING(performance_overlay_position, "top_right", "Azura/Graphics",
                       "Corner of the performance overlay: top_left, top_right, bottom_left or bottom_right");
 
@@ -177,11 +177,11 @@ void PerfOverlay::OnDraw(ImGuiIO& io) {
   }
   g_top_left_height = 0.0f;
   g_top_right_height = 0.0f;
-  // The latency, in a room with someone else once measured.
+  // The latency (rex/system/xam/alboria.h): a member's round trip to the host, 0 for the host and
+  // for a game in no room.
+  const bool ping = REXCVAR_GET(latency_overlay);
   const rex::system::xam::alboria::Latency latency =
-      REXCVAR_GET(latency_overlay) ? rex::system::xam::alboria::GetLatency()
-                                   : rex::system::xam::alboria::Latency{};
-  const bool ping = latency.known;
+      ping ? rex::system::xam::alboria::GetLatency() : rex::system::xam::alboria::Latency{};
   if (!reading) {
     was_reading_ = false;
   } else if (!was_reading_) {
@@ -272,13 +272,15 @@ void PerfOverlay::OnDraw(ImGuiIO& io) {
     return DrawSpacedText(nullptr, text_font, label_size, ImVec2(), 0, text, label_spacing);
   };
 
-  // The latency row: "PING 18 ms DIRECT" (or RELAY), the time green, imulsion gold or red as it
-  // grows. It never shows an address.
+  // The latency row: "PING 18 ms DIRECT" (or RELAY) for a member, "PING 0 ms HOST" for the host,
+  // "PING 0 ms" in no room; the time green, imulsion gold or red as it grows. It never shows an
+  // address.
   char ping_ms[16] = "";
-  if (ping) std::snprintf(ping_ms, sizeof(ping_ms), "%d ms", latency.milliseconds);
-  const char* ping_path = latency.direct ? "DIRECT" : "RELAY";
-  const float ping_row_width =
-      ping ? spaced_width("PING") + gap + text_width(detail_size, ping_ms) + gap + spaced_width(ping_path) : 0.0f;
+  if (ping) std::snprintf(ping_ms, sizeof(ping_ms), "%d ms", latency.known ? latency.milliseconds : 0);
+  const char* ping_path = latency.host ? "HOST" : latency.known ? (latency.direct ? "DIRECT" : "RELAY") : "";
+  const float ping_row_width = ping ? spaced_width("PING") + gap + text_width(detail_size, ping_ms) +
+                                          (ping_path[0] ? gap + spaced_width(ping_path) : 0.0f)
+                                    : 0.0f;
   ImU32 ping_color = coop_ui::Ok(255);
   if (latency.milliseconds >= 120) {
     ping_color = coop_ui::ErrorText(255);
@@ -292,8 +294,10 @@ void PerfOverlay::OnDraw(ImGuiIO& io) {
                                          coop_ui::TextFaint(255), "PING", label_spacing) + gap;
     draw_list->AddText(text_font, detail_size, ImVec2(at, row_top), ping_color, ping_ms);
     at += text_width(detail_size, ping_ms) + gap;
-    DrawSpacedText(draw_list, text_font, label_size, ImVec2(at, row_baseline - label_size * 0.80f),
-                   coop_ui::TextDim(255), ping_path, label_spacing);
+    if (ping_path[0]) {
+      DrawSpacedText(draw_list, text_font, label_size, ImVec2(at, row_baseline - label_size * 0.80f),
+                     coop_ui::TextDim(255), ping_path, label_spacing);
+    }
   };
   const std::string corner = REXCVAR_GET(performance_overlay_position);
   const bool right = corner != "top_left" && corner != "bottom_left";
