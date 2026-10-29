@@ -17,6 +17,9 @@ void SetRestartHandler(std::function<void()> handler);
 // What choosing Local co-op in the Options runs (from the game's script thread): it opens
 // the Local co-op menu. nullptr to stop.
 void SetLocalCoopHandler(std::function<void()> handler);
+// What choosing Connection in the Options runs (from the game's script thread): it opens the
+// Alboria menu (connection_menu.h). nullptr to stop.
+void SetConnectionHandler(std::function<void()> handler);
 
 // The two controls menus (controls_menu.h), opened from the Options' Keyboard and mouse and
 // Controller categories.

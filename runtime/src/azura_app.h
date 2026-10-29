@@ -35,6 +35,7 @@
 #include "input/scripted_pad.h"
 #include "controls_menu.h"
 #include "local_coop_menu.h"
+#include "connection_menu.h"
 #include "local_coop_notices.h"
 #include "gpu_list.h"
 #include "hle_gfx/frame_capture.h"
@@ -264,6 +265,17 @@ class AzuraApp : public rex::ReXApp {
         }
       });
     });
+    // Choosing Connection in the Options opens the Alboria menu, on the UI thread.
+    azura::script::SetConnectionHandler([this] {
+      app_context().CallInUIThread([this] {
+        auto* input = runtime() ? static_cast<rex::input::InputSystem*>(runtime()->input_system()) : nullptr;
+        if (!shutting_down_ && dialog_drawer_ && input && !connection_menu_) {
+          connection_menu_ = new azura::ConnectionMenu(dialog_drawer_, input, azura::input::InstalledPlayerAssignment(),
+                                                       REXCVAR_GET(user_language), title_font_, body_font_,
+                                                       &connection_menu_);
+        }
+      });
+    });
     // In the game's menus (not the title screen) the keyboard's Return and Escape accept and go back,
     // in every scene: the Options, their message boxes, the multiplayer preferences, the pause menu.
     rex::input::mnk::SetMenuKeysQuery(
@@ -371,6 +383,7 @@ class AzuraApp : public rex::ReXApp {
     azura::menu::SetSharpnessChangedHandler(nullptr);
     azura::menu::SetUpscalingSupport(nullptr);
     azura::script::SetLocalCoopHandler(nullptr);
+    azura::script::SetConnectionHandler(nullptr);
     azura::script::SetControlsMenuHandler(nullptr);
     azura::script::SetJoinByCodeHandler(nullptr);
     rex::input::mnk::SetMenuKeysQuery(nullptr);
@@ -387,6 +400,8 @@ class AzuraApp : public rex::ReXApp {
     join_by_code_menu_ = nullptr;
     delete local_coop_menu_;
     local_coop_menu_ = nullptr;
+    delete connection_menu_;
+    connection_menu_ = nullptr;
     delete controls_menu_;
     controls_menu_ = nullptr;
     delete coop_notices_;
@@ -439,6 +454,7 @@ class AzuraApp : public rex::ReXApp {
   // The Local co-op menu while it is open; deletes itself when it closes, clearing this pointer.
   // Accessed on the UI thread only.
   azura::LocalCoopMenu* local_coop_menu_ = nullptr;
+  azura::ConnectionMenu* connection_menu_ = nullptr;
   azura::ControlsMenu* controls_menu_ = nullptr;
   // The local co-op notices, from the game's start to its end. Accessed on the UI thread only.
   azura::LocalCoopNotices* coop_notices_ = nullptr;

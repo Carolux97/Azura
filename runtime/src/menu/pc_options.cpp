@@ -1199,6 +1199,31 @@ void PatchMessageBoxTexts(CoalescedSection& section, const std::string& language
   SetKey(section, kRestartMessageKey, message);
 }
 
+namespace {
+
+// The Connection category's title and tooltip, by the extension of the localization files.
+std::pair<const char*, const char*> ConnectionCategoryTexts(const std::string& language) {
+  static const std::map<std::string, std::pair<const char*, const char*>> texts = {
+      {"int", {"CONNECTION", "Your Alboria account and how you connect to online games."}},
+      {"esn", {"CONEXIÓN", "Su cuenta de Alboria y cómo se conecta a las partidas online."}},
+      {"deu", {"VERBINDUNG", "Ihr Alboria-Konto und wie Sie sich mit Online-Spielen verbinden."}},
+      {"ita", {"CONNESSIONE", "Il tuo account Alboria e come ti colleghi alle partite online."}},
+      {"jpn", {"接続", "Alboria アカウントとオンラインゲームへの接続方法。"}},
+      {"fra", {"CONNEXION", "Votre compte Alboria et votre façon de rejoindre les parties en ligne."}},
+      {"ptb", {"CONEXÃO", "Sua conta Alboria e como você se conecta às partidas online."}},
+      {"pol", {"POŁĄCZENIE", "Twoje konto Alboria i sposób łączenia z grami online."}},
+      {"rus", {"ПОДКЛЮЧЕНИЕ", "Ваша учетная запись Alboria и способ подключения к играм по сети."}},
+      {"cze", {"PŘIPOJENÍ", "Váš účet Alboria a způsob připojení k online hrám."}},
+      {"hun", {"KAPCSOLAT", "Az Alboria-fiókod és az online játékokhoz való kapcsolódás módja."}},
+      {"chn", {"連線", "您的 Alboria 帳號以及連線到線上遊戲的方式。"}},
+      {"kor", {"연결", "Alboria 계정과 온라인 게임 연결 방식."}},
+  };
+  const auto found = texts.find(language);
+  return found != texts.end() ? found->second : texts.at("int");
+}
+
+}  // namespace
+
 void PatchOptionsMenu(CoalescedSection& section, const std::string& language) {
   const Texts& texts = TextsFor(language);
 
@@ -1266,6 +1291,31 @@ void PatchOptionsMenu(CoalescedSection& section, const std::string& language) {
          std::string("(CategoryDescription=\"") + local_coop_title + "\",CategoryTooltip=\"" + local_coop_tooltip +
              "\",OnSelectedCallback=\"Callback_SelectStorageLocation\",bIsGlobalValue=false,CategoryOptions=(),"
              "MenuButtons=((ButtonDescription=\"" + back + "\",ButtonType=1,ButtonHandler=OBH_MAX)))");
+
+  // Connection, in place of the credits: choosing it runs Callback_Credits as the credits did, and
+  // script_hooks.cpp opens the Alboria menu there. The credits keep their own title, now on a Y
+  // button of the list of categories, which script_hooks.cpp turns into the credits. The game's
+  // OMI_MAX entry holds that list's buttons; the new one is a new element of its array, so every
+  // field is written.
+  {
+    const auto credits_title = Quoted(CategoryText(section, kConnectionCategory), u"CategoryDescription");
+    const std::string list = Utf8(CategoryText(section, kCategoryListButtons));
+    const size_t buttons_end = ArrayEnd(list, "MenuButtons=(");
+    const auto& [connection_title, connection_tooltip] = ConnectionCategoryTexts(language);
+    SetKey(section, "OptionCategories[" + std::to_string(kConnectionCategory) + "]",
+           std::string("(CategoryDescription=\"") + connection_title + "\",CategoryTooltip=\"" + connection_tooltip +
+               "\",OnSelectedCallback=\"Callback_Credits\",bIsGlobalValue=false,CategoryOptions=(),"
+               "MenuButtons=((ButtonDescription=\"" + back + "\",ButtonType=1,ButtonHandler=OBH_MAX)))");
+    if (!credits_title.empty() && buttons_end != std::string::npos) {
+      SetKey(section, "OptionCategories[" + std::to_string(kCategoryListButtons) + "]",
+             list.substr(0, buttons_end) + ",(ButtonDescription=\"" + credits_title[0] +
+                 "\",ButtonType=3,ButtonHandler=OBH_MAX)" + list.substr(buttons_end));
+    } else {
+      REXLOG_WARN("[Azura options] The credits or the list of categories are not as expected in {}: the "
+                  "credits button is left out",
+                  language);
+    }
+  }
 
   // Keyboard and mouse, in place of the storage location (a device picker without rows): choosing
   // it runs Callback_ResetTutorials, where script_hooks.cpp opens the keyboard and mouse's controls
