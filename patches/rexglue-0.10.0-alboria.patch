@@ -1,9 +1,9 @@
 diff --git a/include/rex/system/xam/alboria.h b/include/rex/system/xam/alboria.h
 new file mode 100644
-index 0000000..af47025
+index 0000000..3477d5a
 --- /dev/null
 +++ b/include/rex/system/xam/alboria.h
-@@ -0,0 +1,316 @@
+@@ -0,0 +1,320 @@
 +/**
 + * @file        system/xam/alboria.h
 + * @brief       Alboria: System Link over the internet through our relay
@@ -253,6 +253,10 @@ index 0000000..af47025
 +bool HasOtherMembers();
 +// Whether it is in a room or setting one up (signing in, creating or joining, connecting).
 +bool InRoom();
++// Whether the room this installation was a member of (not the host) ended without it leaving: the
++// host closed it, it was removed or banned, or the relay went silent. True once for each such end:
++// the title is then in a party whose host is gone, and the runtime sends it back to the main menu.
++bool TakeLostRoom();
 +// Its virtual address in the room; while it is setting up a room it hosts, already the host's
 +// (10.77.0.1, which the host of a room always gets); 0 otherwise.
 +uint32_t VirtualAddress();
@@ -360,10 +364,10 @@ index 0000000..c7fc5de
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria.cpp b/src/system/xam/alboria.cpp
 new file mode 100644
-index 0000000..9050682
+index 0000000..7ef17ca
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,1624 @@
+@@ -0,0 +1,1634 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -587,6 +591,8 @@ index 0000000..9050682
 +std::optional<std::vector<uint8_t>> g_hosted_qos;
 +bool g_qos_published = false;
 +std::optional<std::vector<uint8_t>> g_host_qos;
++// A room this installation was a member of ended without it leaving (TakeLostRoom).
++std::atomic<bool> g_room_lost{false};
 +// XN_LIVE_INVITE_ACCEPTED (XNID(0, XNOTIFY_LIVE, 2)): the player accepted an invite; its parameter
 +// is the user's index.
 +constexpr uint32_t kNotifyLiveInviteAccepted = 0x02000002;
@@ -1219,6 +1225,8 @@ index 0000000..9050682
 +  CloseTunnelLocked();
 +  if (!end_reason.empty()) {
 +    REXSYS_INFO("Alboria: left the room ({})", end_reason);
++    // A member of a room it had joined (it was welcomed) loses its party with the room.
++    if (welcomed && !g_status.host) g_room_lost.store(true);
 +    g_status.state = State::kFailed;
 +    g_status.error = end_reason;
 +  } else {
@@ -1285,6 +1293,8 @@ index 0000000..9050682
 +
 +void Start(uint32_t title_id, int max_members, std::string join_code) {
 +  StopWorker();
++  // A room the title has not been told about yet is no longer news once it starts another one.
++  g_room_lost.store(false);
 +  SetStatus(State::kWorking);
 +  g_worker = std::thread([title_id, max_members, join_code = std::move(join_code)]() mutable {
 +    try {
@@ -1808,6 +1818,10 @@ index 0000000..9050682
 +bool InRoom() {
 +  std::lock_guard lock(g_mutex);
 +  return g_status.state == State::kConnected || g_status.state == State::kWorking;
++}
++
++bool TakeLostRoom() {
++  return g_room_lost.exchange(false);
 +}
 +
 +bool Connected() {
