@@ -50,7 +50,12 @@ Everything happens inside the game, with `network_mode = "online"` (the default)
 ## 3. Identity and bans
 
 Each installation has an Ed25519 key, made the first time the game runs and kept in `identity.toml`
-(the key's 32-byte seed). The public key is the player's identity for the service.
+(the key's 32-byte seed). The public key is the player's identity for the service: their account.
+
+- The account shows as `Gamertag#tag`, such as `Carolux#97`. The server gives each account a tag
+  from 1 to 9999 the first time it signs in, so that no two players share a gamertag and tag
+  (ignoring case). Changing the gamertag keeps the tag when nobody else holds it with the new
+  gamertag, and gives another one when somebody does.
 
 - Signing in proves the player holds the key: the server sends a random challenge and the runtime
   signs it (section 4.1).
@@ -93,11 +98,12 @@ Answer: `{ "challenge": "<32 bytes>", "expires_in": 60 }`.
 `signature` is the Ed25519 signature of the bytes `alboria-auth-v1` (15 bytes) followed by the
 challenge. A challenge is used once and expires after 60 seconds.
 
-Answer: `{ "token": "<opaque>", "expires_in": 3600 }`. Later requests send it as
+Answer: `{ "token": "<opaque>", "expires_in": 3600, "gamertag": "Carolina", "tag": 97 }`, with
+the account's gamertag and tag (section 3). Later requests send the token as
 `Authorization: Bearer <token>`.
 
 Errors: `400 bad_request`, `401 bad_signature`, `401 challenge_expired`, `403 banned`,
-`426 client_too_old`.
+`409 gamertag_taken` (every tag of that gamertag is held), `426 client_too_old`.
 
 ### 4.2 Host a game
 
@@ -225,9 +231,10 @@ checked yet.
 
 ## 8. What the server keeps
 
+- Accounts: public key, gamertag and tag, so the tag stays the same across sign-ins.
 - Bans: public key or IP address, reason and date, until removed.
-- For each room, for 7 days: its code, title ID, times, and the public key and gamertag of each
-  member, so that a report about a player can be checked. No IP addresses and no game traffic.
+- For each room, for 7 days: its code, title ID, times, and the public key and `Gamertag#tag` of
+  each member, so that a report about a player can be checked. No IP addresses and no game traffic.
 - Counts for the trial of the service: rooms per day and different keys per month, with no other
   data.
 

@@ -573,6 +573,27 @@ fills a list of four: Joinable ("Abierto", party type 1), Invite only (2), Syste
   System Link goes to `AttemptSystemLinkTransition`, which checks the players and the link again and
   opens the System Link browser.
 
+### The party at start-up
+
+Leaving the title screen creates the first party in `UIScene_FrontEnd.ConditionalCreatePartySession`
+(**verified** from its bytecode with `script_dump_code`, 29 October 2026; the branch structure below
+is read from the decompiled listing, which shows no jump targets, so it is **inferred**):
+
+- It runs once the primary player is signed in and off the title screen, while
+  `GearPartyGRI.CurrPartyType` is not 3 and `InPartySession()` is false.
+- With the player signed in to Live (`GetLoginStatus() == 2`) it runs `UpdateNatType()`.
+- When `GearPC.CanAllPlayersPlayOnline()` is false, it sets `GearLocalPlayer.bPartyTypeIsSystemLink`
+  from the profile's party type (`GearProfileSettings.GetPartyType`, not Local), the player not
+  being a guest and `HasLinkConnection()`.
+- Then `GearPartyGame_Base.CreateParty(ControllerId, bPartyTypeIsSystemLink)`, or
+  `LocalPartyCreated()` without a party game; `bStartPartySession` goes back to false.
+- A fresh profile's party type is 1, Joinable (**verified** with `script_trace_args=GetPartyType`).
+  Another function of the front end copies the profile's party type into `CurrPartyType` with
+  `SetPartyType`.
+
+So `CreateLIVEParty` does not run at start-up: a Live party made there skips the hook that hosts
+an Alboria room.
+
 ### The System Link browser (`UIScene_SystemLink`)
 
 - Opening it runs `TriggerPartySearch`: `GameInterface.FindOnlineGames` with its `SearchSettings`.
