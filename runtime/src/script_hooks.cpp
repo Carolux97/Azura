@@ -44,11 +44,13 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -283,6 +285,9 @@ enum WatchedName {
   kAddEnemyLocators,         // RAAM's Shadow's satellite camera: marks the enemies it sees
   kCompleteChapterByDifficulty,   // GearProfileSettings: a campaign chapter is completed
   kUpdateAchievementProgression,  // GearProfileSettings: progress towards a counted achievement
+  kApplySensitivityScaling,  // GearPC: scales the look input by the profile's look sensitivity
+  kViewAdhesion,             // GearPlayerInput: turns the view towards the target (aim assist)
+  kGetAdjustedAimFor,        // GearPC: bends a shot towards the target (aim assist)
   kWatchedNameCount,
 };
 constexpr const char* kWatchedNames[kWatchedNameCount] = {
@@ -299,7 +304,8 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "PlayerInput",           "Callback_ViewController", "Callback_ResetTutorials",
     "PopulateOptionsMenu",   "OnClose",     "WidgetInitialized",
     "GetDesiredFOV",         "AddEnemyLocators",       "CompleteChapterByDifficulty",
-    "UpdateAchievementProgression"};
+    "UpdateAchievementProgression", "ApplySensitivityScaling", "ViewAdhesion",
+    "GetAdjustedAimFor"};
 
 // FName index of each watched name, -1 until found (0 is a valid index: None).
 std::atomic<int32_t> g_names[kWatchedNameCount];
@@ -368,6 +374,21 @@ bool IsEnginePlayerInput(const uint8_t* base, uint32_t function) {
   return true;
 }
 
+// GearPlayerInput.PlayerInput (the one around the engine's), 0 until it first runs.
+std::atomic<uint32_t> g_gear_player_input{0};
+
+// Whether `function` is GearPlayerInput.PlayerInput.
+bool IsGearPlayerInput(const uint8_t* base, uint32_t function) {
+  const uint32_t known = g_gear_player_input.load(std::memory_order_relaxed);
+  if (known) return function == known;
+  if (!Is(base, function, kPlayerInput) ||
+      ObjectName(base, LoadU32(base, function + kObjectOuter)) != "GearPlayerInput") {
+    return false;
+  }
+  g_gear_player_input.store(function, std::memory_order_relaxed);
+  return true;
+}
+
 // Offset of POV.FOV in a Camera's CameraCache (TCameraCache: float TimeStamp, then TPOV: vector
 // Location, rotator Rotation, float FOV; the 32 bytes between CameraCache and LastFrameCameraCache
 // in the dump of Camera match).
@@ -385,6 +406,74 @@ int32_t CachedOffset(const uint8_t* base, uint32_t cls, uint32_t slot, const cha
   }
   return it->second;
 }
+
+// UBoolProperty::BitMask: the bit of its 32-bit word a bool property is (read from the game: the
+// first bool declared in a word is 0x80000000, the next 0x40000000, ...).
+constexpr uint32_t kBoolPropertyBitMask = 104;
+
+// A bool property of a class: its word's offset and its bit, or offset -1.
+struct BoolField {
+  int32_t offset = -1;
+  uint32_t mask = 0;
+};
+
+// Bool property `name` of objects of class `cls`, found by name the first time. Called with
+// g_mouse_look_mutex held.
+std::unordered_map<uint64_t, BoolField> g_class_bools;
+BoolField CachedBool(const uint8_t* base, uint32_t cls, uint32_t slot, const char* name) {
+  const uint64_t key = (static_cast<uint64_t>(cls) << 8) | slot;
+  auto it = g_class_bools.find(key);
+  if (it != g_class_bools.end()) return it->second;
+  BoolField found;
+  for (uint32_t owner = cls; owner && found.offset < 0; owner = LoadU32(base, owner + kStructSuper)) {
+    for (uint32_t field = LoadU32(base, owner + kStructChildren); field; field = LoadU32(base, field + kFieldNext)) {
+      if (ObjectName(base, field) != name) continue;
+      const uint32_t mask = LoadU32(base, field + kBoolPropertyBitMask);
+      // A bool's mask has exactly one bit set; anything else means the layout is not the one read.
+      if (ObjectName(base, LoadU32(base, field + kObjectClass)) == "BoolProperty" && mask && !(mask & (mask - 1))) {
+        found = {static_cast<int32_t>(LoadU32(base, field + kPropertyOffset)), mask};
+      }
+      break;
+    }
+  }
+  return g_class_bools.emplace(key, found).first->second;
+}
+
+// The guest user (LocalPlayer.ControllerId) whose PlayerController `controller` is, or -1. Called
+// with g_mouse_look_mutex held.
+int32_t UserOfController(const uint8_t* base, uint32_t controller) {
+  if (!controller) return -1;
+  const int32_t player = CachedOffset(base, LoadU32(base, controller + kObjectClass), 3, "Player");
+  const uint32_t local_player = player >= 0 ? LoadU32(base, controller + static_cast<uint32_t>(player)) : 0;
+  if (!local_player) return -1;
+  const int32_t controller_id = CachedOffset(base, LoadU32(base, local_player + kObjectClass), 4, "ControllerId");
+  if (controller_id < 0) return -1;
+  const uint32_t user = LoadU32(base, local_player + static_cast<uint32_t>(controller_id));
+  return user < 4 ? static_cast<int32_t>(user) : -1;
+}
+
+// The mouse's share of one player's look input this frame (docs/reverse-engineering.md, Mouse
+// look). The engine's PlayerInput.PlayerInput adds aMouseX and aMouseY to aTurn and aLookUp; what
+// GearPlayerInput.PlayerInput does afterwards (the profile's look sensitivity, the pitch ratio)
+// and GearPC.UpdateRotation (the slow motion division, the conversion to whole rotator units) is
+// for the stick. The share is recorded as the engine's function returns (RecordMouseShare), taken
+// out before ApplySensitivityScaling (TakeOutMouseShare) and put back as
+// GearPlayerInput.PlayerInput returns (PutBackMouseShare), so the mouse turns the view by what
+// mouse_look.cpp asked for. Keyed by PlayerInput object.
+struct MouseShare {
+  int32_t user = -1;
+  bool on_mouse = false;   // the player has a keyboard and mouse this frame (ApplyMouseLook)
+  float yaw = 0.0f;        // the share of aTurn, in rotator units
+  float pitch = 0.0f;      // the share of aLookUp
+  bool taken_out = false;  // TakeOutMouseShare ran this frame
+  // The fraction of a rotator unit UpdateRotation's conversion of aTurn and aLookUp to the int
+  // DeltaRot dropped last frame, added to the next so slow motion is not lost.
+  float carry_yaw = 0.0f;
+  float carry_pitch = 0.0f;
+  // The profile multiplier last taken out, for a frame where it cannot be measured.
+  float multiplier = 1.0f;
+};
+std::unordered_map<uint32_t, MouseShare> g_mouse_shares;  // guarded by g_mouse_look_mutex
 
 // As PlayerInput.PlayerInput starts on `player_input`, writes the mouse motion of its player into
 // aMouseX and aMouseY. The player is its PlayerController's LocalPlayer's ControllerId, the guest
@@ -407,6 +496,7 @@ std::atomic<uint32_t> g_front_end_scene{0};
 std::atomic<int32_t> g_front_end_controller{0};
 
 void ApplyFilmGrain(uint8_t* base, uint32_t controller, uint32_t local_player);
+void StoreU32(uint8_t* base, uint32_t address, uint32_t value);
 
 void ApplyMouseLookFor(uint8_t* base, uint32_t player_input) {
   std::lock_guard lock(g_mouse_look_mutex);
@@ -416,13 +506,11 @@ void ApplyMouseLookFor(uint8_t* base, uint32_t player_input) {
   const int32_t sensitivity = CachedOffset(base, input_class, 2, "MouseSensitivity");
   const uint32_t controller = LoadU32(base, player_input + kObjectOuter);
   if (mouse_x < 0 || mouse_y < 0 || sensitivity < 0 || !controller) return;
+  const int32_t user_index = UserOfController(base, controller);
+  if (user_index < 0) return;
+  const uint32_t user = static_cast<uint32_t>(user_index);
   const int32_t player = CachedOffset(base, LoadU32(base, controller + kObjectClass), 3, "Player");
-  const uint32_t local_player = player >= 0 ? LoadU32(base, controller + static_cast<uint32_t>(player)) : 0;
-  if (!local_player) return;
-  const int32_t controller_id = CachedOffset(base, LoadU32(base, local_player + kObjectClass), 4, "ControllerId");
-  if (controller_id < 0) return;
-  const uint32_t user = LoadU32(base, local_player + static_cast<uint32_t>(controller_id));
-  if (user >= 4) return;
+  const uint32_t local_player = LoadU32(base, controller + static_cast<uint32_t>(player));
   ApplyFilmGrain(base, controller, local_player);
   azura::system_settings::Apply(base);
   g_player_controllers[user].store(controller, std::memory_order_relaxed);
@@ -462,7 +550,20 @@ void ApplyMouseLookFor(uint8_t* base, uint32_t player_input) {
     }
   }
   target.base_fov = static_cast<float>(REXCVAR_GET(field_of_view));
-  azura::input::ApplyMouseLook(base, user, target);
+  MouseShare& share = g_mouse_shares[player_input];
+  share.user = user_index;
+  share.yaw = share.pitch = 0.0f;
+  share.taken_out = false;
+  share.on_mouse = azura::input::ApplyMouseLook(base, user, target);
+  if (share.on_mouse) {
+    // SmoothMouse averages the mouse axes with the frames before: the view would trail the mouse.
+    const BoolField smoothing = CachedBool(base, input_class, 18, "bEnableMouseSmoothing");
+    if (smoothing.offset >= 0) {
+      const uint32_t address = player_input + static_cast<uint32_t>(smoothing.offset);
+      const uint32_t word = LoadU32(base, address);
+      if (word & smoothing.mask) StoreU32(base, address, word & ~smoothing.mask);
+    }
+  }
 }
 
 // The campaign DLC (RAAM's Shadow), chosen in the campaign menu and not replaced by another choice
@@ -738,6 +839,240 @@ void CompensateFieldOfView(uint8_t* base, uint32_t player_input) {
   }
 }
 
+// --- Mouse share (MouseShare) ---
+
+float LoadF32(const uint8_t* base, uint32_t address) {
+  const uint32_t bits = LoadU32(base, address);
+  float value;
+  std::memcpy(&value, &bits, 4);
+  return value;
+}
+
+// As the engine's PlayerInput.PlayerInput returns on `player_input` (after CompensateFieldOfView):
+// records how much of aTurn and aLookUp the mouse is. That function adds aMouseX and aMouseY to
+// them as AdjustMouseSensitivity left them, then flips them with bInvertTurn and bInvertMouse; with
+// bStrafe the mouse's x strafes instead, bLockTurnUntilRelease zeroes aTurn, and
+// IsLookInputIgnored (bIgnoreLookInput) zeroes both.
+void RecordMouseShare(uint8_t* base, uint32_t player_input) {
+  std::lock_guard lock(g_mouse_look_mutex);
+  const auto it = g_mouse_shares.find(player_input);
+  if (it == g_mouse_shares.end() || !it->second.on_mouse) return;
+  MouseShare& share = it->second;
+  const uint32_t input_class = LoadU32(base, player_input + kObjectClass);
+  const int32_t mouse_x = CachedOffset(base, input_class, 0, "aMouseX");
+  const int32_t mouse_y = CachedOffset(base, input_class, 1, "aMouseY");
+  const int32_t turn = CachedOffset(base, input_class, 9, "aTurn");
+  const int32_t look_up = CachedOffset(base, input_class, 10, "aLookUp");
+  const int32_t strafe = CachedOffset(base, input_class, 19, "bStrafe");
+  const BoolField invert_mouse = CachedBool(base, input_class, 20, "bInvertMouse");
+  const BoolField invert_turn = CachedBool(base, input_class, 21, "bInvertTurn");
+  const uint32_t controller = LoadU32(base, player_input + kObjectOuter);
+  if (!controller || mouse_x < 0 || mouse_y < 0 || turn < 0 || look_up < 0) return;
+  const int32_t ignore_look = CachedOffset(base, LoadU32(base, controller + kObjectClass), 22, "bIgnoreLookInput");
+  if (ignore_look >= 0 && base[controller + static_cast<uint32_t>(ignore_look)] != 0) return;
+  const auto is_set = [&](const BoolField& field) {
+    return field.offset >= 0 && (LoadU32(base, player_input + static_cast<uint32_t>(field.offset)) & field.mask) != 0;
+  };
+  // CompensateFieldOfView divided the whole of aTurn and aLookUp by this.
+  const float scale = static_cast<float>(REXCVAR_GET(field_of_view)) / kGameFieldOfView;
+  float yaw = LoadF32(base, player_input + static_cast<uint32_t>(mouse_x)) / scale;
+  float pitch = LoadF32(base, player_input + static_cast<uint32_t>(mouse_y)) / scale;
+  if (is_set(invert_turn)) yaw = -yaw;
+  if (is_set(invert_mouse)) pitch = -pitch;
+  if ((strafe >= 0 && base[player_input + static_cast<uint32_t>(strafe)] != 0) ||
+      LoadF32(base, player_input + static_cast<uint32_t>(turn)) == 0.0f) {
+    yaw = 0.0f;
+  }
+  if (LoadF32(base, player_input + static_cast<uint32_t>(look_up)) == 0.0f) pitch = 0.0f;
+  share.yaw = yaw;
+  share.pitch = pitch;
+}
+
+// A player's aTurn and aLookUp as GearPC.ApplySensitivityScaling is about to scale them.
+struct LookBeforeScaling {
+  uint32_t player_input;
+  uint32_t turn;     // address of aTurn
+  uint32_t look_up;  // address of aLookUp
+  float turn_value;
+  float look_up_value;
+};
+
+// Before GearPC.ApplySensitivityScaling runs on `controller`: its player's look input, when the
+// mouse has a share in it this frame.
+std::optional<LookBeforeScaling> BeforeSensitivityScaling(const uint8_t* base, uint32_t controller) {
+  std::lock_guard lock(g_mouse_look_mutex);
+  const int32_t input_at = CachedOffset(base, LoadU32(base, controller + kObjectClass), 23, "PlayerInput");
+  if (input_at < 0) return std::nullopt;
+  const uint32_t player_input = LoadU32(base, controller + static_cast<uint32_t>(input_at));
+  const auto it = g_mouse_shares.find(player_input);
+  if (!player_input || it == g_mouse_shares.end()) return std::nullopt;
+  const MouseShare& share = it->second;
+  if (!share.on_mouse || share.taken_out || (share.yaw == 0.0f && share.pitch == 0.0f)) return std::nullopt;
+  const uint32_t input_class = LoadU32(base, player_input + kObjectClass);
+  const int32_t turn = CachedOffset(base, input_class, 9, "aTurn");
+  const int32_t look_up = CachedOffset(base, input_class, 10, "aLookUp");
+  if (turn < 0 || look_up < 0) return std::nullopt;
+  LookBeforeScaling before{player_input, player_input + static_cast<uint32_t>(turn),
+                           player_input + static_cast<uint32_t>(look_up), 0.0f, 0.0f};
+  before.turn_value = LoadF32(base, before.turn);
+  before.look_up_value = LoadF32(base, before.look_up);
+  return before;
+}
+
+// After GearPC.ApplySensitivityScaling: takes the mouse's share, as scaled by the profile's look
+// sensitivity (GetSensitivityMultiplier, measured as the ratio it scaled the look input by), out of
+// aTurn and aLookUp, so the pitch ratio GearPlayerInput.PlayerInput applies next is the stick's
+// alone.
+void TakeOutMouseShare(uint8_t* base, const LookBeforeScaling& before) {
+  std::lock_guard lock(g_mouse_look_mutex);
+  MouseShare& share = g_mouse_shares[before.player_input];
+  const float turn = LoadF32(base, before.turn);
+  const float look_up = LoadF32(base, before.look_up);
+  // The axis with the most input gives the ratio most precisely; with neither, the last one.
+  constexpr float kMeasurable = 1e-3f;
+  float multiplier = share.multiplier;
+  if (std::fabs(before.turn_value) >= std::fabs(before.look_up_value) && std::fabs(before.turn_value) > kMeasurable) {
+    multiplier = turn / before.turn_value;
+  } else if (std::fabs(before.look_up_value) > kMeasurable) {
+    multiplier = look_up / before.look_up_value;
+  }
+  static int logged = 0;
+  if (std::fabs(multiplier - share.multiplier) > 1e-3f && logged < 16) {
+    ++logged;
+    REXLOG_INFO("[Azura mouse] Profile look sensitivity {:.3f}, kept off the mouse (player {})", multiplier,
+                share.user + 1);
+  }
+  share.multiplier = multiplier;
+  StoreU32(base, before.turn, FloatBits(turn - share.yaw * multiplier));
+  StoreU32(base, before.look_up, FloatBits(look_up - share.pitch * multiplier));
+  share.taken_out = true;
+}
+
+// As GearPlayerInput.PlayerInput returns on `player_input`: puts the mouse's share back into aTurn
+// and aLookUp, multiplied by the slow motion factor GearPC.UpdateRotation divides the view's turn
+// by, with last frame's leftover fraction of a rotator unit.
+void PutBackMouseShare(uint8_t* base, uint32_t player_input) {
+  std::lock_guard lock(g_mouse_look_mutex);
+  const auto it = g_mouse_shares.find(player_input);
+  if (it == g_mouse_shares.end() || !it->second.on_mouse) return;
+  MouseShare& share = it->second;
+  if (!share.taken_out) {
+    share.carry_yaw = share.carry_pitch = 0.0f;
+    return;
+  }
+  const uint32_t input_class = LoadU32(base, player_input + kObjectClass);
+  const uint32_t turn = player_input + static_cast<uint32_t>(CachedOffset(base, input_class, 9, "aTurn"));
+  const uint32_t look_up = player_input + static_cast<uint32_t>(CachedOffset(base, input_class, 10, "aLookUp"));
+  float time_dilation = 1.0f;
+  const uint32_t controller = LoadU32(base, player_input + kObjectOuter);
+  const int32_t world_at = CachedOffset(base, LoadU32(base, controller + kObjectClass), 7, "WorldInfo");
+  const uint32_t world = world_at >= 0 ? LoadU32(base, controller + static_cast<uint32_t>(world_at)) : 0;
+  if (world) {
+    const int32_t dilation_at = CachedOffset(base, LoadU32(base, world + kObjectClass), 24, "TimeDilation");
+    const float value = dilation_at >= 0 ? LoadF32(base, world + static_cast<uint32_t>(dilation_at)) : 1.0f;
+    if (value > 0.0f) time_dilation = value;
+  }
+  // UpdateRotation turns aTurn and aLookUp into the int DeltaRot, dropping the fraction: kept for
+  // the next frame.
+  const float yaw = LoadF32(base, turn) + share.yaw * time_dilation + share.carry_yaw;
+  const float pitch = LoadF32(base, look_up) + share.pitch * time_dilation + share.carry_pitch;
+  share.carry_yaw = yaw - std::trunc(yaw);
+  share.carry_pitch = pitch - std::trunc(pitch);
+  StoreU32(base, turn, FloatBits(yaw));
+  StoreU32(base, look_up, FloatBits(pitch));
+}
+
+// Whether the player of `player_input` aims with the mouse this frame: the aim assist, made for the
+// stick, is off for them.
+bool AimsWithMouse(const MouseShare& share) {
+  return share.on_mouse && (share.yaw != 0.0f || share.pitch != 0.0f || azura::input::PlaysWithMouse(share.user));
+}
+
+// The out parameters of GearPlayerInput.ViewAdhesion as it starts.
+struct AdhesionBefore {
+  uint32_t yaw_at;
+  uint32_t pitch_at;
+  uint32_t yaw;
+  uint32_t pitch;
+};
+
+// Before GearPlayerInput.ViewAdhesion runs in `frame` on `player_input`: its out_YawRot and
+// out_PitchRot, the view's turn this frame, when its player aims with the mouse.
+std::optional<AdhesionBefore> BeforeViewAdhesion(const uint8_t* base, uint32_t player_input, uint32_t frame) {
+  {
+    std::lock_guard lock(g_mouse_look_mutex);
+    const auto it = g_mouse_shares.find(player_input);
+    if (it == g_mouse_shares.end() || !AimsWithMouse(it->second)) return std::nullopt;
+  }
+  const uint32_t function = LoadU32(base, frame + kFrameNode);
+  const int32_t yaw = ParamOffset(base, function, "out_YawRot");
+  const int32_t pitch = ParamOffset(base, function, "out_PitchRot");
+  if (yaw < 0 || pitch < 0) return std::nullopt;
+  const uint32_t locals = LoadU32(base, frame + kFrameLocals);
+  AdhesionBefore before{locals + static_cast<uint32_t>(yaw), locals + static_cast<uint32_t>(pitch), 0, 0};
+  before.yaw = LoadU32(base, before.yaw_at);
+  before.pitch = LoadU32(base, before.pitch_at);
+  return before;
+}
+
+// After GearPlayerInput.ViewAdhesion: gives its out parameters back the turn they came in with, so
+// the view is not pulled towards the target. They are copied back to the caller as it returns.
+void UndoViewAdhesion(uint8_t* base, const AdhesionBefore& before) {
+  static std::atomic<bool> logged{false};
+  if ((LoadU32(base, before.yaw_at) != before.yaw || LoadU32(base, before.pitch_at) != before.pitch) &&
+      !logged.exchange(true)) {
+    REXLOG_INFO("[Azura mouse] View adhesion kept off the mouse (it turned yaw {} -> {}, pitch {} -> {})",
+                static_cast<int32_t>(before.yaw), static_cast<int32_t>(LoadU32(base, before.yaw_at)),
+                static_cast<int32_t>(before.pitch), static_cast<int32_t>(LoadU32(base, before.pitch_at)));
+  }
+  StoreU32(base, before.yaw_at, before.yaw);
+  StoreU32(base, before.pitch_at, before.pitch);
+}
+
+// A weapon's bullet aim assist (AimAssistScale, AimAssistScaleWhileTargeting), zeroed while
+// GearPC.GetAdjustedAimFor runs.
+struct AimAssistBefore {
+  uint32_t scale_at = 0;
+  uint32_t targeting_scale_at = 0;
+  uint32_t scale = 0;
+  uint32_t targeting_scale = 0;
+};
+
+// Before GearPC.GetAdjustedAimFor runs in `frame` on `controller`: when its player aims with the
+// mouse, zeroes the aim assist of the weapon W it aims, which bends the shot towards the target,
+// and returns what it was.
+std::optional<AimAssistBefore> SuspendBulletAimAssist(uint8_t* base, uint32_t controller, uint32_t frame) {
+  std::lock_guard lock(g_mouse_look_mutex);
+  const int32_t user = UserOfController(base, controller);
+  if (user < 0 || !azura::input::PlaysWithMouse(static_cast<uint32_t>(user))) return std::nullopt;
+  const int32_t weapon_at = ParamOffset(base, LoadU32(base, frame + kFrameNode), "W");
+  const uint32_t weapon =
+      weapon_at >= 0 ? LoadU32(base, LoadU32(base, frame + kFrameLocals) + static_cast<uint32_t>(weapon_at)) : 0;
+  if (!weapon) return std::nullopt;
+  const uint32_t weapon_class = LoadU32(base, weapon + kObjectClass);
+  const int32_t scale = CachedOffset(base, weapon_class, 25, "AimAssistScale");
+  const int32_t targeting_scale = CachedOffset(base, weapon_class, 26, "AimAssistScaleWhileTargeting");
+  static std::atomic<bool> logged{false};
+  if (!logged.exchange(true)) {
+    REXLOG_INFO("[Azura mouse] Bullet aim assist kept off the mouse ({}: AimAssistScale at {}, "
+                "AimAssistScaleWhileTargeting at {})",
+                ObjectName(base, weapon_class), scale, targeting_scale);
+  }
+  if (scale < 0 || targeting_scale < 0) return std::nullopt;
+  AimAssistBefore before{weapon + static_cast<uint32_t>(scale), weapon + static_cast<uint32_t>(targeting_scale)};
+  before.scale = LoadU32(base, before.scale_at);
+  before.targeting_scale = LoadU32(base, before.targeting_scale_at);
+  StoreU32(base, before.scale_at, 0);
+  StoreU32(base, before.targeting_scale_at, 0);
+  return before;
+}
+
+// After GearPC.GetAdjustedAimFor: gives the weapon its aim assist back.
+void RestoreBulletAimAssist(uint8_t* base, const AimAssistBefore& before) {
+  StoreU32(base, before.scale_at, before.scale);
+  StoreU32(base, before.targeting_scale_at, before.targeting_scale);
+}
+
 // --- Film grain ---
 //
 // The game's film grain is drawn by the UberPostProcessEffect of the post-process chain: the
@@ -748,10 +1083,6 @@ void CompensateFieldOfView(uint8_t* base, uint32_t player_input) {
 // writes it (docs/reverse-engineering.md, "Film grain"). With film_grain off, bEnableImageGrain is
 // cleared in every one of those effects each frame; on, each effect gets back the value the game
 // gave it.
-
-// UBoolProperty::BitMask: the bit of its 32-bit word a bool property is (read from the game: the
-// first bool declared in a word is 0x80000000, the next 0x40000000, ...).
-constexpr uint32_t kBoolPropertyBitMask = 104;
 
 // An UberPostProcessEffect the hook has seen: its class, to tell a new object at a recycled
 // address, and whether the game had its grain on.
@@ -1599,8 +1930,34 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     const uint32_t player_input = ctx.r3.u32;
     ApplyMouseLookFor(base, player_input);
     __imp__sub_822DF9E0(ctx, base);
-    // After it: it has scaled the look input by the field of view.
+    // After it: it has scaled the look input by the field of view and added the mouse to it.
     CompensateFieldOfView(base, player_input);
+    RecordMouseShare(base, player_input);
+    return;
+  }
+  // The mouse's share of the look input is kept out of what the game does to it for the stick
+  // (MouseShare), and the aim assist off for a player on the mouse.
+  if (function && IsGearPlayerInput(base, function)) {
+    __imp__sub_822DF9E0(ctx, base);
+    PutBackMouseShare(base, ctx.r3.u32);
+    return;
+  }
+  if (Is(base, function, kApplySensitivityScaling)) {
+    const auto before = BeforeSensitivityScaling(base, ctx.r3.u32);
+    __imp__sub_822DF9E0(ctx, base);
+    if (before) TakeOutMouseShare(base, *before);
+    return;
+  }
+  if (Is(base, function, kViewAdhesion)) {
+    const auto before = BeforeViewAdhesion(base, ctx.r3.u32, ctx.r4.u32);
+    __imp__sub_822DF9E0(ctx, base);
+    if (before) UndoViewAdhesion(base, *before);
+    return;
+  }
+  if (Is(base, function, kGetAdjustedAimFor)) {
+    const auto before = SuspendBulletAimAssist(base, ctx.r3.u32, ctx.r4.u32);
+    __imp__sub_822DF9E0(ctx, base);
+    if (before) RestoreBulletAimAssist(base, *before);
     return;
   }
   // Before it runs: it reads FOVAngle.

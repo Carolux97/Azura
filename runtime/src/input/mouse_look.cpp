@@ -61,11 +61,16 @@ void InstallMouseLook(rex::input::InputSystem* input) {
   g_input.store(input, std::memory_order_release);
 }
 
-void ApplyMouseLook(uint8_t* base, uint32_t user_index, const MouseLookTarget& target) {
+bool PlaysWithMouse(uint32_t user_index) {
+  auto* input = g_input.load(std::memory_order_acquire);
+  return input && input->ActiveKind(user_index) == rex::input::ActiveDeviceKind::kKeyboardMouse;
+}
+
+bool ApplyMouseLook(uint8_t* base, uint32_t user_index, const MouseLookTarget& target) {
   auto* input = g_input.load(std::memory_order_acquire);
   rex::input::InputDriver::MouseLook look;
   if (!input || !input->TakeMouseLook(user_index, look)) {
-    return;
+    return false;
   }
   const float dx = look.dx;
   const float dy = REXCVAR_GET(mnk_invert_y) ? -look.dy : look.dy;
@@ -98,6 +103,7 @@ void ApplyMouseLook(uint8_t* base, uint32_t user_index, const MouseLookTarget& t
   StoreFloat(base, target.mouse_x, static_cast<float>(dx * per_pixel));
   // The window's y grows downwards; aMouseY looks up when positive.
   StoreFloat(base, target.mouse_y, static_cast<float>(-dy * per_pixel));
+  return true;
 }
 
 }  // namespace azura::input
