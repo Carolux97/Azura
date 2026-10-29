@@ -1,9 +1,9 @@
 diff --git a/include/rex/system/xam/alboria.h b/include/rex/system/xam/alboria.h
 new file mode 100644
-index 0000000..0161044
+index 0000000..7c282c0
 --- /dev/null
 +++ b/include/rex/system/xam/alboria.h
-@@ -0,0 +1,230 @@
+@@ -0,0 +1,234 @@
 +/**
 + * @file        system/xam/alboria.h
 + * @brief       Alboria: System Link over the internet through our relay
@@ -207,13 +207,17 @@ index 0000000..0161044
 +// (10.77.0.1, which the host of a room always gets); 0 otherwise.
 +uint32_t VirtualAddress();
 +
-+// The round trip to the other side of the room, for the latency overlay: to the host, or for the
-+// host, to the member furthest away.
++// The latency the game has, for the latency overlay. A member joined to a room has the round trip
++// to the host: straight to it on a direct path, or through the relay (member to relay to host and
++// back) otherwise. The host runs the game itself, so it has none (0 ms), and so does a game in no
++// room.
 +struct Latency {
-+  // Whether there is a measurement: in a room with someone else, after the first answer.
++  // In a room this installation hosts.
++  bool host = false;
++  // A member's round trip to the host has been measured (milliseconds and direct are then set).
 +  bool known = false;
 +  int milliseconds = 0;
-+  // Whether that member is reached directly rather than through the relay.
++  // Whether the host is reached directly rather than through the relay.
 +  bool direct = false;
 +};
 +Latency GetLatency();
@@ -274,7 +278,7 @@ index 0000000..c7fc5de
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria.cpp b/src/system/xam/alboria.cpp
 new file mode 100644
-index 0000000..6dec9ab
+index 0000000..7c8a0fd
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
 @@ -0,0 +1,1059 @@
@@ -1314,15 +1318,15 @@ index 0000000..6dec9ab
 +  std::lock_guard lock(g_mutex);
 +  Latency latency;
 +  if (g_status.state != State::kConnected) return latency;
-+  for (const auto& [address, peer] : g_peers) {
-+    if (peer.rtt_ms < 0) continue;
-+    // A member sees its latency to the host; the host, the member furthest away.
-+    if (!g_status.host && address != (kNetwork | 1)) continue;
-+    if (!latency.known || peer.rtt_ms > latency.milliseconds) {
-+      latency.known = true;
-+      latency.milliseconds = peer.rtt_ms;
-+      latency.direct = peer.rtt_direct;
-+    }
++  if (g_status.host) {
++    latency.host = true;
++    return latency;
++  }
++  const auto host = g_peers.find(kNetwork | 1);
++  if (host != g_peers.end() && host->second.rtt_ms >= 0) {
++    latency.known = true;
++    latency.milliseconds = host->second.rtt_ms;
++    latency.direct = host->second.rtt_direct;
 +  }
 +  return latency;
 +}

@@ -107,9 +107,9 @@ alboria_client = "azura/0.5.0"
 # when the network allows it, with the relay as fallback. Lower latency, but they can learn this
 # computer's public IP address. Takes effect from the next room.
 alboria_direct = true
-# Options > Connection's Show latency: in an Alboria room, the round trip to the host (for the
-# host, to the member furthest away) in the performance overlay's corner, and whether the
-# connection is direct or goes through the relay.
+# Options > Connection's Show latency: the latency in the performance overlay's corner. A member of
+# an Alboria room sees the round trip to the host and whether it is direct or goes through the
+# relay; the host, which runs the game, and a game in no room see 0 ms.
 latency_overlay = false
 # This computer's IPv4 address on the local network System Link plays on (for example
 # "192.168.1.20"). Empty: chosen automatically, preferring a home network address over a VPN or
