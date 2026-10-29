@@ -19,6 +19,15 @@ REXCVAR_DEFINE_DOUBLE(mnk_aim_sensitivity, 1.0, "Input",
 REXCVAR_DEFINE_DOUBLE(mnk_zoom_sensitivity, 1.0, "Input",
                       "Mouse look while zoomed in, as mnk_sensitivity is the rest of the time")
     .range(0.01, 10.0);
+REXCVAR_DEFINE_DOUBLE(mnk_run_sensitivity, 1.0, "Input",
+                      "Mouse look while roadie running, as a share of the rest of the time: the "
+                      "game turns the stick slower then")
+    .range(0.1, 1.0);
+REXCVAR_DEFINE_DOUBLE(mnk_run_turn_limit, 2.0, "Input",
+                      "While roadie running, the fastest the mouse turns sideways, as a multiple of "
+                      "a full A or D steer: above 1 it steers better than the keyboard, without "
+                      "flicking round")
+    .range(1.0, 10.0);
 REXCVAR_DEFINE_BOOL(mnk_invert_y, false, "Input", "Moving the mouse forward looks down");
 REXCVAR_DEFINE_DOUBLE(mnk_mouse_acceleration, 0.0, "Input",
                       "Mouse acceleration: 0 turns the same angle per pixel at any speed (as PC "
@@ -35,8 +44,8 @@ constexpr double kAccelerationFullSpeed = 80.0;
 
 // The camera's turn for one pixel with mnk_sensitivity 1, in Unreal rotator units (65536 a full
 // turn): about 0.044 degrees, a full turn every 8192 pixels, as PC shooters commonly start. The
-// game then scales it by the field of view (less turn while zoomed) and by its own look
-// sensitivity for normal, aiming and zoomed views.
+// game then scales it by the field of view (less turn while zoomed); its own look sensitivity is
+// kept off the mouse.
 constexpr double kRotatorUnitsPerPixel = 8.0;
 
 std::atomic<rex::input::InputSystem*> g_input{nullptr};
