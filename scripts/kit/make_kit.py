@@ -52,18 +52,40 @@ class KitError(Exception):
     pass
 
 
+def response_file_contents(build: Path, config: str, target: str, rsp: str) -> str:
+    """What the response file `rsp` of `target`'s command holds, on one line.
+
+    Ninja writes a response file only while it runs the command, so the command is run once, with
+    `-d keeprsp` so the file stays. The probe is not meant to link, and whether it does is not
+    looked at: the file is written before the command runs."""
+    subprocess.run(["ninja", "-C", str(build), "-f", f"build-{config}.ninja", "-d", "keeprsp", target],
+                   capture_output=True, text=True)
+    path = build / rsp
+    if not path.is_file():
+        raise KitError(f"Ninja did not write the response file {rsp} of {target}")
+    return " ".join(path.read_text().split("\n"))
+
+
 def ninja_command(build: Path, config: str, target: str) -> str:
-    """The last command Ninja would run to build `target`."""
+    """The last command Ninja would run to build `target`, with any response file it uses replaced
+    by what the file holds.
+
+    CMake's Ninja generator moves a command's objects and libraries into a response file
+    (`@file.rsp`) when the command would be longer than cmd.exe takes on Windows (8191 characters),
+    whatever CMAKE_<LANG>_USE_RESPONSE_FILE_FOR_* say. The kit records the arguments themselves:
+    the launcher runs the link without cmd.exe, and passes the objects in a response file of its
+    own (launcher/src-tauri/src/builder.rs)."""
     result = subprocess.run(
         ["ninja", "-C", str(build), "-f", f"build-{config}.ninja", "-t", "commands", "-s", target],
         check=True, capture_output=True, text=True)
     lines = [line for line in result.stdout.splitlines() if line.strip()]
     if not lines:
         raise KitError(f"Ninja has no command for {target}")
-    # A response file is only written while Ninja builds, so the kit cannot record what it holds.
-    if any(token.startswith("@") and token.lower().endswith(".rsp") for token in lines[-1].split()):
-        raise KitError(f"the command for {target} takes its arguments from a response file:\n{lines[-1]}")
-    return lines[-1]
+    command = lines[-1]
+    for token in command.split():
+        if token.startswith("@") and token.lower().endswith(".rsp"):
+            command = command.replace(token, response_file_contents(build, config, target, token[1:]))
+    return command
 
 
 def split_windows(command: str) -> list[str]:
