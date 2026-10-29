@@ -44,6 +44,13 @@ constexpr int kKeyboardMouseCategory = 5;
 // Local co-op, at the game's mature content position (that category's two rows move to the end of
 // Game): choosing it opens the Local co-op menu (local_coop_menu.h) instead of a list.
 constexpr int kLocalCoopCategory = 6;
+// Connection, at the game's credits position: choosing it runs Callback_Credits, where
+// script_hooks.cpp opens the Alboria menu (connection_menu.h). The credits move to a Y button of
+// the list of categories (kNoCategory's buttons), which runs the same function for them.
+constexpr int kConnectionCategory = 7;
+// OptionCategories' last entry, the game's OMI_MAX: no category, only the buttons of the list of
+// categories (and UIScene_Options.CurrentMode while that list is shown).
+constexpr int kCategoryListButtons = 8;
 // Row of the Video category that opens the brightness calibration screen.
 constexpr int kCalibrateRow = 0;
 

@@ -246,6 +246,8 @@ std::function<void()> g_quit_handler;
 std::function<void()> g_restart_handler;
 // Opens the Local co-op menu (SetLocalCoopHandler).
 std::function<void()> g_local_coop_handler;
+// Opens the Alboria menu (SetConnectionHandler).
+std::function<void()> g_connection_handler;
 // Opens the Join by code screen (SetJoinByCodeHandler).
 std::function<void()> g_join_by_code_handler;
 // A join in a room on Alboria (JoinSystemLinkPartyInRoom, "Join by code" below): the System Link
@@ -311,6 +313,7 @@ enum WatchedName {
   kInviteLiveParty,          // UIScene_WhatsUp: RB is pressed
   kUpdatePanelTitle,         // UIWidget_SmallPartyPanel: the party panel names the party's type
   kFindOnlineGamesComplete,  // UIScene_SystemLink: the System Link search is over
+  kCredits,                  // UIScene_Options.Callback_Credits: Connection, or the credits' button
   kWatchedNameCount,
 };
 constexpr const char* kWatchedNames[kWatchedNameCount] = {
@@ -330,7 +333,8 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "UpdateAchievementProgression", "CanAllPlayersPlayOnline", "CreateLIVEParty",
     "Callback_DialogItemPress", "OpenPartyOptions", "BuildPartyOptions",
     "RefreshButtonBarAndPlayerOptions", "CanInviteGearsPlayers", "CanInviteLivePartyPlayers",
-    "InviteGearsPlayers", "InviteLivePartyPlayers", "UpdatePanelTitle", "OnFindOnlineGamesComplete"};
+    "InviteGearsPlayers", "InviteLivePartyPlayers", "UpdatePanelTitle", "OnFindOnlineGamesComplete",
+    "Callback_Credits"};
 
 // FName index of each watched name, -1 until found (0 is a valid index: None).
 std::atomic<int32_t> g_names[kWatchedNameCount];
@@ -1259,6 +1263,29 @@ bool HandleOptionsButton(PPCContext& ctx, uint8_t* base, uint32_t function) {
   return true;
 }
 
+// Y on the list of categories of the Options is the credits' button (pc_options.cpp): it runs
+// Callback_Credits, as choosing the credits did before Connection took their place. RunInstead
+// runs it straight in the interpreter, so it does not reach the hook that turns Connection's call
+// of the same function into the Alboria menu. Returns whether it did.
+bool HandleCreditsButton(PPCContext& ctx, uint8_t* base, uint32_t function) {
+  const uint32_t scene = ctx.r3.u32;
+  if (ObjectName(base, LoadU32(base, function + kObjectOuter)) != "UIScene_Options") return false;
+  if (CurrentMode(base, scene) != kNoCategory) return false;
+  const uint32_t locals = LoadU32(base, ctx.r4.u32 + kFrameLocals);
+  if (base[locals + kFilterInputEvent] != kInputPressed) return false;
+  if (NameText(base, LoadU32(base, locals + kFilterButtonName)) != "XboxTypeS_Y") return false;
+  const uint32_t credits = FindClassFunction(base, LoadU32(base, function + kObjectOuter), "Callback_Credits");
+  if (!credits) {
+    REXLOG_WARN("[Azura options] Callback_Credits not found; the credits button does nothing");
+    return false;
+  }
+  const uint32_t result = ctx.r5.u32;
+  REXLOG_INFO("[Azura options] Opening the credits");
+  RunInstead(ctx, base, credits);
+  if (result) StoreU32(base, result, 1);  // FilterButtonInput's ReturnValue: the press was handled
+  return true;
+}
+
 // Removes every ?listen (or &listen) option from a travel URL.
 static void StripListenParam(std::string& s) {
   std::string lower = s;
@@ -1512,6 +1539,11 @@ void SetRestartHandler(std::function<void()> handler) {
 void SetLocalCoopHandler(std::function<void()> handler) {
   std::lock_guard lock(g_quit_mutex);
   g_local_coop_handler = std::move(handler);
+}
+
+void SetConnectionHandler(std::function<void()> handler) {
+  std::lock_guard lock(g_quit_mutex);
+  g_connection_handler = std::move(handler);
 }
 
 void JoinSystemLinkPartyInRoom() {
@@ -2287,6 +2319,19 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   }
   if (Is(base, function, kFilterButtonInput) && TakeKeyboardStartAsMenuKey(ctx, base, function)) return;
   if (Is(base, function, kFilterButtonInput) && HandleOptionsButton(ctx, base, function)) return;
+  if (Is(base, function, kFilterButtonInput) && HandleCreditsButton(ctx, base, function)) return;
+  // Connection, at the credits' place, runs Callback_Credits: it opens the Alboria menu. (The
+  // credits' own button runs the function without passing here: HandleCreditsButton.)
+  if (Is(base, function, kCredits) && ObjectName(base, LoadU32(base, function + kObjectOuter)) == "UIScene_Options") {
+    std::function<void()> handler;
+    {
+      std::lock_guard lock(g_quit_mutex);
+      handler = g_connection_handler;
+    }
+    REXLOG_INFO("[Azura options] Opening the Alboria menu");
+    if (handler) handler();
+    return;
+  }
   if (Is(base, function, kFilterButtonInput) && IgnoreOtherPlayersStart(ctx, base, function)) return;
   // The Local co-op category runs the storage location's callback: it opens the Local co-op menu.
   if (Is(base, function, kSelectStorageLocation) &&

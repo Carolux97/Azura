@@ -439,6 +439,8 @@ Implemented in `runtime/src/menu/pc_options.{h,cpp}` (data and texts) and `scrip
 | 0 | Game | The game's own rows, then the two of the mature content category (violence 46, mature language 37 with `bRequiresMatureLanguageSupport`) |
 | 5 | Keyboard and mouse | Replaces the storage location: Mouse sensitivity. Back and Defaults |
 | 6 | Local co-op | Replaces the mature content: no list; choosing it opens the Local co-op menu (`runtime/src/local_coop_menu.h`). Greyed out with no controller connected |
+| 7 | Connection | Replaces the credits: no list; choosing it runs `Callback_Credits` as the credits did, and the runtime opens the Alboria menu there (`runtime/src/connection_menu.h`) |
+| 8 | List of categories | Its button bar (`MenuButtons` of the `OMI_MAX` entry: Choose, Back) gets a third button, Y with the credits' own title (`ButtonHandler=OBH_MAX`, so the script does nothing with it): `FilterButtonInput` with `XboxTypeS_Y` while `CurrentMode` is 8 runs `Callback_Credits` in its place, straight in the interpreter, so the credits open (**verified** on screen, 29 October 2026) |
 
 How:
 
