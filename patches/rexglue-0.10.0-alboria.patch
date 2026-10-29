@@ -1,9 +1,9 @@
 diff --git a/include/rex/system/xam/alboria.h b/include/rex/system/xam/alboria.h
 new file mode 100644
-index 0000000..530864e
+index 0000000..d9f62d6
 --- /dev/null
 +++ b/include/rex/system/xam/alboria.h
-@@ -0,0 +1,247 @@
+@@ -0,0 +1,272 @@
 +/**
 + * @file        system/xam/alboria.h
 + * @brief       Alboria: System Link over the internet through our relay
@@ -195,6 +195,13 @@ index 0000000..530864e
 +// earlier one is still running. Hosting and joining sign in too.
 +void RefreshIdentity();
 +
++// Whether the player is signed in to Xbox Live as far as the title can tell, with Alboria behind it
++// (alboria_live): the sign-in state, the online XUID and the online privileges a title checks.
++bool LiveSignedIn();
++// The online XUID that stands for the offline `xuid` while LiveSignedIn: an Xbox Live XUID (top bits
++// 0x0009) with the offline one's low 48 bits.
++uint64_t OnlineXuid(uint64_t xuid);
++
 +// Asks Alboria's API whether it is up, in the background; ServiceReachable then tells the answer.
 +// Does nothing while an earlier check is still running.
 +void CheckService();
@@ -212,8 +219,26 @@ index 0000000..530864e
 +// Leaves the room (the relay closes it for everyone when this installation hosts it).
 +void Leave();
 +
++// --- Xbox Live parties on Alboria (alboria_live) -------------------------------------------------
++
++// The XSESSION_INFO of an Xbox Live session: its ID (8), the host's XNADDR (36) and its key (16).
++constexpr size_t kSessionInfoSize = 60;
++using SessionInfo = std::array<uint8_t, kSessionInfoSize>;
++
++// The host's Live party session, which Alboria keeps with the room for those who join by code. Sent
++// now when connected, or once the room is.
++void PublishSession(const SessionInfo& session);
++// The host's session a join by code brought, as an accepted invite (XInviteGetAcceptedInfo), until
++// the title has read it; nothing otherwise.
++std::optional<SessionInfo> AcceptedInvite();
++// The title read the accepted invite: it is forgotten.
++void ClearAcceptedInvite();
++
 +// Whether this installation is connected to a room.
 +bool Connected();
++// Whether it is connected to a room with other members in it (heard from in the last 30 seconds,
++// or listed by the relay for direct connections).
++bool HasOtherMembers();
 +// Whether it is in a room or setting one up (signing in, creating or joining, connecting).
 +bool InRoom();
 +// Its virtual address in the room; while it is setting up a room it hosts, already the host's
@@ -291,10 +316,10 @@ index 0000000..c7fc5de
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria.cpp b/src/system/xam/alboria.cpp
 new file mode 100644
-index 0000000..e8c1a49
+index 0000000..286acd7
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,1096 @@
+@@ -0,0 +1,1217 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -344,6 +369,10 @@ index 0000000..e8c1a49
 +REXCVAR_DEFINE_STRING(alboria_client, "azura/0.0.0", "Network",
 +                      "Name and version this build gives Alboria when signing in; the service "
 +                      "refuses versions it no longer supports");
++REXCVAR_DEFINE_BOOL(alboria_live, false, "Network",
++                    "Work in progress: the player is signed in to Xbox Live as far as the game can "
++                    "tell, with Alboria behind it, and the game's Xbox Live parties are Alboria's");
++REXCVAR_DECLARE(std::string, network_mode);
 +REXCVAR_DEFINE_BOOL(alboria_direct, true, "Network",
 +                    "Connect directly to the other players of an Alboria room when the network "
 +                    "allows it, with the relay as fallback. Lower latency, but the other players "
@@ -500,6 +529,16 @@ index 0000000..e8c1a49
 +// The service check (CheckService): one at a time, and its last answer.
 +std::atomic<bool> g_checking{false};
 +std::atomic<bool> g_reachable{false};
++// Live parties (alboria_live): the session this installation hosts, to publish once its room is
++// connected; and the host's session a join by code brought, which the title reads as an accepted
++// invite. Guarded by g_mutex.
++std::optional<SessionInfo> g_hosted_session;
++bool g_session_published = false;
++std::optional<SessionInfo> g_accepted_invite;
++// XN_LIVE_INVITE_ACCEPTED (XNID(0, XNOTIFY_LIVE, 2)): the player accepted an invite; its parameter
++// is the user's index.
++constexpr uint32_t kNotifyLiveInviteAccepted = 0x02000002;
++
 +// The account as the last sign-in answered (GetIdentity), and a background sign-in running.
 +std::mutex g_identity_mutex;
 +Identity g_identity;
@@ -567,6 +606,9 @@ index 0000000..e8c1a49
 +  g_proxy_by_port.clear();
 +  for (auto& [address, peer] : g_peers) crypto_wipe(peer.key.data(), peer.key.size());
 +  g_peers.clear();
++  // A new room gets the session of the party it hosts again.
++  g_hosted_session.reset();
++  g_session_published = false;
 +  if (g_socket != kNoSocket) CloseNativeSocket(g_socket);
 +  g_socket = kNoSocket;
 +  g_connection_id = 0;
@@ -759,6 +801,40 @@ index 0000000..e8c1a49
 +  std::string error;
 +};
 +
++// Runs `work` on a thread of its own, detached. An exception it lets out is logged, not left to end
++// the game.
++template <typename Work>
++void RunDetached(const char* what, Work work) {
++  std::thread([what, work = std::move(work)]() mutable {
++    try {
++      work();
++    } catch (const std::exception& error) {
++      REXSYS_ERROR("Alboria: {} failed: {}", what, error.what());
++    }
++  }).detach();
++}
++
++// Fields of an answer of Alboria's API, with `fallback` when the field is missing or of another type
++// (null included): nlohmann's own value() throws then, which would end the game.
++std::string Text(const nlohmann::json& json, const char* key, std::string fallback = {}) {
++  if (!json.is_object()) return fallback;
++  const auto it = json.find(key);
++  return it != json.end() && it->is_string() ? it->get<std::string>() : fallback;
++}
++
++template <typename T>
++T Number(const nlohmann::json& json, const char* key, T fallback) {
++  if (!json.is_object()) return fallback;
++  const auto it = json.find(key);
++  return it != json.end() && it->is_number() ? it->get<T>() : fallback;
++}
++
++bool Flag(const nlohmann::json& json, const char* key, bool fallback) {
++  if (!json.is_object()) return fallback;
++  const auto it = json.find(key);
++  return it != json.end() && it->is_boolean() ? it->get<bool>() : fallback;
++}
++
 +ApiResult CallApi(std::string_view path, const nlohmann::json& request, std::string_view token) {
 +  const std::string url = REXCVAR_GET(alboria_api_url) + std::string(path);
 +  const HttpResponse response = PostJson(url, request.dump(), token);
@@ -768,8 +844,8 @@ index 0000000..e8c1a49
 +  }
 +  auto json = nlohmann::json::parse(response.body, nullptr, false);
 +  if (response.status != 200 || !json.is_object()) {
-+    std::string error = json.is_object() ? json.value("error", "server") : "server";
-+    if (error == "banned") error += ":" + json.value("message", std::string());
++    std::string error = Text(json, "error", "server");
++    if (error == "banned") error += ":" + Text(json, "message");
 +    REXSYS_WARN("Alboria: {} answered {} ({})", path, response.status, error);
 +    return {{}, error};
 +  }
@@ -783,7 +859,7 @@ index 0000000..e8c1a49
 +  const auto public_key = PublicKey(seed);
 +  auto challenge = CallApi("/v1/auth/challenge", {{"public_key", EncodeBase64(public_key)}}, {});
 +  if (!challenge.error.empty()) return challenge;
-+  const auto challenge_bytes = DecodeBase64(challenge.json.value("challenge", std::string()));
++  const auto challenge_bytes = DecodeBase64(Text(challenge.json, "challenge"));
 +  if (!challenge_bytes || challenge_bytes->size() != 32) return {{}, "server"};
 +  const auto signature = SignChallenge(seed, *challenge_bytes);
 +  std::string gamertag = "Player";
@@ -801,8 +877,8 @@ index 0000000..e8c1a49
 +  if (session.error.empty() && session.json.contains("tag")) {
 +    std::lock_guard lock(g_identity_mutex);
 +    g_identity.known = true;
-+    g_identity.gamertag = session.json.value("gamertag", gamertag);
-+    g_identity.tag = session.json.value("tag", 0);
++    g_identity.gamertag = Text(session.json, "gamertag", gamertag);
++    g_identity.tag = Number(session.json, "tag", 0);
 +  }
 +  return session;
 +}
@@ -890,11 +966,13 @@ index 0000000..e8c1a49
 +  }
 +}
 +
++void PublishHostedSession(std::string code, SessionInfo session);
++
 +// Opens the tunnel with `ticket` and runs it until g_stop or the room ends.
 +void RunTunnel(const nlohmann::json& ticket) {
-+  const auto relay = ResolveRelay(ticket.value("relay", std::string()));
-+  const auto key = DecodeBase64(ticket.value("key", std::string()));
-+  const uint32_t connection_id = ticket.value("connection_id", 0u);
++  const auto relay = ResolveRelay(Text(ticket, "relay"));
++  const auto key = DecodeBase64(Text(ticket, "key"));
++  const uint32_t connection_id = Number(ticket, "connection_id", 0u);
 +  if (!relay || !key || key->size() != 32 || !connection_id) {
 +    SetStatus(State::kFailed, relay ? "server" : "relay_unreachable");
 +    return;
@@ -983,16 +1061,30 @@ index 0000000..e8c1a49
 +        std::lock_guard lock(g_mutex);
 +        g_status.state = State::kConnected;
 +        g_status.error.clear();
-+        g_status.code = ticket.value("code", std::string());
++        g_status.code = Text(ticket, "code");
 +        g_status.virtual_ip = virtual_ip;
-+        g_status.host = ticket.value("host", false);
++        g_status.host = Flag(ticket, "host", false);
 +        // A server older than party types answers none: its rooms are joinable.
-+        g_status.party_type = ticket.value("party_type", std::string("joinable")) == "invite_only"
++        g_status.party_type = Text(ticket, "party_type", "joinable") == "invite_only"
 +                                  ? PartyType::kInviteOnly
 +                                  : PartyType::kJoinable;
 +        REXSYS_INFO("Alboria: in room {} as {}.{}.{}.{}{}", g_status.code, virtual_ip >> 24,
 +                    (virtual_ip >> 16) & 0xFF, (virtual_ip >> 8) & 0xFF, virtual_ip & 0xFF,
 +                    g_status.host ? ", hosting" : "");
++        // A Live party: the host publishes its session; a member who joined by code gets the host's
++        // as an accepted invite, which the title acts on as on the console.
++        if (g_status.host && g_hosted_session && !g_session_published) {
++          g_session_published = true;
++          RunDetached("publishing the session", [code = g_status.code, session = *g_hosted_session] { PublishHostedSession(code, session); });
++        }
++        const auto invite = DecodeBase64(Text(ticket, "session"));
++        if (!g_status.host && LiveSignedIn() && invite && invite->size() == kSessionInfoSize) {
++          SessionInfo session;
++          std::memcpy(session.data(), invite->data(), session.size());
++          g_accepted_invite = session;
++          REXSYS_INFO("Alboria: joining the host's Live party, as an accepted invite");
++          REX_KERNEL_STATE()->BroadcastNotification(kNotifyLiveInviteAccepted, 0);
++        }
 +        break;
 +      }
 +      case PacketType::kData:
@@ -1054,6 +1146,15 @@ index 0000000..e8c1a49
 +  g_status.host = false;
 +}
 +
++// Sends the session of the Live party this installation hosts to Alboria, for the room `code`.
++void PublishHostedSession(std::string code, SessionInfo session) {
++  const auto signed_in = SignIn();
++  if (!signed_in.error.empty()) return;
++  const auto published = CallApi("/v1/rooms/session", {{"code", code}, {"session", EncodeBase64(session)}},
++                                 Text(signed_in.json, "token"));
++  if (published.error.empty()) REXSYS_INFO("Alboria: the room has the Live party's session");
++}
++
 +// Signs in, creates or joins a room, then runs the tunnel. `join_code` empty hosts.
 +void Work(uint32_t title_id, int max_members, std::string join_code) {
 +  auto session = SignIn();
@@ -1061,7 +1162,7 @@ index 0000000..e8c1a49
 +    SetStatus(State::kFailed, session.error);
 +    return;
 +  }
-+  const std::string token = session.json.value("token", std::string());
++  const std::string token = Text(session.json, "token");
 +  const std::string title = fmt::format("{:08X}", title_id);
 +  auto room = join_code.empty()
 +                  ? CallApi("/v1/rooms",
@@ -1092,7 +1193,14 @@ index 0000000..e8c1a49
 +void Start(uint32_t title_id, int max_members, std::string join_code) {
 +  StopWorker();
 +  SetStatus(State::kWorking);
-+  g_worker = std::thread(Work, title_id, max_members, std::move(join_code));
++  g_worker = std::thread([title_id, max_members, join_code = std::move(join_code)]() mutable {
++    try {
++      Work(title_id, max_members, std::move(join_code));
++    } catch (const std::exception& error) {
++      REXSYS_ERROR("Alboria: the room failed: {}", error.what());
++      SetStatus(State::kFailed, "server");
++    }
++  });
 +}
 +
 +}  // namespace
@@ -1271,6 +1379,14 @@ index 0000000..e8c1a49
 +  return g_reachable.load();
 +}
 +
++bool LiveSignedIn() {
++  return REXCVAR_GET(alboria_live) && REXCVAR_GET(network_mode) == "online";
++}
++
++uint64_t OnlineXuid(uint64_t xuid) {
++  return uint64_t(0x0009) << 48 | (xuid & 0x0000FFFFFFFFFFFFull);
++}
++
 +Identity GetIdentity() {
 +  std::lock_guard lock(g_identity_mutex);
 +  return g_identity;
@@ -1278,10 +1394,12 @@ index 0000000..e8c1a49
 +
 +void RefreshIdentity() {
 +  if (g_refreshing.exchange(true)) return;
-+  std::thread([] {
++  RunDetached("signing in", [] {
++    struct Done {
++      ~Done() { g_refreshing.store(false); }
++    } done;
 +    SignIn();
-+    g_refreshing.store(false);
-+  }).detach();
++  });
 +}
 +
 +void HostGame(uint32_t title_id, int max_members, PartyType party_type) {
@@ -1299,15 +1417,15 @@ index 0000000..e8c1a49
 +    code = g_status.code;
 +  }
 +  g_host_party_type.store(party_type);
-+  std::thread([code, party_type] {
++  RunDetached("changing the party type", [code, party_type] {
 +    const auto session = SignIn();
 +    if (!session.error.empty()) return;
 +    const auto changed = CallApi(
 +        "/v1/rooms/type",
 +        {{"code", code}, {"party_type", party_type == PartyType::kInviteOnly ? "invite_only" : "joinable"}},
-+        session.json.value("token", std::string()));
++        Text(session.json, "token"));
 +    if (!changed.error.empty()) REXSYS_WARN("Alboria: the room's party type did not change ({})", changed.error);
-+  }).detach();
++  });
 +}
 +
 +void JoinGame(std::string_view code) {
@@ -1329,6 +1447,34 @@ index 0000000..e8c1a49
 +bool Connected() {
 +  std::lock_guard lock(g_mutex);
 +  return g_status.state == State::kConnected;
++}
++
++void PublishSession(const SessionInfo& session) {
++  std::string code;
++  {
++    std::lock_guard lock(g_mutex);
++    g_hosted_session = session;
++    g_session_published = false;
++    if (g_status.state != State::kConnected || !g_status.host) return;
++    g_session_published = true;
++    code = g_status.code;
++  }
++  RunDetached("publishing the session", [code, session] { PublishHostedSession(code, session); });
++}
++
++std::optional<SessionInfo> AcceptedInvite() {
++  std::lock_guard lock(g_mutex);
++  return g_accepted_invite;
++}
++
++void ClearAcceptedInvite() {
++  std::lock_guard lock(g_mutex);
++  g_accepted_invite.reset();
++}
++
++bool HasOtherMembers() {
++  std::lock_guard lock(g_mutex);
++  return g_status.state == State::kConnected && !g_peers.empty();
 +}
 +
 +uint32_t VirtualAddress() {

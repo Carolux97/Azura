@@ -2142,10 +2142,10 @@ index 0000000..1d7d7fb
 +}  // namespace rex::system::xam
 diff --git a/include/rex/system/xam/system_link.h b/include/rex/system/xam/system_link.h
 new file mode 100644
-index 0000000..5ad5fd1
+index 0000000..eeaab48
 --- /dev/null
 +++ b/include/rex/system/xam/system_link.h
-@@ -0,0 +1,125 @@
+@@ -0,0 +1,127 @@
 +/**
 + * @file        system/xam/system_link.h
 + * @brief       System Link: the local network as XNet and the session services show it to a title
@@ -2236,6 +2236,8 @@ index 0000000..5ad5fd1
 +
 +// A new System Link session ID: random, with the System Link type in its top bits.
 +XnKid MakeSystemLinkKid(std::random_device& random);
++// A random session ID marked as an Xbox Live peer session (XNET_XNKID_ONLINE_PEER).
++XnKid MakeOnlinePeerKid(std::random_device& random);
 +// A new key exchange key.
 +XnKey MakeKey(std::random_device& random);
 +// Whether `kid` is a System Link session ID.
@@ -23820,23 +23822,25 @@ index 82a252c..3dcec80 100644
    if (event.gbutton.down) {
      if (xbutton == X_INPUT_GAMEPAD_GUIDE && !REXCVAR_GET(guide_button)) {
 diff --git a/src/kernel/xam/apps/xgi_app.cpp b/src/kernel/xam/apps/xgi_app.cpp
-index 2b222da..444d673 100644
+index 2b222da..e220dd7 100644
 --- a/src/kernel/xam/apps/xgi_app.cpp
 +++ b/src/kernel/xam/apps/xgi_app.cpp
-@@ -10,6 +10,12 @@
+@@ -10,6 +10,14 @@
   */
  
  #include <rex/kernel/xam/apps/xgi_app.h>
 +
++#include <algorithm>
 +#include <cstring>
 +#include <random>
 +
 +#include <rex/system/kernel_state.h>
++#include <rex/system/xam/alboria.h>
 +#include <rex/system/xam/system_link.h>
  #include <rex/logging.h>
  #include <rex/thread.h>
  
-@@ -23,6 +29,28 @@ using namespace rex::system;
+@@ -23,6 +31,28 @@ using namespace rex::system;
  
  XgiApp::XgiApp(KernelState* kernel_state) : App(kernel_state, 0xFB) {}
  
@@ -23865,7 +23869,7 @@ index 2b222da..444d673 100644
  // http://mb.mirage.org/bugzilla/xliveless/main.c
  
  X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
-@@ -83,9 +111,14 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -83,9 +113,14 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
          }
          auto* base = memory_->TranslateVirtual(achievements_ptr);
          for (uint32_t i = 0; i < achievement_count; ++i) {
@@ -23882,7 +23886,7 @@ index 2b222da..444d673 100644
          }
        } else {
          REXKRNL_INFO("XGIUserWriteAchievements: skipped (count={} ptr={:08X})", achievement_count,
-@@ -113,6 +146,38 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -113,6 +148,81 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
            "{:08X})",
            session_ptr, flags, num_slots_public, num_slots_private, user_xuid, session_info_ptr,
            nonce_ptr);
@@ -23890,6 +23894,49 @@ index 2b222da..444d673 100644
 +      // key, and its own XNADDR), and keeps the one the title passes for a session it joins.
 +      const bool system_link_session = (flags & kXSessionCreateUsesPeerNetwork) &&
 +                                       !(flags & kXSessionCreateLiveServices);
++      // An Xbox Live session while signed in to Live through Alboria (alboria_live): it is played in
++      // an Alboria room, which a hosted one creates (Joinable with public slots, Invite only with
++      // private ones only), and handled as a System Link session in that room. The host's
++      // XSESSION_INFO goes to Alboria, so that who joins by code gets it as an accepted invite.
++      const bool live_session = alboria::LiveSignedIn() && (flags & kXSessionCreateUsesPeerNetwork) &&
++                                (flags & kXSessionCreateLiveServices);
++      if (live_session && session_info_ptr) {
++        auto info = memory_->TranslateVirtual(session_info_ptr);
++        SystemLinkSession session;
++        session.hosting = flags & kXSessionCreateHost;
++        if (session.hosting) {
++          if (!alboria::InRoom()) {
++            alboria::HostGame(kernel_state_->title_id(), std::clamp<int>(num_slots_public + num_slots_private, 2, 10),
++                              num_slots_public == 0 && num_slots_private > 0 ? alboria::PartyType::kInviteOnly
++                                                                             : alboria::PartyType::kJoinable);
++          }
++          std::random_device random;
++          session.kid = MakeOnlinePeerKid(random);
++          session.key = MakeKey(random);
++          session.host = MakeXnAddr(LinkAddress(), kernel_state_->player_identity().machine_id);
++          std::memcpy(info + kSessionInfoKidOffset, session.kid.data(), session.kid.size());
++          std::memcpy(info + kSessionInfoHostOffset, session.host.data(), session.host.size());
++          std::memcpy(info + kSessionInfoKeyOffset, session.key.data(), session.key.size());
++          alboria::SessionInfo published;
++          std::memcpy(published.data(), info, published.size());
++          alboria::PublishSession(published);
++        } else {
++          std::memcpy(session.kid.data(), info + kSessionInfoKidOffset, session.kid.size());
++          std::memcpy(session.host.data(), info + kSessionInfoHostOffset, session.host.size());
++          std::memcpy(session.key.data(), info + kSessionInfoKeyOffset, session.key.size());
++        }
++        AddSession(session_ptr, session);
++        const uint32_t host_ip = XnAddrIp(session.host);
++        REXKRNL_INFO("Alboria: {} Live session {:08X} (flags {:08X}), host {}.{}.{}.{}",
++                     session.hosting ? "hosting" : "joining", session_ptr, flags, host_ip >> 24,
++                     (host_ip >> 16) & 0xFF, (host_ip >> 8) & 0xFF, host_ip & 0xFF);
++        if (nonce_ptr) {
++          std::random_device random;
++          const uint64_t nonce = uint64_t(random()) << 32 | random();
++          memory::store_and_swap<uint64_t>(memory_->TranslateVirtual(nonce_ptr), nonce);
++        }
++        return X_E_SUCCESS;
++      }
 +      if (SystemLinkEnabled() && system_link_session && session_info_ptr) {
 +        auto info = memory_->TranslateVirtual(session_info_ptr);
 +        SystemLinkSession session;
@@ -23921,7 +23968,7 @@ index 2b222da..444d673 100644
        return X_E_SUCCESS;
      }
      case 0x000B0011: {
-@@ -123,6 +188,7 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -123,6 +233,7 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
        uint64_t session_nonce = memory::load_and_swap<uint64_t>(buffer + 8);
  
        REXKRNL_DEBUG("XGISessionDelete({:08X}, {:08X}, {:016X})", obj_ptr, flags, session_nonce);
@@ -23929,6 +23976,60 @@ index 2b222da..444d673 100644
  
        return X_E_SUCCESS;
      }
+diff --git a/src/kernel/xam/apps/xlivebase_app.cpp b/src/kernel/xam/apps/xlivebase_app.cpp
+index 3593403..d849409 100644
+--- a/src/kernel/xam/apps/xlivebase_app.cpp
++++ b/src/kernel/xam/apps/xlivebase_app.cpp
+@@ -11,6 +11,8 @@
+ 
+ #include <rex/kernel/xam/apps/xlivebase_app.h>
+ #include <rex/logging.h>
++#include <rex/system/kernel_state.h>
++#include <rex/system/xam/alboria.h>
+ #include <rex/thread.h>
+ 
+ namespace rex {
+@@ -60,11 +62,35 @@ X_HRESULT XLiveBaseApp::DispatchMessageSync(uint32_t message, uint32_t buffer_pt
+       return X_E_FAIL;
+     }
+     case 0x00058023: {
+-      REXKRNL_DEBUG(
+-          "CXLiveMessaging::XMessageGameInviteGetAcceptedInfo({:08X}, {:08X}) "
+-          "unimplemented",
+-          buffer_ptr, buffer_length);
+-      return X_E_FAIL;
++      // XInviteGetAcceptedInfo: with Live parties on Alboria, the host's session a join by code
++      // brought (alboria::AcceptedInvite), as an XINVITE_INFO: invitee XUID (8), inviter XUID (8),
++      // title ID (4), the host's XSESSION_INFO (60), from a game invite (4). Where the title's
++      // XINVITE_INFO is in the message is not known yet: the buffer is logged, and taken as the
++      // structure itself when it is that big, or as {user index, pointer to it} otherwise.
++      namespace alboria = rex::system::xam::alboria;
++      const auto invite = alboria::AcceptedInvite();
++      REXKRNL_INFO("XInviteGetAcceptedInfo({:08X}, {:08X}): {}", buffer_ptr, buffer_length,
++                   invite ? "the Alboria host's session" : "no invite");
++      if (!invite || !buffer_ptr) return X_E_FAIL;
++      constexpr uint32_t kInviteInfoSize = 84;
++      uint32_t info_ptr = buffer_ptr;
++      if (buffer_length < kInviteInfoSize) {
++        const uint32_t first = memory::load_and_swap<uint32_t>(buffer + 0);
++        const uint32_t second = buffer_length >= 8 ? memory::load_and_swap<uint32_t>(buffer + 4) : 0;
++        REXKRNL_INFO("XInviteGetAcceptedInfo buffer: {:08X} {:08X}", first, second);
++        info_ptr = second;
++      }
++      if (!info_ptr) return X_E_FAIL;
++      auto* info = memory_->TranslateVirtual(info_ptr);
++      std::memset(info, 0, kInviteInfoSize);
++      if (const auto* profile = kernel_state_->user_profile(uint32_t(0))) {
++        memory::store_and_swap<uint64_t>(info + 0, alboria::OnlineXuid(profile->xuid()));
++      }
++      memory::store_and_swap<uint32_t>(info + 16, kernel_state_->title_id());
++      std::memcpy(info + 20, invite->data(), invite->size());
++      memory::store_and_swap<uint32_t>(info + 80, 1);
++      alboria::ClearAcceptedInvite();
++      return X_E_SUCCESS;
+     }
+     case 0x00058046: {
+       // Required to be successful for 4D530910 to detect signed-in profile
 diff --git a/src/kernel/xam/xam_content.cpp b/src/kernel/xam/xam_content.cpp
 index 72a50cb..2a724c5 100644
 --- a/src/kernel/xam/xam_content.cpp
@@ -24335,7 +24436,7 @@ index a1a3758..a0f32f2 100644
 -REX_EXPORT_STUB(__imp__NetDll_getsockname);
 -REX_EXPORT_STUB(__imp__NetDll_getsockopt);
 diff --git a/src/kernel/xam/xam_user.cpp b/src/kernel/xam/xam_user.cpp
-index 94468e6..6a3d72b 100644
+index 94468e6..0a194b1 100644
 --- a/src/kernel/xam/xam_user.cpp
 +++ b/src/kernel/xam/xam_user.cpp
 @@ -12,6 +12,7 @@
@@ -24346,7 +24447,23 @@ index 94468e6..6a3d72b 100644
  #include <cstring>
  
  #include <rex/cvar.h>
-@@ -46,8 +47,7 @@ i32 XamUserGetXUID_entry(u32 user_index, u32 type_mask, mapped_u64 xuid_ptr) {
+@@ -26,6 +27,7 @@
+ #include <rex/system/xenumerator.h>
+ #include <rex/system/xio.h>
+ #include <rex/system/xthread.h>
++#include <rex/system/xam/alboria.h>
+ #include <rex/system/xtypes.h>
+ 
+ REXCVAR_DEFINE_UINT32(user_language, 1, "Kernel", "User's language ID");
+@@ -36,6 +38,7 @@ namespace kernel {
+ namespace xam {
+ using namespace rex::system;
+ using namespace rex::system::xam;
++namespace alboria = rex::system::xam::alboria;
+ 
+ i32 XamUserGetXUID_entry(u32 user_index, u32 type_mask, mapped_u64 xuid_ptr) {
+   assert_true(type_mask == 1 || type_mask == 2 || type_mask == 3 || type_mask == 4 ||
+@@ -46,8 +49,7 @@ i32 XamUserGetXUID_entry(u32 user_index, u32 type_mask, mapped_u64 xuid_ptr) {
    uint32_t result = X_E_NO_SUCH_USER;
    uint64_t xuid = 0;
    if (user_index < 4) {
@@ -24356,9 +24473,17 @@ index 94468e6..6a3d72b 100644
        auto type = user_profile->type() & type_mask;
        if (type & (2 | 4)) {
          // maybe online profile?
-@@ -67,14 +67,8 @@ i32 XamUserGetXUID_entry(u32 user_index, u32 type_mask, mapped_u64 xuid_ptr) {
+@@ -66,15 +68,18 @@ i32 XamUserGetXUID_entry(u32 user_index, u32 type_mask, mapped_u64 xuid_ptr) {
+   return result;
  }
  
++// eXUserSigninState_SignedInToLive: signed in, with Xbox Live (Alboria behind it).
++constexpr uint32_t kSignedInToLive = 2;
++// XUSER_INFO_FLAG_LIVE_ENABLED, in X_USER_SIGNIN_INFO's info flags.
++constexpr uint32_t kUserInfoLiveEnabled = 0x00000001;
++// XUSER_GET_SIGNIN_INFO_ONLINE_XUID_ONLY: XamUserGetSigninInfo asks for the online XUID.
++constexpr uint32_t kSigninInfoOnlineXuid = 0x00000002;
++
  u32 XamUserGetSigninState_entry(u32 user_index) {
 -  uint32_t signin_state = 0;
 -  if (user_index < 4) {
@@ -24369,11 +24494,13 @@ index 94468e6..6a3d72b 100644
 -  }
 -  return signin_state;
 +  const auto* user_profile = REX_KERNEL_STATE()->user_profile(user_index);
-+  return user_profile ? user_profile->signin_state() : 0;
++  if (!user_profile) return 0;
++  if (user_index == 0 && alboria::LiveSignedIn()) return kSignedInToLive;
++  return user_profile->signin_state();
  }
  
  typedef struct {
-@@ -93,11 +87,11 @@ i32 XamUserGetSigninInfo_entry(u32 user_index, u32 flags, ppc_ptr_t<X_USER_SIGNI
+@@ -93,13 +98,18 @@ i32 XamUserGetSigninInfo_entry(u32 user_index, u32 flags, ppc_ptr_t<X_USER_SIGNI
    }
  
    std::memset(info, 0, sizeof(X_USER_SIGNIN_INFO));
@@ -24386,8 +24513,15 @@ index 94468e6..6a3d72b 100644
 -  const auto& user_profile = REX_KERNEL_STATE()->user_profile();
    info->xuid = user_profile->xuid();
    info->signin_state = user_profile->signin_state();
++  if (user_index == 0 && alboria::LiveSignedIn()) {
++    info->signin_state = kSignedInToLive;
++    info->unk08 = kUserInfoLiveEnabled;  // the info flags
++    if (flags & kSigninInfoOnlineXuid) info->xuid = alboria::OnlineXuid(user_profile->xuid());
++  }
    rex::string::copy_truncating(info->name, user_profile->name(), rex::countof(info->name));
-@@ -109,11 +103,11 @@ u32 XamUserGetName_entry(u32 user_index, mapped_string buffer, u32 buffer_len) {
+   return X_E_SUCCESS;
+ }
+@@ -109,11 +119,11 @@ u32 XamUserGetName_entry(u32 user_index, mapped_string buffer, u32 buffer_len) {
      return X_E_INVALIDARG;
    }
  
@@ -24401,7 +24535,7 @@ index 94468e6..6a3d72b 100644
    const auto& user_name = user_profile->name();
    rex::string::copy_truncating(buffer, user_name, std::min(buffer_len, uint32_t(16)));
    return X_E_SUCCESS;
-@@ -124,7 +118,8 @@ u32 XamUserGetGamerTag_entry(u32 user_index, mapped_wstring buffer, u32 buffer_l
+@@ -124,7 +134,8 @@ u32 XamUserGetGamerTag_entry(u32 user_index, mapped_wstring buffer, u32 buffer_l
      return X_E_INVALIDARG;
    }
  
@@ -24411,7 +24545,7 @@ index 94468e6..6a3d72b 100644
      return X_E_NO_SUCH_USER;
    }
  
-@@ -132,7 +127,6 @@ u32 XamUserGetGamerTag_entry(u32 user_index, mapped_wstring buffer, u32 buffer_l
+@@ -132,7 +143,6 @@ u32 XamUserGetGamerTag_entry(u32 user_index, mapped_wstring buffer, u32 buffer_l
      return X_E_INVALIDARG;
    }
  
@@ -24419,7 +24553,7 @@ index 94468e6..6a3d72b 100644
    auto user_name = rex::string::to_utf16(user_profile->name());
    rex::string::copy_and_swap_truncating(buffer, user_name, std::min(buffer_len, uint32_t(16)));
    return X_E_SUCCESS;
-@@ -156,8 +150,6 @@ uint32_t XamUserReadProfileSettingsEx(uint32_t title_id, uint32_t user_index, ui
+@@ -156,8 +166,6 @@ uint32_t XamUserReadProfileSettingsEx(uint32_t title_id, uint32_t user_index, ui
      assert_true(xuid_count == 1);
      assert_not_null(xuids);
      // TODO(gibbed): allow proper lookup of arbitrary XUIDs
@@ -24428,7 +24562,7 @@ index 94468e6..6a3d72b 100644
      // TODO(gibbed): we assert here, but in case a title passes xuid_count > 1
      // until it's implemented for release builds...
      xuid_count = 1;
-@@ -212,8 +204,21 @@ uint32_t XamUserReadProfileSettingsEx(uint32_t title_id, uint32_t user_index, ui
+@@ -212,8 +220,21 @@ uint32_t XamUserReadProfileSettingsEx(uint32_t title_id, uint32_t user_index, ui
    // Title ID = 0 means us.
    // 0xfffe07d1 = profile?
  
@@ -24452,7 +24586,7 @@ index 94468e6..6a3d72b 100644
      if (overlapped) {
        REX_KERNEL_STATE()->CompleteOverlappedImmediate(
            REX_KERNEL_MEMORY()->HostToGuestVirtual(overlapped), X_ERROR_NO_SUCH_USER);
-@@ -222,8 +227,6 @@ uint32_t XamUserReadProfileSettingsEx(uint32_t title_id, uint32_t user_index, ui
+@@ -222,8 +243,6 @@ uint32_t XamUserReadProfileSettingsEx(uint32_t title_id, uint32_t user_index, ui
      return X_ERROR_NO_SUCH_USER;
    }
  
@@ -24461,7 +24595,7 @@ index 94468e6..6a3d72b 100644
    // First call asks for size (fill buffer_size_ptr).
    // Second call asks for buffer contents with that size.
  
-@@ -309,8 +312,8 @@ u32 XamUserWriteProfileSettings_entry(u32 title_id, u32 user_index, u32 setting_
+@@ -309,8 +328,8 @@ u32 XamUserWriteProfileSettings_entry(u32 title_id, u32 user_index, u32 setting_
      return X_ERROR_INVALID_PARAMETER;
    }
  
@@ -24472,7 +24606,7 @@ index 94468e6..6a3d72b 100644
      if (overlapped) {
        REX_KERNEL_STATE()->CompleteOverlappedImmediate(overlapped.guest_address(),
                                                        X_ERROR_NO_SUCH_USER);
-@@ -320,7 +323,6 @@ u32 XamUserWriteProfileSettings_entry(u32 title_id, u32 user_index, u32 setting_
+@@ -320,7 +339,6 @@ u32 XamUserWriteProfileSettings_entry(u32 title_id, u32 user_index, u32 setting_
    }
  
    // Update and save settings.
@@ -24480,7 +24614,7 @@ index 94468e6..6a3d72b 100644
  
    for (uint32_t n = 0; n < setting_count; ++n) {
      const X_USER_PROFILE_SETTING& setting = settings[n];
-@@ -378,7 +380,7 @@ u32 XamUserCheckPrivilege_entry(u32 user_index, u32 mask, mapped_u32 out_value)
+@@ -378,18 +396,19 @@ u32 XamUserCheckPrivilege_entry(u32 user_index, u32 mask, mapped_u32 out_value)
        return X_ERROR_INVALID_PARAMETER;
      }
  
@@ -24489,7 +24623,13 @@ index 94468e6..6a3d72b 100644
        return X_ERROR_NO_SUCH_USER;
      }
    }
-@@ -389,7 +391,7 @@ u32 XamUserCheckPrivilege_entry(u32 user_index, u32 mask, mapped_u32 out_value)
+ 
+-  // If we deny everything, games should hopefully not try to do stuff.
+-  *out_value = 0;
++  // Signed in to Live through Alboria: every online privilege is granted (multiplayer, communications,
++  // content, presence...). Otherwise every one is denied, so games do not try online play.
++  *out_value = alboria::LiveSignedIn() ? 1 : 0;
+   return X_ERROR_SUCCESS;
  }
  
  u32 XamUserContentRestrictionGetFlags_entry(u32 user_index, mapped_u32 out_flags) {
@@ -24498,7 +24638,7 @@ index 94468e6..6a3d72b 100644
      return X_ERROR_NO_SUCH_USER;
    }
  
-@@ -400,7 +402,7 @@ u32 XamUserContentRestrictionGetFlags_entry(u32 user_index, mapped_u32 out_flags
+@@ -400,7 +419,7 @@ u32 XamUserContentRestrictionGetFlags_entry(u32 user_index, mapped_u32 out_flags
  
  u32 XamUserContentRestrictionGetRating_entry(u32 user_index, u32 unk1, mapped_u32 out_unk2,
                                               mapped_u32 out_unk3) {
@@ -24507,7 +24647,7 @@ index 94468e6..6a3d72b 100644
      return X_ERROR_NO_SUCH_USER;
    }
  
-@@ -431,7 +433,7 @@ u32 XamUserGetMembershipTier_entry(u32 user_index) {
+@@ -431,7 +450,7 @@ u32 XamUserGetMembershipTier_entry(u32 user_index) {
    if (user_index >= 4) {
      return X_ERROR_INVALID_PARAMETER;
    }
@@ -24516,7 +24656,7 @@ index 94468e6..6a3d72b 100644
      return X_ERROR_NO_SUCH_USER;
    }
    return 6 /* 6 appears to be Gold */;
-@@ -445,18 +447,13 @@ u32 XamUserAreUsersFriends_entry(u32 user_index, u32 unk1, u32 unk2, mapped_u32
+@@ -445,18 +464,13 @@ u32 XamUserAreUsersFriends_entry(u32 user_index, u32 unk1, u32 unk2, mapped_u32
    if (user_index >= 4) {
      result = X_ERROR_INVALID_PARAMETER;
    } else {
@@ -24541,7 +24681,7 @@ index 94468e6..6a3d72b 100644
      }
    }
  
-@@ -481,8 +478,8 @@ u32 XamShowSigninUI_entry(u32 unk, u32 unk_mask) {
+@@ -481,8 +495,8 @@ u32 XamShowSigninUI_entry(u32 unk, u32 unk_mask) {
  
    // To fix game modes that display a 4 profile signin UI (even if playing
    // alone):
@@ -24552,7 +24692,7 @@ index 94468e6..6a3d72b 100644
    // Games seem to sit and loop until we trigger this notification:
    // XN_SYS_UI (off)
    REX_KERNEL_STATE()->BroadcastNotification(0x00000009, 0);
-@@ -713,16 +710,22 @@ u32 XamWriteGamerTile_entry(u32 arg1, u32 arg2, u32 arg3, u32 arg4, u32 arg5, u3
+@@ -713,16 +727,22 @@ u32 XamWriteGamerTile_entry(u32 arg1, u32 arg2, u32 arg3, u32 arg4, u32 arg5, u3
    return X_ERROR_SUCCESS;
  }
  
@@ -24970,10 +25110,10 @@ index 0000000..1cfbf15
 +}  // namespace rex::system::xam
 diff --git a/src/system/xam/system_link.cpp b/src/system/xam/system_link.cpp
 new file mode 100644
-index 0000000..7f3c651
+index 0000000..2583865
 --- /dev/null
 +++ b/src/system/xam/system_link.cpp
-@@ -0,0 +1,380 @@
+@@ -0,0 +1,390 @@
 +/**
 + * @file        system/xam/system_link.cpp
 + * @brief       System Link: the local network as XNet and the session services show it to a title
@@ -25032,6 +25172,7 @@ index 0000000..7f3c651
 +// Top bits of an XNKID that say what kind of session it is; System Link sessions have none set.
 +constexpr uint8_t kXnKidTypeMask = 0xF0;
 +constexpr uint8_t kXnKidSystemLink = 0x00;
++constexpr uint8_t kXnKidOnlinePeer = 0x80;
 +
 +std::mutex g_mutex;
 +std::map<uint32_t, XnAddrBytes> g_address_book;  // by IP address
@@ -25295,6 +25436,15 @@ index 0000000..7f3c651
 +    byte = uint8_t(random());
 +  }
 +  kid[0] = uint8_t((kid[0] & ~kXnKidTypeMask) | kXnKidSystemLink);
++  return kid;
++}
++
++XnKid MakeOnlinePeerKid(std::random_device& random) {
++  XnKid kid;
++  for (auto& byte : kid) {
++    byte = uint8_t(random());
++  }
++  kid[0] = uint8_t((kid[0] & ~kXnKidTypeMask) | kXnKidOnlinePeer);
 +  return kid;
 +}
 +
