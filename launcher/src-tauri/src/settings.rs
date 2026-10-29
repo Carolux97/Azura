@@ -45,6 +45,23 @@ const KEY_USER_LANGUAGE: &str = "user_language";
 const KEY_USER_COUNTRY: &str = "user_country";
 const KEY_GPU_PLUGIN: &str = "gpu_plugin";
 const KEY_FULLSCREEN: &str = "fullscreen";
+/// How the game plays with others: "online" (Alboria, with System Link too) for a player with an
+/// account, "system_link" (the local network only) for a local account.
+const KEY_NETWORK_MODE: &str = "network_mode";
+
+/// `account` in `launcher.toml`: the player signed in to an Alboria account, or chose to play with
+/// a local account. With neither, the welcome screen asks.
+pub const ACCOUNT_ALBORIA: &str = "alboria";
+pub const ACCOUNT_LOCAL: &str = "local";
+
+/// The `network_mode` an account choice gives the game, or `None` to leave the key as it is.
+fn network_mode(account: Option<&str>) -> Option<&'static str> {
+    match account {
+        Some(ACCOUNT_ALBORIA) => Some("online"),
+        Some(ACCOUNT_LOCAL) => Some("system_link"),
+        _ => None,
+    }
+}
 /// Render resolution of the game's Video menu ("auto", "1280x720", "1920x1080" on macOS, "2560x1440"
 /// or "3840x2160").
 /// Defined by the runtime, which sets the draw resolution scale and texture memory from it.
@@ -174,6 +191,11 @@ pub struct Settings {
     /// nothing to draw, and comes back when the game ends.
     #[serde(default = "default_true")]
     pub minimize_while_playing: bool,
+    /// The account the player chose on the welcome screen: [`ACCOUNT_ALBORIA`] or
+    /// [`ACCOUNT_LOCAL`]; `None` until they choose, also after updating from a launcher without
+    /// accounts. It sets the game's `network_mode`.
+    #[serde(default)]
+    pub account: Option<String>,
 }
 
 /// The part of [`Settings`] stored in `launcher.toml`. Every field has a default, so an old or
@@ -193,6 +215,7 @@ struct LauncherFile {
     gpu: Option<String>,
     saves_folder: Option<String>,
     minimize_while_playing: bool,
+    account: Option<String>,
 }
 
 impl Default for LauncherFile {
@@ -207,6 +230,7 @@ impl Default for LauncherFile {
             gpu: None,
             saves_folder: None,
             minimize_while_playing: true,
+            account: None,
         }
     }
 }
@@ -322,6 +346,7 @@ impl SettingsPaths {
             gpu: launcher.gpu,
             saves_folder,
             minimize_while_playing: launcher.minimize_while_playing,
+            account: launcher.account,
         })
     }
 
@@ -380,6 +405,9 @@ impl SettingsPaths {
             KEY_RENDER_RESOLUTION,
             graphics.render_resolution.as_deref().map(value),
         );
+        if let Some(mode) = network_mode(settings.account.as_deref()) {
+            runtime[KEY_NETWORK_MODE] = value(mode);
+        }
         for key in LEGACY_KEYS {
             runtime.remove(key);
         }
@@ -400,6 +428,7 @@ impl SettingsPaths {
             gpu: settings.gpu.clone(),
             saves_folder: self.load_launcher_file()?.saves_folder,
             minimize_while_playing: settings.minimize_while_playing,
+            account: settings.account.clone().filter(|account| account == ACCOUNT_ALBORIA || account == ACCOUNT_LOCAL),
         };
         self.save_launcher_file(&launcher)
     }
@@ -431,6 +460,7 @@ mod tests {
             gpu: Some("0123456789abcdef0123456789abcdef".into()),
             saves_folder: crate::saves::default_folder().to_string_lossy().into_owned(),
             minimize_while_playing: false,
+            account: Some(ACCOUNT_ALBORIA.into()),
         }
     }
 
@@ -445,6 +475,8 @@ mod tests {
         assert_eq!(settings.ui_language, "auto");
         assert_eq!(settings.achievements_view, "list");
         assert_eq!(settings.gpu, None);
+        // No account chosen yet: the welcome screen asks.
+        assert_eq!(settings.account, None);
     }
 
     #[test]
@@ -646,5 +678,28 @@ mod tests {
         settings.game_language = Some("INT".into());
         paths.save(&settings).unwrap();
         assert_eq!(country(&dir), None);
+    }
+
+    #[test]
+    fn the_account_choice_sets_the_network_mode() {
+        let dir = temp_folder("account");
+        let paths = SettingsPaths::new(&dir);
+        let mut settings = sample_settings();
+        paths.save(&settings).unwrap();
+        let runtime = fs::read_to_string(dir.join(RUNTIME_CONFIG)).unwrap();
+        assert!(runtime.contains("network_mode = \"online\""));
+        assert_eq!(paths.load().unwrap().account.as_deref(), Some(ACCOUNT_ALBORIA));
+
+        settings.account = Some(ACCOUNT_LOCAL.into());
+        paths.save(&settings).unwrap();
+        let runtime = fs::read_to_string(dir.join(RUNTIME_CONFIG)).unwrap();
+        assert!(runtime.contains("network_mode = \"system_link\""));
+
+        // No choice (or an unknown one) leaves the key as it is and stores nothing.
+        settings.account = Some("other".into());
+        paths.save(&settings).unwrap();
+        let runtime = fs::read_to_string(dir.join(RUNTIME_CONFIG)).unwrap();
+        assert!(runtime.contains("network_mode = \"system_link\""));
+        assert_eq!(paths.load().unwrap().account, None);
     }
 }
