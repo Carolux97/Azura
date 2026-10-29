@@ -1,9 +1,9 @@
 diff --git a/include/rex/system/xam/alboria.h b/include/rex/system/xam/alboria.h
 new file mode 100644
-index 0000000..d9f62d6
+index 0000000..af47025
 --- /dev/null
 +++ b/include/rex/system/xam/alboria.h
-@@ -0,0 +1,272 @@
+@@ -0,0 +1,316 @@
 +/**
 + * @file        system/xam/alboria.h
 + * @brief       Alboria: System Link over the internet through our relay
@@ -73,6 +73,8 @@ index 0000000..d9f62d6
 +  // From the relay to every member: the room's party type changed, as its byte (1 Joinable,
 +  // 2 Invite only).
 +  kRoom = 12,
++  // From the relay to a member: another member opens a stream to one of its ports (section 5.5).
++  kStream = 13,
 +};
 +
 +enum class CloseReason : uint8_t {
@@ -231,8 +233,18 @@ index 0000000..d9f62d6
 +// The host's session a join by code brought, as an accepted invite (XInviteGetAcceptedInfo), until
 +// the title has read it; nothing otherwise.
 +std::optional<SessionInfo> AcceptedInvite();
-+// The title read the accepted invite: it is forgotten.
++// The title read the accepted invite: it is no longer pending (KnownSession still finds it).
 +void ClearAcceptedInvite();
++// The data the host's title answers quality of service probes with (XNetQosListen's), which
++// Alboria keeps with the room: a member's title reads the party's settings from it when it accepts
++// the invite. Sent now when connected and changed, or once the room is.
++void PublishQosData(std::vector<uint8_t> data);
++// The QoS data of the host whose room this installation joined, for XNetQosLookup; nothing when
++// the host has not published any.
++std::optional<std::vector<uint8_t>> HostQosData();
++// The session with the ID `kid` among the ones Alboria brought (the last accepted invite) or this
++// installation hosts, for XSessionSearchByID.
++std::optional<SessionInfo> KnownSession(std::span<const uint8_t, 8> kid);
 +
 +// Whether this installation is connected to a room.
 +bool Connected();
@@ -275,6 +287,38 @@ index 0000000..d9f62d6
 +// it came from the relay through one of the loopback sockets.
 +std::optional<std::pair<uint32_t, uint16_t>> TranslateSource(uint32_t address, uint16_t port);
 +
++// A datagram socket of the game for `title_port` whose network port (NetworkPort) was taken, by
++// another installation on the same computer: it is bound on `host_port` instead, where the room's
++// datagrams for `title_port` are delivered. Forgotten with ForgetDatagramPort when it closes.
++void RegisterDatagramPort(uint16_t title_port, uint16_t host_port);
++void ForgetDatagramPort(uint16_t host_port);
++
++// --- The game's TCP connections (streams, section 5.5) ---------------------------------------------
++//
++// A TCP connection of the game to another member of the room goes through the server's stream
++// port: each end has a loopback socket the game's socket is connected to, and a thread that passes
++// what it carries, sealed, to and from the server. The game sees an ordinary TCP connection to the
++// member's virtual address.
++
++// Whether a TCP connection to `address` goes to a member through the stream port: another address
++// of the room's network while connected to a room.
++bool StreamsTo(uint32_t address);
++
++// Opens a stream to `port` of the member at `address`, for a game's TCP socket on `source_port`.
++// Returns the loopback port the game's socket connects to instead, or 0 when the stream cannot be
++// opened. Whether the member takes it is known later: when it does not, that connection closes.
++uint16_t OpenStream(uint32_t address, uint16_t port, uint16_t source_port);
++
++// A TCP socket of the game listens on `game_port`, bound to `local_port` of the loopback
++// interface: streams other members open to `game_port` connect there. Forgotten with
++// ForgetListener when the socket closes.
++void RegisterListener(uint16_t game_port, uint16_t local_port);
++void ForgetListener(uint16_t local_port);
++
++// The member and port the stream that connected from loopback port `local_port` comes from, when
++// it is one: what the game's accept reports instead of the loopback address.
++std::optional<std::pair<uint32_t, uint16_t>> StreamSource(uint16_t local_port);
++
 +}  // namespace rex::system::xam::alboria
 diff --git a/include/rex/system/xam/alboria_http.h b/include/rex/system/xam/alboria_http.h
 new file mode 100644
@@ -316,10 +360,10 @@ index 0000000..c7fc5de
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria.cpp b/src/system/xam/alboria.cpp
 new file mode 100644
-index 0000000..286acd7
+index 0000000..9050682
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,1217 @@
+@@ -0,0 +1,1624 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -336,6 +380,7 @@ index 0000000..286acd7
 +#include <cstring>
 +#include <map>
 +#include <mutex>
++#include <random>
 +#include <thread>
 +
 +#include <fmt/format.h>
@@ -359,6 +404,7 @@ index 0000000..286acd7
 +#include <arpa/inet.h>
 +#include <netdb.h>
 +#include <netinet/in.h>
++#include <netinet/tcp.h>
 +#include <sys/socket.h>
 +#include <sys/time.h>
 +#include <unistd.h>
@@ -535,6 +581,12 @@ index 0000000..286acd7
 +std::optional<SessionInfo> g_hosted_session;
 +bool g_session_published = false;
 +std::optional<SessionInfo> g_accepted_invite;
++std::optional<SessionInfo> g_last_invite;  // the last one, read or not
++// The QoS data this installation's title listens with (published with the room it hosts), and the
++// one of the host of the room it joined.
++std::optional<std::vector<uint8_t>> g_hosted_qos;
++bool g_qos_published = false;
++std::optional<std::vector<uint8_t>> g_host_qos;
 +// XN_LIVE_INVITE_ACCEPTED (XNID(0, XNOTIFY_LIVE, 2)): the player accepted an invite; its parameter
 +// is the user's index.
 +constexpr uint32_t kNotifyLiveInviteAccepted = 0x02000002;
@@ -577,6 +629,16 @@ index 0000000..286acd7
 +std::map<uint64_t, Proxy> g_proxies;          // by member << 16 | member port
 +std::map<uint16_t, uint64_t> g_proxy_by_port;  // local port -> key in g_proxies
 +std::map<uint32_t, Peer> g_peers;              // by virtual address
++// Streams (section 5.5): the stream port's address, from the ticket; the game's listening TCP
++// sockets (game port -> loopback port), which outlive rooms as the game's sockets do; and where each
++// stream a member opened to this installation comes from (loopback port of its connection to the
++// game -> member and port).
++std::optional<sockaddr_in> g_stream_server;
++std::map<uint16_t, uint16_t> g_listeners;
++// The game's datagram sockets bound off their network port (RegisterDatagramPort): title port ->
++// host port.
++std::map<uint16_t, uint16_t> g_datagram_ports;
++std::map<uint16_t, std::pair<uint32_t, uint16_t>> g_stream_sources;
 +
 +void SetStatus(State state, std::string error = {}) {
 +  std::lock_guard lock(g_mutex);
@@ -609,8 +671,12 @@ index 0000000..286acd7
 +  // A new room gets the session of the party it hosts again.
 +  g_hosted_session.reset();
 +  g_session_published = false;
++  // The title keeps listening with the same QoS data: it goes to the next room it hosts.
++  g_qos_published = false;
++  g_host_qos.reset();
 +  if (g_socket != kNoSocket) CloseNativeSocket(g_socket);
 +  g_socket = kNoSocket;
++  g_stream_server.reset();
 +  g_connection_id = 0;
 +  g_sent_counter = 0;
 +  g_key.fill(0);
@@ -790,7 +856,9 @@ index 0000000..286acd7
 +    g_proxy_by_port[proxy.local_port] = key;
 +    it = g_proxies.emplace(key, proxy).first;
 +  }
-+  const sockaddr_in to = MakeAddress(kLoopback, NetworkPort(destination_port));
++  const auto moved = g_datagram_ports.find(destination_port);
++  const sockaddr_in to = MakeAddress(
++      kLoopback, moved != g_datagram_ports.end() ? moved->second : NetworkPort(destination_port));
 +  sendto(it->second.handle, reinterpret_cast<const char*>(payload.data()), int(payload.size()), 0,
 +         reinterpret_cast<const sockaddr*>(&to), sizeof(to));
 +}
@@ -967,10 +1035,14 @@ index 0000000..286acd7
 +}
 +
 +void PublishHostedSession(std::string code, SessionInfo session);
++void PublishHostedQos(std::string code, std::vector<uint8_t> data);
++void AnswerStream(std::span<const uint8_t> announcement);
 +
 +// Opens the tunnel with `ticket` and runs it until g_stop or the room ends.
 +void RunTunnel(const nlohmann::json& ticket) {
 +  const auto relay = ResolveRelay(Text(ticket, "relay"));
++  // A server older than streams gives no stream port: the game's TCP connections then fail.
++  const auto stream_server = ResolveRelay(Text(ticket, "stream"));
 +  const auto key = DecodeBase64(Text(ticket, "key"));
 +  const uint32_t connection_id = Number(ticket, "connection_id", 0u);
 +  if (!relay || !key || key->size() != 32 || !connection_id) {
@@ -992,6 +1064,7 @@ index 0000000..286acd7
 +    const sockaddr_in any = MakeAddress(0, 0);
 +    bind(g_socket, reinterpret_cast<const sockaddr*>(&any), sizeof(any));
 +    g_relay = *relay;
++    g_stream_server = stream_server;
 +    std::memcpy(g_key.data(), key->data(), 32);
 +    g_connection_id = connection_id;
 +    g_sent_counter = 0;
@@ -1077,11 +1150,19 @@ index 0000000..286acd7
 +          g_session_published = true;
 +          RunDetached("publishing the session", [code = g_status.code, session = *g_hosted_session] { PublishHostedSession(code, session); });
 +        }
++        if (g_status.host && g_hosted_qos && !g_qos_published) {
++          g_qos_published = true;
++          RunDetached("publishing the QoS data", [code = g_status.code, data = *g_hosted_qos] { PublishHostedQos(code, data); });
++        }
++        if (!g_status.host) {
++          if (auto qos = DecodeBase64(Text(ticket, "qos")); qos && !qos->empty()) g_host_qos = std::move(*qos);
++        }
 +        const auto invite = DecodeBase64(Text(ticket, "session"));
 +        if (!g_status.host && LiveSignedIn() && invite && invite->size() == kSessionInfoSize) {
 +          SessionInfo session;
 +          std::memcpy(session.data(), invite->data(), session.size());
 +          g_accepted_invite = session;
++          g_last_invite = session;
 +          REXSYS_INFO("Alboria: joining the host's Live party, as an accepted invite");
 +          REX_KERNEL_STATE()->BroadcastNotification(kNotifyLiveInviteAccepted, 0);
 +        }
@@ -1105,6 +1186,9 @@ index 0000000..286acd7
 +        UpdatePeersLocked(*body, last_received);
 +        break;
 +      }
++      case PacketType::kStream:
++        AnswerStream(*body);
++        break;
 +      case PacketType::kRoom: {
 +        if (body->empty()) break;
 +        std::lock_guard lock(g_mutex);
@@ -1155,6 +1239,15 @@ index 0000000..286acd7
 +  if (published.error.empty()) REXSYS_INFO("Alboria: the room has the Live party's session");
 +}
 +
++// Sends the QoS data of the Live party this installation hosts to Alboria, for the room `code`.
++void PublishHostedQos(std::string code, std::vector<uint8_t> data) {
++  const auto signed_in = SignIn();
++  if (!signed_in.error.empty()) return;
++  const auto published = CallApi("/v1/rooms/qos", {{"code", code}, {"qos", EncodeBase64(data)}},
++                                 Text(signed_in.json, "token"));
++  if (published.error.empty()) REXSYS_INFO("Alboria: the room has the Live party's QoS data ({} bytes)", data.size());
++}
++
 +// Signs in, creates or joins a room, then runs the tunnel. `join_code` empty hosts.
 +void Work(uint32_t title_id, int max_members, std::string join_code) {
 +  auto session = SignIn();
@@ -1203,6 +1296,279 @@ index 0000000..286acd7
 +  });
 +}
 +
++// --- Streams (docs/alboria-relay.md, section 5.5) ---------------------------------------------------
++
++// A connection to the stream port opens with its role (after magic and version), then the
++// connection ID and the stream ID, in the clear; then records: a 2-byte length and the bytes sealed
++// with that end's stream key, a counter for each direction as the nonce.
++constexpr uint8_t kStreamDial = 1;
++constexpr uint8_t kStreamAnswer = 2;
++constexpr uint8_t kStreamRefuse = 3;
++constexpr size_t kStreamOpeningSize = 12;
++constexpr size_t kMaxRecordBody = 16384;
++constexpr std::string_view kStreamKeyLabel = "alboria-stream-v1";
++// How long the game's connection to a dialing proxy, and the other member's answer, may take.
++constexpr int kStreamWaitMs = 12000;
++
++// The key of one end of stream `stream_id`: HMAC-SHA512 of the label, the stream ID and the role
++// (1 dials, 2 answers or refuses), keyed with the member's key, first 32 bytes.
++PacketKey StreamKey(const PacketKey& member_key, uint32_t stream_id, uint8_t role) {
++  std::vector<uint8_t> input(kStreamKeyLabel.begin(), kStreamKeyLabel.end());
++  for (int i = 0; i < 4; ++i) input.push_back(uint8_t(stream_id >> (24 - 8 * i)));
++  input.push_back(role == kStreamDial ? 1 : 2);
++  uint8_t mac[64];
++  crypto_sha512_hmac(mac, member_key.data(), member_key.size(), input.data(), input.size());
++  PacketKey key;
++  std::memcpy(key.data(), mac, key.size());
++  crypto_wipe(mac, sizeof(mac));
++  return key;
++}
++
++bool SendAll(NativeSocket handle, const uint8_t* data, size_t size) {
++  while (size) {
++    const int sent = send(handle, reinterpret_cast<const char*>(data), int(size), 0);
++    if (sent <= 0) return false;
++    data += sent;
++    size -= size_t(sent);
++  }
++  return true;
++}
++
++bool ReceiveAll(NativeSocket handle, uint8_t* data, size_t size) {
++  while (size) {
++    const int received = recv(handle, reinterpret_cast<char*>(data), int(size), 0);
++    if (received <= 0) return false;
++    data += received;
++    size -= size_t(received);
++  }
++  return true;
++}
++
++// Waits up to `milliseconds` for `handle` to be readable (or writable); false on timeout or error.
++bool WaitReady(NativeSocket handle, int milliseconds, bool write = false) {
++  fd_set set;
++  FD_ZERO(&set);
++  FD_SET(handle, &set);
++  timeval timeout{milliseconds / 1000, (milliseconds % 1000) * 1000};
++  return select(int(handle) + 1, write ? nullptr : &set, write ? &set : nullptr, nullptr, &timeout) > 0;
++}
++
++// One end's connection to the stream port and its records' key and counters.
++struct StreamChannel {
++  NativeSocket handle = kNoSocket;
++  PacketKey key{};
++  uint64_t sent = 0;
++  uint64_t received = 0;
++
++  bool Send(std::span<const uint8_t> body) {
++    std::vector<uint8_t> record(2 + body.size() + kTagSize);
++    record[0] = uint8_t((body.size() + kTagSize) >> 8);
++    record[1] = uint8_t(body.size() + kTagSize);
++    uint8_t nonce[12];
++    Nonce(Direction::kToRelay, sent++, nonce);
++    crypto_aead_ctx context;
++    crypto_aead_init_ietf(&context, key.data(), nonce);
++    crypto_aead_write(&context, record.data() + 2, record.data() + 2 + body.size(), nullptr, 0,
++                      body.data(), body.size());
++    crypto_wipe(&context, sizeof(context));
++    return SendAll(handle, record.data(), record.size());
++  }
++
++  // The next record's body; nothing when the connection ends or the record does not authenticate.
++  std::optional<std::vector<uint8_t>> Receive() {
++    uint8_t length_bytes[2];
++    if (!ReceiveAll(handle, length_bytes, 2)) return std::nullopt;
++    const size_t length = size_t(length_bytes[0]) << 8 | length_bytes[1];
++    if (length < kTagSize || length > kMaxRecordBody + kTagSize) return std::nullopt;
++    std::vector<uint8_t> sealed(length);
++    if (!ReceiveAll(handle, sealed.data(), length)) return std::nullopt;
++    std::vector<uint8_t> body(length - kTagSize);
++    uint8_t nonce[12];
++    Nonce(Direction::kFromRelay, received++, nonce);
++    crypto_aead_ctx context;
++    crypto_aead_init_ietf(&context, key.data(), nonce);
++    const int result = crypto_aead_read(&context, body.data(), sealed.data() + body.size(), nullptr, 0,
++                                        sealed.data(), body.size());
++    crypto_wipe(&context, sizeof(context));
++    if (result != 0) return std::nullopt;
++    return body;
++  }
++};
++
++// What a stream thread needs of the room, copied when the stream starts.
++struct StreamRoom {
++  sockaddr_in server{};
++  PacketKey key{};
++  uint32_t connection_id = 0;
++};
++
++std::optional<StreamRoom> CurrentStreamRoom() {
++  std::lock_guard lock(g_mutex);
++  if (g_status.state != State::kConnected || !g_stream_server) return std::nullopt;
++  return StreamRoom{*g_stream_server, g_key, g_connection_id};
++}
++
++// Connects to the stream port and sends the opening and first record of `role` for `stream_id`.
++std::optional<StreamChannel> OpenStreamChannel(const StreamRoom& room, uint8_t role, uint32_t stream_id,
++                                               std::span<const uint8_t> first) {
++  StreamChannel channel;
++  channel.handle = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
++  if (channel.handle == kNoSocket) return std::nullopt;
++  int on = 1;
++  setsockopt(channel.handle, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&on), sizeof(on));
++  if (connect(channel.handle, reinterpret_cast<const sockaddr*>(&room.server), sizeof(room.server)) != 0) {
++    CloseNativeSocket(channel.handle);
++    return std::nullopt;
++  }
++  channel.key = StreamKey(room.key, stream_id, role);
++  uint8_t opening[kStreamOpeningSize] = {kMagic0, kMagic1, kVersion, role};
++  for (int i = 0; i < 4; ++i) opening[4 + i] = uint8_t(room.connection_id >> (24 - 8 * i));
++  for (int i = 0; i < 4; ++i) opening[8 + i] = uint8_t(stream_id >> (24 - 8 * i));
++  if (!SendAll(channel.handle, opening, sizeof(opening)) || !channel.Send(first)) {
++    CloseNativeSocket(channel.handle);
++    return std::nullopt;
++  }
++  return channel;
++}
++
++// Passes what the game's connection `game` sends to the stream, sealed, and the stream's records
++// to the game, until either side closes; then closes both.
++void PumpStream(NativeSocket game, StreamChannel& channel) {
++  std::vector<uint8_t> buffer(kMaxRecordBody);
++  for (;;) {
++    fd_set set;
++    FD_ZERO(&set);
++    FD_SET(game, &set);
++    FD_SET(channel.handle, &set);
++    const NativeSocket highest = std::max(game, channel.handle);
++    if (select(int(highest) + 1, &set, nullptr, nullptr, nullptr) <= 0) break;
++    if (FD_ISSET(game, &set)) {
++      const int read = recv(game, reinterpret_cast<char*>(buffer.data()), int(buffer.size()), 0);
++      if (read <= 0 || !channel.Send({buffer.data(), size_t(read)})) break;
++    }
++    if (FD_ISSET(channel.handle, &set)) {
++      const auto body = channel.Receive();
++      if (!body || !SendAll(game, body->data(), body->size())) break;
++    }
++  }
++  CloseNativeSocket(game);
++  CloseNativeSocket(channel.handle);
++  crypto_wipe(channel.key.data(), channel.key.size());
++}
++
++uint32_t NewStreamId() {
++  uint32_t id = 0;
++  while (!id) {
++    static std::random_device random;
++    id = random();
++  }
++  return id;
++}
++
++// The dialing end: waits for the game's socket on `listener`, opens the stream to `address`:`port`
++// and passes the connection through it once the member answers.
++void RunDialedStream(NativeSocket listener, StreamRoom room, uint32_t address, uint16_t port,
++                     uint16_t source_port) {
++  NativeSocket game = kNoSocket;
++  if (WaitReady(listener, kStreamWaitMs)) game = accept(listener, nullptr, nullptr);
++  CloseNativeSocket(listener);
++  if (game == kNoSocket) return;
++  const uint32_t stream_id = NewStreamId();
++  uint8_t dial[8];
++  for (int i = 0; i < 4; ++i) dial[i] = uint8_t(address >> (24 - 8 * i));
++  dial[4] = uint8_t(port >> 8);
++  dial[5] = uint8_t(port);
++  dial[6] = uint8_t(source_port >> 8);
++  dial[7] = uint8_t(source_port);
++  auto channel = OpenStreamChannel(room, kStreamDial, stream_id, dial);
++  if (!channel) {
++    REXSYS_WARN("Alboria: the stream port could not be reached");
++    CloseNativeSocket(game);
++    return;
++  }
++  SetReceiveTimeout(channel->handle, kStreamWaitMs);
++  const auto answer = channel->Receive();
++  SetReceiveTimeout(channel->handle, 0);
++  if (!answer || answer->size() != 1 || (*answer)[0] != 1) {
++    REXSYS_INFO("Alboria: stream to {}.{}.{}.{}:{} not taken", address >> 24, (address >> 16) & 0xFF,
++                (address >> 8) & 0xFF, address & 0xFF, port);
++    CloseNativeSocket(game);
++    CloseNativeSocket(channel->handle);
++    return;
++  }
++  REXSYS_INFO("Alboria: stream to {}.{}.{}.{}:{} open", address >> 24, (address >> 16) & 0xFF,
++              (address >> 8) & 0xFF, address & 0xFF, port);
++  PumpStream(game, *channel);
++}
++
++// The answering end of a stream the relay announced (STREAM): connects to the game's socket that
++// listens on that port and passes the connection through the stream, or refuses when none does.
++void AnswerStream(std::span<const uint8_t> announcement) {
++  if (announcement.size() != 12) return;
++  auto read32 = [&](size_t at) {
++    return uint32_t(announcement[at]) << 24 | uint32_t(announcement[at + 1]) << 16 |
++           uint32_t(announcement[at + 2]) << 8 | announcement[at + 3];
++  };
++  const uint32_t stream_id = read32(0);
++  const uint32_t address = read32(4);
++  const uint16_t port = uint16_t(announcement[8] << 8 | announcement[9]);
++  const uint16_t to_port = uint16_t(announcement[10] << 8 | announcement[11]);
++  // Called from the tunnel's thread, which holds no lock here.
++  std::optional<uint16_t> local_port;
++  {
++    std::lock_guard lock(g_mutex);
++    if (const auto it = g_listeners.find(to_port); it != g_listeners.end()) local_port = it->second;
++  }
++  const auto room = CurrentStreamRoom();
++  if (!room) return;
++  RunDetached("answering a stream", [room = *room, stream_id, address, port, to_port, local_port] {
++    // The connection to the game's listening socket is bound first, so the game's accept, which can
++    // come at once, already finds where it comes from: the member, not the loopback.
++    NativeSocket game = kNoSocket;
++    uint16_t game_side_port = 0;
++    if (local_port) {
++      game = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
++      const sockaddr_in any_loopback = MakeAddress(kLoopback, 0);
++      sockaddr_in bound{};
++      socklen_t length = sizeof(bound);
++      if (game != kNoSocket &&
++          bind(game, reinterpret_cast<const sockaddr*>(&any_loopback), sizeof(any_loopback)) == 0 &&
++          getsockname(game, reinterpret_cast<sockaddr*>(&bound), &length) == 0) {
++        game_side_port = ntohs(bound.sin_port);
++        {
++          std::lock_guard lock(g_mutex);
++          g_stream_sources[game_side_port] = {address, port};
++        }
++        const sockaddr_in target = MakeAddress(kLoopback, *local_port);
++        if (connect(game, reinterpret_cast<const sockaddr*>(&target), sizeof(target)) != 0) {
++          CloseNativeSocket(game);
++          game = kNoSocket;
++        }
++      } else if (game != kNoSocket) {
++        CloseNativeSocket(game);
++        game = kNoSocket;
++      }
++    }
++    if (game == kNoSocket) {
++      REXSYS_INFO("Alboria: stream to port {} refused: nothing of the game listens there", to_port);
++      if (auto refusal = OpenStreamChannel(room, kStreamRefuse, stream_id, {})) CloseNativeSocket(refusal->handle);
++      std::lock_guard lock(g_mutex);
++      g_stream_sources.erase(game_side_port);
++      return;
++    }
++    auto channel = OpenStreamChannel(room, kStreamAnswer, stream_id, {});
++    if (channel) {
++      REXSYS_INFO("Alboria: stream from {}.{}.{}.{}:{} to port {} open", address >> 24, (address >> 16) & 0xFF,
++                  (address >> 8) & 0xFF, address & 0xFF, port, to_port);
++      PumpStream(game, *channel);
++    } else {
++      CloseNativeSocket(game);
++    }
++    std::lock_guard lock(g_mutex);
++    g_stream_sources.erase(game_side_port);
++  });
++}
++
 +}  // namespace
 +
 +// --- Packets ----------------------------------------------------------------------------------------
@@ -1224,7 +1590,7 @@ index 0000000..286acd7
 +std::optional<Header> ParseHeader(std::span<const uint8_t> packet) {
 +  if (packet.size() < kHeaderSize + kTagSize || packet.size() > kMaxPacketSize) return std::nullopt;
 +  if (packet[0] != kMagic0 || packet[1] != kMagic1 || packet[2] != kVersion) return std::nullopt;
-+  if (packet[3] < uint8_t(PacketType::kHello) || packet[3] > uint8_t(PacketType::kRoom)) {
++  if (packet[3] < uint8_t(PacketType::kHello) || packet[3] > uint8_t(PacketType::kStream)) {
 +    return std::nullopt;
 +  }
 +  Header header;
@@ -1462,6 +1828,25 @@ index 0000000..286acd7
 +  RunDetached("publishing the session", [code, session] { PublishHostedSession(code, session); });
 +}
 +
++void PublishQosData(std::vector<uint8_t> data) {
++  std::string code;
++  {
++    std::lock_guard lock(g_mutex);
++    if (g_hosted_qos == data) return;
++    g_hosted_qos = data;
++    g_qos_published = false;
++    if (g_status.state != State::kConnected || !g_status.host) return;
++    g_qos_published = true;
++    code = g_status.code;
++  }
++  RunDetached("publishing the QoS data", [code, data = std::move(data)] { PublishHostedQos(code, data); });
++}
++
++std::optional<std::vector<uint8_t>> HostQosData() {
++  std::lock_guard lock(g_mutex);
++  return g_host_qos;
++}
++
 +std::optional<SessionInfo> AcceptedInvite() {
 +  std::lock_guard lock(g_mutex);
 +  return g_accepted_invite;
@@ -1470,6 +1855,14 @@ index 0000000..286acd7
 +void ClearAcceptedInvite() {
 +  std::lock_guard lock(g_mutex);
 +  g_accepted_invite.reset();
++}
++
++std::optional<SessionInfo> KnownSession(std::span<const uint8_t, 8> kid) {
++  std::lock_guard lock(g_mutex);
++  for (const auto& session : {g_last_invite, g_hosted_session}) {
++    if (session && std::equal(kid.begin(), kid.end(), session->begin())) return session;
++  }
++  return std::nullopt;
 +}
 +
 +bool HasOtherMembers() {
@@ -1534,6 +1927,64 @@ index 0000000..286acd7
 +  if (it == g_proxy_by_port.end()) return std::nullopt;
 +  const Proxy& proxy = g_proxies.at(it->second);
 +  return std::pair(proxy.member, proxy.member_port);
++}
++
++bool StreamsTo(uint32_t address) {
++  if ((address & kNetworkMask) != kNetwork || address == kNetworkBroadcast) return false;
++  std::lock_guard lock(g_mutex);
++  return g_status.state == State::kConnected && address != g_status.virtual_ip;
++}
++
++uint16_t OpenStream(uint32_t address, uint16_t port, uint16_t source_port) {
++  const auto room = CurrentStreamRoom();
++  if (!room) return 0;
++  // The game's socket connects to this listener, which takes that one connection.
++  const NativeSocket listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
++  if (listener == kNoSocket) return 0;
++  const sockaddr_in loopback = MakeAddress(kLoopback, 0);
++  sockaddr_in bound{};
++  socklen_t length = sizeof(bound);
++  if (bind(listener, reinterpret_cast<const sockaddr*>(&loopback), sizeof(loopback)) != 0 ||
++      listen(listener, 1) != 0 ||
++      getsockname(listener, reinterpret_cast<sockaddr*>(&bound), &length) != 0) {
++    CloseNativeSocket(listener);
++    return 0;
++  }
++  RunDetached("a stream", [listener, room = *room, address, port, source_port] {
++    RunDialedStream(listener, room, address, port, source_port);
++  });
++  return ntohs(bound.sin_port);
++}
++
++void RegisterDatagramPort(uint16_t title_port, uint16_t host_port) {
++  std::lock_guard lock(g_mutex);
++  g_datagram_ports[title_port] = host_port;
++}
++
++void ForgetDatagramPort(uint16_t host_port) {
++  std::lock_guard lock(g_mutex);
++  for (auto it = g_datagram_ports.begin(); it != g_datagram_ports.end();) {
++    it = it->second == host_port ? g_datagram_ports.erase(it) : std::next(it);
++  }
++}
++
++void RegisterListener(uint16_t game_port, uint16_t local_port) {
++  std::lock_guard lock(g_mutex);
++  g_listeners[game_port] = local_port;
++}
++
++void ForgetListener(uint16_t local_port) {
++  std::lock_guard lock(g_mutex);
++  for (auto it = g_listeners.begin(); it != g_listeners.end();) {
++    it = it->second == local_port ? g_listeners.erase(it) : std::next(it);
++  }
++}
++
++std::optional<std::pair<uint32_t, uint16_t>> StreamSource(uint16_t local_port) {
++  std::lock_guard lock(g_mutex);
++  const auto it = g_stream_sources.find(local_port);
++  if (it == g_stream_sources.end()) return std::nullopt;
++  return it->second;
 +}
 +
 +}  // namespace rex::system::xam::alboria

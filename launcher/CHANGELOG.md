@@ -16,8 +16,10 @@ indented lines.
   shadows, ambient occlusion, bloom and lens flares. Turning off depth of field and dynamic shadows
   saves the most graphics card time (measured on macOS); the other three change the look only.
   Ambient occlusion stays off by default on Linux, as before.
-- macOS: 1920 × 1080 in the render resolutions of the launcher and the game's Video menu, between
-  1280 × 720 and 2560 × 1440 in detail and graphics card time.
+- 1920 × 1080 in the render resolutions of the launcher and the game's Video menu. On macOS it sits
+  between 1280 × 720 and 2560 × 1440 in detail and graphics card time; on Linux and Windows the game
+  is drawn at 2560 × 1440 and scaled down to the screen, so it takes the graphics card time of
+  2560 × 1440.
 - macOS: cheaper pixel shaders in textures that need no sign handling, about 10% less graphics
   card time per frame in the scene measured. The first start after updating compiles the shaders
   again, with the usual "Compiling shaders" notice.
