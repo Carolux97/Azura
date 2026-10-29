@@ -97,6 +97,7 @@ REXCVAR_DECLARE(double, field_of_view);
 REXCVAR_DECLARE(bool, film_grain);
 REXCVAR_DECLARE(std::string, network_mode);
 REXCVAR_DECLARE(uint32_t, user_language);
+REXCVAR_DECLARE(bool, menu_remove_unused);
 
 extern "C" void __imp__sub_822DF4D0(PPCContext& __restrict ctx, uint8_t* base);
 extern "C" void __imp__sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base);
@@ -314,6 +315,7 @@ enum WatchedName {
   kUpdatePanelTitle,         // UIWidget_SmallPartyPanel: the party panel names the party's type
   kFindOnlineGamesComplete,  // UIScene_SystemLink: the System Link search is over
   kCredits,                  // UIScene_Options.Callback_Credits: Connection, or the credits' button
+  kClientMenuSelected,       // UIScene_FrontEnd: a choice in the menu of a player in another's party
   kWatchedNameCount,
 };
 constexpr const char* kWatchedNames[kWatchedNameCount] = {
@@ -334,7 +336,7 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "Callback_DialogItemPress", "OpenPartyOptions", "BuildPartyOptions",
     "RefreshButtonBarAndPlayerOptions", "CanInviteGearsPlayers", "CanInviteLivePartyPlayers",
     "InviteGearsPlayers", "InviteLivePartyPlayers", "UpdatePanelTitle", "OnFindOnlineGamesComplete",
-    "Callback_Credits"};
+    "Callback_Credits",      "Callback_ClientMenuOptionWasSelected"};
 
 // FName index of each watched name, -1 until found (0 is a valid index: None).
 std::atomic<int32_t> g_names[kWatchedNameCount];
@@ -1286,6 +1288,23 @@ bool HandleCreditsButton(PPCContext& ctx, uint8_t* base, uint32_t function) {
   return true;
 }
 
+// The menu of a player in another's party without its calendar and Marketplace (menu_patches.cpp):
+// Callback_ClientMenuOptionWasSelected(SelectedOption, a float) handles its choices by their
+// original position (0 Journal, 1 Calendar, 2 Options, 3 Marketplace, 4 Leave party), so the
+// positions left (Journal, Options, Leave party) are turned into those before it runs.
+void ClientMenuPosition(PPCContext& ctx, uint8_t* base) {
+  if (!REXCVAR_GET(menu_remove_unused)) return;
+  constexpr float kOriginal[] = {0.0f, 2.0f, 4.0f};
+  const uint32_t at = LoadU32(base, ctx.r4.u32 + kFrameLocals);  // SelectedOption, the first parameter
+  uint32_t bits = LoadU32(base, at);
+  float shown;
+  std::memcpy(&shown, &bits, sizeof(shown));
+  const int index = static_cast<int>(shown);
+  if (index < 0 || index >= static_cast<int>(std::size(kOriginal))) return;
+  std::memcpy(&bits, &kOriginal[index], sizeof(bits));
+  StoreU32(base, at, bits);
+}
+
 // Removes every ?listen (or &listen) option from a travel URL.
 static void StripListenParam(std::string& s) {
   std::string lower = s;
@@ -1756,9 +1775,10 @@ bool ChooseOnlinePartyType(PPCContext& ctx, uint8_t* base, uint32_t dialog_item_
   const auto status = alboria::GetStatus();
   const int type = item == kJoinableItem ? kFriendsOnlyType : kInviteRequiredType;
   if (status.host && alboria::InRoom()) {
-    // Already hosting a room: the party stays, and shows the type chosen now. The room keeps the
-    // type it was created with on Alboria, which members who join see.
+    // Already hosting a room: the party stays, with the type chosen now, which Alboria passes on to
+    // the room's members and to who joins later.
     g_online_party_type.store(type);
+    alboria::SetPartyType(type == kInviteRequiredType ? alboria::PartyType::kInviteOnly : alboria::PartyType::kJoinable);
     RunInstead(ctx, base, close_options, g_transition_locals);
     return true;
   }
@@ -1778,8 +1798,12 @@ bool ChooseOnlinePartyType(PPCContext& ctx, uint8_t* base, uint32_t dialog_item_
 // System Link's. Returns whether it ran.
 bool RunWithOnlinePartyType(PPCContext& ctx, uint8_t* base, uint32_t function) {
   namespace alboria = rex::system::xam::alboria;
-  const int chosen = g_online_party_type.load();
+  int chosen = g_online_party_type.load();
   if (chosen < 0 || !alboria::InRoom()) return false;
+  // A member shows the room's type as Alboria last told it, which follows the host's changes.
+  if (const auto status = alboria::GetStatus(); !status.host && status.state == alboria::State::kConnected) {
+    chosen = status.party_type == alboria::PartyType::kInviteOnly ? kInviteRequiredType : kFriendsOnlyType;
+  }
   const uint32_t code = LoadU32(base, function + kStructScript);
   const uint32_t size = LoadU32(base, function + kStructScript + 4);
   // Each `CurrPartyType == <byte>`, compared as integers: the property's 8-byte reference, the
@@ -2364,6 +2388,10 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   if (Is(base, function, kFilterButtonInput) && TakeKeyboardStartAsMenuKey(ctx, base, function)) return;
   if (Is(base, function, kFilterButtonInput) && HandleOptionsButton(ctx, base, function)) return;
   if (Is(base, function, kFilterButtonInput) && HandleCreditsButton(ctx, base, function)) return;
+  if (Is(base, function, kClientMenuSelected) &&
+      ObjectName(base, LoadU32(base, function + kObjectOuter)) == "UIScene_FrontEnd") {
+    ClientMenuPosition(ctx, base);
+  }
   // Connection, at the credits' place, runs Callback_Credits: it opens the Alboria menu. (The
   // credits' own button runs the function without passing here: HandleCreditsButton.)
   if (Is(base, function, kCredits) && ObjectName(base, LoadU32(base, function + kObjectOuter)) == "UIScene_Options") {

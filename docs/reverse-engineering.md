@@ -233,6 +233,15 @@ The button bar's Start "Options" (`[UIWidget_MainMenu] OptionsButtonStr` of `gea
 replaced with a space, since the list has the option.
 Calendar and Marketplace are the last two entries, so removing them shifts no other index.
 
+The menu of a player who joined another's party is another screen, `MAINMENUOP_ClientMenu`:
+Journal, Calendar, Options, Marketplace (`DLC`) and Leave party, all `Next=MAINMENUOP_None`.
+`UIScene_FrontEnd.Callback_ClientMenuOptionWasSelected(SelectedOption)` (a float) handles them by
+position: 0 `HandleOpenWarJournal`, 1 `HandleOpenCalendar`, 2 `Callback_StartButtonPressed`, 3
+`OpenMarketplaceBlade`, 4 `Callback_TransitionToTitle` (**verified** from its bytecode, 29 October
+2026). With `menu_remove_unused` the calendar and Marketplace are removed from that list too, and
+the runtime turns the positions left (0, 1, 2) into the original ones (0, 2, 4) in the callback's
+parameter before it runs.
+
 ### Sub-menus we change
 
 Each screen is another `AllOptions` entry with its own `Identifier`. Rows disabled and marked

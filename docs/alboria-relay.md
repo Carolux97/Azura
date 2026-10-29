@@ -118,6 +118,11 @@ options: `joinable` (anyone with the code) or `invite_only` (who the host invite
 the code). It is `joinable` when missing, as the first clients send it. A room is never System Link,
 which is the local network. Answer: a ticket (section 4.4).
 
+`POST /v1/rooms/type` with `{ "code": "K7QM-2XPA", "party_type": "invite_only" }` changes the
+party type of a room the player hosts; the relay then sends every member `ROOM` (section 5.3), and
+who joins later gets the new type in the ticket. Answer: `{ "party_type": "invite_only" }`. Errors:
+`400 bad_request`, `403 not_host`, `404 room_not_found`.
+
 ### 4.3 Join a game
 
 `POST /v1/rooms/join`
@@ -200,6 +205,7 @@ that is more than 1024 behind the highest one accepted (replay protection).
 | 9 | `PROBE` | member to member | the sender's clock (8) |
 | 10 | `PROBE_ACK` | member to member | the `PROBE`'s body, echoed |
 | 11 | `DIRECT` | member to member | as `DATA` to the relay |
+| 12 | `ROOM` | from relay | the room's party type (1): 1 joinable, 2 invite only |
 
 Addresses are IPv4 addresses as big-endian numbers, ports are big endian.
 
