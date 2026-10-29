@@ -76,6 +76,7 @@ import { TEXT_RULES } from "./textRules.js";
 import { achievementView } from "./achievements.js";
 import { createBuildTracker } from "./buildProgress.js";
 import { LOCK_ICON, completedBanner, renderAchievementsPage } from "./achievementsPage.js";
+import { setupAccount } from "./account.js";
 
 const SPORE_COUNT = 26;
 /** Launcher version shown in a browser; the app reads its real version (see detectSystem). */
@@ -134,6 +135,9 @@ const state = {
   system: null,
   launcherVersion: BROWSER_LAUNCHER_VERSION,
   userName: "",
+  // The account the player plays with: "alboria", "local", or null until the welcome screen asks
+  // (account.js, which also keeps the service's state in `alboria`).
+  account: null,
   fullscreen: true,
   // Render resolution (render_resolution, also in the game's Video menu): "auto" (follows this Mac)
   // or the render size the user chose ("2560x1440").
@@ -182,6 +186,7 @@ const currentSettings = () => ({
   gpu: state.gpu,
   savesFolder: state.savesFolder,
   minimizeWhilePlaying: state.minimizeWhilePlaying,
+  account: state.account,
 });
 
 /** Pending save timer; null when everything is saved. */
@@ -385,8 +390,7 @@ const renderPlay = () => {
 
   const player = document.getElementById("status-player");
   if (player) {
-    const name = state.userName.trim() || t("install.defaultUserName");
-    document.getElementById("status-player-detail").textContent = name;
+    document.getElementById("status-player-detail").textContent = account.playerLine();
   }
 
   const button = document.getElementById("launch");
@@ -1009,11 +1013,6 @@ const renderInstall = () => {
   // Long paths are cut off in the field; the tooltip shows them whole.
   pathField.title = pathField.value;
 
-  const playerField = document.getElementById("player-name");
-  if (playerField && playerField.value !== state.userName) {
-    playerField.value = state.userName;
-  }
-
   const [runtimeKey, runtimeTone] = runtimeState();
   const runtimeLine = document.getElementById("runtime-check");
   const progress = state.buildProgress;
@@ -1167,18 +1166,6 @@ const setupInstall = () => {
     state.savesConflict = null;
     renderInstall();
   });
-
-  const playerField = document.getElementById("player-name");
-  if (playerField) {
-    // Only what a gamertag may hold stays (textRules.js), however it was typed or pasted.
-    playerField.addEventListener("input", () => {
-      const clean = TEXT_RULES.gamertag.clean(playerField.value);
-      if (clean !== playerField.value) playerField.value = clean;
-      state.userName = playerField.value;
-      renderPlay();
-      persist();
-    });
-  }
 };
 
 /** Checks the folder saved in an earlier session, if any, and shows the result. */
@@ -1633,6 +1620,7 @@ const renderAll = () => {
   renderSaves();
   renderAchievements();
   renderCompiler();
+  account.render();
 };
 
 /**
@@ -1676,6 +1664,8 @@ const loadSavedSettings = async () => {
 };
 
 createSpores();
+// The welcome screen and the Account section; renderPlay reads its player line, so it comes first.
+const account = setupAccount({ state, persist, renderPlay, toast, t, getLocale });
 setupNavigation();
 // The controller belongs to the game while it runs.
 setupGamepad({ showView, blocked: () => state.game !== "idle", t, onLocaleChange, onInput: onGamepadInput });
@@ -1716,9 +1706,12 @@ state.gameLanguage = settings.gameLanguage ?? null;
 state.gameLanguageChosen = Boolean(settings.gameLanguageChosen);
 state.achievementsView = achievementView(settings.achievementsView);
 state.seenReleaseNotes = settings.seenReleaseNotes ?? null;
+state.account = settings.account ?? null;
 onLocaleChange(renderAll);
 await initI18n(settings.uiLanguage);
 document.getElementById("ui-language").value = getPreference();
+// Before anything else the player sees: the welcome screen when they have not chosen an account.
+account.start();
 await restoreGameFolder(settings.gameFolder);
 // Without a valid folder restoreGameFolder reads nothing; the section still needs its locked page.
 if (!state.achievements) refreshAchievements();

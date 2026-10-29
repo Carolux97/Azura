@@ -1,14 +1,15 @@
 # Alboria relay: co-op over the internet
 
-How Azura plays System Link with players on other networks through Alboria, our own online service:
-what the runtime and the server say to each other. The server's code is private; this
+How Azura plays System Link with players on other networks through Alboria, our online ecosystem
+(for Gears of War 3 and the games that come after it): what the launcher, the runtime and the server
+say to each other. The server's code is private; this
 document is the contract the public client code follows.
 
 ## Contents
 
 1. [Summary](#1-summary)
 2. [How a game is played](#2-how-a-game-is-played)
-3. [Identity and bans](#3-identity-and-bans)
+3. [Accounts, identity and bans](#3-accounts-identity-and-bans)
 4. [Control API (HTTPS)](#4-control-api-https)
 5. [Relay protocol (UDP)](#5-relay-protocol-udp)
 6. [The runtime side](#6-the-runtime-side)
@@ -47,22 +48,64 @@ Everything happens inside the game, with `network_mode = "online"` (the default)
    host `10.77.0.1`), which is the address the game sees in its XNADDR.
 5. The room closes when the host leaves it, or when nobody sends anything for 2 minutes.
 
-## 3. Identity and bans
+## 3. Accounts, identity and bans
 
-Each installation has an Ed25519 key, made the first time the game runs and kept in `identity.toml`
-(the key's 32-byte seed). The public key is the player's identity for the service: their account.
+An Alboria account belongs to a player, for every game that uses Alboria. It is their **email**,
+with no password: a 6-digit code sent to it proves it is theirs (section 3.1).
 
-- The account shows as `Gamertag#tag`, such as `Carolux#97`. The server gives each account a tag
-  from 1 to 9999 the first time it signs in, so that no two players share a gamertag and tag
-  (ignoring case). Changing the gamertag keeps the tag when nobody else holds it with the new
-  gamertag, and gives another one when somebody does.
+Each game installation is a **device** of the account. It has an Ed25519 key, kept in
+`identity.toml` (the key's 32-byte seed, in the game's saves folder), and signs in with it
+(section 4.1). The launcher links the device to the account the first time: when the player creates
+an account or signs in to theirs from the launcher's welcome screen (section 4.6). Each game links
+its own installation, so a player with two games on a computer has two devices. A player who
+chooses a local account has no device: the game plays Local and System Link only, with no Alboria.
 
-- Signing in proves the player holds the key: the server sends a random challenge and the runtime
-  signs it (section 4.1).
-- A ban is on a public key, an IP address, or both. A banned player cannot sign in, create a room
-  or join one, and is removed from the rooms they are in.
-- A player who deletes `identity.toml` gets a new key. Bans that survive that need accounts, which
-  come later.
+- The account shows as `Gamertag#tag`, such as `Carolux#3290`, the same in every game. The server
+  gives each account a four-digit tag, 1000 to 9999, when it is created, so that no two players
+  share a gamertag and tag (ignoring case). Tags of 1 to 999 are special (developers and people
+  chosen by the project): only the server's administration tool gives them, and clients show them as
+  they are, `Carolux#97`, never padded. Changing the gamertag keeps the tag when nobody else holds
+  it with the new gamertag, and gives another four-digit one when somebody does.
+- Signing in proves the device holds its key: the server sends a random challenge and the device
+  signs it (section 4.1). A key no account has linked is refused with `no_account`.
+- A player who loses `identity.toml` (a new computer, a reinstall that removes the saves folder)
+  signs in to their account again from the launcher: the new key becomes a new device, with the same
+  identity. The old one can be removed from the Account screen.
+- A ban is on an account (every device it has, and every one it links later), a device's key, a
+  computer (section 3.2), an IP address, or a key and an address. A banned player cannot sign in,
+  ask for a code, create a room or join one, and is removed from the rooms they are in.
+- So that a banned player cannot come back with a new account, banning an account also bans, with
+  it: each of its devices' keys (which stay banned if they move to another account), each of their
+  computers, and the last address of each device for 30 days, only for new accounts and new links:
+  who already plays from that address, such as someone in the same home, keeps playing. Removing
+  the account's ban removes them too.
+- One mailbox makes one account: the server compares emails in lower case, without a `+suffix`,
+  and for Gmail without dots, so `Carolina.M+azura@gmail.com` and `carolinam@gmail.com` are the
+  same account. Emails on throwaway domains (the public disposable-email-domains list) are refused.
+
+### 3.1 Codes
+
+A code is 6 digits, sent by email in the player's language. It works once, for 10 minutes, and
+stops working after 5 wrong guesses. Another code for the same email can be asked for after 60
+seconds, and replaces the one before; an email gets at most 5 codes an hour, and an IP address may
+ask for 10 an hour. A code is for one purpose: creating the account, linking a device to it, moving
+it to another email (the code goes to the new one) or deleting it.
+
+### 3.2 The computer's ID
+
+When the launcher links a device, it sends `machine_id`: the SHA-256 of the bytes
+`alboria-machine-v1` (18 bytes), a zero byte and the computer's own ID in lower case UTF-8, with no
+spaces around it. The ID is the one the operating system keeps for the computer and does not change
+when the game is reinstalled:
+
+| System | ID |
+| --- | --- |
+| macOS | `IOPlatformUUID` of the `IOPlatformExpertDevice` in the I/O Registry |
+| Linux | `/etc/machine-id` (`/var/lib/dbus/machine-id` when it is missing) |
+| Windows | `MachineGuid` in `HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Cryptography` |
+
+The server only ever sees the hash, which tells it two devices are on the same computer and
+nothing else. The ID is read by the launcher, never sent as it is, and never written to logs.
 
 ## 4. Control API (HTTPS)
 
@@ -102,8 +145,12 @@ Answer: `{ "token": "<opaque>", "expires_in": 3600, "gamertag": "Carolina", "tag
 the account's gamertag and tag (section 3). Later requests send the token as
 `Authorization: Bearer <token>`.
 
+`client` is the game (`azura/0.5.0`) or the launcher (`azura-launcher/0.5.0`). The key must be a
+device of an account (section 3).
+
 Errors: `400 bad_request`, `401 bad_signature`, `401 challenge_expired`, `403 banned`,
-`409 gamertag_taken` (every tag of that gamertag is held), `426 client_too_old`.
+`403 no_account` (no account has linked this key), `409 gamertag_taken` (every tag of that gamertag
+is held), `426 client_too_old`.
 
 ### 4.2 Host a game
 
@@ -176,6 +223,63 @@ session of the Live party the player hosts in the room: its XSESSION_INFO, that 
 (XNKID, 8 bytes), the host's XNADDR (36) and the key (XNKEY, 16). Members who join afterwards get it
 in the ticket's `session`. Answer: `{}`. Errors: `400 bad_request`, `403 not_host`,
 `404 room_not_found`.
+
+### 4.6 Accounts
+
+The launcher's requests for the account (section 3). Errors that ask the player to wait answer
+`429 too_many_requests` with `retry_in` (seconds) next to the error.
+
+`POST /v1/account/code` asks for a code (section 3.1):
+
+```json
+{ "purpose": "create", "email": "carolina@example.com", "gamertag": "Carolux97", "language": "es" }
+```
+
+`purpose` is `create` (with the gamertag the account will have) or `signin` (to link this device to
+the account of the email). The launcher also sends `machine_id` (section 3.2), so that a banned
+computer is refused before an email goes out. `language` is one of the launcher's languages (`en`, `es`, `fr`, `de`,
+`it`, `pt`, `pl`, `cs`, `hu`, `ru`, `ja`, `ko`, `zh-Hant`); any other gets English. Answer:
+`{ "expires_in": 600, "resend_in": 60 }`. Errors: `400 bad_request`, `400 disposable_email`
+(a throwaway domain), `400 email_suppressed` (emails to that address bounced for good or were
+marked as spam, so they are no longer delivered: use another one), `403 banned`,
+`404 no_account` (signin: no account has that email), `409 email_taken` (create: that email has an
+account), `429 too_many_requests`, `503 mail_failed`.
+
+`POST /v1/account/verify` uses the code from the device, which proves its key as signing in does:
+
+```json
+{
+  "purpose": "create",
+  "email": "carolina@example.com",
+  "code": "482190",
+  "public_key": "<32 bytes>",
+  "challenge": "<32 bytes>",
+  "signature": "<64 bytes>",
+  "client": "azura-launcher/0.5.0",
+  "title_id": "4D5308AB",
+  "platform": "Mac",
+  "machine_id": "<32 bytes>"
+}
+```
+
+It creates the account and links the device to it, or links the device to the account of the
+email; a key linked to another account moves to this one. `machine_id` is required (section 3.2),
+and the server keeps it and the request's address with the device. Answer: as `/v1/auth/session`
+(`token`, `expires_in`, `gamertag`, `tag`). Errors: those of `/v1/auth/session`, and
+`401 bad_code` (with `attempts_left`), `404 no_account`, `409 email_taken`, `410 code_expired`
+(expired, used up or never sent: ask for another one).
+
+With the token of a signed-in device:
+
+| Request | Body | Answer |
+| --- | --- | --- |
+| `POST /v1/account` | `{}` | `email`, `gamertag`, `tag` and `devices`: each with `public_key`, `title_id`, `platform`, `created_at`, `last_seen_at` and `current` (the device asking) |
+| `POST /v1/account/devices/remove` | `{ "public_key": "…" }` | `{}`; the device is signed out at once, and signs in again only after it is linked again. `404 no_device` |
+| `POST /v1/account/email/code` | `{ "email": "…", "language": "es" }` | as `/v1/account/code`; the code goes to the new email. `409 email_taken` |
+| `POST /v1/account/email/verify` | `{ "email": "…", "code": "…" }` | `{ "email": "…" }` |
+| `POST /v1/account/export` | `{}` | everything the server keeps about the account (section 8), as JSON |
+| `POST /v1/account/delete/code` | `{ "language": "es" }` | as `/v1/account/code`; the code goes to the account's email |
+| `POST /v1/account/delete` | `{ "code": "…" }` | `{}`; the account and its devices are deleted, and every device is signed out |
 
 ## 5. Relay protocol (UDP)
 
@@ -274,6 +378,12 @@ keys, and bans.
 
 ## 6. The runtime side
 
+The launcher writes `network_mode` from the player's account choice: `online` with an Alboria
+account and `system_link` with a local one (Local and System Link only, no Alboria). With `online`,
+the game signs in with the same key the launcher linked. A key no account has linked gets
+`no_account`: hosting or joining a room fails, and the online overlay says to sign in from the
+launcher.
+
 With `network_mode = "online"`, the runtime connects to the relay once it has a ticket, and while
 it is in a room the game sees:
 
@@ -312,17 +422,25 @@ checked yet.
 
 - Up to 10 members per room.
 - Per member: 1000 packets and 256 KB per second; above that, packets are dropped.
-- Per IP address: 10 sign-ins and 5 new rooms per minute.
+- Per IP address: 10 sign-ins and 5 new rooms per minute, and 10 codes an hour.
+- Per email: one code a minute and 5 an hour (section 3.1).
 - Rooms close after 2 minutes with no traffic, and a code stops working when its room closes.
 
 ## 8. What the server keeps
 
-- Accounts: public key, gamertag and tag, so the tag stays the same across sign-ins.
-- Bans: public key or IP address, reason and date, until removed.
+- Accounts: email, gamertag and tag, until the player deletes the account. The email is used only to
+  send the codes.
+- Devices of each account: public key, game (title ID), system (such as "Mac"), the hash of the
+  computer's ID (section 3.2), the address it last signed in from and the dates it was linked and
+  last signed in, until removed from the account. The address is kept only to ban it with its
+  account.
+- Bans: account, public key, computer or IP address, reason, date and end date (30 days for the
+  addresses of a banned account; none for the rest), until removed or ended.
+- Codes: in memory only, as a hash, for their 10 minutes.
 - For each room, for 7 days: its code, title ID, times, and the public key and `Gamertag#tag` of
   each member, so that a report about a player can be checked. No IP addresses and no game traffic.
-- Counts for the trial of the service: rooms per day and different keys per month, with no other
-  data.
+- Counts of use: rooms per day, with no other data, and the device keys seen each month, to count
+  the different players, kept 13 months.
 
 ## 9. Versions
 
