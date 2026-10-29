@@ -47,6 +47,16 @@ Everything happens inside the game, with `network_mode = "online"` (the default)
 4. The runtime's local network is the room: each member has a virtual address `10.77.0.x` (the
    host `10.77.0.1`), which is the address the game sees in its XNADDR.
 5. The room closes when the host leaves it, or when nobody sends anything for 2 minutes.
+6. The game starts with the party the player chose last time. When that is a room, the runtime
+   first checks that Alboria answers and signs in (section 4.1); if it does not answer, or refuses
+   the sign-in (no account linked to this installation, a ban, an old client), the game starts in
+   Local and the room notice says why. Choosing Joinable or Invite only while Alboria does not
+   answer or refuses the sign-in creates no room: the game's message box says online play is not
+   possible and what to check, and the room notice names the refusal. A room that fails (hosting
+   or joining does not get it connected, or the hosted room ends), or a member's room that ends,
+   leaves the player in a Local party, in the main menu where they were (a match goes back to it),
+   with a message box saying the room was lost and how to try again; the next party is Local until
+   they choose Joinable or Invite only again.
 
 ## 3. Accounts, identity and bans
 

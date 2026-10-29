@@ -622,6 +622,29 @@ party exists (`PartySuccessfullyCreatedNotify`). A room's party stays System Lin
 Horde and Versus matches did not start (**observed** on 29 October 2026); only what the party panel
 and options show is changed (`RunWithOnlinePartyType`).
 
+### Leaving a room's party
+
+Read from the bytecode of `GearPC` and `UIScene_FrontEnd` (`script_dump_code`) and checked with
+`script_trace_args`, 29 October 2026:
+
+- `GearPC.ReturnToMainMenu(bReturnToStartScreen, bClearMenuHistory)` travels to the front end's
+  map again, as leaving a match does. `bReturnToStartScreen` only sets the local player's
+  `bIsFirstFrontEndLoad`; from the main menu the front end still started over at its title screen
+  (**observed**).
+- Choosing Local in the party options ends in `UIScene_FrontEnd.DestroyPartyForLocal`, which
+  destroys the party session (its delegate `OnDestroyPartyForLocalComplete` registers the players
+  with the party, closes the party options and resets the menu), and `CreateLocalParty`, which
+  sets `bPartyTypeUpdated` and runs `LocalPartyCreated`. Run on the front end's scene, the two
+  give a Local party without leaving the main menu (**verified**: the party panel said Local). With
+  `DestroyPartyForLocal` alone the party showed the System Link type the room's party had.
+- `GearPC.NotifyInviteFailed()` takes no parameters: it hides the loading movie and runs
+  `GearUIManager.DisplayErrorMessage("InviteHandlingFailed_Message", "InviteHandlingFailed_Title",
+  "GenericAccept")`, a message box with those `[MessageBoxErrorStrings]` texts and an Accept
+  button. The runtime runs it, with those texts changed, for a room that failed or ended.
+- `GearPC.OnConnectionStatusChange` shows the lost Xbox LIVE connection message and runs
+  `ReturnToMainMenu(true)`; `ClientWasKicked` shows `LostLink_Title` with `AFKKicked_Desc` and
+  runs `ReturnToMainMenu`.
+
 ### The System Link browser (`UIScene_SystemLink`)
 
 - Opening it runs `TriggerPartySearch`: `GameInterface.FindOnlineGames` with its `SearchSettings`.
