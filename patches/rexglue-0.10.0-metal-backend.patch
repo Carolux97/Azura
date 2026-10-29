@@ -2074,6 +2074,21 @@ index 83f0dff..8f91c48 100644
  }  // namespace rex::perf
  
  // Perf counter macros -- compile to no-ops when counters are disabled.
+diff --git a/include/rex/platform/dynlib.h b/include/rex/platform/dynlib.h
+index e3fc40d..42dba68 100644
+--- a/include/rex/platform/dynlib.h
++++ b/include/rex/platform/dynlib.h
+@@ -31,6 +31,10 @@ class DynamicLibrary {
+   DynamicLibrary& operator=(DynamicLibrary&& other) noexcept;
+ 
+   bool Load(const std::filesystem::path& path, SymbolResolution mode = SymbolResolution::kLazy);
++  // Takes a reference to a library that is already loaded into the process, without loading it
++  // when it is not: fails if nothing in the process has loaded `path` yet. For detecting tools that
++  // inject themselves (RenderDoc), where a real load would inject the tool instead.
++  bool LoadIfResident(const std::filesystem::path& path);
+   void Close();
+   explicit operator bool() const { return handle_ != nullptr; }
+ 
 diff --git a/include/rex/system/interfaces/graphics.h b/include/rex/system/interfaces/graphics.h
 index d54df86..52b27e7 100644
 --- a/include/rex/system/interfaces/graphics.h
@@ -2967,6 +2982,48 @@ index 1ddafd0..af07433 100644
  )
  
  target_include_directories(rexcore PUBLIC
+diff --git a/src/core/dynlib_posix.cpp b/src/core/dynlib_posix.cpp
+index fcfd6c9..e1519ee 100644
+--- a/src/core/dynlib_posix.cpp
++++ b/src/core/dynlib_posix.cpp
+@@ -31,6 +31,14 @@ bool DynamicLibrary::Load(const std::filesystem::path& path, SymbolResolution mo
+   return handle_ != nullptr;
+ }
+ 
++bool DynamicLibrary::LoadIfResident(const std::filesystem::path& path) {
++  Close();
++  // RTLD_NOLOAD returns the handle of a library already in the process (adding a reference that
++  // Close() drops) and null otherwise, without searching the library paths.
++  handle_ = dlopen(path.c_str(), RTLD_NOW | RTLD_NOLOAD);
++  return handle_ != nullptr;
++}
++
+ void DynamicLibrary::Close() {
+   if (handle_) {
+     dlclose(handle_);
+diff --git a/src/core/dynlib_win.cpp b/src/core/dynlib_win.cpp
+index a402c75..1aa3f03 100644
+--- a/src/core/dynlib_win.cpp
++++ b/src/core/dynlib_win.cpp
+@@ -31,6 +31,18 @@ bool DynamicLibrary::Load(const std::filesystem::path& path, SymbolResolution /*
+   return handle_ != nullptr;
+ }
+ 
++bool DynamicLibrary::LoadIfResident(const std::filesystem::path& path) {
++  Close();
++  // Without GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT the module's reference count goes up, so
++  // the FreeLibrary in Close() is balanced. Modules not yet loaded are not searched for.
++  HMODULE module = nullptr;
++  if (!GetModuleHandleExW(0, path.c_str(), &module)) {
++    return false;
++  }
++  handle_ = static_cast<void*>(module);
++  return true;
++}
++
+ void DynamicLibrary::Close() {
+   if (handle_) {
+     FreeLibrary(static_cast<HMODULE>(handle_));
 diff --git a/src/core/filesystem_win.cpp b/src/core/filesystem_win.cpp
 index c5a2c5d..723b88e 100644
 --- a/src/core/filesystem_win.cpp
@@ -28668,6 +28725,26 @@ index 7360ed9..d4fe4c3 100644
        default:
          break;
      }
+diff --git a/src/ui/renderdoc_api.cpp b/src/ui/renderdoc_api.cpp
+index e1a5287..807e3ea 100644
+--- a/src/ui/renderdoc_api.cpp
++++ b/src/ui/renderdoc_api.cpp
+@@ -25,10 +25,11 @@ std::unique_ptr<RenderDocAPI> RenderDocAPI::CreateIfConnected() {
+ 
+   pRENDERDOC_GetAPI get_api = nullptr;
+ 
+-  // Try to load the RenderDoc library. If RenderDoc is attached, the library
+-  // should already be loaded into the process and this will increment the
+-  // reference count. If not attached, the load will fail and we return nullptr.
+-  if (!renderdoc_api->library_.Load(platform::lib_names::kRenderDoc)) {
++  // Take a reference to the RenderDoc library only if RenderDoc is attached,
++  // that is, already loaded into the process. A real load would find a
++  // RenderDoc installed on the system and inject it (its overlay included)
++  // into every run.
++  if (!renderdoc_api->library_.LoadIfResident(platform::lib_names::kRenderDoc)) {
+     return nullptr;
+   }
+   get_api = renderdoc_api->library_.GetSymbol<pRENDERDOC_GetAPI>("RENDERDOC_GetAPI");
 diff --git a/src/ui/rex_app.cpp b/src/ui/rex_app.cpp
 index 46ff8e5..f811158 100644
 --- a/src/ui/rex_app.cpp
