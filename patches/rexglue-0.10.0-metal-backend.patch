@@ -28316,6 +28316,25 @@ index 9eeb902..6337da5 100644
          break;
        }
      }
+diff --git a/src/ui/window_sdl.cpp b/src/ui/window_sdl.cpp
+index 2251429..18cb3e0 100644
+--- a/src/ui/window_sdl.cpp
++++ b/src/ui/window_sdl.cpp
+@@ -558,9 +558,12 @@ void WindowSDL::HandleMouseEvent(SDL_Event& event) {
+         SDL_ShowCursor();
+         RearmCursorAutoHideTimer();
+       }
++      // With the pointer locked, the motion is the mouse's own counts, not window coordinates:
++      // scaling it by the density would make mouse look faster on a high-density display.
++      const float motion_scale = SDL_GetWindowRelativeMouseMode(sdl_window_) ? 1.0f : density;
+       MouseEvent e(this, MouseEvent::Button::kNone, int32_t(event.motion.x * density),
+-                   int32_t(event.motion.y * density), 0, 0, event.motion.xrel * density,
+-                   event.motion.yrel * density);
++                   int32_t(event.motion.y * density), 0, 0, event.motion.xrel * motion_scale,
++                   event.motion.yrel * motion_scale);
+       OnMouseMove(e, destruction_receiver);
+       break;
+     }
 diff --git a/tests/unit/CMakeLists.txt b/tests/unit/CMakeLists.txt
 index 7bd264b..272dbb8 100644
 --- a/tests/unit/CMakeLists.txt

@@ -8,6 +8,12 @@
 // hooks call ApplyMouseLook as that function starts, and it writes the mouse motion since the last
 // frame there (docs/reverse-engineering.md, Mouse look). While it does, the SDK's keyboard and
 // mouse driver stops turning the mouse into right stick (rex::input::InputSystem::TakeMouseLook).
+//
+// What the game does to the look input after that is for the stick, and the script hooks keep the
+// mouse's share out of it, so a pixel turns the same angle whatever the game is doing: they turn
+// mouse smoothing off, take the share out of the profile's look sensitivity, the pitch ratio and
+// the slow motion division, carry the fraction of a rotator unit the view rotation drops, and turn
+// the view adhesion and the bullet aim assist off for a player on the mouse (PlaysWithMouse).
 
 #pragma once
 
@@ -36,8 +42,12 @@ struct MouseLookTarget {
 void InstallMouseLook(rex::input::InputSystem* input);
 
 // Writes the mouse motion of guest user `user_index` since the last call into `target`, as the
-// angle mnk_sensitivity sets per pixel. Leaves it alone when that player has no keyboard and mouse
-// or mouse look is off.
-void ApplyMouseLook(uint8_t* base, uint32_t user_index, const MouseLookTarget& target);
+// angle mnk_sensitivity sets per pixel, and returns true. Leaves it alone and returns false when
+// that player has no keyboard and mouse or mouse look is off.
+bool ApplyMouseLook(uint8_t* base, uint32_t user_index, const MouseLookTarget& target);
+
+// Whether guest user `user_index` last played with the keyboard and mouse: the aim assist made for
+// the stick is off for them.
+bool PlaysWithMouse(uint32_t user_index);
 
 }  // namespace azura::input
