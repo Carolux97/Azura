@@ -4,14 +4,17 @@
 #   1. merge the platforms' entries (latest-<platform>.json) into latest.json, the file the
 #      launcher's updater reads (version, notes, date, and per platform the archive's URL and
 #      signature);
-#   2. create the release "launcher-v<version>" in the releases repository (release-common.sh)
-#      with the downloads and the update archives;
-#   3. upload latest.json to the fixed release "launcher-updates", where the updater endpoint in
+#   2. pack the players' installers of every platform (the .dmg, the -setup.exe and the
+#      .AppImage) into one archive, Azura-Launcher_<version>_all-platforms.zip;
+#   3. create the release "launcher-v<version>" in the releases repository (release-common.sh)
+#      with the downloads, that archive and the update archives;
+#   4. upload latest.json to the fixed release "launcher-updates", where the updater endpoint in
 #      tauri.conf.json points.
 #
 # A release may hold only the platforms that built. Publishing the same version again adds the
 # platforms in <dist folder> to its release (replacing their files) and merges their entries into
-# the published latest.json, keeping the platforms already there.
+# the published latest.json, keeping the platforms already there. The all-platforms archive is then
+# packed again with the installers already in the release and the new ones, and replaced.
 #
 # Releases are titled with the version; the notes are the version's section of the changelog.
 #
@@ -80,6 +83,26 @@ node -e '
   const manifest = { version, notes, pub_date: previous?.version === version ? previous.pub_date : new Date().toISOString(), platforms };
   fs.writeFileSync(file, JSON.stringify(manifest, null, 2) + "\n");
 ' "${DIST}/latest.json" "${PUBLISHED}" "${VERSION}" "${NOTES}" "${ENTRIES[@]}"
+
+# The players' installers of every platform in one archive: this run's, and for a released version
+# the ones already published for the platforms this run does not build (this run's replace them).
+readonly ALL_PLATFORMS="${DIST}/Azura-Launcher_${VERSION}_all-platforms.zip"
+INSTALLERS="$(mktemp -d)"
+readonly INSTALLERS
+trap 'rm -f "${PUBLISHED}"; rm -rf "${INSTALLERS}"' EXIT
+if [[ "${RELEASED}" == true ]]; then
+  for pattern in "*.dmg" "*-setup.exe" "*.AppImage"; do
+    gh release download "${TAG}" --repo "${RELEASES_REPO}" --pattern "${pattern}" \
+      --dir "${INSTALLERS}" --clobber 2>/dev/null || true
+  done
+fi
+for file in "${DIST}"/*.dmg "${DIST}"/*-setup.exe "${DIST}"/*.AppImage; do
+  cp "${file}" "${INSTALLERS}/"
+done
+rm -f "${ALL_PLATFORMS}"
+echo "==> Packing $(ls "${INSTALLERS}" | tr '\n' ' ')into $(basename "${ALL_PLATFORMS}")"
+# -j: the installers at the archive's root; the AppImage keeps its executable bit.
+zip -j -q "${ALL_PLATFORMS}" "${INSTALLERS}"/*
 
 # Every file of the release but the updater's own: the signatures are inside latest.json.
 FILES=()

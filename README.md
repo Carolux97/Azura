@@ -16,7 +16,8 @@ the recompiled code is generated on your machine from your own `default.xex` and
 
 The launcher for macOS (Apple Silicon), Linux (x86-64) and Windows (x86-64) is published in
 [gears3-azura-releases](https://github.com/Carolux97/gears3-azura-releases/releases/latest).
-Point it at your own copy of the game (a folder or a disc image): it builds the game for your
+Each release also has `Azura-Launcher_<version>_all-platforms.zip`, with the installers of the three
+platforms in one download. Point the launcher at your own copy of the game (a folder or a disc image): it builds the game for your
 machine and keeps itself and the game up to date. The macOS launcher is not signed with an Apple
 Developer ID, so the first time it opens from System Settings, Privacy & Security.
 
