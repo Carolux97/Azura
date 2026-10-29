@@ -2269,10 +2269,10 @@ index 0000000..1d7d7fb
 +}  // namespace rex::system::xam
 diff --git a/include/rex/system/xam/system_link.h b/include/rex/system/xam/system_link.h
 new file mode 100644
-index 0000000..b742f90
+index 0000000..eeaab48
 --- /dev/null
 +++ b/include/rex/system/xam/system_link.h
-@@ -0,0 +1,120 @@
+@@ -0,0 +1,127 @@
 +/**
 + * @file        system/xam/system_link.h
 + * @brief       System Link: the local network as XNet and the session services show it to a title
@@ -2293,8 +2293,8 @@ index 0000000..b742f90
 + *              encryption between installations. The address book below remembers the XNADDRs
 + *              seen, so that the reverse conversion (XNetInAddrToXnAddr) can answer for them.
 + *
-+ *              Everything here is off unless network_mode is system_link: the title then sees no
-+ *              network link, as before.
++ *              Everything here is off unless network_mode is system_link or online (or the player
++ *              is in an Alboria room, alboria.h): the title then sees no network link, as before.
 + */
 +
 +#pragma once
@@ -2317,7 +2317,8 @@ index 0000000..b742f90
 +using XnKid = std::array<uint8_t, 8>;
 +using XnKey = std::array<uint8_t, 16>;
 +
-+// Whether System Link is on (network_mode = system_link).
++// Whether System Link is on: network_mode is system_link or online, or the player is in a room on
++// Alboria (alboria.h), whose relay is then the local network.
 +bool SystemLinkEnabled();
 +
 +// IPv4 address (as a number: 192.168.1.2 is 0xC0A80102) of the interface that reaches the local
@@ -2326,6 +2327,10 @@ index 0000000..b742f90
 +// without (Windows reports gateways), and then the interface of the default route. Every interface
 +// seen and the one chosen are logged.
 +uint32_t LanAddress();
++
++// This installation's address on the System Link network: its virtual address in an Alboria room,
++// its local network address otherwise.
++uint32_t LinkAddress();
 +
 +// The broadcast address of LanAddress's subnet (192.168.1.255 for 192.168.1.2/24), or 0 when its
 +// netmask is not known. Titles broadcast to 255.255.255.255, which Windows sends out of a single
@@ -2358,6 +2363,8 @@ index 0000000..b742f90
 +
 +// A new System Link session ID: random, with the System Link type in its top bits.
 +XnKid MakeSystemLinkKid(std::random_device& random);
++// A random session ID marked as an Xbox Live peer session (XNET_XNKID_ONLINE_PEER).
++XnKid MakeOnlinePeerKid(std::random_device& random);
 +// A new key exchange key.
 +XnKey MakeKey(std::random_device& random);
 +// Whether `kid` is a System Link session ID.
@@ -2443,7 +2450,7 @@ index 06888b9..d4650bc 100644
    std::unordered_map<uint32_t, Setting*> settings_;
    KernelState* kernel_state_ = nullptr;
 diff --git a/include/rex/system/xsocket.h b/include/rex/system/xsocket.h
-index a1b4443..abe55e8 100644
+index a1b4443..bb69cc9 100644
 --- a/include/rex/system/xsocket.h
 +++ b/include/rex/system/xsocket.h
 @@ -101,6 +101,8 @@ class XSocket : public XObject {
@@ -2465,6 +2472,17 @@ index a1b4443..abe55e8 100644
    struct packet {
      // These values are in network byte order.
      rex::be<uint16_t> src_port;
+@@ -140,6 +145,10 @@ class XSocket : public XObject {
+   uint16_t bound_port_ = 0;
+ 
+   bool broadcast_socket_ = false;
++  // A TCP socket listening for Alboria streams: its loopback port (Listen), forgotten on Close.
++  uint16_t stream_listener_port_ = 0;
++  // A datagram socket bound off its network port, which another installation has (Bind).
++  uint16_t datagram_moved_port_ = 0;
+ 
+   std::unique_ptr<rex::thread::Event> event_;
+   std::mutex incoming_packet_mutex_;
 diff --git a/include/rex/ui/imgui_dialog.h b/include/rex/ui/imgui_dialog.h
 index a7ab6b3..f4425b8 100644
 --- a/include/rex/ui/imgui_dialog.h
@@ -25697,23 +25715,29 @@ index 82a252c..3dcec80 100644
    if (event.gbutton.down) {
      if (xbutton == X_INPUT_GAMEPAD_GUIDE && !REXCVAR_GET(guide_button)) {
 diff --git a/src/kernel/xam/apps/xgi_app.cpp b/src/kernel/xam/apps/xgi_app.cpp
-index 2b222da..71fd6a6 100644
+index 2b222da..fdbee90 100644
 --- a/src/kernel/xam/apps/xgi_app.cpp
 +++ b/src/kernel/xam/apps/xgi_app.cpp
-@@ -10,6 +10,12 @@
+@@ -10,6 +10,18 @@
   */
  
  #include <rex/kernel/xam/apps/xgi_app.h>
 +
++#include <algorithm>
++#include <array>
 +#include <cstring>
 +#include <random>
++#include <string>
++
++#include <fmt/format.h>
 +
 +#include <rex/system/kernel_state.h>
++#include <rex/system/xam/alboria.h>
 +#include <rex/system/xam/system_link.h>
  #include <rex/logging.h>
  #include <rex/thread.h>
  
-@@ -23,6 +29,28 @@ using namespace rex::system;
+@@ -23,6 +35,28 @@ using namespace rex::system;
  
  XgiApp::XgiApp(KernelState* kernel_state) : App(kernel_state, 0xFB) {}
  
@@ -25742,7 +25766,7 @@ index 2b222da..71fd6a6 100644
  // http://mb.mirage.org/bugzilla/xliveless/main.c
  
  X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
-@@ -83,9 +111,14 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -83,9 +117,14 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
          }
          auto* base = memory_->TranslateVirtual(achievements_ptr);
          for (uint32_t i = 0; i < achievement_count; ++i) {
@@ -25759,7 +25783,7 @@ index 2b222da..71fd6a6 100644
          }
        } else {
          REXKRNL_INFO("XGIUserWriteAchievements: skipped (count={} ptr={:08X})", achievement_count,
-@@ -113,6 +146,38 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -113,6 +152,81 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
            "{:08X})",
            session_ptr, flags, num_slots_public, num_slots_private, user_xuid, session_info_ptr,
            nonce_ptr);
@@ -25767,6 +25791,49 @@ index 2b222da..71fd6a6 100644
 +      // key, and its own XNADDR), and keeps the one the title passes for a session it joins.
 +      const bool system_link_session = (flags & kXSessionCreateUsesPeerNetwork) &&
 +                                       !(flags & kXSessionCreateLiveServices);
++      // An Xbox Live session while signed in to Live through Alboria (alboria_live): it is played in
++      // an Alboria room, which a hosted one creates (Joinable with public slots, Invite only with
++      // private ones only), and handled as a System Link session in that room. The host's
++      // XSESSION_INFO goes to Alboria, so that who joins by code gets it as an accepted invite.
++      const bool live_session = alboria::LiveSignedIn() && (flags & kXSessionCreateUsesPeerNetwork) &&
++                                (flags & kXSessionCreateLiveServices);
++      if (live_session && session_info_ptr) {
++        auto info = memory_->TranslateVirtual(session_info_ptr);
++        SystemLinkSession session;
++        session.hosting = flags & kXSessionCreateHost;
++        if (session.hosting) {
++          if (!alboria::InRoom()) {
++            alboria::HostGame(kernel_state_->title_id(), std::clamp<int>(num_slots_public + num_slots_private, 2, 10),
++                              num_slots_public == 0 && num_slots_private > 0 ? alboria::PartyType::kInviteOnly
++                                                                             : alboria::PartyType::kJoinable);
++          }
++          std::random_device random;
++          session.kid = MakeOnlinePeerKid(random);
++          session.key = MakeKey(random);
++          session.host = MakeXnAddr(LinkAddress(), kernel_state_->player_identity().machine_id);
++          std::memcpy(info + kSessionInfoKidOffset, session.kid.data(), session.kid.size());
++          std::memcpy(info + kSessionInfoHostOffset, session.host.data(), session.host.size());
++          std::memcpy(info + kSessionInfoKeyOffset, session.key.data(), session.key.size());
++          alboria::SessionInfo published;
++          std::memcpy(published.data(), info, published.size());
++          alboria::PublishSession(published);
++        } else {
++          std::memcpy(session.kid.data(), info + kSessionInfoKidOffset, session.kid.size());
++          std::memcpy(session.host.data(), info + kSessionInfoHostOffset, session.host.size());
++          std::memcpy(session.key.data(), info + kSessionInfoKeyOffset, session.key.size());
++        }
++        AddSession(session_ptr, session);
++        const uint32_t host_ip = XnAddrIp(session.host);
++        REXKRNL_INFO("Alboria: {} Live session {:08X} (flags {:08X}), host {}.{}.{}.{}",
++                     session.hosting ? "hosting" : "joining", session_ptr, flags, host_ip >> 24,
++                     (host_ip >> 16) & 0xFF, (host_ip >> 8) & 0xFF, host_ip & 0xFF);
++        if (nonce_ptr) {
++          std::random_device random;
++          const uint64_t nonce = uint64_t(random()) << 32 | random();
++          memory::store_and_swap<uint64_t>(memory_->TranslateVirtual(nonce_ptr), nonce);
++        }
++        return X_E_SUCCESS;
++      }
 +      if (SystemLinkEnabled() && system_link_session && session_info_ptr) {
 +        auto info = memory_->TranslateVirtual(session_info_ptr);
 +        SystemLinkSession session;
@@ -25775,7 +25842,7 @@ index 2b222da..71fd6a6 100644
 +          std::random_device random;
 +          session.kid = MakeSystemLinkKid(random);
 +          session.key = MakeKey(random);
-+          session.host = MakeXnAddr(LanAddress(), kernel_state_->player_identity().machine_id);
++          session.host = MakeXnAddr(LinkAddress(), kernel_state_->player_identity().machine_id);
 +          std::memcpy(info + kSessionInfoKidOffset, session.kid.data(), session.kid.size());
 +          std::memcpy(info + kSessionInfoHostOffset, session.host.data(), session.host.size());
 +          std::memcpy(info + kSessionInfoKeyOffset, session.key.data(), session.key.size());
@@ -25798,7 +25865,7 @@ index 2b222da..71fd6a6 100644
        return X_E_SUCCESS;
      }
      case 0x000B0011: {
-@@ -123,6 +188,7 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -123,6 +237,7 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
        uint64_t session_nonce = memory::load_and_swap<uint64_t>(buffer + 8);
  
        REXKRNL_DEBUG("XGISessionDelete({:08X}, {:08X}, {:016X})", obj_ptr, flags, session_nonce);
@@ -25806,6 +25873,103 @@ index 2b222da..71fd6a6 100644
  
        return X_E_SUCCESS;
      }
+@@ -288,6 +403,34 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+       REXKRNL_DEBUG("XSessionSearchByID({}, {:08X}, {:08X}, {:08X}, {:08X}, {}, {}, {})",
+                     user_index, num_session_ids, session_ids_ptr, results_buffer_size,
+                     search_results_ptr, reserved1, reserved2, reserved3);
++      // XSessionSearchByID(XNKID, user, buffer size, results): the 20-byte message holds the user
++      // index, the XNKID, the buffer's size and the results' address (**verified** in Gears of War
++      // 3's wrapper at 0x82B0D270). A session Alboria brought (an accepted invite) or this
++      // installation hosts is found: one XSESSION_SEARCHRESULT after the
++      // XSESSION_SEARCHRESULT_HEADER, with its XSESSION_INFO, open and filled slots, and no
++      // properties or contexts.
++      if (alboria::LiveSignedIn() && search_results_ptr) {
++        std::array<uint8_t, 8> kid;
++        std::memcpy(kid.data(), buffer + 4, kid.size());
++        const auto session = alboria::KnownSession(kid);
++        auto* results = memory_->TranslateVirtual(search_results_ptr);
++        constexpr uint32_t kHeaderSize = 8;
++        constexpr uint32_t kResultSize = 92;
++        if (session && results_buffer_size >= kHeaderSize + kResultSize) {
++          std::memset(results, 0, kHeaderSize + kResultSize);
++          memory::store_and_swap<uint32_t>(results + 0, 1);
++          memory::store_and_swap<uint32_t>(results + 4, search_results_ptr + kHeaderSize);
++          uint8_t* result = results + kHeaderSize;
++          std::memcpy(result, session->data(), session->size());
++          memory::store_and_swap<uint32_t>(result + 60, 9);  // open public slots
++          memory::store_and_swap<uint32_t>(result + 68, 1);  // filled public slots: the host
++          REXKRNL_INFO("Alboria: XSessionSearchByID found the host's Live session");
++        } else {
++          REXKRNL_INFO("Alboria: XSessionSearchByID found no session ({}, buffer {})", session ? "known" : "unknown",
++                       results_buffer_size);
++          if (results_buffer_size >= kHeaderSize) std::memset(results, 0, kHeaderSize);
++        }
++      }
+ 
+       return X_E_SUCCESS;
+     }
+diff --git a/src/kernel/xam/apps/xlivebase_app.cpp b/src/kernel/xam/apps/xlivebase_app.cpp
+index 3593403..2091df0 100644
+--- a/src/kernel/xam/apps/xlivebase_app.cpp
++++ b/src/kernel/xam/apps/xlivebase_app.cpp
+@@ -10,7 +10,12 @@
+  */
+ 
+ #include <rex/kernel/xam/apps/xlivebase_app.h>
++#include <string>
++
++#include <fmt/format.h>
+ #include <rex/logging.h>
++#include <rex/system/kernel_state.h>
++#include <rex/system/xam/alboria.h>
+ #include <rex/thread.h>
+ 
+ namespace rex {
+@@ -60,11 +65,39 @@ X_HRESULT XLiveBaseApp::DispatchMessageSync(uint32_t message, uint32_t buffer_pt
+       return X_E_FAIL;
+     }
+     case 0x00058023: {
+-      REXKRNL_DEBUG(
+-          "CXLiveMessaging::XMessageGameInviteGetAcceptedInfo({:08X}, {:08X}) "
+-          "unimplemented",
+-          buffer_ptr, buffer_length);
+-      return X_E_FAIL;
++      // XInviteGetAcceptedInfo: with Live parties on Alboria, the host's session a join by code
++      // brought (alboria::AcceptedInvite), as an XINVITE_INFO: invitee XUID (8), inviter XUID (8),
++      // title ID (4), the host's XSESSION_INFO (60), from a game invite (4). The message's second
++      // argument is its parameter list, 16 bytes per parameter ({4, padding, an 8-byte value}): the
++      // first is the user index's address, the second the XINVITE_INFO's (**verified** in Gears of
++      // War 3's code, which builds the list at 0x82B0B5A8 before the call).
++      namespace alboria = rex::system::xam::alboria;
++      const auto invite = alboria::AcceptedInvite();
++      REXKRNL_INFO("XInviteGetAcceptedInfo({:08X}, {:08X}): {}", buffer_ptr, buffer_length,
++                   invite ? "the Alboria host's session" : "no invite");
++      constexpr uint32_t kInviteInfoSize = 84;
++      constexpr uint32_t kParameterSize = 16;
++      const uint32_t parameters = buffer_length;
++      if (!invite || !parameters) return X_E_FAIL;
++      const uint32_t info_ptr =
++          uint32_t(memory::load_and_swap<uint64_t>(memory_->TranslateVirtual(parameters) + kParameterSize + 8));
++      if (!info_ptr) return X_E_FAIL;
++      auto* info = memory_->TranslateVirtual(info_ptr);
++      std::memset(info, 0, kInviteInfoSize);
++      if (const auto* profile = kernel_state_->user_profile(uint32_t(0))) {
++        memory::store_and_swap<uint64_t>(info + 0, alboria::OnlineXuid(profile->xuid()));
++      }
++      memory::store_and_swap<uint32_t>(info + 16, kernel_state_->title_id());
++      std::memcpy(info + 20, invite->data(), invite->size());
++      memory::store_and_swap<uint32_t>(info + 80, 1);
++      alboria::ClearAcceptedInvite();
++      return X_E_SUCCESS;
++    }
++    case 0x0005800E: {
++      // Asked by Gears of War 3 with Xbox Live parties on Alboria, around joining a party. Believed
++      // to be XUserMuteListQuery (not verified): success with nothing written, so nobody is muted.
++      REXKRNL_DEBUG("XLiveBase 0005800E({:08X}, {:08X})", buffer_ptr, buffer_length);
++      return X_E_SUCCESS;
+     }
+     case 0x00058046: {
+       // Required to be successful for 4D530910 to detect signed-in profile
 diff --git a/src/kernel/xam/xam_content.cpp b/src/kernel/xam/xam_content.cpp
 index 72a50cb..2a724c5 100644
 --- a/src/kernel/xam/xam_content.cpp
@@ -25891,12 +26055,15 @@ index ff6cb56..46f05f5 100644
  REX_EXPORT_STUB(__imp__XNetLogonGetUserPrivileges);
  REX_EXPORT_STUB(__imp__XNetLogonInitOverrideInfo);
 diff --git a/src/kernel/xam/xam_net.cpp b/src/kernel/xam/xam_net.cpp
-index a1a3758..c2fba52 100644
+index a1a3758..2407293 100644
 --- a/src/kernel/xam/xam_net.cpp
 +++ b/src/kernel/xam/xam_net.cpp
-@@ -13,6 +13,10 @@
+@@ -12,7 +12,13 @@
+ // Disable warnings about unused parameters for kernel functions
  #pragma GCC diagnostic ignored "-Wunused-parameter"
  
++#include <algorithm>
++#include <cerrno>
  #include <cstring>
 +#include <random>
 +#include <string>
@@ -25905,15 +26072,24 @@ index a1a3758..c2fba52 100644
  
  #if REX_PLATFORM_MAC
  #include <sys/select.h>
-@@ -29,6 +33,7 @@
+@@ -29,6 +35,8 @@
  #include <rex/types.h>
  #include <rex/string.h>
  #include <rex/system/kernel_state.h>
++#include <rex/system/xam/alboria.h>
 +#include <rex/system/xam/system_link.h>
  #include <rex/system/xevent.h>
  #include <rex/system/xsocket.h>
  #include <rex/system/xthread.h>
-@@ -70,6 +75,7 @@ typedef struct {
+@@ -50,6 +58,7 @@ namespace kernel {
+ namespace xam {
+ using namespace rex::system;
+ using namespace rex::system::xam;
++namespace alboria = rex::system::xam::alboria;
+ 
+ // https://github.com/G91/TitanOffLine/blob/1e692d9bb9dfac386d08045ccdadf4ae3227bb5e/xkelib/xam/xamNet.h
+ enum {
+@@ -70,6 +79,7 @@ typedef struct {
    uint8_t abEnet[6];              // Ethernet MAC address
    uint8_t abOnline[20];           // Online identification
  } XNADDR;
@@ -25921,7 +26097,7 @@ index a1a3758..c2fba52 100644
  
  typedef struct {
    rex::be<int32_t> status;
-@@ -439,27 +445,19 @@ struct XnAddrStatus {
+@@ -439,27 +449,20 @@ struct XnAddrStatus {
    static const uint32_t XNET_GET_XNADDR_TROUBLESHOOT = 0x00008000;
  };
  
@@ -25945,13 +26121,14 @@ index a1a3758..c2fba52 100644
 -  std::memset(addr_ptr->abEnet, 0xCC, 6);
 -
 -  std::memset(addr_ptr->abOnline, 0, 20);
-+// The XNADDR of this installation: its local network address with System Link (the loopback one
-+// without), and the machine ID of its player identity as the network card address.
++// The XNADDR of this installation: its address on the System Link network (LinkAddress: the local
++// network's, or its virtual one in an Alboria room), the loopback one without System Link, and the
++// machine ID of its player identity as the network card address.
 +// RakNet's 360 version appears to depend on abEnet to create "random" 64-bit numbers, and a zero
 +// value makes RakPeer::Startup fail (58411436 crashed on startup), so it is never zero.
 +// https://github.com/facebookarchive/RakNet/blob/master/Source/RakPeer.cpp#L382
 +XnAddrBytes TitleXnAddr() {
-+  const uint32_t ip = SystemLinkEnabled() && LanAddress() ? LanAddress() : INADDR_LOOPBACK;
++  const uint32_t ip = SystemLinkEnabled() && LinkAddress() ? LinkAddress() : INADDR_LOOPBACK;
 +  return MakeXnAddr(ip, REX_KERNEL_STATE()->player_identity().machine_id);
 +}
  
@@ -25961,7 +26138,7 @@ index a1a3758..c2fba52 100644
    return XnAddrStatus::XNET_GET_XNADDR_STATIC;
  }
  
-@@ -475,23 +473,98 @@ u32 NetDll_XNetXnAddrToMachineId_entry(u32 caller, ppc_ptr_t<XNADDR> addr_ptr, m
+@@ -475,23 +478,98 @@ u32 NetDll_XNetXnAddrToMachineId_entry(u32 caller, ppc_ptr_t<XNADDR> addr_ptr, m
    return 1;
  }
  
@@ -26068,7 +26245,7 @@ index a1a3758..c2fba52 100644
  }
  
  // https://www.google.com/patents/WO2008112448A1?cl=en
-@@ -509,8 +582,14 @@ struct XEthernetStatus {
+@@ -509,8 +587,14 @@ struct XEthernetStatus {
    static const uint32_t XNET_ETHERNET_LINK_HALF_DUPLEX = 0x10;
  };
  
@@ -26084,20 +26261,257 @@ index a1a3758..c2fba52 100644
  }
  
  u32 NetDll_XNetDnsLookup_entry(u32 caller, mapped_string host, u32 event_handle, mapped_u32 pdns) {
-@@ -561,9 +640,11 @@ u32 NetDll_XNetQosRelease_entry(u32 caller, ppc_ptr_t<XNQOS> qos) {
+@@ -553,6 +637,63 @@ u32 NetDll_XNetQosServiceLookup_entry(u32 caller, u32 flags, u32 event_handle, m
    return 0;
  }
  
-+// A host answers quality of service probes for its session; the probes are not emulated, so
-+// listening only succeeds, with System Link.
++// XNQOSINFO flags: the probes are over, the target answered.
++constexpr uint8_t kQosInfoComplete = 0x01;
++constexpr uint8_t kQosInfoTargetContacted = 0x02;
++
++// Probes of the quality of service to other consoles (`cxna` XNADDRs) and to title servers (`cina`
++// addresses), before joining a session. With Xbox Live parties on Alboria the consoles are the
++// room's members, reached through the relay or directly: each one is reported as contacted, with
++// the latency Alboria measures (or 30 ms before the first measure), and 10 Mbit/s each way, with
++// the data the host's title listens with (alboria::HostQosData): Gears of War 3 reads the party's
++// settings from it before joining (**verified** in its code at 0x8297EC18; without data it drops
++// the session). The data follows the XNQOSINFO array in the same allocation, which XNetQosRelease
++// frees. Without Alboria, nothing is reached.
++u32 NetDll_XNetQosLookup_entry(u32 caller, u32 cxna, u32 apxna, u32 apxnkid, u32 apxnkey, u32 cina, u32 aina,
++                               u32 service_ids, u32 probes, u32 bits_per_sec, u32 flags, u32 event_handle,
++                               mapped_u32 pqos) {
++  const bool reachable = alboria::LiveSignedIn() && alboria::Connected();
++  const uint32_t count = cxna + cina;
++  if (pqos) {
++    const auto host_data = reachable ? alboria::HostQosData() : std::nullopt;
++    const uint32_t data_len = host_data ? uint32_t(std::min<size_t>(host_data->size(), 0xFFFF)) : 0;
++    const uint32_t infos_size = sizeof(XNQOS) + sizeof(XNQOSINFO) * (count ? count - 1 : 0);
++    const uint32_t size = infos_size + data_len;
++    auto qos_guest = REX_KERNEL_MEMORY()->SystemHeapAlloc(size);
++    auto* qos = REX_KERNEL_MEMORY()->TranslateVirtual<XNQOS*>(qos_guest);
++    std::memset(qos, 0, size);
++    if (data_len) std::memcpy(reinterpret_cast<uint8_t*>(qos) + infos_size, host_data->data(), data_len);
++    qos->count = count;
++    qos->count_pending = 0;
++    const auto latency = alboria::GetLatency();
++    const uint16_t rtt = uint16_t(latency.known ? std::max(1, latency.milliseconds) : 30);
++    for (uint32_t i = 0; i < count; ++i) {
++      XNQOSINFO& info = qos->info[i];
++      const bool contacted = reachable && i < cxna;
++      info.flags = kQosInfoComplete | (contacted ? kQosInfoTargetContacted : 0);
++      info.probes_xmit = uint16_t(probes);
++      info.probes_recv = contacted ? uint16_t(probes) : 0;
++      info.rtt_min_in_msecs = contacted ? rtt : 0;
++      info.rtt_med_in_msecs = contacted ? rtt : 0;
++      info.up_bits_per_sec = contacted ? 10'000'000u : 0;
++      info.down_bits_per_sec = contacted ? 10'000'000u : 0;
++      if (contacted && data_len) {
++        info.data_len = uint16_t(data_len);
++        info.data_ptr = qos_guest + infos_size;
++      }
++    }
++    *pqos = qos_guest;
++  }
++  REXKRNL_INFO("XNetQosLookup({} consoles, {} servers): {}{}", cxna, cina,
++               reachable ? "the room's members are reachable" : "nothing reachable",
++               reachable && alboria::HostQosData() ? ", with the host's data" : "");
++  if (event_handle) {
++    auto ev = REX_KERNEL_OBJECTS()->LookupObject<XEvent>(event_handle);
++    if (ev) ev->Set(0, false);
++  }
++  return 0;
++}
++
+ u32 NetDll_XNetQosRelease_entry(u32 caller, ppc_ptr_t<XNQOS> qos) {
+   if (!qos) {
+     return X_STATUS_INVALID_PARAMETER;
+@@ -561,9 +702,24 @@ u32 NetDll_XNetQosRelease_entry(u32 caller, ppc_ptr_t<XNQOS> qos) {
+   return 0;
+ }
+ 
++// XNetQosListen flags: set the data probes are answered with (XNET_QOS_LISTEN_SET_DATA; Gears of
++// War 3 listens with 0x05, enable and set data).
++constexpr uint32_t kQosListenSetData = 0x04;
++
++// A host answers quality of service probes for its session. The probes are not emulated: with
++// System Link, listening only succeeds; with Xbox Live parties on Alboria, the data the title sets
++// is published with the room (alboria::PublishQosData), for the members' XNetQosLookup.
  u32 NetDll_XNetQosListen_entry(u32 caller, mapped_void id, mapped_void data, u32 data_size, u32 r7,
                                 u32 flags) {
 -  return X_ERROR_FUNCTION_FAILED;
++  if (alboria::LiveSignedIn()) {
++    REXKRNL_DEBUG("XNetQosListen(flags {:02X}, {} bytes)", flags, data_size);
++    if ((flags & kQosListenSetData) && data && data_size) {
++      const auto* bytes = static_cast<const uint8_t*>(data.host_address());
++      alboria::PublishQosData(std::vector<uint8_t>(bytes, bytes + data_size));
++    }
++    return 0;
++  }
 +  return SystemLinkEnabled() ? 0 : X_ERROR_FUNCTION_FAILED;
  }
  
  u32 NetDll_inet_addr_entry(mapped_string addr_ptr) {
-@@ -923,6 +1004,57 @@ u32 NetDll_sendto_entry(u32 caller, u32 socket_handle, mapped_void buf_ptr, u32
+@@ -720,7 +876,8 @@ u32 NetDll_listen_entry(u32 caller, u32 socket_handle, i32 backlog) {
+ 
+ u32 NetDll_accept_entry(u32 caller, u32 socket_handle, ppc_ptr_t<XSOCKADDR> addr_ptr,
+                         mapped_u32 addrlen_ptr) {
+-  if (!addr_ptr) {
++  // The address is optional, as in Winsock: Unreal Engine 3's beacons accept with none.
++  if (addr_ptr && !addrlen_ptr) {
+     // WSAEFAULT
+     XThread::SetLastError(0x271E);
+     return -1;
+@@ -733,13 +890,17 @@ u32 NetDll_accept_entry(u32 caller, u32 socket_handle, ppc_ptr_t<XSOCKADDR> addr
+     return -1;
+   }
+ 
+-  N_XSOCKADDR native_addr(addr_ptr);
+-  int native_len = *addrlen_ptr;
++  N_XSOCKADDR native_addr{};
++  if (addr_ptr) native_addr = *addr_ptr;
++  int native_len = addr_ptr ? int(*addrlen_ptr) : int(sizeof(XSOCKADDR));
+   auto new_socket = socket->Accept(&native_addr, &native_len);
+   if (new_socket) {
+-    addr_ptr->address_family = native_addr.address_family;
+-    std::memcpy(addr_ptr->sa_data, native_addr.sa_data, *addrlen_ptr - 2);
+-    *addrlen_ptr = native_len;
++    if (addr_ptr) {
++      addr_ptr->address_family = native_addr.address_family;
++      std::memcpy(addr_ptr->sa_data, native_addr.sa_data,
++                  std::min<size_t>(sizeof(addr_ptr->sa_data), *addrlen_ptr - 2));
++      *addrlen_ptr = native_len;
++    }
+ 
+     return new_socket->handle();
+   } else {
+@@ -787,6 +948,15 @@ struct host_set {
+     }
+   }
+ 
++  // The highest native handle in the set, for POSIX select's first argument; -1 when empty.
++  int64_t HighestNative() const {
++    int64_t highest = -1;
++    for (uint32_t i = 0; i < this->count; ++i) {
++      highest = std::max<int64_t>(highest, int64_t(this->sockets[i]->native_handle()));
++    }
++    return highest;
++  }
++
+   void UpdateFrom(fd_set* native_set) {
+     uint32_t new_count = 0;
+     for (uint32_t i = 0; i < this->count; ++i) {
+@@ -829,8 +999,18 @@ i32 NetDll_select_entry(i32 caller, i32 nfds, ppc_ptr_t<x_fd_set> readfds,
+                                              reinterpret_cast<int32_t*>(&timeout.tv_usec));
+     timeout_in = &timeout;
+   }
+-  int ret = select(nfds, readfds ? &native_readfds : nullptr, writefds ? &native_writefds : nullptr,
+-                   exceptfds ? &native_exceptfds : nullptr, timeout_in);
++#if REX_PLATFORM_WIN32
++  // Winsock ignores the count, as the console does.
++  const int native_nfds = nfds;
++#else
++  // The console ignores the count, and titles pass anything (often 0); POSIX select only looks at
++  // handles below it, so it is the highest native handle in the sets plus one.
++  const int native_nfds = int(std::max({host_readfds.HighestNative(), host_writefds.HighestNative(),
++                                        host_exceptfds.HighestNative()}) + 1);
++#endif
++  int ret = select(native_nfds, readfds ? &native_readfds : nullptr,
++                   writefds ? &native_writefds : nullptr, exceptfds ? &native_exceptfds : nullptr,
++                   timeout_in);
+   if (readfds) {
+     host_readfds.UpdateFrom(&native_readfds);
+     host_readfds.Store(readfds);
+@@ -848,6 +1028,67 @@ i32 NetDll_select_entry(i32 caller, i32 nfds, ppc_ptr_t<x_fd_set> readfds,
+   return ret;
+ }
+ 
++// Gives the title the Winsock code of the host's last socket error, which WSAGetLastError returns:
++// on macOS and Linux the host reports errno values, which titles do not know. Unreal Engine 3 closes
++// a TCP connection whose receive fails with anything but WSAEWOULDBLOCK.
++void SetLastSocketError() {
++#if REX_PLATFORM_WIN32
++  XThread::SetLastError(WSAGetLastError());
++#else
++  const int error = errno;
++  uint32_t code;
++  switch (error) {
++    case EAGAIN:
++#if EWOULDBLOCK != EAGAIN
++    case EWOULDBLOCK:
++#endif
++      code = 10035;  // WSAEWOULDBLOCK
++      break;
++    case EINPROGRESS:
++      code = 10036;  // WSAEINPROGRESS
++      break;
++    case EALREADY:
++      code = 10037;  // WSAEALREADY
++      break;
++    case EMSGSIZE:
++      code = 10040;  // WSAEMSGSIZE
++      break;
++    case EADDRINUSE:
++      code = 10048;  // WSAEADDRINUSE
++      break;
++    case ENETUNREACH:
++      code = 10051;  // WSAENETUNREACH
++      break;
++    case ECONNABORTED:
++      code = 10053;  // WSAECONNABORTED
++      break;
++    case ECONNRESET:
++    case EPIPE:
++      code = 10054;  // WSAECONNRESET
++      break;
++    case EISCONN:
++      code = 10056;  // WSAEISCONN
++      break;
++    case ENOTCONN:
++      code = 10057;  // WSAENOTCONN
++      break;
++    case ETIMEDOUT:
++      code = 10060;  // WSAETIMEDOUT
++      break;
++    case ECONNREFUSED:
++      code = 10061;  // WSAECONNREFUSED
++      break;
++    case EHOSTUNREACH:
++      code = 10065;  // WSAEHOSTUNREACH
++      break;
++    default:
++      code = 10022;  // WSAEINVAL
++      break;
++  }
++  XThread::SetLastError(code);
++#endif
++}
++
+ u32 NetDll_recv_entry(u32 caller, u32 socket_handle, mapped_void buf_ptr, u32 buf_len, u32 flags) {
+   auto socket = REX_KERNEL_OBJECTS()->LookupObject<XSocket>(socket_handle);
+   if (!socket) {
+@@ -856,7 +1097,9 @@ u32 NetDll_recv_entry(u32 caller, u32 socket_handle, mapped_void buf_ptr, u32 bu
+     return -1;
+   }
+ 
+-  return socket->Recv(buf_ptr, buf_len, flags);
++  const int ret = socket->Recv(buf_ptr, buf_len, flags);
++  if (ret == -1) SetLastSocketError();
++  return ret;
+ }
+ 
+ u32 NetDll_recvfrom_entry(u32 caller, u32 socket_handle, mapped_void buf_ptr, u32 buf_len,
+@@ -907,7 +1150,9 @@ u32 NetDll_send_entry(u32 caller, u32 socket_handle, mapped_void buf_ptr, u32 bu
+     return -1;
+   }
+ 
+-  return socket->Send(buf_ptr, buf_len, flags);
++  const int ret = socket->Send(buf_ptr, buf_len, flags);
++  if (ret == -1) SetLastSocketError();
++  return ret;
+ }
+ 
+ u32 NetDll_sendto_entry(u32 caller, u32 socket_handle, mapped_void buf_ptr, u32 buf_len, u32 flags,
+@@ -923,6 +1168,57 @@ u32 NetDll_sendto_entry(u32 caller, u32 socket_handle, mapped_void buf_ptr, u32
    return socket->SendTo(buf_ptr, buf_len, flags, &native_to, to_len);
  }
  
@@ -26155,8 +26569,11 @@ index a1a3758..c2fba52 100644
  u32 NetDll___WSAFDIsSet_entry(u32 socket_handle, ppc_ptr_t<x_fd_set> fd_set) {
    const uint8_t max_fd_count = std::min((uint32_t)fd_set->fd_count, uint32_t(64));
    for (uint8_t i = 0; i < max_fd_count; i++) {
-@@ -972,6 +1104,13 @@ REX_EXPORT(__imp__NetDll_XNetDnsRelease, rex::kernel::xam::NetDll_XNetDnsRelease
+@@ -970,8 +1266,16 @@ REX_EXPORT(__imp__NetDll_XNetGetEthernetLinkStatus,
+ REX_EXPORT(__imp__NetDll_XNetDnsLookup, rex::kernel::xam::NetDll_XNetDnsLookup_entry)
+ REX_EXPORT(__imp__NetDll_XNetDnsRelease, rex::kernel::xam::NetDll_XNetDnsRelease_entry)
  REX_EXPORT(__imp__NetDll_XNetQosServiceLookup, rex::kernel::xam::NetDll_XNetQosServiceLookup_entry)
++REX_EXPORT(__imp__NetDll_XNetQosLookup, rex::kernel::xam::NetDll_XNetQosLookup_entry)
  REX_EXPORT(__imp__NetDll_XNetQosRelease, rex::kernel::xam::NetDll_XNetQosRelease_entry)
  REX_EXPORT(__imp__NetDll_XNetQosListen, rex::kernel::xam::NetDll_XNetQosListen_entry)
 +REX_EXPORT(__imp__NetDll_XNetCreateKey, rex::kernel::xam::NetDll_XNetCreateKey_entry)
@@ -26169,7 +26586,7 @@ index a1a3758..c2fba52 100644
  REX_EXPORT(__imp__NetDll_inet_addr, rex::kernel::xam::NetDll_inet_addr_entry)
  REX_EXPORT(__imp__NetDll_socket, rex::kernel::xam::NetDll_socket_entry)
  REX_EXPORT(__imp__NetDll_closesocket, rex::kernel::xam::NetDll_closesocket_entry)
-@@ -988,6 +1127,8 @@ REX_EXPORT(__imp__NetDll_recvfrom, rex::kernel::xam::NetDll_recvfrom_entry)
+@@ -988,6 +1292,8 @@ REX_EXPORT(__imp__NetDll_recvfrom, rex::kernel::xam::NetDll_recvfrom_entry)
  REX_EXPORT(__imp__NetDll_send, rex::kernel::xam::NetDll_send_entry)
  REX_EXPORT(__imp__NetDll_sendto, rex::kernel::xam::NetDll_sendto_entry)
  REX_EXPORT(__imp__NetDll___WSAFDIsSet, rex::kernel::xam::NetDll___WSAFDIsSet_entry)
@@ -26178,7 +26595,7 @@ index a1a3758..c2fba52 100644
  REX_EXPORT(__imp__NetDll_WSASetLastError, rex::kernel::xam::NetDll_WSASetLastError_entry)
  
  REX_EXPORT_STUB(__imp__NetDll_UpnpActionCalculateWorkBufferSize);
-@@ -1034,25 +1175,19 @@ REX_EXPORT_STUB(__imp__NetDll_XHttpSetStatusCallback);
+@@ -1034,25 +1340,19 @@ REX_EXPORT_STUB(__imp__NetDll_XHttpSetStatusCallback);
  REX_EXPORT_STUB(__imp__NetDll_XHttpShutdown);
  REX_EXPORT_STUB(__imp__NetDll_XHttpStartup);
  REX_EXPORT_STUB(__imp__NetDll_XHttpWriteData);
@@ -26192,8 +26609,9 @@ index a1a3758..c2fba52 100644
  REX_EXPORT_STUB(__imp__NetDll_XNetGetXnAddrPlatform);
  REX_EXPORT_STUB(__imp__NetDll_XNetInAddrToServer);
  REX_EXPORT_STUB(__imp__NetDll_XNetQosGetListenStats);
- REX_EXPORT_STUB(__imp__NetDll_XNetQosLookup);
+-REX_EXPORT_STUB(__imp__NetDll_XNetQosLookup);
 -REX_EXPORT_STUB(__imp__NetDll_XNetRegisterKey);
++
  REX_EXPORT_STUB(__imp__NetDll_XNetReplaceKey);
  REX_EXPORT_STUB(__imp__NetDll_XNetServerToInAddr);
  REX_EXPORT_STUB(__imp__NetDll_XNetSetOpt);
@@ -26204,14 +26622,14 @@ index a1a3758..c2fba52 100644
  REX_EXPORT_STUB(__imp__NetDll_XmlDownloadContinue);
  REX_EXPORT_STUB(__imp__NetDll_XmlDownloadGetParseTime);
  REX_EXPORT_STUB(__imp__NetDll_XmlDownloadGetReceivedDataSize);
-@@ -1102,5 +1237,3 @@ REX_EXPORT_STUB(__imp__NetDll_XnpToolSetCallbacks);
+@@ -1102,5 +1402,3 @@ REX_EXPORT_STUB(__imp__NetDll_XnpToolSetCallbacks);
  REX_EXPORT_STUB(__imp__NetDll_XnpUnregisterKeyForCallerType);
  REX_EXPORT_STUB(__imp__NetDll_XnpUpdateConfigParams);
  REX_EXPORT_STUB(__imp__NetDll_getpeername);
 -REX_EXPORT_STUB(__imp__NetDll_getsockname);
 -REX_EXPORT_STUB(__imp__NetDll_getsockopt);
 diff --git a/src/kernel/xam/xam_user.cpp b/src/kernel/xam/xam_user.cpp
-index 94468e6..6a3d72b 100644
+index 94468e6..0a194b1 100644
 --- a/src/kernel/xam/xam_user.cpp
 +++ b/src/kernel/xam/xam_user.cpp
 @@ -12,6 +12,7 @@
@@ -26222,7 +26640,23 @@ index 94468e6..6a3d72b 100644
  #include <cstring>
  
  #include <rex/cvar.h>
-@@ -46,8 +47,7 @@ i32 XamUserGetXUID_entry(u32 user_index, u32 type_mask, mapped_u64 xuid_ptr) {
+@@ -26,6 +27,7 @@
+ #include <rex/system/xenumerator.h>
+ #include <rex/system/xio.h>
+ #include <rex/system/xthread.h>
++#include <rex/system/xam/alboria.h>
+ #include <rex/system/xtypes.h>
+ 
+ REXCVAR_DEFINE_UINT32(user_language, 1, "Kernel", "User's language ID");
+@@ -36,6 +38,7 @@ namespace kernel {
+ namespace xam {
+ using namespace rex::system;
+ using namespace rex::system::xam;
++namespace alboria = rex::system::xam::alboria;
+ 
+ i32 XamUserGetXUID_entry(u32 user_index, u32 type_mask, mapped_u64 xuid_ptr) {
+   assert_true(type_mask == 1 || type_mask == 2 || type_mask == 3 || type_mask == 4 ||
+@@ -46,8 +49,7 @@ i32 XamUserGetXUID_entry(u32 user_index, u32 type_mask, mapped_u64 xuid_ptr) {
    uint32_t result = X_E_NO_SUCH_USER;
    uint64_t xuid = 0;
    if (user_index < 4) {
@@ -26232,9 +26666,17 @@ index 94468e6..6a3d72b 100644
        auto type = user_profile->type() & type_mask;
        if (type & (2 | 4)) {
          // maybe online profile?
-@@ -67,14 +67,8 @@ i32 XamUserGetXUID_entry(u32 user_index, u32 type_mask, mapped_u64 xuid_ptr) {
+@@ -66,15 +68,18 @@ i32 XamUserGetXUID_entry(u32 user_index, u32 type_mask, mapped_u64 xuid_ptr) {
+   return result;
  }
  
++// eXUserSigninState_SignedInToLive: signed in, with Xbox Live (Alboria behind it).
++constexpr uint32_t kSignedInToLive = 2;
++// XUSER_INFO_FLAG_LIVE_ENABLED, in X_USER_SIGNIN_INFO's info flags.
++constexpr uint32_t kUserInfoLiveEnabled = 0x00000001;
++// XUSER_GET_SIGNIN_INFO_ONLINE_XUID_ONLY: XamUserGetSigninInfo asks for the online XUID.
++constexpr uint32_t kSigninInfoOnlineXuid = 0x00000002;
++
  u32 XamUserGetSigninState_entry(u32 user_index) {
 -  uint32_t signin_state = 0;
 -  if (user_index < 4) {
@@ -26245,11 +26687,13 @@ index 94468e6..6a3d72b 100644
 -  }
 -  return signin_state;
 +  const auto* user_profile = REX_KERNEL_STATE()->user_profile(user_index);
-+  return user_profile ? user_profile->signin_state() : 0;
++  if (!user_profile) return 0;
++  if (user_index == 0 && alboria::LiveSignedIn()) return kSignedInToLive;
++  return user_profile->signin_state();
  }
  
  typedef struct {
-@@ -93,11 +87,11 @@ i32 XamUserGetSigninInfo_entry(u32 user_index, u32 flags, ppc_ptr_t<X_USER_SIGNI
+@@ -93,13 +98,18 @@ i32 XamUserGetSigninInfo_entry(u32 user_index, u32 flags, ppc_ptr_t<X_USER_SIGNI
    }
  
    std::memset(info, 0, sizeof(X_USER_SIGNIN_INFO));
@@ -26262,8 +26706,15 @@ index 94468e6..6a3d72b 100644
 -  const auto& user_profile = REX_KERNEL_STATE()->user_profile();
    info->xuid = user_profile->xuid();
    info->signin_state = user_profile->signin_state();
++  if (user_index == 0 && alboria::LiveSignedIn()) {
++    info->signin_state = kSignedInToLive;
++    info->unk08 = kUserInfoLiveEnabled;  // the info flags
++    if (flags & kSigninInfoOnlineXuid) info->xuid = alboria::OnlineXuid(user_profile->xuid());
++  }
    rex::string::copy_truncating(info->name, user_profile->name(), rex::countof(info->name));
-@@ -109,11 +103,11 @@ u32 XamUserGetName_entry(u32 user_index, mapped_string buffer, u32 buffer_len) {
+   return X_E_SUCCESS;
+ }
+@@ -109,11 +119,11 @@ u32 XamUserGetName_entry(u32 user_index, mapped_string buffer, u32 buffer_len) {
      return X_E_INVALIDARG;
    }
  
@@ -26277,7 +26728,7 @@ index 94468e6..6a3d72b 100644
    const auto& user_name = user_profile->name();
    rex::string::copy_truncating(buffer, user_name, std::min(buffer_len, uint32_t(16)));
    return X_E_SUCCESS;
-@@ -124,7 +118,8 @@ u32 XamUserGetGamerTag_entry(u32 user_index, mapped_wstring buffer, u32 buffer_l
+@@ -124,7 +134,8 @@ u32 XamUserGetGamerTag_entry(u32 user_index, mapped_wstring buffer, u32 buffer_l
      return X_E_INVALIDARG;
    }
  
@@ -26287,7 +26738,7 @@ index 94468e6..6a3d72b 100644
      return X_E_NO_SUCH_USER;
    }
  
-@@ -132,7 +127,6 @@ u32 XamUserGetGamerTag_entry(u32 user_index, mapped_wstring buffer, u32 buffer_l
+@@ -132,7 +143,6 @@ u32 XamUserGetGamerTag_entry(u32 user_index, mapped_wstring buffer, u32 buffer_l
      return X_E_INVALIDARG;
    }
  
@@ -26295,7 +26746,7 @@ index 94468e6..6a3d72b 100644
    auto user_name = rex::string::to_utf16(user_profile->name());
    rex::string::copy_and_swap_truncating(buffer, user_name, std::min(buffer_len, uint32_t(16)));
    return X_E_SUCCESS;
-@@ -156,8 +150,6 @@ uint32_t XamUserReadProfileSettingsEx(uint32_t title_id, uint32_t user_index, ui
+@@ -156,8 +166,6 @@ uint32_t XamUserReadProfileSettingsEx(uint32_t title_id, uint32_t user_index, ui
      assert_true(xuid_count == 1);
      assert_not_null(xuids);
      // TODO(gibbed): allow proper lookup of arbitrary XUIDs
@@ -26304,7 +26755,7 @@ index 94468e6..6a3d72b 100644
      // TODO(gibbed): we assert here, but in case a title passes xuid_count > 1
      // until it's implemented for release builds...
      xuid_count = 1;
-@@ -212,8 +204,21 @@ uint32_t XamUserReadProfileSettingsEx(uint32_t title_id, uint32_t user_index, ui
+@@ -212,8 +220,21 @@ uint32_t XamUserReadProfileSettingsEx(uint32_t title_id, uint32_t user_index, ui
    // Title ID = 0 means us.
    // 0xfffe07d1 = profile?
  
@@ -26328,7 +26779,7 @@ index 94468e6..6a3d72b 100644
      if (overlapped) {
        REX_KERNEL_STATE()->CompleteOverlappedImmediate(
            REX_KERNEL_MEMORY()->HostToGuestVirtual(overlapped), X_ERROR_NO_SUCH_USER);
-@@ -222,8 +227,6 @@ uint32_t XamUserReadProfileSettingsEx(uint32_t title_id, uint32_t user_index, ui
+@@ -222,8 +243,6 @@ uint32_t XamUserReadProfileSettingsEx(uint32_t title_id, uint32_t user_index, ui
      return X_ERROR_NO_SUCH_USER;
    }
  
@@ -26337,7 +26788,7 @@ index 94468e6..6a3d72b 100644
    // First call asks for size (fill buffer_size_ptr).
    // Second call asks for buffer contents with that size.
  
-@@ -309,8 +312,8 @@ u32 XamUserWriteProfileSettings_entry(u32 title_id, u32 user_index, u32 setting_
+@@ -309,8 +328,8 @@ u32 XamUserWriteProfileSettings_entry(u32 title_id, u32 user_index, u32 setting_
      return X_ERROR_INVALID_PARAMETER;
    }
  
@@ -26348,7 +26799,7 @@ index 94468e6..6a3d72b 100644
      if (overlapped) {
        REX_KERNEL_STATE()->CompleteOverlappedImmediate(overlapped.guest_address(),
                                                        X_ERROR_NO_SUCH_USER);
-@@ -320,7 +323,6 @@ u32 XamUserWriteProfileSettings_entry(u32 title_id, u32 user_index, u32 setting_
+@@ -320,7 +339,6 @@ u32 XamUserWriteProfileSettings_entry(u32 title_id, u32 user_index, u32 setting_
    }
  
    // Update and save settings.
@@ -26356,7 +26807,7 @@ index 94468e6..6a3d72b 100644
  
    for (uint32_t n = 0; n < setting_count; ++n) {
      const X_USER_PROFILE_SETTING& setting = settings[n];
-@@ -378,7 +380,7 @@ u32 XamUserCheckPrivilege_entry(u32 user_index, u32 mask, mapped_u32 out_value)
+@@ -378,18 +396,19 @@ u32 XamUserCheckPrivilege_entry(u32 user_index, u32 mask, mapped_u32 out_value)
        return X_ERROR_INVALID_PARAMETER;
      }
  
@@ -26365,7 +26816,13 @@ index 94468e6..6a3d72b 100644
        return X_ERROR_NO_SUCH_USER;
      }
    }
-@@ -389,7 +391,7 @@ u32 XamUserCheckPrivilege_entry(u32 user_index, u32 mask, mapped_u32 out_value)
+ 
+-  // If we deny everything, games should hopefully not try to do stuff.
+-  *out_value = 0;
++  // Signed in to Live through Alboria: every online privilege is granted (multiplayer, communications,
++  // content, presence...). Otherwise every one is denied, so games do not try online play.
++  *out_value = alboria::LiveSignedIn() ? 1 : 0;
+   return X_ERROR_SUCCESS;
  }
  
  u32 XamUserContentRestrictionGetFlags_entry(u32 user_index, mapped_u32 out_flags) {
@@ -26374,7 +26831,7 @@ index 94468e6..6a3d72b 100644
      return X_ERROR_NO_SUCH_USER;
    }
  
-@@ -400,7 +402,7 @@ u32 XamUserContentRestrictionGetFlags_entry(u32 user_index, mapped_u32 out_flags
+@@ -400,7 +419,7 @@ u32 XamUserContentRestrictionGetFlags_entry(u32 user_index, mapped_u32 out_flags
  
  u32 XamUserContentRestrictionGetRating_entry(u32 user_index, u32 unk1, mapped_u32 out_unk2,
                                               mapped_u32 out_unk3) {
@@ -26383,7 +26840,7 @@ index 94468e6..6a3d72b 100644
      return X_ERROR_NO_SUCH_USER;
    }
  
-@@ -431,7 +433,7 @@ u32 XamUserGetMembershipTier_entry(u32 user_index) {
+@@ -431,7 +450,7 @@ u32 XamUserGetMembershipTier_entry(u32 user_index) {
    if (user_index >= 4) {
      return X_ERROR_INVALID_PARAMETER;
    }
@@ -26392,7 +26849,7 @@ index 94468e6..6a3d72b 100644
      return X_ERROR_NO_SUCH_USER;
    }
    return 6 /* 6 appears to be Gold */;
-@@ -445,18 +447,13 @@ u32 XamUserAreUsersFriends_entry(u32 user_index, u32 unk1, u32 unk2, mapped_u32
+@@ -445,18 +464,13 @@ u32 XamUserAreUsersFriends_entry(u32 user_index, u32 unk1, u32 unk2, mapped_u32
    if (user_index >= 4) {
      result = X_ERROR_INVALID_PARAMETER;
    } else {
@@ -26417,7 +26874,7 @@ index 94468e6..6a3d72b 100644
      }
    }
  
-@@ -481,8 +478,8 @@ u32 XamShowSigninUI_entry(u32 unk, u32 unk_mask) {
+@@ -481,8 +495,8 @@ u32 XamShowSigninUI_entry(u32 unk, u32 unk_mask) {
  
    // To fix game modes that display a 4 profile signin UI (even if playing
    // alone):
@@ -26428,7 +26885,7 @@ index 94468e6..6a3d72b 100644
    // Games seem to sit and loop until we trigger this notification:
    // XN_SYS_UI (off)
    REX_KERNEL_STATE()->BroadcastNotification(0x00000009, 0);
-@@ -713,16 +710,22 @@ u32 XamWriteGamerTile_entry(u32 arg1, u32 arg2, u32 arg3, u32 arg4, u32 arg5, u3
+@@ -713,16 +727,22 @@ u32 XamWriteGamerTile_entry(u32 arg1, u32 arg2, u32 arg3, u32 arg4, u32 arg5, u3
    return X_ERROR_SUCCESS;
  }
  
@@ -26846,10 +27303,10 @@ index 0000000..1cfbf15
 +}  // namespace rex::system::xam
 diff --git a/src/system/xam/system_link.cpp b/src/system/xam/system_link.cpp
 new file mode 100644
-index 0000000..f93f31c
+index 0000000..2583865
 --- /dev/null
 +++ b/src/system/xam/system_link.cpp
-@@ -0,0 +1,372 @@
+@@ -0,0 +1,390 @@
 +/**
 + * @file        system/xam/system_link.cpp
 + * @brief       System Link: the local network as XNet and the session services show it to a title
@@ -26872,6 +27329,7 @@ index 0000000..f93f31c
 +#include <rex/cvar.h>
 +#include <rex/logging.h>
 +#include <rex/platform.h>
++#include <rex/system/xam/alboria.h>
 +
 +#if REX_PLATFORM_WIN32
 +#include <WinSock2.h>
@@ -26890,8 +27348,9 @@ index 0000000..f93f31c
 +REXCVAR_DEFINE_STRING(network_mode, "offline", "Network",
 +                      "offline: the title sees no network link, so System Link stays off; "
 +                      "system_link: System Link games with the other computers of the local "
-+                      "network")
-+    .allowed({"offline", "system_link"})
++                      "network; online: the same, and games over the internet through Alboria "
++                      "(alboria.h)")
++    .allowed({"offline", "system_link", "online"})
 +    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 +
 +REXCVAR_DEFINE_STRING(system_link_address, "", "Network",
@@ -26906,6 +27365,7 @@ index 0000000..f93f31c
 +// Top bits of an XNKID that say what kind of session it is; System Link sessions have none set.
 +constexpr uint8_t kXnKidTypeMask = 0xF0;
 +constexpr uint8_t kXnKidSystemLink = 0x00;
++constexpr uint8_t kXnKidOnlinePeer = 0x80;
 +
 +std::mutex g_mutex;
 +std::map<uint32_t, XnAddrBytes> g_address_book;  // by IP address
@@ -27109,11 +27569,17 @@ index 0000000..f93f31c
 +}  // namespace
 +
 +bool SystemLinkEnabled() {
-+  return REXCVAR_GET(network_mode) == "system_link";
++  const auto& mode = REXCVAR_GET(network_mode);
++  return mode == "system_link" || mode == "online" || alboria::InRoom();
 +}
 +
 +uint32_t LanAddress() {
 +  return Lan().address;
++}
++
++uint32_t LinkAddress() {
++  const uint32_t virtual_address = alboria::VirtualAddress();
++  return virtual_address ? virtual_address : LanAddress();
 +}
 +
 +uint32_t LanBroadcastAddress() {
@@ -27163,6 +27629,15 @@ index 0000000..f93f31c
 +    byte = uint8_t(random());
 +  }
 +  kid[0] = uint8_t((kid[0] & ~kXnKidTypeMask) | kXnKidSystemLink);
++  return kid;
++}
++
++XnKid MakeOnlinePeerKid(std::random_device& random) {
++  XnKid kid;
++  for (auto& byte : kid) {
++    byte = uint8_t(random());
++  }
++  kid[0] = uint8_t((kid[0] & ~kXnKidTypeMask) | kXnKidOnlinePeer);
 +  return kid;
 +}
 +
@@ -27296,10 +27771,10 @@ index 7ed67aa..d5c61f0 100644
      auto setting_id = fmt::format("{:08X}", setting->setting_id);
      auto file_path = content_dir / setting_id;
 diff --git a/src/system/xsocket.cpp b/src/system/xsocket.cpp
-index 2d13ac8..b9d2548 100644
+index 2d13ac8..7aea83e 100644
 --- a/src/system/xsocket.cpp
 +++ b/src/system/xsocket.cpp
-@@ -9,11 +9,20 @@
+@@ -9,11 +9,21 @@
   * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
   */
  
@@ -27316,11 +27791,12 @@ index 2d13ac8..b9d2548 100644
 +#include <rex/memory/utils.h>
  #include <rex/platform.h>
  #include <rex/system/kernel_state.h>
++#include <rex/system/xam/alboria.h>
 +#include <rex/system/xam/system_link.h>
  #include <rex/system/xsocket.h>
  // #include <rex/system/xnet.h>
  
-@@ -28,11 +37,128 @@
+@@ -28,11 +38,144 @@
  #include <arpa/inet.h>
  #include <netinet/in.h>
  #include <netinet/ip.h>
@@ -27444,12 +27920,28 @@ index 2d13ac8..b9d2548 100644
 +  return host;
 +}
 +
++// The loopback address `port`, for the sockets standing for Alboria streams (alboria.h).
++sockaddr_in LoopbackAddress(uint16_t port) {
++  N_XSOCKADDR_IN loopback{};
++  loopback.sin_addr = 0x7F000001;
++  return ToHostAddress(loopback, port);
++}
++
++// Whether a non-blocking connect is still under way.
++bool IsConnectInProgress(int error) {
++#if REX_PLATFORM_WIN32
++  return error == WSAEWOULDBLOCK;
++#else
++  return error == EINPROGRESS || IsWouldBlock(error);
++#endif
++}
++
 +}  // namespace
 +
  XSocket::XSocket(KernelState* kernel_state) : XObject(kernel_state, kObjectType) {}
  
  XSocket::XSocket(KernelState* kernel_state, uint64_t native_handle)
-@@ -54,9 +180,28 @@ X_STATUS XSocket::Initialize(AddressFamily af, Type type, Protocol proto) {
+@@ -54,13 +197,40 @@ X_STATUS XSocket::Initialize(AddressFamily af, Type type, Protocol proto) {
  
    native_handle_ = socket(af, type, proto);
    if (native_handle_ == -1) {
@@ -27478,7 +27970,19 @@ index 2d13ac8..b9d2548 100644
    return X_STATUS_SUCCESS;
  }
  
-@@ -76,9 +221,23 @@ X_STATUS XSocket::SetOption(uint32_t level, uint32_t optname, void* optval_ptr,
+ X_STATUS XSocket::Close() {
++  if (stream_listener_port_) {
++    xam::alboria::ForgetListener(stream_listener_port_);
++    stream_listener_port_ = 0;
++  }
++  if (datagram_moved_port_) {
++    xam::alboria::ForgetDatagramPort(datagram_moved_port_);
++    datagram_moved_port_ = 0;
++  }
+   int ret = rex::net::socket_close(native_handle_);
+   if (ret != 0) {
+     return X_STATUS_UNSUCCESSFUL;
+@@ -76,9 +246,23 @@ X_STATUS XSocket::SetOption(uint32_t level, uint32_t optname, void* optval_ptr,
      return X_STATUS_SUCCESS;
    }
  
@@ -27504,7 +28008,7 @@ index 2d13ac8..b9d2548 100644
      return X_STATUS_UNSUCCESSFUL;
    }
  
-@@ -90,10 +249,54 @@ X_STATUS XSocket::SetOption(uint32_t level, uint32_t optname, void* optval_ptr,
+@@ -90,10 +274,54 @@ X_STATUS XSocket::SetOption(uint32_t level, uint32_t optname, void* optval_ptr,
    return X_STATUS_SUCCESS;
  }
  
@@ -27561,17 +28065,87 @@ index 2d13ac8..b9d2548 100644
      return X_STATUS_UNSUCCESSFUL;
    }
  
-@@ -110,8 +313,21 @@ X_STATUS XSocket::Connect(N_XSOCKADDR* name, int name_len) {
+@@ -101,6 +329,34 @@ X_STATUS XSocket::IOControl(uint32_t cmd, uint8_t* arg_ptr) {
+ }
+ 
+ X_STATUS XSocket::Connect(N_XSOCKADDR* name, int name_len) {
++  // A TCP connection to another member of an Alboria room goes through a stream (alboria.h): the
++  // socket connects to the loopback port of the stream's proxy instead, which takes it at once.
++  if (type_ == Type::X_SOCK_STREAM && name->address_family == X_AF_INET) {
++    const auto* target = reinterpret_cast<const N_XSOCKADDR_IN*>(name);
++    const uint32_t address = target->sin_addr;
++    const uint16_t port = target->sin_port;
++    if (xam::alboria::StreamsTo(address)) {
++      const uint16_t proxy_port = xam::alboria::OpenStream(address, port, bound_port_);
++      const sockaddr_in proxy = LoopbackAddress(proxy_port);
++      int ret = proxy_port ? connect(native_handle_, reinterpret_cast<const sockaddr*>(&proxy), sizeof(proxy)) : -1;
++      if (ret < 0 && proxy_port && IsConnectInProgress(HostSocketError())) {
++        // A non-blocking socket: the loopback connection completes almost at once, and the title
++        // takes the connect as done (it would wait for it to be writable otherwise).
++        fd_set set;
++        FD_ZERO(&set);
++#if REX_PLATFORM_WIN32
++        FD_SET(static_cast<SOCKET>(native_handle_), &set);
++#else
++        FD_SET(static_cast<int>(native_handle_), &set);
++#endif
++        timeval timeout{2, 0};
++        ret = select(int(native_handle_ + 1), nullptr, &set, nullptr, &timeout) > 0 ? 0 : -1;
++      }
++      REXKRNL_INFO("Socket: TCP connection to {}:{} through an Alboria stream{}", FormatAddress(address),
++                   port, ret == 0 ? "" : " failed");
++      return ret == 0 ? X_STATUS_SUCCESS : X_STATUS_UNSUCCESSFUL;
++    }
++  }
+   int ret = connect(native_handle_, (sockaddr*)name, name_len);
+   if (ret < 0) {
+     return X_STATUS_UNSUCCESSFUL;
+@@ -110,8 +366,56 @@ X_STATUS XSocket::Connect(N_XSOCKADDR* name, int name_len) {
  }
  
  X_STATUS XSocket::Bind(N_XSOCKADDR_IN* name, int name_len) {
 -  int ret = bind(native_handle_, (sockaddr*)name, name_len);
++  // With the game's Xbox Live parties on Alboria, its TCP sockets only reach other members through
++  // streams (alboria.h): they are bound on the loopback interface, on a port of the system's
++  // choosing, and a listening one is known by the port the title asked for (Listen).
++  if (type_ == Type::X_SOCK_STREAM && xam::alboria::LiveSignedIn()) {
++    const sockaddr_in loopback = LoopbackAddress(0);
++    if (bind(native_handle_, reinterpret_cast<const sockaddr*>(&loopback), sizeof(loopback)) < 0) {
++      return X_STATUS_UNSUCCESSFUL;
++    }
++    bound_ = true;
++    bound_port_ = name->sin_port;
++    return X_STATUS_SUCCESS;
++  }
++
 +  // A datagram socket on a privileged port is bound on its network port (xam::NetworkPort), the
 +  // one the others send it to; the title keeps the port it asked for (bound_port_).
 +  const uint16_t port = name->sin_port;
 +  const uint16_t host_port = type_ == Type::X_SOCK_DGRAM ? xam::NetworkPort(port) : port;
 +  sockaddr_in host_name = ToHostAddress(*name, host_port);
 +  int ret = bind(native_handle_, reinterpret_cast<sockaddr*>(&host_name), sizeof(host_name));
++#if REX_PLATFORM_WIN32
++  const bool port_taken = ret < 0 && HostSocketError() == WSAEADDRINUSE;
++#else
++  const bool port_taken = ret < 0 && HostSocketError() == EADDRINUSE;
++#endif
++  if (port_taken && type_ == Type::X_SOCK_DGRAM && port && xam::alboria::LiveSignedIn()) {
++    // Another installation on this computer has the port (two games testing an Alboria room): the
++    // room's datagrams reach this one wherever it is bound (alboria::RegisterDatagramPort).
++    sockaddr_in any_port = ToHostAddress(*name, 0);
++    sockaddr_in bound{};
++    socklen_t length = sizeof(bound);
++    if (bind(native_handle_, reinterpret_cast<sockaddr*>(&any_port), sizeof(any_port)) == 0 &&
++        getsockname(native_handle_, reinterpret_cast<sockaddr*>(&bound), &length) == 0) {
++      datagram_moved_port_ = ntohs(bound.sin_port);
++      xam::alboria::RegisterDatagramPort(port, datagram_moved_port_);
++      REXKRNL_INFO("Socket port {} is taken on this computer: bound as port {} for the Alboria room",
++                   port, datagram_moved_port_);
++      bound_ = true;
++      bound_port_ = port;
++      return X_STATUS_SUCCESS;
++    }
++  }
 +  if (ret == 0 && host_port != port) {
 +    REXKRNL_INFO("Socket port {} is bound as port {} on the network", port, host_port);
 +  }
@@ -27584,7 +28158,45 @@ index 2d13ac8..b9d2548 100644
      return X_STATUS_UNSUCCESSFUL;
    }
  
-@@ -190,10 +406,18 @@ int XSocket::RecvFrom(uint8_t* buf, uint32_t buf_len, uint32_t flags, N_XSOCKADD
+@@ -127,6 +431,17 @@ X_STATUS XSocket::Listen(int backlog) {
+     return X_STATUS_UNSUCCESSFUL;
+   }
+ 
++  // A TCP socket listening for other members' streams (Bind): they connect to its loopback port.
++  if (type_ == Type::X_SOCK_STREAM && bound_port_ && xam::alboria::LiveSignedIn()) {
++    sockaddr_in bound{};
++    socklen_t length = sizeof(bound);
++    if (getsockname(native_handle_, reinterpret_cast<sockaddr*>(&bound), &length) == 0) {
++      stream_listener_port_ = ntohs(bound.sin_port);
++      xam::alboria::RegisterListener(bound_port_, stream_listener_port_);
++      REXKRNL_INFO("Socket: TCP port {} listens for Alboria streams", bound_port_);
++    }
++  }
++
+   return X_STATUS_SUCCESS;
+ }
+ 
+@@ -142,6 +457,19 @@ object_ref<XSocket> XSocket::Accept(N_XSOCKADDR* name, int* name_len) {
+ 
+   std::memcpy(name, &n_sockaddr, n_name_len);
+   *name_len = n_name_len;
++  // A stream from another member arrives from the loopback: the title is told the member's
++  // virtual address and port instead, as the guest's sockaddr_in (big-endian port, then address).
++  if (type_ == Type::X_SOCK_STREAM && n_sockaddr.sa_family == AF_INET) {
++    const auto* from = reinterpret_cast<const sockaddr_in*>(&n_sockaddr);
++    if (const auto member = xam::alboria::StreamSource(ntohs(from->sin_port))) {
++      name->address_family = X_AF_INET;
++      std::memset(name->sa_data, 0, sizeof(name->sa_data));
++      name->sa_data[0] = char(member->second >> 8);
++      name->sa_data[1] = char(member->second);
++      for (int i = 0; i < 4; ++i) name->sa_data[2 + i] = char(member->first >> (24 - 8 * i));
++      *name_len = 16;
++    }
++  }
+ 
+   // Create a kernel object to represent the new socket, and copy parameters
+   // over.
+@@ -190,10 +518,26 @@ int XSocket::RecvFrom(uint8_t* buf, uint32_t buf_len, uint32_t flags, N_XSOCKADD
    socklen_t nfromlen = sizeof(sockaddr_in);
    int ret = recvfrom(native_handle_, reinterpret_cast<char*>(buf), buf_len, flags,
                       (sockaddr*)&nfrom, &nfromlen);
@@ -27603,14 +28215,47 @@ index 2d13ac8..b9d2548 100644
 +    from->sin_addr = ntohl(nfrom.sin_addr.s_addr);
 +    const uint16_t port = ntohs(nfrom.sin_port);
 +    from->sin_port = type_ == Type::X_SOCK_DGRAM ? xam::TitlePort(port) : port;
++    // A datagram from an Alboria room comes from its member's loopback socket: the title sees the
++    // member's virtual address and port instead.
++    if (ret >= 0 && type_ == Type::X_SOCK_DGRAM) {
++      if (const auto member = xam::alboria::TranslateSource(from->sin_addr, port)) {
++        from->sin_addr = member->first;
++        from->sin_port = member->second;
++      }
++    }
      std::memset(from->x_sin_zero, 0, sizeof(from->x_sin_zero));
    }
  
-@@ -221,15 +445,52 @@ int XSocket::SendTo(uint8_t* buf, uint32_t buf_len, uint32_t flags, N_XSOCKADDR_
+@@ -221,15 +565,83 @@ int XSocket::SendTo(uint8_t* buf, uint32_t buf_len, uint32_t flags, N_XSOCKADDR_
    }
    */
  
 -  sockaddr_in nto;
++  // In an Alboria room, datagrams to the room's addresses and broadcasts go through the relay,
++  // from the socket's port as the title knows it. A socket the title never bound would get a port
++  // from its first sendto; it gets one here instead, so that the answers delivered to that port on
++  // the loopback interface reach it.
++  if (to && type_ == Type::X_SOCK_DGRAM && xam::alboria::RoutesThroughRelay(to->sin_addr)) {
++    uint16_t source_port = bound_port_;
++    if (!bound_) {
++      sockaddr_in any{};
++#if REX_PLATFORM_MAC
++      any.sin_len = sizeof(any);
++#endif
++      any.sin_family = AF_INET;
++      if (bind(native_handle_, reinterpret_cast<sockaddr*>(&any), sizeof(any)) == 0) bound_ = true;
++    }
++    if (source_port == 0) {
++      sockaddr_in local{};
++      socklen_t length = sizeof(local);
++      if (getsockname(native_handle_, reinterpret_cast<sockaddr*>(&local), &length) == 0) {
++        source_port = xam::TitlePort(ntohs(local.sin_port));
++      }
++    }
++    return xam::alboria::SendDatagram(source_port, to->sin_addr, to->sin_port,
++                                      std::span<const uint8_t>(buf, buf_len));
++  }
++
 +  sockaddr_in nto{};
    if (to) {
 -    nto.sin_addr.s_addr = to->sin_addr;
@@ -27658,6 +28303,12 @@ index 2d13ac8..b9d2548 100644
 +  }
 +  name->sin_family = XSocket::X_AF_INET;
 +  name->sin_addr = ntohl(host.sin_addr.s_addr);
++  // In an Alboria room a socket bound to any address is on the room's network.
++  if (type_ == Type::X_SOCK_DGRAM && name->sin_addr == 0) {
++    if (const uint32_t virtual_address = xam::alboria::VirtualAddress()) {
++      name->sin_addr = virtual_address;
++    }
++  }
 +  const uint16_t port = ntohs(host.sin_port);
 +  name->sin_port = type_ == Type::X_SOCK_DGRAM ? xam::TitlePort(port) : port;
 +  std::memset(name->x_sin_zero, 0, sizeof(name->x_sin_zero));
@@ -28359,13 +29010,14 @@ index 2251429..18cb3e0 100644
        break;
      }
 diff --git a/tests/unit/CMakeLists.txt b/tests/unit/CMakeLists.txt
-index 7bd264b..272dbb8 100644
+index 7bd264b..4ccad02 100644
 --- a/tests/unit/CMakeLists.txt
 +++ b/tests/unit/CMakeLists.txt
-@@ -14,6 +14,8 @@ add_executable(unit_tests
+@@ -14,6 +14,9 @@ add_executable(unit_tests
      ppc/stack_test.cpp
      system/guest_path_test.cpp
      system/achievement_manager_test.cpp
++    system/alboria_test.cpp
 +    system/player_identity_test.cpp
 +    system/system_link_test.cpp
      system/function_dispatcher_test.cpp

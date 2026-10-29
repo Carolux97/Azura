@@ -19,6 +19,7 @@ The RAAM's Shadow DLC and the Title Update it depends on have their own notes in
 - [Main menu](#main-menu)
 - [Options menu](#options-menu)
 - [Local co-op](#local-co-op)
+- [Party types, System Link and Manage/Invite](#party-types-system-link-and-manageinvite)
 - [Keyboard in menus](#keyboard-in-menus)
 - [Profile settings](#profile-settings)
 - [Mouse look](#mouse-look)
@@ -218,7 +219,7 @@ patched (**verified** with `script_trace_args=HandleMenuSelection`).
 | Original index | Label | Opens | After our patch |
 | --- | --- | --- | --- |
 | 0 | `Campaign` | `MAINMENUOP_Campaign` | 0, unchanged |
-| 1 | `VS` | `MAINMENUOP_VS_Competitiveness` | 1, text marked "(coming soon)" |
+| 1 | `VS` | `MAINMENUOP_VS_Competitiveness` | 1, unchanged (its private matches play locally and over System Link) |
 | 2 | `Horde` | `MAINMENUOP_Horde` | 2, unchanged |
 | 3 | `Siege` (Beast) | `MAINMENUOP_Siege` | 3, unchanged |
 | 4 | `Journal` (War Journal) | `MAINMENUOP_WarJournal` | 4, unchanged |
@@ -231,6 +232,15 @@ Indices 0 and 5 were confirmed with `HandleMenuSelection` traces; the others fol
 The button bar's Start "Options" (`[UIWidget_MainMenu] OptionsButtonStr` of `geargame.<lang>`) is
 replaced with a space, since the list has the option.
 Calendar and Marketplace are the last two entries, so removing them shifts no other index.
+
+The menu of a player who joined another's party is another screen, `MAINMENUOP_ClientMenu`:
+Journal, Calendar, Options, Marketplace (`DLC`) and Leave party, all `Next=MAINMENUOP_None`.
+`UIScene_FrontEnd.Callback_ClientMenuOptionWasSelected(SelectedOption)` (a float) handles them by
+position: 0 `HandleOpenWarJournal`, 1 `HandleOpenCalendar`, 2 `Callback_StartButtonPressed`, 3
+`OpenMarketplaceBlade`, 4 `Callback_TransitionToTitle` (**verified** from its bytecode, 29 October
+2026). With `menu_remove_unused` the calendar and Marketplace are removed from that list too, and
+the runtime turns the positions left (0, 1, 2) into the original ones (0, 2, 4) in the callback's
+parameter before it runs.
 
 ### Sub-menus we change
 
@@ -245,7 +255,8 @@ Each screen is another `AllOptions` entry with its own `Identifier`. Rows disabl
 | `MAINMENUOP_VS_Competitiveness` | `Recreational`, `Competitive` (`Private` stays) |
 
 The "(coming soon)" suffix is appended to the row's text key in `geargameui.<lang>` `[MainMenu]`
-(same name as the label, `TITLE_VS_Competitiveness` for the Versus title).
+(same name as the label). The Versus entry and its screen title (`VS`, `TITLE_VS_Competitiveness`)
+are not marked: Versus is played in private matches.
 
 ### Changes and switches
 
@@ -437,6 +448,8 @@ Implemented in `runtime/src/menu/pc_options.{h,cpp}` (data and texts) and `scrip
 | 0 | Game | The game's own rows, then the two of the mature content category (violence 46, mature language 37 with `bRequiresMatureLanguageSupport`) |
 | 5 | Keyboard and mouse | Replaces the storage location: Mouse sensitivity. Back and Defaults |
 | 6 | Local co-op | Replaces the mature content: no list; choosing it opens the Local co-op menu (`runtime/src/local_coop_menu.h`). Greyed out with no controller connected |
+| 7 | Connection | Replaces the credits: no list; choosing it runs `Callback_Credits` as the credits did, and the runtime opens the Alboria menu there (`runtime/src/connection_menu.h`) |
+| 8 | List of categories | Its button bar (`MenuButtons` of the `OMI_MAX` entry: Choose, Back) gets a third button, Y with the credits' own title (`ButtonHandler=OBH_MAX`, so the script does nothing with it): `FilterButtonInput` with `XboxTypeS_Y` while `CurrentMode` is 8 runs `Callback_Credits` in its place, straight in the interpreter, so the credits open (**verified** on screen, 29 October 2026) |
 
 How:
 
@@ -546,6 +559,101 @@ players 2 to 4 have profiles of their own in the SDK, signed in when they get a 
 `XN_SYS_SIGNINCHANGED`; the runtime gives player 2 a device from the Local co-op menu, ignores
 player 2's Start and Accept on the title screen, and sends `XN_SYS_INPUTDEVICESCHANGED` when a
 player is left with no device or gets one back.
+
+## Party types, System Link and Manage/Invite
+
+What the front end does with parties (**verified** with `script_trace` and `script_dump_code`,
+28 October 2026, with `network_mode = system_link`). This is where Alboria's online play hooks in
+(`docs/alboria-relay.md`).
+
+### Party options
+
+Back (Tab) on the main menu runs `UIScene_FrontEnd.OpenPartyOptions` and `BuildPartyOptions`, which
+fills a list of four: Joinable ("Abierto", party type 1), Invite only (2), System Link
+("Interconexión", 3) and Local (4); the profile setting is `GearProfileSettings.GetPartyType`.
+
+- Joinable and Invite only are disabled when `bNoLIVEFunctionality` is set, which happens when
+  `GearPC.CanAllPlayersPlayOnline()` is false. That script function asks, for each local player,
+  `GetLoginStatus() == 2` (signed in to Live), `CanPlayOnline() == 0` and
+  `ProfileSettings.IsProfileBanned() == false`.
+- System Link is enabled when every player is signed in, none is a guest and
+  `UIInteraction.HasLinkConnection()` (bit 0 of `XNetGetEthernetLinkStatus`) is true.
+- Accepting runs `HandlePartyTypeSelection`. Joinable and Invite only go through
+  `TransitionToLIVEParty` and `CreateLIVEParty`, which clears `bPartyTypeIsSystemLink` and
+  `bPartyTypeIsLocal`, sets the party type and asks for a party session (`bStartPartySession`).
+  System Link goes to `AttemptSystemLinkTransition`, which checks the players and the link again and
+  opens the System Link browser.
+
+### The party at start-up
+
+Leaving the title screen creates the first party in `UIScene_FrontEnd.ConditionalCreatePartySession`
+(**verified** from its bytecode with `script_dump_code`, 29 October 2026; the branch structure below
+is read from the decompiled listing, which shows no jump targets, so it is **inferred**):
+
+- It runs once the primary player is signed in and off the title screen, while
+  `GearPartyGRI.CurrPartyType` is not 3 and `InPartySession()` is false.
+- With the player signed in to Live (`GetLoginStatus() == 2`) it runs `UpdateNatType()`.
+- When `GearPC.CanAllPlayersPlayOnline()` is false, it sets `GearLocalPlayer.bPartyTypeIsSystemLink`
+  from the profile's party type (`GearProfileSettings.GetPartyType`, not Local), the player not
+  being a guest and `HasLinkConnection()`.
+- Then `GearPartyGame_Base.CreateParty(ControllerId, bPartyTypeIsSystemLink)`, or
+  `LocalPartyCreated()` without a party game; `bStartPartySession` goes back to false.
+- A fresh profile's party type is 1, Joinable (**verified** with `script_trace_args=GetPartyType`).
+  Another function of the front end copies the profile's party type into `CurrPartyType` with
+  `SetPartyType`.
+
+So `CreateLIVEParty` does not run at start-up: a Live party made there skips the hook that hosts
+an Alboria room.
+
+Without an Xbox Live sign-in (`GetLoginStatus() != 2`, as always on Azura) the function goes
+straight to `LocalPartyCreated`: it reads no party type and creates no party session (**verified**
+with `script_trace_args`, 29 October 2026), so the game always started in Local.
+
+With `network_mode = "online"` the runtime makes that first party the one `startup_party` names
+(`CreateStartupParty` in `script_hooks.cpp`): the type the player last chose in the party options,
+Joinable the first time. For Joinable or Invite only, when Alboria answered the start-up check, it
+runs `CreateSystemLinkParty` in `LocalPartyCreated`'s place after hosting a room of that type, as
+choosing them in the party options does; when Alboria did not answer, the game starts in Local and
+`startup_party` stays as it was. For System Link it runs `CreateSystemLinkParty` with no room; for
+Local, `LocalPartyCreated` as the game does. Outside a room `GetPartyType` answers the type the
+game started with until the player chooses one; the game copies it into `CurrPartyType` once the
+party exists (`PartySuccessfullyCreatedNotify`). A room's party stays System Link (3) in
+`CurrPartyType`: with Joinable (1) there the game treated it as an Xbox Live party and private
+Horde and Versus matches did not start (**observed** on 29 October 2026); only what the party panel
+and options show is changed (`RunWithOnlinePartyType`).
+
+### The System Link browser (`UIScene_SystemLink`)
+
+- Opening it runs `TriggerPartySearch`: `GameInterface.FindOnlineGames` with its `SearchSettings`.
+  On a local network the search is a broadcast to port 14001 (seen on the network by Kabu, PR #113).
+  `OnFindOnlineGamesComplete` (about 3 seconds later) copies `GetGameSearch().Results` into
+  `SearchResults` and fills the list, or shows `NoServersString`.
+- Buttons (`FilterButtonInput`): B closes (`CloseSystemLinkBrowser`), X searches again
+  (`RefreshSearch`), Y creates a party (`CreateHost`, then `CreateSystemLink`: kick the remote
+  players, destroy the party, create a System Link party); A on a row runs
+  `Callback_OnJoinSelected(index)`, which after the same checks runs `JoinSystemLink`.
+- Joining destroys the current party and joins the selected one; `OnJoinPartyComplete('Party',
+  success)` reads `GetResolvedConnectString('Party')` and travels with `start <URL>`, or shows
+  "UnableToConnect".
+
+### Manage/Invite (`UIScene_WhatsUp`)
+
+Opened from the party panel (`UIWidget_SmallPartyPanel.OpenWhatsUpScene`).
+
+- The button bar is built by `RefreshButtonBarAndPlayerOptions` from `ButtonList` (`array<byte>` at
+  +896, set in the class defaults, not in the configuration): 0 line break, 1 player options (A),
+  2 back (B), 3 invite (X), 4 join (Y), 5 mute (Back), 6 mute strangers (Start), 7 invite Gears
+  friends (LB), 8 invite Xbox LIVE party (RB). Each button is shown with its active text, or wrapped
+  in `ButtonInactiveFormat` (grey) when its `Can...` function says no.
+- The texts are in `geargame.<lang>` `[UIScene_WhatsUp]`, for example
+  `InviteGearsButtonActive=<Font:$ControllerFont>_</Font> INVITAR AMIGOS GEARS`: the character in
+  the controller font is the button (`_` LB, `` ` `` RB, `X`, `Y`, `A`, `B`).
+- Presses arrive as `Callback_OnButtonPressed(ButtonString, List, ListIndex)` with `gamepad_Y`
+  (`JoinPlayer`), `gamepad_X` (`InvitePlayer`), `enter-gamepad_A` (player options), `gamepad_L1`
+  (`InviteGearsPlayers`), `gamepad_R1` (`InviteLivePartyPlayers`), `start` (`QuickMute`) and `back`
+  (`ToggleMutePlayer`). `FilterButtonInput` only handles B.
+- Join and Invite work on Xbox LIVE friends and parties (`CanJoinPlayer` asks
+  `CanAllPlayersPlayOnline` and the friend's presence).
 
 ## Keyboard in menus
 
