@@ -98,6 +98,13 @@ REXCVAR_DECLARE(bool, film_grain);
 REXCVAR_DECLARE(std::string, network_mode);
 REXCVAR_DECLARE(uint32_t, user_language);
 REXCVAR_DECLARE(bool, menu_remove_unused);
+REXCVAR_DECLARE(bool, alboria_live);
+REXCVAR_DEFINE_STRING(startup_party, "joinable", "Network",
+                      "With network_mode = \"online\", the party the game starts with: the type the "
+                      "player last chose in the party options (joinable, invite_only, system_link or "
+                      "local). Joinable and Invite only host a room on Alboria; when Alboria does not "
+                      "answer the game starts in Local, and this is left as it was")
+    .allowed({"joinable", "invite_only", "system_link", "local"});
 
 extern "C" void __imp__sub_822DF4D0(PPCContext& __restrict ctx, uint8_t* base);
 extern "C" void __imp__sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base);
@@ -316,6 +323,9 @@ enum WatchedName {
   kFindOnlineGamesComplete,  // UIScene_SystemLink: the System Link search is over
   kCredits,                  // UIScene_Options.Callback_Credits: Connection, or the credits' button
   kClientMenuSelected,       // UIScene_FrontEnd: a choice in the menu of a player in another's party
+  kConditionalCreateParty,   // UIScene_FrontEnd.ConditionalCreatePartySession: the party at start-up
+  kGetPartyType,             // GearProfileSettings.GetPartyType: the profile's party type
+  kLocalPartyCreated,        // UIScene_FrontEnd.LocalPartyCreated: the party at start-up, without Live
   kWatchedNameCount,
 };
 constexpr const char* kWatchedNames[kWatchedNameCount] = {
@@ -336,7 +346,8 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "Callback_DialogItemPress", "OpenPartyOptions", "BuildPartyOptions",
     "RefreshButtonBarAndPlayerOptions", "CanInviteGearsPlayers", "CanInviteLivePartyPlayers",
     "InviteGearsPlayers", "InviteLivePartyPlayers", "UpdatePanelTitle", "OnFindOnlineGamesComplete",
-    "Callback_Credits",      "Callback_ClientMenuOptionWasSelected"};
+    "Callback_Credits",      "Callback_ClientMenuOptionWasSelected", "ConditionalCreatePartySession",
+    "GetPartyType",          "LocalPartyCreated"};
 
 // FName index of each watched name, -1 until found (0 is a valid index: None).
 std::atomic<int32_t> g_names[kWatchedNameCount];
@@ -1566,6 +1577,9 @@ void SetConnectionHandler(std::function<void()> handler) {
 }
 
 void JoinSystemLinkPartyInRoom() {
+  // With Live parties on Alboria the SDK hands the host's session to the game as an accepted
+  // invite, and the game joins the party itself.
+  if (REXCVAR_GET(alboria_live)) return;
   g_join_searches.store(kJoinSearches + 1);
   g_open_browser.store(true);
 }
@@ -1719,9 +1733,13 @@ std::atomic<bool> g_show_room_code{false};
 constexpr uint32_t kFrontEndPendingPartyType = 1009;
 constexpr int32_t kJoinableItem = 0;
 constexpr int32_t kInviteOnlyItem = 1;
+// The two others (positions as BuildPartyOptions fills the list; not checked on screen yet).
+constexpr int32_t kSystemLinkItem = 2;
+constexpr int32_t kLocalItem = 3;
 constexpr int kInviteRequiredType = 0;
 constexpr int kFriendsOnlyType = 1;  // "Joinable" in the party options
 constexpr int kSystemLinkType = 3;
+constexpr int kLocalPartyType = 4;
 // Guest memory for the locals of UIScene_FrontEnd.TransitionToLIVEParty, larger than they are.
 constexpr uint32_t kTransitionLocalsSize = 64;
 uint32_t g_transition_locals = 0;
@@ -1729,12 +1747,26 @@ uint32_t g_transition_locals = 0;
 constexpr uint32_t kSystemLinkPartyLocalsSize = 64;
 uint32_t g_system_link_party_locals = 0;
 
+// Online play through the runtime's System Link parties on Alboria. With alboria_live (work in
+// progress) the game's own Xbox Live parties are Alboria's instead, and these hooks stay out of it.
 bool OnlineMode() {
-  return REXCVAR_GET(network_mode) == "online";
+  return REXCVAR_GET(network_mode) == "online" && !REXCVAR_GET(alboria_live);
 }
 
 // Answers CanAllPlayersPlayOnline with yes when online. The frame is about to run it; returns
 // whether it was answered.
+// The party the game creates when it leaves the title screen (UIScene_FrontEnd.
+// ConditionalCreatePartySession, docs/reverse-engineering.md "The party at start-up"). Without an
+// Xbox Live sign-in the game always makes it Local (LocalPartyCreated); with online play on, the
+// runtime makes it the one startup_party names instead while the function runs: a room's party
+// (kBootOnline) or a System Link one (kBootSystemLink), both created as choosing them does.
+enum BootParty { kBootNone, kBootOnline, kBootSystemLink, kBootLocal };
+std::atomic<int> g_boot_party{kBootNone};
+// The party type the profile answers outside a room (GetPartyType), when the party the game
+// started with is not the profile's: System Link or Local from startup_party, or Local forced
+// because Alboria did not answer. -1 once the player chooses a type in the party options.
+std::atomic<int> g_startup_party_type{-1};
+
 bool AnswerCanPlayOnline(PPCContext& ctx, uint8_t* base) {
   if (!OnlineMode()) return false;
   if (ctx.r5.u32) StoreU32(base, ctx.r5.u32, 1);  // ReturnValue
@@ -1747,6 +1779,17 @@ bool ChooseOnlinePartyType(PPCContext& ctx, uint8_t* base, uint32_t dialog_item_
   if (!OnlineMode()) return false;
   namespace alboria = rex::system::xam::alboria;
   const int32_t item = SmallParam(base, dialog_item_press, ctx.r4.u32, "Idx");
+  // The player's choice is the party the game starts with next time (startup_party). A Local the
+  // runtime forced at start-up ends here too.
+  const char* chosen = item == kJoinableItem     ? "joinable"
+                       : item == kInviteOnlyItem ? "invite_only"
+                       : item == kSystemLinkItem ? "system_link"
+                       : item == kLocalItem      ? "local"
+                                                 : nullptr;
+  if (chosen) {
+    g_startup_party_type.store(-1);
+    if (REXCVAR_GET(startup_party) != chosen) azura::menu::StoreControlsSetting("startup_party", chosen, true);
+  }
   if (item != kJoinableItem && item != kInviteOnlyItem) {
     // System Link or Local: the party leaves Alboria.
     if (alboria::InRoom()) {
@@ -2176,10 +2219,12 @@ void TrimManageInviteButtons(uint8_t* base, uint32_t scene) {
 
 // Hosts a room and creates a System Link party where CreateLIVEParty was about to run. Returns
 // whether it did.
-bool CreateOnlineParty(PPCContext& ctx, uint8_t* base, uint32_t create_live_party) {
-  if (!OnlineMode()) return false;
+// Runs UIScene_FrontEnd.CreateSystemLinkParty where `front_end_function` (a function of the same
+// class, in `ctx`) was about to run, after hosting a room on Alboria when `host_room`, of the type
+// in g_online_party_type. Returns whether it did.
+bool RunSystemLinkParty(PPCContext& ctx, uint8_t* base, uint32_t front_end_function, bool host_room) {
   const uint32_t create_system_link_party =
-      FindClassFunction(base, LoadU32(base, create_live_party + kObjectOuter), "CreateSystemLinkParty");
+      FindClassFunction(base, LoadU32(base, front_end_function + kObjectOuter), "CreateSystemLinkParty");
   if (!create_system_link_party) {
     REXLOG_WARN("[Azura online] CreateSystemLinkParty not found; the party is left to the game");
     return false;
@@ -2190,13 +2235,74 @@ bool CreateOnlineParty(PPCContext& ctx, uint8_t* base, uint32_t create_live_part
     if (!g_system_link_party_locals) return false;
   }
   std::memset(base + g_system_link_party_locals, 0, kSystemLinkPartyLocalsSize);
-  REXLOG_INFO("[Azura online] Hosting an online party on Alboria");
-  rex::system::xam::alboria::HostGame(rex::system::kernel_state()->title_id(), kOnlineRoomMembers,
-                                      g_online_party_type.load() == kInviteRequiredType
-                                          ? rex::system::xam::alboria::PartyType::kInviteOnly
-                                          : rex::system::xam::alboria::PartyType::kJoinable);
+  if (host_room) {
+    const bool invite_only = g_online_party_type.load() == kInviteRequiredType;
+    REXLOG_INFO("[Azura online] Hosting an {} party on Alboria", invite_only ? "Invite only" : "Joinable");
+    rex::system::xam::alboria::HostGame(rex::system::kernel_state()->title_id(), kOnlineRoomMembers,
+                                        invite_only ? rex::system::xam::alboria::PartyType::kInviteOnly
+                                                    : rex::system::xam::alboria::PartyType::kJoinable);
+  }
   RunInstead(ctx, base, create_system_link_party, g_system_link_party_locals);
   return true;
+}
+
+// Hosts a room and creates a System Link party where CreateLIVEParty was about to run.
+bool CreateOnlineParty(PPCContext& ctx, uint8_t* base, uint32_t create_live_party) {
+  if (!OnlineMode()) return false;
+  return RunSystemLinkParty(ctx, base, create_live_party, true);
+}
+
+// Runs ConditionalCreatePartySession (`ctx`, about to run) for the party at start-up (BootParty):
+// the one startup_party names, which the player chose last time, Joinable the first time. A room's
+// party (Joinable or Invite only) when Alboria answered the start-up check; Local when it did not,
+// which startup_party does not keep.
+void CreateStartupParty(PPCContext& ctx, uint8_t* base) {
+  namespace alboria = rex::system::xam::alboria;
+  const std::string wanted = REXCVAR_GET(startup_party);
+  int boot = kBootOnline;
+  if (wanted == "system_link") {
+    boot = kBootSystemLink;
+    g_startup_party_type.store(kSystemLinkType);
+  } else if (wanted == "local") {
+    boot = kBootLocal;
+    g_startup_party_type.store(kLocalPartyType);
+  } else if (!alboria::ServiceReachable()) {
+    boot = kBootLocal;
+    g_startup_party_type.store(kLocalPartyType);
+    REXLOG_INFO("[Azura online] Alboria did not answer: starting in Local");
+  } else {
+    g_online_party_type.store(wanted == "invite_only" ? kInviteRequiredType : kFriendsOnlyType);
+    g_show_room_code.store(false);
+  }
+  REXLOG_INFO("[Azura online] Startup party: {} ({})", wanted,
+              boot == kBootOnline ? "Alboria" : boot == kBootSystemLink ? "System Link" : "Local");
+  g_boot_party.store(boot);
+  __imp__sub_822DF9E0(ctx, base);
+  g_boot_party.store(kBootNone);
+}
+
+// LocalPartyCreated (`ctx`, about to run) at start-up, when the party startup_party names is not
+// Local: a room's System Link party or a plain System Link one instead, as choosing them does.
+// Returns whether it ran in LocalPartyCreated's place.
+bool ReplaceStartupLocalParty(PPCContext& ctx, uint8_t* base, uint32_t local_party_created) {
+  const int boot = g_boot_party.load();
+  if (boot != kBootOnline && boot != kBootSystemLink) return false;
+  if (boot == kBootOnline && rex::system::xam::alboria::InRoom()) return false;
+  return RunSystemLinkParty(ctx, base, local_party_created, boot == kBootOnline);
+}
+
+// GearProfileSettings.GetPartyType (`ctx`, about to run), with online play on: the party the game
+// started with when it is not the profile's (g_startup_party_type: System Link, or Local), until
+// the player chooses one; otherwise the profile's. The game copies it into the party's
+// CurrPartyType once the party exists (PartySuccessfullyCreatedNotify). A room's party is left as
+// the System Link party it is: the game treats any other type as an Xbox Live party (private
+// matches then need a Live session and do not start), and RunWithOnlinePartyType only changes what
+// the party panel and options show.
+void AnswerPartyType(PPCContext& ctx, uint8_t* base) {
+  const uint32_t result = ctx.r5.u32;
+  __imp__sub_822DF9E0(ctx, base);
+  const int startup = g_startup_party_type.load();
+  if (result && startup >= 0 && !rex::system::xam::alboria::InRoom()) base[result] = static_cast<uint8_t>(startup);
 }
 
 extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
@@ -2265,6 +2371,21 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
       PatchTravelURL(base, locals + static_cast<uint32_t>(url_offset));
     }
   }
+  if (Is(base, function, kConditionalCreateParty) && OnlineMode() &&
+      ObjectName(base, LoadU32(base, function + kObjectOuter)) == "UIScene_FrontEnd" &&
+      !rex::system::xam::alboria::InRoom()) {
+    CreateStartupParty(ctx, base);
+    return;
+  }
+  if (Is(base, function, kGetPartyType) && OnlineMode() &&
+      ObjectName(base, LoadU32(base, function + kObjectOuter)) == "GearProfileSettings") {
+    AnswerPartyType(ctx, base);
+    return;
+  }
+  if (Is(base, function, kLocalPartyCreated) && ObjectName(base, LoadU32(base, function + kObjectOuter)) == "UIScene_FrontEnd" &&
+      ReplaceStartupLocalParty(ctx, base, function)) {
+    return;
+  }
   if (Is(base, function, kCanAllPlayersPlayOnline) && AnswerCanPlayOnline(ctx, base)) return;
   if (Is(base, function, kFindOnlineGamesComplete) && g_join_searches.load(std::memory_order_relaxed) > 0 &&
       ObjectName(base, LoadU32(base, function + kObjectOuter)) == "UIScene_SystemLink") {
@@ -2278,7 +2399,9 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     return;
   }
   // Manage/Invite with online play on.
-  if (OnlineMode() && ObjectName(base, LoadU32(base, function + kObjectOuter)) == "UIScene_WhatsUp") {
+  // Manage/Invite's code and Join by code, with either kind of party on Alboria.
+  if (REXCVAR_GET(network_mode) == "online" &&
+      ObjectName(base, LoadU32(base, function + kObjectOuter)) == "UIScene_WhatsUp") {
     namespace alboria = rex::system::xam::alboria;
     if (Is(base, function, kWidgetInitialized)) PrepareManageInviteHeading(ctx, base, function);
     if (Is(base, function, kRefreshManageInviteBar)) TrimManageInviteButtons(base, ctx.r3.u32);

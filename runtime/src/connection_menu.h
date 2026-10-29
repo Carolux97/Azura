@@ -8,7 +8,8 @@
 // what it does:
 // - Direct connection (alboria_direct): reach the other players of a room directly when the network
 //   allows it, with the relay as fallback; lower latency, but they can learn this computer's public
-//   IP address. Takes effect in the next room.
+//   IP address. Takes effect in the next room, so it cannot change while other players are in the
+//   room: a padlock and a line say so.
 // - Show latency (latency_overlay): the round trip in the performance overlay's corner while in a
 //   room.
 // No address is ever shown.

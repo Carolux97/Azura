@@ -103,6 +103,10 @@ network_mode = "online"
 # service refuses versions it no longer supports).
 alboria_api_url = "https://api.alboria.org"
 alboria_client = "azura/0.5.0"
+# The party the game starts with, which the game keeps as the player chooses in the party options:
+# joinable (the first time), invite_only, system_link or local. Joinable and Invite only host a
+# room on Alboria; when Alboria does not answer the game starts in Local and this stays as it was.
+startup_party = "joinable"
 # Options > Connection's Direct connection: reach the other players of an Alboria room directly
 # when the network allows it, with the relay as fallback. Lower latency, but they can learn this
 # computer's public IP address. Takes effect from the next room.

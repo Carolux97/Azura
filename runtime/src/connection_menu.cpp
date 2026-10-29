@@ -47,6 +47,7 @@ struct Texts {
   const char* change;
   const char* back;
   const char* enter;  // the Enter key, on the keyboard's hint
+  const char* locked;  // why Direct connection cannot change now
 };
 
 // Fonts carry Latin-1 only, so the languages written in other scripts use the English texts.
@@ -61,7 +62,8 @@ Texts LocalizedTexts(uint32_t language) {
               "LATENZ ANZEIGEN",
               "Zeigt in einem Online-Raum die Verz\xC3\xB6gerung zum Host in der Ecke der Leistungsanzeige, und "
               "ob die Verbindung direkt ist oder \xC3\xBC""ber das Relay l\xC3\xA4uft.",
-              "Ein", "Aus", "\xC3\x84ndern", "Zur\xC3\xBC""ck", "Eingabe"};
+              "Ein", "Aus", "\xC3\x84ndern", "Zur\xC3\xBC""ck", "Eingabe",
+              "Kann nicht ge\xC3\xA4ndert werden, solange Spieler im Raum sind"};
     case 4:  // French
       return {"ALBORIA", "COMPTE", "Connexion en cours\xE2\x80\xA6", "Impossible de joindre Alboria",
               "CONNEXION DIRECTE",
@@ -71,7 +73,8 @@ Texts LocalizedTexts(uint32_t language) {
               "AFFICHER LA LATENCE",
               "Dans un salon en ligne, affiche le d\xC3\xA9lai avec l'h\xC3\xB4te dans le coin de l'indicateur de "
               "performances, et si la connexion est directe ou passe par le relais.",
-              "Activ\xC3\xA9", "D\xC3\xA9sactiv\xC3\xA9", "Changer", "Retour", "Entr\xC3\xA9""e"};
+              "Activ\xC3\xA9", "D\xC3\xA9sactiv\xC3\xA9", "Changer", "Retour", "Entr\xC3\xA9""e",
+              "Impossible \xC3\xA0 changer tant que des joueurs sont dans le salon"};
     case 5:  // Spanish
       return {"ALBORIA", "CUENTA", "Iniciando sesi\xC3\xB3n\xE2\x80\xA6", "No se puede conectar con Alboria",
               "CONEXI\xC3\x93N DIRECTA",
@@ -81,7 +84,8 @@ Texts LocalizedTexts(uint32_t language) {
               "MOSTRAR LATENCIA",
               "En una sala online, muestra el retardo con el anfitri\xC3\xB3n en la esquina del indicador de "
               "rendimiento, y si la conexi\xC3\xB3n es directa o pasa por el relay.",
-              "Activada", "Desactivada", "Cambiar", "Volver", "Intro"};
+              "Activada", "Desactivada", "Cambiar", "Volver", "Intro",
+              "No se puede cambiar con jugadores en la sala"};
     case 6:  // Italian
       return {"ALBORIA", "ACCOUNT", "Accesso in corso\xE2\x80\xA6", "Impossibile raggiungere Alboria",
               "CONNESSIONE DIRETTA",
@@ -91,7 +95,8 @@ Texts LocalizedTexts(uint32_t language) {
               "MOSTRA LATENZA",
               "In una stanza online, mostra il ritardo con l'host nell'angolo dell'indicatore delle prestazioni, "
               "e se la connessione \xC3\xA8 diretta o passa dal relay.",
-              "Attivata", "Disattivata", "Cambia", "Indietro", "Invio"};
+              "Attivata", "Disattivata", "Cambia", "Indietro", "Invio",
+              "Non si pu\xC3\xB2 cambiare con giocatori nella stanza"};
     case 9:  // Portuguese
       return {"ALBORIA", "CONTA", "Entrando\xE2\x80\xA6", "N\xC3\xA3o foi poss\xC3\xADvel conectar ao Alboria",
               "CONEX\xC3\x83O DIRETA",
@@ -101,7 +106,8 @@ Texts LocalizedTexts(uint32_t language) {
               "MOSTRAR LAT\xC3\x8ANCIA",
               "Numa sala online, mostra o atraso at\xC3\xA9 o anfitri\xC3\xA3o no canto do indicador de desempenho, "
               "e se a conex\xC3\xA3o \xC3\xA9 direta ou passa pelo relay.",
-              "Ativada", "Desativada", "Mudar", "Voltar", "Enter"};
+              "Ativada", "Desativada", "Mudar", "Voltar", "Enter",
+              "N\xC3\xA3o pode ser mudada com jogadores na sala"};
     case 11:  // Polish
       return {"ALBORIA", "KONTO", "Logowanie\xE2\x80\xA6", "Brak po\xC5\x82\xC4\x85""czenia z Alboria",
               "PO\xC5\x81\xC4\x84""CZENIE BEZPO\xC5\x9AREDNIE",
@@ -111,7 +117,8 @@ Texts LocalizedTexts(uint32_t language) {
               "POKA\xC5\xBB OP\xC3\x93\xC5\xB9NIENIE",
               "W pokoju online pokazuje op\xC3\xB3\xC5\xBAnienie do gospodarza w rogu wska\xC5\xBAnika wydajno\xC5\x9B""ci "
               "i czy po\xC5\x82\xC4\x85""czenie jest bezpo\xC5\x9Brednie, czy przez przeka\xC5\xBAnik.",
-              "W\xC5\x82\xC4\x85""czone", "Wy\xC5\x82\xC4\x85""czone", "Zmie\xC5\x84", "Wr\xC3\xB3\xC4\x87", "Enter"};
+              "W\xC5\x82\xC4\x85""czone", "Wy\xC5\x82\xC4\x85""czone", "Zmie\xC5\x84", "Wr\xC3\xB3\xC4\x87", "Enter",
+              "Nie mo\xC5\xBCna zmieni\xC4\x87, gdy w pokoju s\xC4\x85 gracze"};
     default:
       return {"ALBORIA", "ACCOUNT", "Signing in\xE2\x80\xA6", "Cannot reach Alboria",
               "DIRECT CONNECTION",
@@ -121,12 +128,30 @@ Texts LocalizedTexts(uint32_t language) {
               "SHOW LATENCY",
               "In an online room, shows the round trip to the host in the performance overlay's corner, and "
               "whether the connection is direct or goes through the relay.",
-              "On", "Off", "Change", "Back", "Enter"};
+              "On", "Off", "Change", "Back", "Enter",
+              "Cannot be changed while there are players in the room"};
   }
 }
 
 bool RowValue(int row) {
   return row == 0 ? REXCVAR_GET(alboria_direct) : REXCVAR_GET(latency_overlay);
+}
+
+// Whether row `row` cannot change now: Direct connection while other players are in the room,
+// whose connections were set up with the setting as it was (it applies from the next room).
+bool RowLocked(int row) {
+  return row == 0 && alboria::HasOtherMembers();
+}
+
+// A padlock, `size` tall, its top left at `top_left`.
+void DrawPadlock(ImDrawList* draw_list, ImVec2 top_left, float size, ImU32 color) {
+  const float body_top = top_left.y + size * 0.45f;
+  const float width = size * 0.8f;
+  const float line = std::max(1.0f, size * 0.12f);
+  draw_list->PathArcTo(ImVec2(top_left.x + width * 0.5f, body_top), width * 0.3f, 3.14159265f, 2.0f * 3.14159265f, 12);
+  draw_list->PathStroke(color, 0, line);
+  draw_list->AddRectFilled(ImVec2(top_left.x, body_top), ImVec2(top_left.x + width, top_left.y + size), color,
+                           size * 0.1f);
 }
 
 }  // namespace
@@ -149,6 +174,7 @@ ConnectionMenu::ConnectionMenu(rex::ui::ImGuiDrawer* drawer, rex::input::InputSy
 }
 
 void ConnectionMenu::Toggle(int row) {
+  if (RowLocked(row)) return;
   const bool value = !RowValue(row);
   menu::StoreControlsSetting(row == 0 ? "alboria_direct" : "latency_overlay", value ? "true" : "false", false);
 }
@@ -278,12 +304,20 @@ void ConnectionMenu::OnDraw(ImGuiIO& io) {
                        focused ? Imulsion(a(255)) : Text(a(255)), names[row]);
     // The value, on the right: green when on.
     const bool on = RowValue(row);
+    const bool locked = RowLocked(row);
     const char* value = on ? texts.on : texts.off;
     const float value_width = body_font->CalcTextSizeA(14.0f * unit, FLT_MAX, 0.0f, value).x;
-    draw_list->AddText(body_font, 14.0f * unit, ImVec2(card_max.x - inner - value_width, card_top + 11.0f * unit),
-                       on ? Ok(a(255)) : TextDim(a(255)), value);
+    const float value_x = card_max.x - inner - value_width;
+    draw_list->AddText(body_font, 14.0f * unit, ImVec2(value_x, card_top + 11.0f * unit),
+                       locked ? TextFaint(a(255)) : on ? Ok(a(255)) : TextDim(a(255)), value);
+    // Locked: a padlock before the value, and why under the help.
+    if (locked) DrawPadlock(draw_list, ImVec2(value_x - 18.0f * unit, card_top + 12.0f * unit), 14.0f * unit, TextDim(a(255)));
     draw_list->AddText(body_font, 12.5f * unit, ImVec2(card_min.x + inner, card_top + 36.0f * unit), TextDim(a(255)),
                        helps[row], nullptr, card_width - 2.0f * inner);
+    if (locked) {
+      draw_list->AddText(body_font, 12.5f * unit, ImVec2(card_min.x + inner, card_max.y - 22.0f * unit),
+                         Imulsion(a(255)), texts.locked);
+    }
     card_top += card_height + 12.0f * unit;
   }
 
