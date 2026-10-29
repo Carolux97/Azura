@@ -58,11 +58,11 @@ test("resolutions are written as the game's Video menu names them", () => {
   assert.equal(scaleOfResolution(undefined), null);
 });
 
-test("1920 x 1080 is offered on macOS only (the Metal renderer draws a scale of 3/2)", () => {
+test("1920 x 1080 is offered on every operating system", () => {
   assert.deepEqual(resolutionScalesFor("macos"), [1, 1.5, 2, 3]);
-  assert.deepEqual(resolutionScalesFor("linux"), [1, 2, 3]);
-  assert.deepEqual(resolutionScalesFor("windows"), [1, 2, 3]);
-  assert.deepEqual(resolutionScalesFor(undefined), [1, 2, 3]);
+  assert.deepEqual(resolutionScalesFor("linux"), [1, 1.5, 2, 3]);
+  assert.deepEqual(resolutionScalesFor("windows"), [1, 1.5, 2, 3]);
+  assert.deepEqual(resolutionScalesFor(undefined), [1, 1.5, 2, 3]);
 });
 
 const hybrid = {
