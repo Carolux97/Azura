@@ -64,31 +64,37 @@ struct Texts {
 // Texts of online play on Alboria (network_mode = online), for each localization.
 struct OnlineTexts {
   // The message box the party options show when Joinable or Invite only cannot be chosen, which
-  // with online play on only happens when Alboria cannot be reached.
+  // with online play on happens when Alboria cannot be reached or refuses this installation's
+  // sign-in (no account linked, a ban, an old client); the room overlay names the refusal.
   const char* unreachable_title;
   const char* unreachable_message;
   // Manage/Invite's LB and RB buttons (UIScene_WhatsUp), in upper case as the game's are. LB shows
   // the room's code and then hides it (its texts change in script_hooks.cpp); this is its first.
   const char* show_id;
   const char* join_by_code;
+  // The message box shown when a room on Alboria fails or ends under the player (the game's
+  // InviteHandlingFailed message, which script_hooks.cpp opens). {joinable} and {invite} become the
+  // game's own names of those party options in that localization.
+  const char* room_lost_title;
+  const char* room_lost_message;
 };
 
 const std::map<std::string, OnlineTexts>& LocalizedOnlineTexts() {
   static const std::map<std::string, OnlineTexts> texts = {
-      {"int", {"Cannot reach Alboria", "Online play needs a connection to Alboria. Check your internet connection and try again; if it keeps failing, Alboria may be down for a while.", "SHOW ID", "JOIN BY CODE"}},
-      {"esn", {"No se puede conectar con Alboria", "Para jugar online hace falta conectar con Alboria. Comprueba tu conexión a internet y vuelve a intentarlo; si sigue fallando, puede que Alboria no esté disponible ahora mismo.", "MOSTRAR ID", "UNIRSE POR CÓDIGO"}},
-      {"esm", {"No se puede conectar con Alboria", "Para jugar en línea hace falta conectar con Alboria. Revisa tu conexión a internet y vuelve a intentarlo; si sigue fallando, puede que Alboria no esté disponible en este momento.", "MOSTRAR ID", "UNIRSE CON CÓDIGO"}},
-      {"deu", {"Keine Verbindung zu Alboria", "Für das Online-Spiel ist eine Verbindung zu Alboria nötig. Prüfe deine Internetverbindung und versuche es erneut; wenn es weiter fehlschlägt, ist Alboria vielleicht gerade nicht erreichbar.", "ID ANZEIGEN", "PER CODE BEITRETEN"}},
-      {"ita", {"Impossibile raggiungere Alboria", "Per giocare online serve una connessione ad Alboria. Controlla la connessione a internet e riprova; se continua a non funzionare, Alboria potrebbe essere momentaneamente non disponibile.", "MOSTRA ID", "UNISCITI CON CODICE"}},
-      {"fra", {"Impossible de joindre Alboria", "Le jeu en ligne nécessite une connexion à Alboria. Vérifiez votre connexion internet et réessayez ; si le problème persiste, Alboria est peut-être indisponible pour le moment.", "AFFICHER L'ID", "REJOINDRE PAR CODE"}},
-      {"ptb", {"Não foi possível conectar ao Alboria", "Para jogar online é preciso conectar ao Alboria. Verifique sua conexão com a internet e tente de novo; se continuar falhando, o Alboria pode estar indisponível no momento.", "MOSTRAR ID", "ENTRAR COM CÓDIGO"}},
-      {"pol", {"Brak połączenia z Alborią", "Gra online wymaga połączenia z Alborią. Sprawdź połączenie z internetem i spróbuj ponownie; jeśli problem nie ustąpi, Alboria może być chwilowo niedostępna.", "POKAŻ ID", "DOŁĄCZ KODEM"}},
-      {"rus", {"Нет связи с Alboria", "Для игры по сети нужно подключение к Alboria. Проверьте подключение к интернету и попробуйте снова; если ошибка повторяется, Alboria может быть временно недоступна.", "ПОКАЗАТЬ ID", "ВОЙТИ ПО КОДУ"}},
-      {"cze", {"Nelze se připojit k Alborii", "Hra online vyžaduje připojení k Alborii. Zkontrolujte připojení k internetu a zkuste to znovu; pokud to stále nejde, Alboria může být dočasně nedostupná.", "ZOBRAZIT ID", "PŘIPOJIT SE KÓDEM"}},
-      {"hun", {"Nem érhető el az Alboria", "Az online játékhoz kapcsolódni kell az Alboriához. Ellenőrizd az internetkapcsolatot, és próbáld újra; ha továbbra sem megy, lehet, hogy az Alboria átmenetileg nem érhető el.", "AZONOSÍTÓ MEGJELENÍTÉSE", "CSATLAKOZÁS KÓDDAL"}},
-      {"jpn", {"Alboria に接続できません", "オンラインプレイには Alboria への接続が必要です。インターネット接続を確認してもう一度お試しください。解決しない場合は、Alboria が一時的に利用できない可能性があります。", "IDを表示", "コードで参加"}},
-      {"chn", {"無法連線至 Alboria", "線上遊玩需要連線至 Alboria。請檢查網際網路連線後再試一次；若仍失敗，Alboria 可能暫時無法使用。", "顯示 ID", "以代碼加入"}},
-      {"kor", {"Alboria에 연결할 수 없습니다", "온라인 플레이를 하려면 Alboria에 연결해야 합니다. 인터넷 연결을 확인하고 다시 시도하세요. 계속 실패하면 Alboria를 일시적으로 사용할 수 없는 것일 수 있습니다.", "ID 표시", "코드로 참가"}},
+      {"int", {"Cannot play online on Alboria", "Online play needs a connection to Alboria with your account. If this computer is not linked to it, sign in from the launcher, in Account. If it is, check your internet connection and try again; Alboria may be down for a while.", "SHOW ID", "JOIN BY CODE", "No connection to the Alboria room", "The Alboria room could not be created, joined or kept open, so the game stays in Local. To try again, choose {joinable} or {invite} in the party options."}},
+      {"esn", {"No se puede jugar online en Alboria", "Para jugar online hace falta conectar con Alboria con tu cuenta. Si este equipo no está vinculado a ella, inicia sesión desde el launcher, en Cuenta. Si lo está, comprueba tu conexión a internet y vuelve a intentarlo; puede que Alboria no esté disponible ahora mismo.", "MOSTRAR ID", "UNIRSE POR CÓDIGO", "Sin conexión con la sala de Alboria", "No se ha podido crear la sala de Alboria, entrar en ella o mantenerla abierta, así que la partida sigue en Local. Para volver a intentarlo, elige {joinable} o {invite} en las opciones de grupo."}},
+      {"esm", {"No se puede jugar en línea en Alboria", "Para jugar en línea hace falta conectar con Alboria con tu cuenta. Si este equipo no está vinculado a ella, inicia sesión desde el launcher, en Cuenta. Si lo está, revisa tu conexión a internet y vuelve a intentarlo; puede que Alboria no esté disponible en este momento.", "MOSTRAR ID", "UNIRSE CON CÓDIGO", "Sin conexión con la sala de Alboria", "No se pudo crear la sala de Alboria, entrar en ella o mantenerla abierta, así que la partida sigue en Local. Para volver a intentarlo, elige {joinable} o {invite} en las opciones de grupo."}},
+      {"deu", {"Online-Spiel auf Alboria nicht möglich", "Für das Online-Spiel ist eine Verbindung zu Alboria mit deinem Konto nötig. Ist dieser Computer nicht damit verknüpft, melde dich im Launcher unter Konto an. Ist er es, prüfe deine Internetverbindung und versuche es erneut; Alboria ist vielleicht gerade nicht erreichbar.", "ID ANZEIGEN", "PER CODE BEITRETEN", "Keine Verbindung zum Alboria-Raum", "Der Alboria-Raum konnte nicht erstellt, betreten oder offen gehalten werden, daher bleibt das Spiel auf Lokal. Um es erneut zu versuchen, wähle {joinable} oder {invite} in den Gruppenoptionen."}},
+      {"ita", {"Impossibile giocare online su Alboria", "Per giocare online serve una connessione ad Alboria con il tuo account. Se questo computer non è collegato all'account, accedi dal launcher, in Account. Se lo è, controlla la connessione a internet e riprova; Alboria potrebbe essere momentaneamente non disponibile.", "MOSTRA ID", "UNISCITI CON CODICE", "Nessuna connessione alla stanza di Alboria", "Non è stato possibile creare la stanza di Alboria, entrarvi o mantenerla aperta, quindi il gioco resta in Locale. Per riprovare, scegli {joinable} o {invite} nelle opzioni del gruppo."}},
+      {"fra", {"Impossible de jouer en ligne sur Alboria", "Le jeu en ligne nécessite une connexion à Alboria avec votre compte. Si cet ordinateur n'y est pas lié, connectez-vous depuis le launcher, dans Compte. S'il l'est, vérifiez votre connexion internet et réessayez ; Alboria est peut-être indisponible pour le moment.", "AFFICHER L'ID", "REJOINDRE PAR CODE", "Pas de connexion au salon Alboria", "Le salon Alboria n'a pas pu être créé, rejoint ou maintenu ouvert : la partie reste en Local. Pour réessayer, choisissez {joinable} ou {invite} dans les options de groupe."}},
+      {"ptb", {"Não é possível jogar online no Alboria", "Para jogar online é preciso conectar ao Alboria com a sua conta. Se este computador não estiver vinculado a ela, entre pelo launcher, em Conta. Se estiver, verifique sua conexão com a internet e tente de novo; o Alboria pode estar indisponível no momento.", "MOSTRAR ID", "ENTRAR COM CÓDIGO", "Sem conexão com a sala do Alboria", "Não foi possível criar a sala do Alboria, entrar nela ou mantê-la aberta, então o jogo continua em Local. Para tentar de novo, escolha {joinable} ou {invite} nas opções de grupo."}},
+      {"pol", {"Nie można grać online w Alborii", "Gra online wymaga połączenia z Alborią przy użyciu Twojego konta. Jeśli ten komputer nie jest z nim powiązany, zaloguj się w launcherze, w sekcji Konto. Jeśli jest, sprawdź połączenie z internetem i spróbuj ponownie; Alboria może być chwilowo niedostępna.", "POKAŻ ID", "DOŁĄCZ KODEM", "Brak połączenia z pokojem Alborii", "Nie udało się utworzyć pokoju Alborii, dołączyć do niego ani utrzymać go otwartego, więc gra pozostaje w trybie lokalnym. Aby spróbować ponownie, wybierz {joinable} lub {invite} w opcjach drużyny."}},
+      {"rus", {"Нельзя играть по сети в Alboria", "Для игры по сети нужно подключение к Alboria с вашей учётной записью. Если этот компьютер к ней не привязан, войдите в лаунчере, в разделе «Учётная запись». Если привязан, проверьте подключение к интернету и попробуйте снова; Alboria может быть временно недоступна.", "ПОКАЗАТЬ ID", "ВОЙТИ ПО КОДУ", "Нет связи с комнатой Alboria", "Не удалось создать комнату Alboria, войти в неё или сохранить её открытой, поэтому игра остаётся в локальном режиме. Чтобы попробовать снова, выберите {joinable} или {invite} в параметрах группы."}},
+      {"cze", {"Na Alborii nelze hrát online", "Hra online vyžaduje připojení k Alborii s vaším účtem. Pokud tento počítač není s účtem propojen, přihlaste se v launcheru v části Účet. Pokud je, zkontrolujte připojení k internetu a zkuste to znovu; Alboria může být dočasně nedostupná.", "ZOBRAZIT ID", "PŘIPOJIT SE KÓDEM", "Žádné spojení s místností Alborie", "Místnost Alborie se nepodařilo vytvořit, připojit se k ní ani ji udržet otevřenou, takže hra zůstává v místním režimu. Chcete-li to zkusit znovu, zvolte {joinable} nebo {invite} v možnostech skupiny."}},
+      {"hun", {"Nem lehet online játszani az Alborián", "Az online játékhoz a fiókoddal kell kapcsolódni az Alboriához. Ha ez a számítógép nincs a fiókodhoz kapcsolva, jelentkezz be a launcherben, a Fiók részben. Ha igen, ellenőrizd az internetkapcsolatot, és próbáld újra; lehet, hogy az Alboria átmenetileg nem érhető el.", "AZONOSÍTÓ MEGJELENÍTÉSE", "CSATLAKOZÁS KÓDDAL", "Nincs kapcsolat az Alboria-szobával", "Az Alboria-szobát nem sikerült létrehozni, csatlakozni hozzá vagy nyitva tartani, ezért a játék helyi módban marad. Az újrapróbálkozáshoz válaszd a(z) {joinable} vagy {invite} lehetőséget a csapatbeállításokban."}},
+      {"jpn", {"Alboria でオンラインプレイできません", "オンラインプレイには、あなたのアカウントで Alboria に接続する必要があります。このコンピューターがアカウントにリンクされていない場合は、ランチャーの「アカウント」からサインインしてください。リンクされている場合は、インターネット接続を確認してもう一度お試しください。Alboria が一時的に利用できない可能性があります。", "IDを表示", "コードで参加", "Alboria のルームに接続できません", "Alboria のルームを作成できなかったか、参加できなかったか、開いたままにできなかったため、ゲームはローカルのままです。もう一度試すには、パーティーオプションで {joinable} または {invite} を選んでください。"}},
+      {"chn", {"無法在 Alboria 線上遊玩", "線上遊玩需要以你的帳號連線至 Alboria。若這台電腦尚未連結至帳號，請在啟動器的「帳號」中登入。若已連結，請檢查網際網路連線後再試一次；Alboria 可能暫時無法使用。", "顯示 ID", "以代碼加入", "無法連線至 Alboria 房間", "無法建立、加入或維持 Alboria 房間，因此遊戲維持在本機模式。若要再試一次，請在隊伍選項中選擇 {joinable} 或 {invite}。"}},
+      {"kor", {"Alboria에서 온라인 플레이를 할 수 없습니다", "온라인 플레이를 하려면 내 계정으로 Alboria에 연결해야 합니다. 이 컴퓨터가 계정에 연결되어 있지 않다면 런처의 계정에서 로그인하세요. 연결되어 있다면 인터넷 연결을 확인하고 다시 시도하세요. Alboria를 일시적으로 사용할 수 없는 것일 수 있습니다.", "ID 표시", "코드로 참가", "Alboria 방에 연결할 수 없습니다", "Alboria 방을 만들거나, 참가하거나, 열어 둘 수 없어 게임이 로컬로 유지됩니다. 다시 시도하려면 파티 옵션에서 {joinable} 또는 {invite}을(를) 선택하세요."}},
   };
   return texts;
 }
@@ -333,9 +339,32 @@ bool ReadGameFile(rex::filesystem::Entry* entry, std::vector<uint8_t>& out) {
 
 }  // namespace
 
-// With online play on, the Xbox LIVE Gold message of the party options says that Alboria cannot
-// be reached: in [MessageBoxErrorStrings] of a GearGameUI localization file.
-void PatchOnlineMessages(CoalescedSection& section, const std::string& language) {
+// The names of the Joinable and Invite only party options in one localization, as the game's own
+// texts call them ([UIScene_FrontEnd] of a GearGame localization file).
+struct PartyOptionNames {
+  CoalescedString joinable;
+  CoalescedString invite;
+};
+
+// `utf8` with "{joinable}" and "{invite}" replaced by `names` (left as they are when a name is
+// missing, which no localization of the game does).
+CoalescedString WithPartyOptionNames(const std::string& utf8, const PartyOptionNames& names) {
+  CoalescedString result = CoalescedString::FromUtf8(utf8);
+  for (const auto& [placeholder, name] : {std::pair{std::u16string(u"{joinable}"), &names.joinable},
+                                          std::pair{std::u16string(u"{invite}"), &names.invite}}) {
+    const size_t at = result.text.find(placeholder);
+    if (at == std::u16string::npos || name->text.empty()) continue;
+    result.text.replace(at, placeholder.size(), name->text);
+    result.wide = result.wide || name->wide;
+  }
+  return result;
+}
+
+// With online play on, in [MessageBoxErrorStrings] of a GearGameUI localization file: the Xbox
+// LIVE Gold message of the party options says that online play on Alboria is not possible, and what
+// to check; the message of an invite that failed, which no Xbox LIVE invite reaches with online
+// play on, says that the room on Alboria failed and how to try again.
+void PatchOnlineMessages(CoalescedSection& section, const std::string& language, const PartyOptionNames& names) {
   const OnlineTexts& texts = OnlineTextsFor(language);
   for (auto& key : section.keys) {
     const std::string name = key.name.Ascii();
@@ -343,6 +372,10 @@ void PatchOnlineMessages(CoalescedSection& section, const std::string& language)
       key.value = CoalescedString::FromUtf8(texts.unreachable_title);
     } else if (name == "NeedGoldTierFunctionality_Message") {
       key.value = CoalescedString::FromUtf8(texts.unreachable_message);
+    } else if (name == "InviteHandlingFailed_Title") {
+      key.value = CoalescedString::FromUtf8(texts.room_lost_title);
+    } else if (name == "InviteHandlingFailed_Message") {
+      key.value = WithPartyOptionNames(texts.room_lost_message, names);
     }
   }
 }
@@ -416,6 +449,20 @@ void PatchPartyPanelTitle(CoalescedSection& section, const std::string& language
 int PatchMenus(Coalesced& coalesced) {
   const bool online = REXCVAR_GET(network_mode) == "online";
   int quit_option = -1;
+  // The party options' names in each localization first, for the online messages that name them.
+  std::map<std::string, PartyOptionNames> party_option_names;
+  for (const auto& file : coalesced.files) {
+    const std::string name = BaseName(file.name);
+    if (name.rfind("geargame.", 0) != 0) continue;
+    PartyOptionNames& names = party_option_names[name.substr(name.find('.') + 1)];
+    for (const auto& section : file.sections) {
+      if (section.name.Ascii() != "UIScene_FrontEnd") continue;
+      for (const auto& key : section.keys) {
+        if (key.name.Ascii() == "PartyOptionJoinable") names.joinable = key.value;
+        if (key.name.Ascii() == "PartyOptionInvite") names.invite = key.value;
+      }
+    }
+  }
   for (auto& file : coalesced.files) {
     const std::string name = BaseName(file.name);
     const bool ui_config = name == "xbox360-gearui.ini";
@@ -444,7 +491,7 @@ int PatchMenus(Coalesced& coalesced) {
       } else if (engine_config && section_name == "Engine.Engine") {
         PatchEngineSettings(section);
       } else if (online && ui_texts && section_name == "MessageBoxErrorStrings") {
-        PatchOnlineMessages(section, language);
+        PatchOnlineMessages(section, language, party_option_names[language]);
       } else if (online && game_texts && section_name == "UIScene_WhatsUp") {
         PatchManageInviteButtons(section, language);
       } else if ((game_texts || ui_texts) && section_name == "UIWidget_SmallPartyPanel") {

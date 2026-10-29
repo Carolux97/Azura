@@ -8,6 +8,7 @@
 #include <rex/system/xam/alboria.h>
 
 #include "perf_overlay.h"
+#include "script_hooks.h"
 
 namespace azura {
 
@@ -130,9 +131,19 @@ void OnlineRoomOverlay::OnDraw(ImGuiIO& io) {
   const char* title = nullptr;
   std::string line;
   switch (status.state) {
-    case alboria::State::kOffline:
-      error_.clear();
-      return;
+    case alboria::State::kOffline: {
+      // No room. When the game has just stayed in Local because Alboria refused the sign-in (at
+      // start-up, or as the player asked for a room), the refusal shows for a while from that
+      // moment, as a failure does; so does the last failure when the player left right after it.
+      if (std::string reason = azura::script::TakeRefusalNotice(); !reason.empty()) {
+        error_ = std::move(reason);
+        error_since_ = now;
+      }
+      if (error_.empty() || now - error_since_ >= kErrorShownFor) return;
+      title = texts.failed;
+      line = ErrorText(texts, error_);
+      break;
+    }
     case alboria::State::kWorking:
       error_.clear();
       title = texts.title;

@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <string>
 
 namespace azura::script {
 
@@ -33,6 +34,12 @@ void SetControlsMenuHandler(std::function<void(ControlsMenu)> handler);
 // Join by code screen (join_by_code_menu.h) over Manage/Invite, which stays open under it until the
 // code joins a room. nullptr to stop.
 void SetJoinByCodeHandler(std::function<void()> handler);
+
+// Why the game stays in Local when the player wants a room on Alboria: the refusal Alboria gave the
+// sign-in (alboria::SignInRefusal, such as "no_account"), handed out once, at the moment the
+// start-up party falls back to Local or the player chooses Joinable or Invite only; empty
+// otherwise. The room overlay shows it then. Any thread.
+std::string TakeRefusalNotice();
 
 // Once the player is in a friend's room on Alboria: opens the game's System Link browser, which
 // finds the host's party in the room, and joins the first party it finds (searching again a few

@@ -3,7 +3,7 @@ new file mode 100644
 index 0000000..3477d5a
 --- /dev/null
 +++ b/include/rex/system/xam/alboria.h
-@@ -0,0 +1,320 @@
+@@ -0,0 +1,330 @@
 +/**
 + * @file        system/xam/alboria.h
 + * @brief       Alboria: System Link over the internet through our relay
@@ -204,11 +204,16 @@ index 0000000..3477d5a
 +// 0x0009) with the offline one's low 48 bits.
 +uint64_t OnlineXuid(uint64_t xuid);
 +
-+// Asks Alboria's API whether it is up, in the background; ServiceReachable then tells the answer.
-+// Does nothing while an earlier check is still running.
++// Asks Alboria's API whether it is up and, when it is, signs in with the installation's key, in the
++// background; ServiceReachable and SignInRefusal then tell the answers, both at once. Does nothing
++// while an earlier check is still running.
 +void CheckService();
 +// Whether the last check reached Alboria (false before the first one ends).
 +bool ServiceReachable();
++// Why Alboria refused the last sign-in that reached it, such as "no_account" (this installation's
++// key is not linked to an account), "banned:<reason>" or "client_too_old"; empty when it was
++// accepted or none reached it yet. The title cannot play on Alboria while it is not empty.
++std::string SignInRefusal();
 +
 +// Hosts a game for `title_id` with up to `max_members` players, in the background. GetStatus
 +// reports the code once connected.
@@ -257,6 +262,11 @@ index 0000000..3477d5a
 +// host closed it, it was removed or banned, or the relay went silent. True once for each such end:
 +// the title is then in a party whose host is gone, and the runtime sends it back to the main menu.
 +bool TakeLostRoom();
++// Whether a room failed: hosting or joining one did not get it connected (the sign-in was refused,
++// the room was full or not found, the relay did not answer...), or the room this installation
++// hosted ended under it. True once for each such failure: the title is then in a party with no
++// room behind it, and the runtime sends it back to the main menu with a Local party.
++bool TakeFailedRoom();
 +// Its virtual address in the room; while it is setting up a room it hosts, already the host's
 +// (10.77.0.1, which the host of a room always gets); 0 otherwise.
 +uint32_t VirtualAddress();
@@ -367,7 +377,7 @@ new file mode 100644
 index 0000000..7ef17ca
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,1634 @@
+@@ -0,0 +1,1663 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -593,6 +603,8 @@ index 0000000..7ef17ca
 +std::optional<std::vector<uint8_t>> g_host_qos;
 +// A room this installation was a member of ended without it leaving (TakeLostRoom).
 +std::atomic<bool> g_room_lost{false};
++// A room failed to come up, or the one this installation hosted ended (TakeFailedRoom).
++std::atomic<bool> g_room_failed{false};
 +// XN_LIVE_INVITE_ACCEPTED (XNID(0, XNOTIFY_LIVE, 2)): the player accepted an invite; its parameter
 +// is the user's index.
 +constexpr uint32_t kNotifyLiveInviteAccepted = 0x02000002;
@@ -600,6 +612,8 @@ index 0000000..7ef17ca
 +// The account as the last sign-in answered (GetIdentity), and a background sign-in running.
 +std::mutex g_identity_mutex;
 +Identity g_identity;
++// Why the last sign-in that reached Alboria was refused (SignInRefusal). Guarded by g_identity_mutex.
++std::string g_sign_in_refusal;
 +std::atomic<bool> g_refreshing{false};
 +
 +// Another member of the room, reached directly when the relay listed it (PEERS) and a probe got
@@ -647,6 +661,7 @@ index 0000000..7ef17ca
 +std::map<uint16_t, std::pair<uint32_t, uint16_t>> g_stream_sources;
 +
 +void SetStatus(State state, std::string error = {}) {
++  if (state == State::kFailed) g_room_failed.store(true);
 +  std::lock_guard lock(g_mutex);
 +  g_status.state = state;
 +  g_status.error = std::move(error);
@@ -947,9 +962,11 @@ index 0000000..7ef17ca
 +                          {"gamertag", gamertag},
 +                          {"client", REXCVAR_GET(alboria_client)}},
 +                         {});
++  std::lock_guard lock(g_identity_mutex);
++  // An answer from Alboria, yes or no, replaces the last one; a network failure tells nothing new.
++  if (session.error != "network") g_sign_in_refusal = session.error;
 +  // A server older than account tags answers no tag: the identity stays unknown.
 +  if (session.error.empty() && session.json.contains("tag")) {
-+    std::lock_guard lock(g_identity_mutex);
 +    g_identity.known = true;
 +    g_identity.gamertag = Text(session.json, "gamertag", gamertag);
 +    g_identity.tag = Number(session.json, "tag", 0);
@@ -1225,8 +1242,13 @@ index 0000000..7ef17ca
 +  CloseTunnelLocked();
 +  if (!end_reason.empty()) {
 +    REXSYS_INFO("Alboria: left the room ({})", end_reason);
-+    // A member of a room it had joined (it was welcomed) loses its party with the room.
-+    if (welcomed && !g_status.host) g_room_lost.store(true);
++    // A member of a room it had joined (it was welcomed) loses its party with the room; the host,
++    // or a member the room ended for before it was welcomed, is left with a party and no room.
++    if (welcomed && !g_status.host) {
++      g_room_lost.store(true);
++    } else {
++      g_room_failed.store(true);
++    }
 +    g_status.state = State::kFailed;
 +    g_status.error = end_reason;
 +  } else {
@@ -1295,6 +1317,7 @@ index 0000000..7ef17ca
 +  StopWorker();
 +  // A room the title has not been told about yet is no longer news once it starts another one.
 +  g_room_lost.store(false);
++  g_room_failed.store(false);
 +  SetStatus(State::kWorking);
 +  g_worker = std::thread([title_id, max_members, join_code = std::move(join_code)]() mutable {
 +    try {
@@ -1744,6 +1767,13 @@ index 0000000..7ef17ca
 +  std::thread([] {
 +    const HttpResponse response = PostJson(REXCVAR_GET(alboria_api_url) + "/v1/status", "{}", {});
 +    const bool reachable = response.status == 200;
++    // Signing in before the answer is told, so that a refusal is known as soon as Alboria is.
++    if (reachable) {
++      const auto session = SignIn();
++      if (!session.error.empty() && session.error != "network") {
++        REXSYS_WARN("Alboria: the sign-in was refused ({})", session.error);
++      }
++    }
 +    if (reachable != g_reachable.exchange(reachable)) {
 +      REXSYS_INFO("Alboria: the service is {}", reachable ? "reachable" : "unreachable");
 +    }
@@ -1753,6 +1783,11 @@ index 0000000..7ef17ca
 +
 +bool ServiceReachable() {
 +  return g_reachable.load();
++}
++
++std::string SignInRefusal() {
++  std::lock_guard lock(g_identity_mutex);
++  return g_sign_in_refusal;
 +}
 +
 +bool LiveSignedIn() {
@@ -1822,6 +1857,10 @@ index 0000000..7ef17ca
 +
 +bool TakeLostRoom() {
 +  return g_room_lost.exchange(false);
++}
++
++bool TakeFailedRoom() {
++  return g_room_failed.exchange(false);
 +}
 +
 +bool Connected() {
