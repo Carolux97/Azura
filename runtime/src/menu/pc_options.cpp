@@ -31,7 +31,8 @@ REXCVAR_DEFINE_BOOL(motion_blur, true, "Azura/Graphics",
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_STRING(render_resolution, "auto", "Azura/Graphics",
                       "Resolution the game is drawn at: auto (chosen for this computer), 1280x720 (the "
-                      "Xbox 360's), 1920x1080 (macOS only, with gfx = hle; elsewhere 1280x720), "
+                      "Xbox 360's), 1920x1080 (drawn at 3/2 on macOS with gfx = hle, at 2560x1440 "
+                      "and scaled down to the window on Vulkan), "
                       "2560x1440 or 3840x2160. Sets the draw resolution scale and the texture cache "
                       "limits when the game starts")
     .allowed({"auto", "1280x720", "1920x1080", "2560x1440", "3840x2160"})
@@ -40,7 +41,8 @@ REXCVAR_DEFINE_STRING(upscaling_preset, "custom", "Azura/Graphics",
                       "Quality preset of the image scaling: custom (render_resolution and present_effect "
                       "as set), native, quality, balanced or performance. A preset draws the game at the "
                       "screen's resolution divided by 1, 1.5, 1.7 or 2, rounded to the nearest render "
-                      "resolution this build draws and never below 1280x720, and scales it with AMD FSR 1 "
+                      "resolution this build draws (not 1920x1080 off macOS, which Vulkan draws at "
+                      "2560x1440) and never below 1280x720, and scales it with AMD FSR 1 "
                       "(Apple MetalFX on macOS) when that is below the screen's")
     .allowed({"custom", "native", "quality", "balanced", "performance"})
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
@@ -127,13 +129,9 @@ struct Option {
 };
 
 // The render resolutions the Video menu offers, in order. 1920x1080 is a draw resolution scale of
-// 3/2, which only the Metal renderer draws (macOS); Vulkan draws its whole part, 1280x720.
+// 3/2: the Metal renderer (macOS) draws it as it is, Vulkan at 2 and scales the image down.
 std::vector<const char*> RenderResolutionChoices() {
-#if defined(__APPLE__)
   return {"auto", "1280x720", "1920x1080", "2560x1440", "3840x2160"};
-#else
-  return {"auto", "1280x720", "2560x1440", "3840x2160"};
-#endif
 }
 
 // The upscaling effects present_effect accepts in this build of the SDK, in menu order. Others it
@@ -1458,6 +1456,8 @@ std::pair<int, int> ScreenSize() {
 // The render resolution an upscaling preset picks for a screen `screen_height` pixels tall: that
 // height divided by the preset's factor, rounded to the nearest height among the render resolutions
 // this build offers (RenderResolutionChoices), the lower one on a tie, and never below 1280x720.
+// Off macOS 1920x1080 is left out: Vulkan draws it at 2560x1440, at that resolution's cost, so a
+// preset that asks for it gets the cheaper or the sharper of its neighbours instead.
 std::string PresetRenderResolution(const std::string& preset, int screen_height) {
   const double factor = preset == "quality"       ? 1.5
                         : preset == "balanced"    ? 1.7
@@ -1470,6 +1470,9 @@ std::string PresetRenderResolution(const std::string& preset, int screen_height)
     const std::string value = choice;
     const size_t x = value.find('x');
     if (x == std::string::npos) continue;
+#if !defined(__APPLE__)
+    if (value == "1920x1080") continue;
+#endif
     const double distance = std::abs(std::atoi(value.c_str() + x + 1) - target);
     if (distance < best_distance) {
       best = value;
@@ -1505,8 +1508,8 @@ void ApplyRenderResolution() {
                   preset);
     }
   }
-  // The scale as numerator / denominator: 1920x1080 is 3/2 (the renderer draws its whole part, 1,
-  // where it cannot draw a rational scale).
+  // The scale as numerator / denominator: 1920x1080 is 3/2 (Vulkan draws it at 2 and scales the
+  // image down to the window).
   const int numerator = chosen == "1280x720"    ? 1
                         : chosen == "1920x1080" ? 3
                         : chosen == "2560x1440" ? 2
