@@ -1,9 +1,9 @@
 diff --git a/include/rex/system/xam/alboria.h b/include/rex/system/xam/alboria.h
 new file mode 100644
-index 0000000..6d9d9b1
+index 0000000..0161044
 --- /dev/null
 +++ b/include/rex/system/xam/alboria.h
-@@ -0,0 +1,196 @@
+@@ -0,0 +1,230 @@
 +/**
 + * @file        system/xam/alboria.h
 + * @brief       Alboria: System Link over the internet through our relay
@@ -63,6 +63,13 @@ index 0000000..6d9d9b1
 +  kPong = 5,
 +  kBye = 6,
 +  kClosed = 7,
++  // From the relay to a member: the other members it may reach directly (section 5.4).
++  kPeers = 8,
++  // Between two members, never through the relay: finding a direct path, keeping it open and
++  // measuring it (PROBE, answered by PROBE_ACK), and the game's data over it (DIRECT).
++  kProbe = 9,
++  kProbeAck = 10,
++  kDirect = 11,
 +};
 +
 +enum class CloseReason : uint8_t {
@@ -76,6 +83,9 @@ index 0000000..6d9d9b1
 +enum class Direction : uint8_t {
 +  kToRelay = 0,
 +  kFromRelay = 1,
++  // Between two members: from the one with the lower virtual address, and from the higher one.
++  kFromLowerPeer = 2,
++  kFromHigherPeer = 3,
 +};
 +
 +struct Header {
@@ -162,6 +172,19 @@ index 0000000..6d9d9b1
 +// What the menu shows.
 +Status GetStatus();
 +
++// The player's account as Alboria answered the last sign-in: the gamertag and the tag that tells it
++// apart from others with the same gamertag, shown as Gamertag#tag (docs/alboria-relay.md,
++// section 3).
++struct Identity {
++  bool known = false;
++  std::string gamertag;
++  int tag = 0;
++};
++Identity GetIdentity();
++// Signs in, in the background, to learn the account's tag (GetIdentity). Does nothing while an
++// earlier one is still running. Hosting and joining sign in too.
++void RefreshIdentity();
++
 +// Asks Alboria's API whether it is up, in the background; ServiceReachable then tells the answer.
 +// Does nothing while an earlier check is still running.
 +void CheckService();
@@ -183,6 +206,17 @@ index 0000000..6d9d9b1
 +// Its virtual address in the room; while it is setting up a room it hosts, already the host's
 +// (10.77.0.1, which the host of a room always gets); 0 otherwise.
 +uint32_t VirtualAddress();
++
++// The round trip to the other side of the room, for the latency overlay: to the host, or for the
++// host, to the member furthest away.
++struct Latency {
++  // Whether there is a measurement: in a room with someone else, after the first answer.
++  bool known = false;
++  int milliseconds = 0;
++  // Whether that member is reached directly rather than through the relay.
++  bool direct = false;
++};
++Latency GetLatency();
 +
 +// --- The game's sockets --------------------------------------------------------------------------
 +
@@ -240,10 +274,10 @@ index 0000000..c7fc5de
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria.cpp b/src/system/xam/alboria.cpp
 new file mode 100644
-index 0000000..19a188d
+index 0000000..6dec9ab
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,717 @@
+@@ -0,0 +1,1059 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -293,6 +327,10 @@ index 0000000..19a188d
 +REXCVAR_DEFINE_STRING(alboria_client, "azura/0.0.0", "Network",
 +                      "Name and version this build gives Alboria when signing in; the service "
 +                      "refuses versions it no longer supports");
++REXCVAR_DEFINE_BOOL(alboria_direct, true, "Network",
++                    "Connect directly to the other players of an Alboria room when the network "
++                    "allows it, with the relay as fallback. Lower latency, but the other players "
++                    "can learn this computer's public IP address. Takes effect in the next room");
 +
 +namespace rex::system::xam::alboria {
 +namespace {
@@ -311,6 +349,25 @@ index 0000000..19a188d
 +// kRelaySilence it gives up.
 +constexpr auto kKeepalive = std::chrono::seconds(5);
 +constexpr auto kRelaySilence = std::chrono::seconds(30);
++// Direct connections (section 5.4): PROBE every kProbeInterval for kProbeWindow, again every
++// kProbeRetry while there is no direct path; a direct path silent for kDirectSilence falls back
++// to the relay. The latency to each member is measured every kLatencyInterval.
++constexpr auto kProbeInterval = std::chrono::milliseconds(200);
++constexpr auto kProbeWindow = std::chrono::seconds(5);
++constexpr auto kProbeRetry = std::chrono::seconds(10);
++constexpr auto kDirectSilence = std::chrono::seconds(6);
++constexpr auto kLatencyInterval = std::chrono::seconds(1);
++// A member only known from its relayed data is forgotten after this long without any.
++constexpr auto kMemberSilence = std::chrono::seconds(30);
++// A HELLO's flags (section 5.3): the member takes direct connections.
++constexpr uint8_t kHelloDirect = 0x01;
++constexpr size_t kPeerEntrySize = 48;
++// DATA to port 0 never reaches the game: it carries the latency echo between two members through
++// the relay. Its payload is the kind (kEchoRequest or kEchoReply) and the sender's 8-byte clock.
++constexpr uint16_t kEchoPort = 0;
++constexpr uint8_t kEchoRequest = 1;
++constexpr uint8_t kEchoReply = 2;
++using Clock = std::chrono::steady_clock;
 +
 +#if REX_PLATFORM_WIN32
 +using NativeSocket = SOCKET;
@@ -425,6 +482,33 @@ index 0000000..19a188d
 +// The service check (CheckService): one at a time, and its last answer.
 +std::atomic<bool> g_checking{false};
 +std::atomic<bool> g_reachable{false};
++// The account as the last sign-in answered (GetIdentity), and a background sign-in running.
++std::mutex g_identity_mutex;
++Identity g_identity;
++std::atomic<bool> g_refreshing{false};
++
++// Another member of the room, reached directly when the relay listed it (PEERS) and a probe got
++// through, and measured either way.
++struct Peer {
++  // From PEERS: the pair's key and where the relay sees the member, and its own network address.
++  bool listed = false;
++  PacketKey key{};
++  sockaddr_in public_address{};
++  sockaddr_in local_address{};
++  uint64_t sent_counter = 0;
++  ReplayWindow received;
++  // The address that answered a probe, while the direct path works.
++  bool direct = false;
++  sockaddr_in path{};
++  Clock::time_point probing_since{};
++  Clock::time_point last_probe{};
++  Clock::time_point last_heard_direct{};
++  Clock::time_point last_heard_relay{};
++  Clock::time_point last_echo{};
++  // The last round trip measured, in milliseconds, and over which path; -1 before the first.
++  int rtt_ms = -1;
++  bool rtt_direct = false;
++};
 +
 +// The tunnel, while connected. Guarded by g_mutex except the socket's reads in the worker.
 +NativeSocket g_socket = kNoSocket;
@@ -435,6 +519,7 @@ index 0000000..19a188d
 +std::chrono::steady_clock::time_point g_last_sent;
 +std::map<uint64_t, Proxy> g_proxies;          // by member << 16 | member port
 +std::map<uint16_t, uint64_t> g_proxy_by_port;  // local port -> key in g_proxies
++std::map<uint32_t, Peer> g_peers;              // by virtual address
 +
 +void SetStatus(State state, std::string error = {}) {
 +  std::lock_guard lock(g_mutex);
@@ -462,11 +547,163 @@ index 0000000..19a188d
 +  for (auto& [key, proxy] : g_proxies) CloseNativeSocket(proxy.handle);
 +  g_proxies.clear();
 +  g_proxy_by_port.clear();
++  for (auto& [address, peer] : g_peers) crypto_wipe(peer.key.data(), peer.key.size());
++  g_peers.clear();
 +  if (g_socket != kNoSocket) CloseNativeSocket(g_socket);
 +  g_socket = kNoSocket;
 +  g_connection_id = 0;
 +  g_sent_counter = 0;
 +  g_key.fill(0);
++}
++
++// --- Direct connections (docs/alboria-relay.md, section 5.4) ----------------------------------------
++
++// The nonce direction of a packet from the member at `from` to the member at `to`.
++Direction PeerDirection(uint32_t from, uint32_t to) {
++  return from < to ? Direction::kFromLowerPeer : Direction::kFromHigherPeer;
++}
++
++uint64_t ClockStamp(Clock::time_point when) {
++  return uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(when.time_since_epoch()).count());
++}
++
++std::array<uint8_t, 8> EncodeStamp(uint64_t stamp) {
++  std::array<uint8_t, 8> out{};
++  for (int i = 0; i < 8; ++i) out[i] = uint8_t(stamp >> (56 - 8 * i));
++  return out;
++}
++
++uint64_t DecodeStamp(std::span<const uint8_t> bytes) {
++  uint64_t stamp = 0;
++  for (int i = 0; i < 8; ++i) stamp = stamp << 8 | bytes[i];
++  return stamp;
++}
++
++// Milliseconds since `stamp` (a ClockStamp of this machine), rounded.
++int MillisecondsSince(uint64_t stamp, Clock::time_point now) {
++  const uint64_t current = ClockStamp(now);
++  return current >= stamp ? int((current - stamp + 500) / 1000) : 0;
++}
++
++// Sends a packet straight to the member at `address`, sealed with the pair's key. Needs g_mutex.
++void SendToPeerLocked(uint32_t address, Peer& peer, PacketType type, std::span<const uint8_t> body,
++                      const sockaddr_in& to) {
++  if (g_socket == kNoSocket || !peer.listed) return;
++  const uint32_t mine = g_status.virtual_ip;
++  const Header header{type, mine, ++peer.sent_counter};
++  const auto packet = SealPacket(peer.key, PeerDirection(mine, address), header, body);
++  sendto(g_socket, reinterpret_cast<const char*>(packet.data()), int(packet.size()), 0,
++         reinterpret_cast<const sockaddr*>(&to), sizeof(to));
++}
++
++bool SameAddress(const sockaddr_in& a, const sockaddr_in& b) {
++  return a.sin_addr.s_addr == b.sin_addr.s_addr && a.sin_port == b.sin_port;
++}
++
++// Replaces the listed members with those of a PEERS body. A member missing from it left the room
++// or no longer takes direct connections; one whose key or addresses changed starts over.
++void UpdatePeersLocked(std::span<const uint8_t> body, Clock::time_point now) {
++  if (body.empty() || body.size() != 1 + size_t(body[0]) * kPeerEntrySize) return;
++  const auto u32 = [](const uint8_t* p) {
++    return uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | p[3];
++  };
++  const auto u16 = [](const uint8_t* p) { return uint16_t(p[0] << 8 | p[1]); };
++  std::map<uint32_t, bool> listed;
++  for (size_t i = 0; i < body[0]; ++i) {
++    const uint8_t* entry = body.data() + 1 + i * kPeerEntrySize;
++    const uint32_t address = u32(entry);
++    if ((address & kNetworkMask) != kNetwork || address == g_status.virtual_ip) continue;
++    PacketKey key;
++    std::memcpy(key.data(), entry + 16, key.size());
++    const sockaddr_in public_address = MakeAddress(u32(entry + 4), u16(entry + 8));
++    const sockaddr_in local_address = MakeAddress(u32(entry + 10), u16(entry + 14));
++    Peer& peer = g_peers[address];
++    const bool same = peer.listed && peer.key == key && SameAddress(peer.public_address, public_address);
++    if (!same) {
++      const auto last_heard_relay = peer.last_heard_relay;
++      peer = Peer{};
++      peer.listed = true;
++      peer.key = key;
++      peer.public_address = public_address;
++      peer.local_address = local_address;
++      peer.probing_since = now;
++      peer.last_heard_relay = last_heard_relay;
++    }
++    crypto_wipe(key.data(), key.size());
++    listed[address] = true;
++  }
++  for (auto it = g_peers.begin(); it != g_peers.end();) {
++    if (it->second.listed && !listed.count(it->first)) {
++      REXSYS_INFO("Alboria: no direct connection to member {} any more", it->first & 0xFFFF);
++      crypto_wipe(it->second.key.data(), it->second.key.size());
++      it = g_peers.erase(it);
++    } else {
++      ++it;
++    }
++  }
++}
++
++// Probes, keeps direct paths open, falls back to the relay and measures each member. Needs g_mutex.
++void TickPeersLocked(Clock::time_point now) {
++  for (auto it = g_peers.begin(); it != g_peers.end();) {
++    const uint32_t address = it->first;
++    Peer& peer = it->second;
++    if (!peer.listed && now - peer.last_heard_relay >= kMemberSilence) {
++      it = g_peers.erase(it);
++      continue;
++    }
++    if (peer.listed) {
++      if (peer.direct && now - peer.last_heard_direct >= kDirectSilence) {
++        REXSYS_INFO("Alboria: lost the direct connection to member {}; using the relay", address & 0xFFFF);
++        peer.direct = false;
++        peer.probing_since = now;
++      }
++      const auto stamp = EncodeStamp(ClockStamp(now));
++      if (peer.direct) {
++        // Keeps the routers' mappings open and measures the path.
++        if (now - peer.last_probe >= kLatencyInterval) {
++          SendToPeerLocked(address, peer, PacketType::kProbe, stamp, peer.path);
++          peer.last_probe = now;
++        }
++      } else if (now - peer.probing_since < kProbeWindow) {
++        if (now - peer.last_probe >= kProbeInterval) {
++          SendToPeerLocked(address, peer, PacketType::kProbe, stamp, peer.public_address);
++          if (peer.local_address.sin_addr.s_addr != 0 &&
++              !SameAddress(peer.local_address, peer.public_address)) {
++            SendToPeerLocked(address, peer, PacketType::kProbe, stamp, peer.local_address);
++          }
++          peer.last_probe = now;
++        }
++      } else if (now - peer.probing_since >= kProbeRetry) {
++        peer.probing_since = now;
++      }
++    }
++    // Over the relay, the latency is an echo through it.
++    if (!peer.direct && now - peer.last_echo >= kLatencyInterval && g_status.state == State::kConnected) {
++      std::vector<uint8_t> echo{kEchoRequest};
++      const auto stamp = EncodeStamp(ClockStamp(now));
++      echo.insert(echo.end(), stamp.begin(), stamp.end());
++      SendLocked(PacketType::kData, EncodeData(address, kEchoPort, kEchoPort, echo));
++      peer.last_echo = now;
++    }
++    ++it;
++  }
++}
++
++// Answers or reads a latency echo that came through the relay from `member`. Needs g_mutex.
++void HandleEchoLocked(uint32_t member, std::span<const uint8_t> payload, Clock::time_point now) {
++  if (payload.size() < 9) return;
++  if (payload[0] == kEchoRequest) {
++    std::vector<uint8_t> reply(payload.begin(), payload.begin() + 9);
++    reply[0] = kEchoReply;
++    SendLocked(PacketType::kData, EncodeData(member, kEchoPort, kEchoPort, reply));
++  } else if (payload[0] == kEchoReply) {
++    Peer& peer = g_peers[member];
++    if (!peer.direct) {
++      peer.rtt_ms = MillisecondsSince(DecodeStamp(payload.subspan(1)), now);
++      peer.rtt_direct = false;
++    }
++  }
 +}
 +
 +// Hands a member's datagram to the game's socket on `destination_port` (as the game uses it),
@@ -535,13 +772,21 @@ index 0000000..19a188d
 +  if (auto* profile = kernel_state->user_profile(); profile && !profile->name().empty()) {
 +    gamertag = profile->name();
 +  }
-+  return CallApi("/v1/auth/session",
-+                 {{"public_key", EncodeBase64(public_key)},
-+                  {"challenge", challenge.json["challenge"]},
-+                  {"signature", EncodeBase64(signature)},
-+                  {"gamertag", gamertag},
-+                  {"client", REXCVAR_GET(alboria_client)}},
-+                 {});
++  auto session = CallApi("/v1/auth/session",
++                         {{"public_key", EncodeBase64(public_key)},
++                          {"challenge", challenge.json["challenge"]},
++                          {"signature", EncodeBase64(signature)},
++                          {"gamertag", gamertag},
++                          {"client", REXCVAR_GET(alboria_client)}},
++                         {});
++  // A server older than account tags answers no tag: the identity stays unknown.
++  if (session.error.empty() && session.json.contains("tag")) {
++    std::lock_guard lock(g_identity_mutex);
++    g_identity.known = true;
++    g_identity.gamertag = session.json.value("gamertag", gamertag);
++    g_identity.tag = session.json.value("tag", 0);
++  }
++  return session;
 +}
 +
 +// Resolves "host:port" to an IPv4 address.
@@ -561,6 +806,72 @@ index 0000000..19a188d
 +  return address;
 +}
 +
++// This computer's address on its own network, the one it reaches `relay` from (no packet is sent:
++// connecting a datagram socket only picks the route). 0 when there is none.
++uint32_t LocalAddressTowards(const sockaddr_in& relay) {
++  const NativeSocket probe = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
++  if (probe == kNoSocket) return 0;
++  sockaddr_in local{};
++  socklen_t length = sizeof(local);
++  const bool found = connect(probe, reinterpret_cast<const sockaddr*>(&relay), sizeof(relay)) == 0 &&
++                     getsockname(probe, reinterpret_cast<sockaddr*>(&local), &length) == 0;
++  CloseNativeSocket(probe);
++  return found ? ntohl(local.sin_addr.s_addr) : 0;
++}
++
++// A HELLO's body: whether this member takes direct connections, and its own network address and
++// the tunnel's port on it, for members behind the same router (section 5.3).
++std::vector<uint8_t> HelloBody(bool direct, uint32_t local_address, uint16_t local_port) {
++  return {direct ? kHelloDirect : uint8_t(0),     uint8_t(local_address >> 24),
++          uint8_t(local_address >> 16),          uint8_t(local_address >> 8),
++          uint8_t(local_address),                uint8_t(local_port >> 8),
++          uint8_t(local_port)};
++}
++
++// Handles a packet that came from another member directly. Game data is handed to the game.
++void HandlePeerPacket(std::span<const uint8_t> packet, const sockaddr_in& from, Clock::time_point now) {
++  std::vector<uint8_t> data;
++  uint32_t member = 0;
++  {
++    std::lock_guard lock(g_mutex);
++    const auto header = ParseHeader(packet);
++    if (!header || g_status.state != State::kConnected) return;
++    member = header->connection_id;
++    const auto it = g_peers.find(member);
++    if (it == g_peers.end() || !it->second.listed) return;
++    Peer& peer = it->second;
++    const auto body = OpenPacket(peer.key, PeerDirection(member, g_status.virtual_ip), *header, packet);
++    if (!body || !peer.received.Accept(header->counter)) return;
++    switch (header->type) {
++      case PacketType::kProbe:
++        // Their packets reach this side: answer from here, which opens this router's way back.
++        peer.last_heard_direct = now;
++        SendToPeerLocked(member, peer, PacketType::kProbeAck, *body, from);
++        return;
++      case PacketType::kProbeAck:
++        if (body->size() < 8) return;
++        if (!peer.direct) {
++          REXSYS_INFO("Alboria: direct connection to member {}", member & 0xFFFF);
++        }
++        peer.direct = true;
++        peer.path = from;
++        peer.last_heard_direct = now;
++        peer.rtt_ms = MillisecondsSince(DecodeStamp(*body), now);
++        peer.rtt_direct = true;
++        return;
++      case PacketType::kDirect:
++        peer.last_heard_direct = now;
++        data = std::move(*body);
++        break;
++      default:
++        return;
++    }
++  }
++  if (const auto parsed = ParseData(data)) {
++    Deliver(member, parsed->source_port, parsed->destination_port, parsed->payload);
++  }
++}
++
 +// Opens the tunnel with `ticket` and runs it until g_stop or the room ends.
 +void RunTunnel(const nlohmann::json& ticket) {
 +  const auto relay = ResolveRelay(ticket.value("relay", std::string()));
@@ -578,12 +889,27 @@ index 0000000..19a188d
 +      g_status.error = "network";
 +      return;
 +    }
-+    SetReceiveTimeout(g_socket, 250);
++    // Short reads, so probes go out on time (kProbeInterval).
++    SetReceiveTimeout(g_socket, 50);
++    // Bound now, so its port is known for the HELLO: the same socket talks to the relay and to the
++    // other members, which is what lets routers pass the direct packets (section 5.4).
++    const sockaddr_in any = MakeAddress(0, 0);
++    bind(g_socket, reinterpret_cast<const sockaddr*>(&any), sizeof(any));
 +    g_relay = *relay;
 +    std::memcpy(g_key.data(), key->data(), 32);
 +    g_connection_id = connection_id;
 +    g_sent_counter = 0;
 +  }
++
++  uint16_t local_port = 0;
++  {
++    sockaddr_in bound{};
++    socklen_t length = sizeof(bound);
++    if (getsockname(g_socket, reinterpret_cast<sockaddr*>(&bound), &length) == 0) {
++      local_port = ntohs(bound.sin_port);
++    }
++  }
++  const auto hello = HelloBody(REXCVAR_GET(alboria_direct), LocalAddressTowards(*relay), local_port);
 +
 +  ReplayWindow received;
 +  bool welcomed = false;
@@ -602,11 +928,12 @@ index 0000000..19a188d
 +          end_reason = "relay_unreachable";
 +          break;
 +        }
-+        SendLocked(PacketType::kHello, {});
++        SendLocked(PacketType::kHello, hello);
 +        last_hello = now;
 +      } else if (welcomed && now - g_last_sent >= kKeepalive) {
 +        SendLocked(PacketType::kPing, {});
 +      }
++      if (welcomed) TickPeersLocked(now);
 +    }
 +    if (welcomed && now - last_received >= kRelaySilence) {
 +      end_reason = "relay_unreachable";
@@ -617,11 +944,12 @@ index 0000000..19a188d
 +    socklen_t from_length = sizeof(from);
 +    const int length = recvfrom(g_socket, reinterpret_cast<char*>(buffer.data()), int(buffer.size()),
 +                                0, reinterpret_cast<sockaddr*>(&from), &from_length);
-+    if (length <= 0 || from.sin_addr.s_addr != g_relay.sin_addr.s_addr ||
-+        from.sin_port != g_relay.sin_port) {
++    if (length <= 0) continue;
++    const std::span<const uint8_t> packet(buffer.data(), size_t(length));
++    if (from.sin_addr.s_addr != g_relay.sin_addr.s_addr || from.sin_port != g_relay.sin_port) {
++      if (welcomed) HandlePeerPacket(packet, from, std::chrono::steady_clock::now());
 +      continue;
 +    }
-+    const std::span<const uint8_t> packet(buffer.data(), size_t(length));
 +    const auto header = ParseHeader(packet);
 +    if (!header || header->connection_id != connection_id) continue;
 +    const auto body = OpenPacket(g_key, Direction::kFromRelay, *header, packet);
@@ -647,9 +975,22 @@ index 0000000..19a188d
 +      }
 +      case PacketType::kData:
 +        if (const auto data = ParseData(*body)) {
++          {
++            std::lock_guard lock(g_mutex);
++            g_peers[data->address].last_heard_relay = last_received;
++            if (data->destination_port == kEchoPort) {
++              HandleEchoLocked(data->address, data->payload, last_received);
++              break;
++            }
++          }
 +          Deliver(data->address, data->source_port, data->destination_port, data->payload);
 +        }
 +        break;
++      case PacketType::kPeers: {
++        std::lock_guard lock(g_mutex);
++        UpdatePeersLocked(*body, last_received);
++        break;
++      }
 +      case PacketType::kPing: {
 +        std::lock_guard lock(g_mutex);
 +        SendLocked(PacketType::kPong, {});
@@ -742,7 +1083,7 @@ index 0000000..19a188d
 +std::optional<Header> ParseHeader(std::span<const uint8_t> packet) {
 +  if (packet.size() < kHeaderSize + kTagSize || packet.size() > kMaxPacketSize) return std::nullopt;
 +  if (packet[0] != kMagic0 || packet[1] != kMagic1 || packet[2] != kVersion) return std::nullopt;
-+  if (packet[3] < uint8_t(PacketType::kHello) || packet[3] > uint8_t(PacketType::kClosed)) {
++  if (packet[3] < uint8_t(PacketType::kHello) || packet[3] > uint8_t(PacketType::kDirect)) {
 +    return std::nullopt;
 +  }
 +  Header header;
@@ -897,6 +1238,19 @@ index 0000000..19a188d
 +  return g_reachable.load();
 +}
 +
++Identity GetIdentity() {
++  std::lock_guard lock(g_identity_mutex);
++  return g_identity;
++}
++
++void RefreshIdentity() {
++  if (g_refreshing.exchange(true)) return;
++  std::thread([] {
++    SignIn();
++    g_refreshing.store(false);
++  }).detach();
++}
++
 +void HostGame(uint32_t title_id, int max_members) {
 +  g_hosting.store(true);
 +  Start(title_id, max_members, {});
@@ -948,7 +1302,29 @@ index 0000000..19a188d
 +  if (g_status.state == State::kWorking) return int(payload.size());
 +  if (g_status.state != State::kConnected) return -1;
 +  const auto body = EncodeData(address, source_port, destination_port, payload);
++  // To a member reached directly, straight to it; broadcasts and the rest through the relay.
++  if (const auto it = g_peers.find(address); it != g_peers.end() && it->second.direct) {
++    SendToPeerLocked(address, it->second, PacketType::kDirect, body, it->second.path);
++    return int(payload.size());
++  }
 +  return SendLocked(PacketType::kData, body) ? int(payload.size()) : -1;
++}
++
++Latency GetLatency() {
++  std::lock_guard lock(g_mutex);
++  Latency latency;
++  if (g_status.state != State::kConnected) return latency;
++  for (const auto& [address, peer] : g_peers) {
++    if (peer.rtt_ms < 0) continue;
++    // A member sees its latency to the host; the host, the member furthest away.
++    if (!g_status.host && address != (kNetwork | 1)) continue;
++    if (!latency.known || peer.rtt_ms > latency.milliseconds) {
++      latency.known = true;
++      latency.milliseconds = peer.rtt_ms;
++      latency.direct = peer.rtt_direct;
++    }
++  }
++  return latency;
 +}
 +
 +std::optional<std::pair<uint32_t, uint16_t>> TranslateSource(uint32_t address, uint16_t port) {

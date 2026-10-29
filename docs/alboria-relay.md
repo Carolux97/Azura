@@ -183,13 +183,17 @@ that is more than 1024 behind the highest one accepted (replay protection).
 
 | Type | Name | Direction | Body |
 | --- | --- | --- | --- |
-| 1 | `HELLO` | to relay | empty |
+| 1 | `HELLO` | to relay | flags (1), local address (4), local port (2); empty from the first clients |
 | 2 | `WELCOME` | from relay | virtual IP (4), keepalive interval in seconds (2) |
 | 3 | `DATA` | both | address (4), source port (2), destination port (2), game data |
 | 4 | `PING` | both | empty |
 | 5 | `PONG` | both | empty |
 | 6 | `BYE` | to relay | empty |
 | 7 | `CLOSED` | from relay | reason (1): 1 room closed, 2 banned, 3 timed out, 4 replaced |
+| 8 | `PEERS` | from relay | count (1), then 48 bytes per peer (section 5.4) |
+| 9 | `PROBE` | member to member | the sender's clock (8) |
+| 10 | `PROBE_ACK` | member to member | the `PROBE`'s body, echoed |
+| 11 | `DIRECT` | member to member | as `DATA` to the relay |
 
 Addresses are IPv4 addresses as big-endian numbers, ports are big endian.
 
@@ -205,6 +209,40 @@ Addresses are IPv4 addresses as big-endian numbers, ports are big endian.
 - `BYE` leaves the room at once. When the host leaves, the room closes and the others get `CLOSED`.
 - A second `HELLO` with the same connection ID from another address replaces the first one; the old
   address gets `CLOSED` with reason 4.
+- `DATA` to port 0 never reaches the game: it is the latency echo between two members through the
+  relay. Its payload is a kind (1 request, 2 reply) and the sender's 8-byte clock, which the reply
+  echoes.
+
+### 5.4 Direct connections
+
+Members that take direct connections reach each other without the relay when their routers allow
+it, and fall back to it when they do not. The relay stays in charge of the room: who is in it, the
+keys, and bans.
+
+- **Asking for it.** A `HELLO`'s flags have bit 0 set (`alboria_direct`, on by default), with the
+  member's address on its own network and the port of its socket there, for members behind the
+  same router. The socket is the one that talks to the relay: the mapping its router opened for the
+  relay is what lets the other members' packets in (UDP hole punching).
+- **`PEERS`.** Whenever who is in a room or where a member is changes, the relay sends each member
+  that asked the list of the others that asked: for each one its virtual address (4), its address
+  and port as the relay sees them (4, 2), its local address and port (4, 2), and a 32-byte key for
+  that pair of members, made by the relay and only ever sent inside this encrypted channel. The list
+  replaces the last one: a member missing from it left, was banned or stopped taking direct
+  connections, and its key is forgotten. A member who did not ask gets no list and is never listed.
+- **Packets between members** have the header of section 5.1 with the sender's virtual address as
+  the connection ID, sealed with the pair's key. The nonce's direction byte is `0x02` from the member
+  with the lower virtual address and `0x03` from the other, so the two never share a nonce. Each
+  member keeps a counter and a replay window per peer.
+- **Finding a path.** Both members send `PROBE` to the other's public address (and local one) every
+  200 ms for 5 seconds; the first that gets through is answered with `PROBE_ACK` from where it
+  arrived. A `PROBE_ACK` makes the path direct: from then on the game's packets to that member go as
+  `DIRECT`. Without an answer, the members keep using the relay and try again every 10 seconds.
+- **Keeping it.** On a direct path a `PROBE` goes every second, which keeps the routers' mappings
+  open and measures the round trip. A path with nothing from the other side for 6 seconds falls back
+  to the relay. Broadcasts always go through the relay.
+- **What it costs.** The members of a room learn each other's public address. Players who do not
+  want that turn the setting off (Options > Connection in the game) and everything goes through the
+  relay. Neither the game nor the launcher ever shows an address.
 
 ## 6. The runtime side
 
