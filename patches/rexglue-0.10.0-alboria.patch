@@ -1,9 +1,9 @@
 diff --git a/include/rex/system/xam/alboria.h b/include/rex/system/xam/alboria.h
 new file mode 100644
-index 0000000..7c282c0
+index 0000000..30bfa58
 --- /dev/null
 +++ b/include/rex/system/xam/alboria.h
-@@ -0,0 +1,234 @@
+@@ -0,0 +1,241 @@
 +/**
 + * @file        system/xam/alboria.h
 + * @brief       Alboria: System Link over the internet through our relay
@@ -155,8 +155,15 @@ index 0000000..7c282c0
 +  kFailed,      // the last attempt failed or the room ended: see Status::error
 +};
 +
++// Who may join a room (docs/alboria-relay.md, section 4.2), as the host chose it in the game's party
++// options: anyone with the code (Joinable), or who the host invites (Invite only). Every member of
++// the room gets the host's. A room is never System Link, which is the local network.
++enum class PartyType { kJoinable, kInviteOnly };
++
 +struct Status {
 +  State state = State::kOffline;
++  // The room's party type, while connected.
++  PartyType party_type = PartyType::kJoinable;
 +  // The room's code (XXXX-XXXX), while connected.
 +  std::string code;
 +  // This installation's virtual address, while connected.
@@ -193,7 +200,7 @@ index 0000000..7c282c0
 +
 +// Hosts a game for `title_id` with up to `max_members` players, in the background. GetStatus
 +// reports the code once connected.
-+void HostGame(uint32_t title_id, int max_members);
++void HostGame(uint32_t title_id, int max_members, PartyType party_type = PartyType::kJoinable);
 +// Joins the game with `code`, in the background.
 +void JoinGame(std::string_view code);
 +// Leaves the room (the relay closes it for everyone when this installation hosts it).
@@ -278,10 +285,10 @@ index 0000000..c7fc5de
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria.cpp b/src/system/xam/alboria.cpp
 new file mode 100644
-index 0000000..7c8a0fd
+index 0000000..2d485fc
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,1059 @@
+@@ -0,0 +1,1070 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -481,8 +488,9 @@ index 0000000..7c8a0fd
 +// The worker that signs in, joins and then runs the tunnel; g_stop asks it to end.
 +std::thread g_worker;
 +std::atomic<bool> g_stop{false};
-+// The current or last attempt hosts a room (HostGame) rather than joining one.
++// The current or last attempt hosts a room (HostGame) rather than joining one, and of which type.
 +std::atomic<bool> g_hosting{false};
++std::atomic<PartyType> g_host_party_type{PartyType::kJoinable};
 +// The service check (CheckService): one at a time, and its last answer.
 +std::atomic<bool> g_checking{false};
 +std::atomic<bool> g_reachable{false};
@@ -972,6 +980,10 @@ index 0000000..7c8a0fd
 +        g_status.code = ticket.value("code", std::string());
 +        g_status.virtual_ip = virtual_ip;
 +        g_status.host = ticket.value("host", false);
++        // A server older than party types answers none: its rooms are joinable.
++        g_status.party_type = ticket.value("party_type", std::string("joinable")) == "invite_only"
++                                  ? PartyType::kInviteOnly
++                                  : PartyType::kJoinable;
 +        REXSYS_INFO("Alboria: in room {} as {}.{}.{}.{}{}", g_status.code, virtual_ip >> 24,
 +                    (virtual_ip >> 16) & 0xFF, (virtual_ip >> 8) & 0xFF, virtual_ip & 0xFF,
 +                    g_status.host ? ", hosting" : "");
@@ -1040,7 +1052,12 @@ index 0000000..7c8a0fd
 +  const std::string token = session.json.value("token", std::string());
 +  const std::string title = fmt::format("{:08X}", title_id);
 +  auto room = join_code.empty()
-+                  ? CallApi("/v1/rooms", {{"title_id", title}, {"max_members", max_members}}, token)
++                  ? CallApi("/v1/rooms",
++                            {{"title_id", title},
++                             {"max_members", max_members},
++                             {"party_type", g_host_party_type.load() == PartyType::kInviteOnly ? "invite_only"
++                                                                                                 : "joinable"}},
++                            token)
 +                  : CallApi("/v1/rooms/join", {{"code", join_code}, {"title_id", title}}, token);
 +  if (!room.error.empty()) {
 +    SetStatus(State::kFailed, room.error);
@@ -1255,8 +1272,9 @@ index 0000000..7c8a0fd
 +  }).detach();
 +}
 +
-+void HostGame(uint32_t title_id, int max_members) {
++void HostGame(uint32_t title_id, int max_members, PartyType party_type) {
 +  g_hosting.store(true);
++  g_host_party_type.store(party_type);
 +  Start(title_id, max_members, {});
 +}
 +
