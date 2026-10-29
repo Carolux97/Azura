@@ -158,6 +158,10 @@ another game; the request then has to carry `title_id` too).
 - `session`: the host's Xbox Live party session once the host has published it (section 4.5), as
   base64; `null` before, and for rooms of System Link parties. Clients read every field of an
   answer without assuming its type: a field may be `null`.
+- `qos`: the data the host's game answers quality of service probes with (section 4.5), as base64;
+  `null` before the host publishes it, and for rooms of System Link parties.
+- `stream`: the stream port's address as players reach it (section 5.5), such as
+  `relay.alboria.org:27451`. A server without streams leaves it out.
 - `key`: the member's key for the relay (section 5.2). It only travels inside HTTPS and is never
   written to logs or files.
 - `expires_in`: seconds to send the first packet to the relay. Once connected, the member stays
@@ -175,6 +179,12 @@ party underneath (section 6.1).
 session of the Live party the player hosts in the room: its XSESSION_INFO, that is the session ID
 (XNKID, 8 bytes), the host's XNADDR (36) and the key (XNKEY, 16). Members who join afterwards get it
 in the ticket's `session`. Answer: `{}`. Errors: `400 bad_request`, `403 not_host`,
+`404 room_not_found`.
+
+`POST /v1/rooms/qos` with `{ "code": "K7QM-2XPA", "qos": "<1 to 1024 bytes>" }` stores the data
+the host's game listens for quality of service probes with (`XNetQosListen`); the game sends it again
+when it changes. Members who join afterwards get it in the ticket's `qos`, and the game reads the
+party's settings from it before joining. Answer: `{}`. Errors: `400 bad_request`, `403 not_host`,
 `404 room_not_found`.
 
 ## 5. Relay protocol (UDP)
@@ -222,6 +232,7 @@ that is more than 1024 behind the highest one accepted (replay protection).
 | 10 | `PROBE_ACK` | member to member | the `PROBE`'s body, echoed |
 | 11 | `DIRECT` | member to member | as `DATA` to the relay |
 | 12 | `ROOM` | from relay | the room's party type (1): 1 joinable, 2 invite only |
+| 13 | `STREAM` | from relay | stream ID (4), the opening member's virtual address (4) and port (2), the port it is for (2) (section 5.5) |
 
 Addresses are IPv4 addresses as big-endian numbers, ports are big endian.
 
@@ -272,6 +283,46 @@ keys, and bans.
   want that turn the setting off (Options > Connection in the game) and everything goes through the
   relay. Neither the game nor the launcher ever shows an address.
 
+### 5.5 Streams (the game's TCP connections)
+
+**The design.** The game plays over UDP, directly between members when their routers allow it and
+through the relay otherwise (sections 5.1 to 5.4). Its few TCP connections, which carry
+signalling rather than play (Gears of War 3's party beacons: asking the host for a place in its
+party, and its answer), always go through the server, over real TCP. TCP gives them reliable,
+ordered delivery for free, they work behind any router, and the latency they add is not felt where
+they are used. This split, signalling over TCP through the server and the game peer to peer over
+UDP, is the model for the next games on Alboria too.
+
+**How it works.** The server listens on a TCP port (27451, the ticket's `stream` field). Both
+members connect out to it, so no router has to let anything in:
+
+1. A member whose game connects to another member's virtual address opens a connection to the
+   stream port with the role *dial*, a stream ID of its choosing, and a first record with the
+   address, the port it wants and its own port.
+2. The relay tells the member it is for with `STREAM` (section 5.3).
+3. That member connects to the stream port with the role *answer* (or *refuse*, when nothing of its
+   game listens on that port) and the same stream ID.
+4. The server pairs the two connections and tells the dialing member with a one-byte record: 1
+   taken, 0 not. From then on each side's records go to the other.
+
+A stream that is not answered within 10 seconds is refused. A member may have 32 streams open or
+waiting; its streams close when it leaves the room.
+
+**On the wire.** Each connection opens with 12 bytes in the clear: magic `A1 B0`, version 1, the
+role (1 dial, 2 answer, 3 refuse), the member's connection ID (4) and the stream ID (4). Then come
+records: a 2-byte length and the bytes sealed with ChaCha20-Poly1305 (the 16-byte tag at the end),
+with no additional data. Each end of a stream has its own key: the first 32 bytes of
+HMAC-SHA512, keyed with the member's key, of `alboria-stream-v1`, the stream ID (4) and the role (1
+dials, 2 answers or refuses). The nonce is as in section 5.2, with a counter per direction starting
+at 0: direction 0 for records to the server, 1 for records from it. The server opens what one end
+sends and seals it again for the other, as the relay does with `DATA`. A record carries up to 16 KB.
+
+**In the runtime.** A TCP socket of the game that connects to another member's virtual address is
+connected instead to a loopback port where a thread of the runtime takes it and dials the stream.
+With Xbox Live parties on Alboria, the game's TCP sockets are bound on the loopback interface, and a
+listening one is registered by the port the game asked for: streams to that port are answered by
+connecting to it, and the game's `accept` reports the member's virtual address and port.
+
 ## 6. The runtime side
 
 With `network_mode = "online"`, the runtime connects to the relay once it has a ticket, and while
@@ -285,8 +336,7 @@ it is in a room the game sees:
   for each remote member, so `select`, blocking reads and `FIONREAD` keep working as with any other
   socket; `recvfrom` gives the game the member's virtual address and port as the sender.
 
-Stream (TCP) sockets are not carried. Whether Gears 3 uses them for System Link has not been
-checked yet.
+The game's TCP connections to other members go through the server's stream port (section 5.5).
 
 ### 6.1 Xbox Live parties (work in progress, `alboria_live`)
 
@@ -305,8 +355,43 @@ checked yet.
   `XN_LIVE_INVITE_ACCEPTED` (`0x02000002`, user 0), and answers the title's
   `XInviteGetAcceptedInfo` (XLIVEBASE message `0x58023`) with an XINVITE_INFO: the invitee's online
   XUID, the title ID, the host's XSESSION_INFO and "from a game invite". The game then joins the
-  host's party as after accepting an invite on the console. Where the title expects the
-  XINVITE_INFO in that message is not checked yet: the runtime logs the message's buffer.
+  host's party as after accepting an invite on the console. The message's second argument is its
+  parameter list (16 bytes per parameter); the XINVITE_INFO goes where the second one points
+  (**verified** in Gears of War 3's code at 0x82B0B5A8).
+- **Finding the host's party.** The title then looks the session up with `XSessionSearchByID`,
+  answered with the host's XSESSION_INFO, and probes the host with `XNetQosLookup`. The game reads
+  the party's settings from the probe's data: the host's `XNetQosListen` data (flags `0x05`, enable
+  and set data), which the runtime publishes with the room (section 4.5) and hands back to members in
+  `XNetQosLookup`. Without it the game drops the session (**verified** at 0x8297EC18).
+- **Joining.** The member asks the host's party beacon for a place over TCP (section 5.5), then
+  travels to the host's session. Verified on 29 October 2026 with two installations on one
+  computer, one with RAAM's Shadow and one without (section 6.2).
+
+### 6.2 Players with different content (DLC)
+
+Decided on 29 October 2026.
+
+- **Players with and without a DLC play together, with the content they share.** A player with
+  RAAM's Shadow and one without it can be in the same party and match; what only the DLC has (its
+  maps, modes, characters) is not offered while someone in the party lacks it.
+- **Why it matters on the wire.** RAAM's Shadow's update data replaces `GearGame.xxx` with a version
+  that keeps the base game's net objects at the same indices (**verified**: the 86564 objects both
+  versions load sit at the same index) and adds 74 at the end, while keeping the package's GUID and
+  its single generation (89730 net objects without the update, 89804 with it). Unreal Engine 3
+  numbers every package's objects after the previous packages' counts, so with different counts
+  every package after `GearGame` is shifted: a reference one side sends resolves to the wrong object
+  or to None on the other (**verified**: a member without the DLC joining a host with it got None as
+  its menu HUD, the reference being 74 past the class).
+- **How the runtime makes it work.** The engine already negotiates package versions through
+  generations: `UPackageMap::Compute` gives each package the net object count of the older of the
+  two sides' generations. At start-up the runtime gives the updated `GearGame` the base game's count
+  as a first generation and its own as a second, so both sides of a mixed connection count the base
+  game's objects, and the update's own ones are not sent; two players with the update count all of
+  them. The table of known content updates is `kContentUpdates` in `runtime/src/script_hooks.cpp`.
+- **Matchmaking (not built yet).** When a player with a DLC looks for a game, empty or filling
+  lobbies of players without it come first, so that rooms fill up; lobbies where everyone has the
+  DLC come after. The room will carry each member's content so that the service and the game know
+  what the party shares.
 
 ## 7. Limits
 

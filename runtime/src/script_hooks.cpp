@@ -108,6 +108,7 @@ REXCVAR_DEFINE_STRING(startup_party, "joinable", "Network",
 
 extern "C" void __imp__sub_822DF4D0(PPCContext& __restrict ctx, uint8_t* base);
 extern "C" void __imp__sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base);
+extern "C" void __imp__sub_822B0E30(PPCContext& __restrict ctx, uint8_t* base);
 
 namespace {
 
@@ -326,6 +327,7 @@ enum WatchedName {
   kConditionalCreateParty,   // UIScene_FrontEnd.ConditionalCreatePartySession: the party at start-up
   kGetPartyType,             // GearProfileSettings.GetPartyType: the profile's party type
   kLocalPartyCreated,        // UIScene_FrontEnd.LocalPartyCreated: the party at start-up, without Live
+  kClientSetHUD,             // PlayerController.ClientSetHUD: the player's HUD, first set at start-up
   kWatchedNameCount,
 };
 constexpr const char* kWatchedNames[kWatchedNameCount] = {
@@ -347,7 +349,7 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "RefreshButtonBarAndPlayerOptions", "CanInviteGearsPlayers", "CanInviteLivePartyPlayers",
     "InviteGearsPlayers", "InviteLivePartyPlayers", "UpdatePanelTitle", "OnFindOnlineGamesComplete",
     "Callback_Credits",      "Callback_ClientMenuOptionWasSelected", "ConditionalCreatePartySession",
-    "GetPartyType",          "LocalPartyCreated"};
+    "GetPartyType",          "LocalPartyCreated",      "ClientSetHUD"};
 
 // FName index of each watched name, -1 until found (0 is a valid index: None).
 std::atomic<int32_t> g_names[kWatchedNameCount];
@@ -1314,6 +1316,75 @@ void ClientMenuPosition(PPCContext& ctx, uint8_t* base) {
   if (index < 0 || index >= static_cast<int>(std::size(kOriginal))) return;
   std::memcpy(&bits, &kOriginal[index], sizeof(bits));
   StoreU32(base, at, bits);
+}
+
+// --- Content updates and online play ----------------------------------------------------------
+//
+// A content update (RAAM's Shadow's, mounted as update data) replaces GearGame.xxx with a version
+// whose net objects are the base game's, at the same indices, plus new ones at the end (verified:
+// the 86564 objects both load sit at the same index in both; the update's 74 extra ones follow
+// index 89730). The update keeps the package's GUID and its single generation, now of 89804 net
+// objects, so two players with and without it number every package after GearGame differently, and
+// what one sends the other resolves to the wrong object or to None.
+//
+// Unreal Engine 3 already negotiates this through generations: UPackageMap::Compute (guest
+// 0x822C88B8) gives each package the net object count of the older of the two sides' generations.
+// So the updated GearGame is given the base game's count as a first generation and its own as a
+// second: with a player without the update both sides count the base game's objects, and the
+// update's own ones are not sent; between two players with it, everything is.
+struct ContentUpdate {
+  const char* package;
+  uint32_t guid[4];
+  uint32_t base_count;    // the base game's net objects
+  uint32_t update_count;  // the updated package's
+};
+constexpr ContentUpdate kContentUpdates[] = {
+    {"GearGame", {0x4365494C, 0x471BBA26, 0x06C75190, 0x7AD22C91}, 89730, 89804},
+};
+constexpr uint32_t kPackageGuid = 92;         // UPackage: its GUID (16 bytes)
+constexpr uint32_t kPackageGenerations = 128;  // UPackage: TArray<INT> net object count per generation
+
+// Gives `package`, when it is an updated one of kContentUpdates with a single generation, the base
+// game's generation first. The array is grown with the game's own TArray resize (guest 0x822B0E30:
+// r3 the array, r4 its new capacity, r5 the element size), on the caller's context.
+void SplitContentUpdateGenerations(PPCContext& ctx, uint8_t* base, uint32_t package) {
+  for (const ContentUpdate& update : kContentUpdates) {
+    if (ObjectName(base, package) != update.package) continue;
+    bool same_guid = true;
+    for (int i = 0; i < 4; ++i) same_guid &= LoadU32(base, package + kPackageGuid + i * 4) == update.guid[i];
+    const uint32_t array = package + kPackageGenerations;
+    if (!same_guid || LoadU32(base, array + 4) != 1 || LoadU32(base, LoadU32(base, array)) != update.update_count) return;
+    const uint64_t r3 = ctx.r3.u64, r4 = ctx.r4.u64, r5 = ctx.r5.u64;
+    ctx.r3.u64 = array;
+    ctx.r4.u64 = 2;
+    ctx.r5.u64 = 4;
+    __imp__sub_822B0E30(ctx, base);
+    ctx.r3.u64 = r3;
+    ctx.r4.u64 = r4;
+    ctx.r5.u64 = r5;
+    const uint32_t data = LoadU32(base, array);
+    if (!data) return;
+    StoreU32(base, data, update.base_count);
+    StoreU32(base, data + 4, update.update_count);
+    StoreU32(base, array + 4, 2);
+    StoreU32(base, array + 8, 2);
+    REXLOG_INFO("[Azura online] {} is a content update: generations {} (base game) and {}", update.package,
+                update.base_count, update.update_count);
+    return;
+  }
+}
+
+// Splits the content updates' generations once, at the first ClientSetHUD: the game has loaded its
+// script packages by then, and no connection has a package map yet. The packages are found through
+// the player controller's class, which GearGame holds.
+void SplitContentUpdatesOnce(PPCContext& ctx, uint8_t* base) {
+  static std::atomic<bool> split{false};
+  if (split.exchange(true)) return;
+  uint32_t package = LoadU32(base, ctx.r3.u32 + kObjectClass);
+  for (uint32_t outer = LoadU32(base, package + kObjectOuter); outer; outer = LoadU32(base, outer + kObjectOuter)) {
+    package = outer;
+  }
+  SplitContentUpdateGenerations(ctx, base, package);
 }
 
 // Removes every ?listen (or &listen) option from a travel URL.
@@ -2511,6 +2582,7 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   if (Is(base, function, kFilterButtonInput) && TakeKeyboardStartAsMenuKey(ctx, base, function)) return;
   if (Is(base, function, kFilterButtonInput) && HandleOptionsButton(ctx, base, function)) return;
   if (Is(base, function, kFilterButtonInput) && HandleCreditsButton(ctx, base, function)) return;
+  if (Is(base, function, kClientSetHUD)) SplitContentUpdatesOnce(ctx, base);
   if (Is(base, function, kClientMenuSelected) &&
       ObjectName(base, LoadU32(base, function + kObjectOuter)) == "UIScene_FrontEnd") {
     ClientMenuPosition(ctx, base);
