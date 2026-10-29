@@ -605,6 +605,23 @@ is read from the decompiled listing, which shows no jump targets, so it is **inf
 So `CreateLIVEParty` does not run at start-up: a Live party made there skips the hook that hosts
 an Alboria room.
 
+Without an Xbox Live sign-in (`GetLoginStatus() != 2`, as always on Azura) the function goes
+straight to `LocalPartyCreated`: it reads no party type and creates no party session (**verified**
+with `script_trace_args`, 29 October 2026), so the game always started in Local.
+
+With `network_mode = "online"` the runtime makes that first party the one `startup_party` names
+(`CreateStartupParty` in `script_hooks.cpp`): the type the player last chose in the party options,
+Joinable the first time. For Joinable or Invite only, when Alboria answered the start-up check, it
+runs `CreateSystemLinkParty` in `LocalPartyCreated`'s place after hosting a room of that type, as
+choosing them in the party options does; when Alboria did not answer, the game starts in Local and
+`startup_party` stays as it was. For System Link it runs `CreateSystemLinkParty` with no room; for
+Local, `LocalPartyCreated` as the game does. Outside a room `GetPartyType` answers the type the
+game started with until the player chooses one; the game copies it into `CurrPartyType` once the
+party exists (`PartySuccessfullyCreatedNotify`). A room's party stays System Link (3) in
+`CurrPartyType`: with Joinable (1) there the game treated it as an Xbox Live party and private
+Horde and Versus matches did not start (**observed** on 29 October 2026); only what the party panel
+and options show is changed (`RunWithOnlinePartyType`).
+
 ### The System Link browser (`UIScene_SystemLink`)
 
 - Opening it runs `TriggerPartySearch`: `GameInterface.FindOnlineGames` with its `SearchSettings`.
