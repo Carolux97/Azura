@@ -963,10 +963,10 @@ index 0000000..19a188d
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria_http.cpp b/src/system/xam/alboria_http.cpp
 new file mode 100644
-index 0000000..fd0e1ab
+index 0000000..90314fd
 --- /dev/null
 +++ b/src/system/xam/alboria_http.cpp
-@@ -0,0 +1,245 @@
+@@ -0,0 +1,249 @@
 +/**
 + * @file        system/xam/alboria_http.cpp
 + * @brief       Alboria's HTTPS requests on Linux, through libcurl loaded at run time, and on
@@ -978,8 +978,10 @@ index 0000000..fd0e1ab
 + * @remarks     libcurl is not linked: it is loaded the first time Alboria is used, so the runtime
 + *              starts on systems without it and only online play needs it. Only the few functions
 + *              and option numbers below are used; their values are part of libcurl's stable ABI.
-+ *              On Windows, WinHTTP is part of the system, so it is linked like any other system
-+ *              library. macOS has its own client (alboria_http_mac.mm).
++ *              On Windows, WinHTTP is part of the system. It is linked from this file (#pragma
++ *              comment) rather than from CMake: the player kit records the runtime's link command,
++ *              which must stay under Windows' command line limit (scripts/kit/make_kit.py).
++ *              macOS has its own client (alboria_http_mac.mm).
 + */
 +
 +#include <rex/system/xam/alboria_http.h>
@@ -993,6 +995,8 @@ index 0000000..fd0e1ab
 +#elif REX_PLATFORM_WIN32
 +#include <windows.h>
 +#include <winhttp.h>
++
++#pragma comment(lib, "winhttp.lib")
 +
 +#include <format>
 +#include <vector>
