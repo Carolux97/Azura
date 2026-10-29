@@ -24,11 +24,16 @@ const isUsable = (element) =>
   element.getClientRects().length > 0 &&
   getComputedStyle(element).visibility !== "hidden";
 
+/** A dialog over the launcher (data-modal, such as the welcome screen) while it is open, or null. */
+const openModal = () => [...document.querySelectorAll("[data-modal]")].find((modal) => !modal.hidden) ?? null;
+
 /**
- * The controls the focus can move between: the on-screen keyboard's keys while it is open, or else
- * the rail's and those of the section on screen.
+ * The controls the focus can move between: the on-screen keyboard's keys while it is open, those
+ * of an open dialog, or else the rail's and those of the section on screen.
  */
 const controls = () => {
+  const modal = openModal();
+  if (modal && !isKeyboardOpen()) return [...modal.querySelectorAll(FOCUSABLE)].filter(isUsable);
   const scope = isKeyboardOpen() ? `.vkbd :is(${FOCUSABLE})` : `.rail :is(${FOCUSABLE}), .view.is-active :is(${FOCUSABLE})`;
   return [...document.querySelectorAll(scope)].filter(isUsable);
 };
@@ -64,8 +69,10 @@ const focusFirst = () => {
     if (key) focus(key);
     return;
   }
-  const first = [...document.querySelectorAll(`.view.is-active :is(${FOCUSABLE})`)].find(isUsable);
-  const target = first ?? document.querySelector(".nav-item.is-active");
+  const modal = openModal();
+  const scope = modal ? modal.querySelectorAll(FOCUSABLE) : document.querySelectorAll(`.view.is-active :is(${FOCUSABLE})`);
+  const first = [...scope].find(isUsable);
+  const target = first ?? (modal ? null : document.querySelector(".nav-item.is-active"));
   if (target) focus(target);
 };
 
@@ -217,11 +224,13 @@ export const setupGamepad = ({ showView, blocked, t, onLocaleChange, onInput }) 
       return;
     }
     // A prompt waiting for an answer is cancelled first (its cancel button has data-pad-back).
-    const cancel = [...document.querySelectorAll("[data-pad-back]")].find(isUsable);
+    const cancel = [...(openModal() ?? document).querySelectorAll("[data-pad-back]")].find(isUsable);
     if (cancel) {
       cancel.click();
       return;
     }
+    // A dialog with nothing to cancel (the welcome screen's first step) stays until answered.
+    if (openModal()) return;
     if (!document.querySelector('.view.is-active[data-view="play"]')) showView("play");
     const launch = document.getElementById("launch");
     if (launch && isUsable(launch)) focus(launch);
@@ -257,6 +266,8 @@ export const setupGamepad = ({ showView, blocked, t, onLocaleChange, onInput }) 
       else if (action === "previous") turnKeyboardPage(-1);
       else if (action === "next") turnKeyboardPage(1);
     }
+    // While a dialog is open, the sections and Play wait for it.
+    else if (openModal()) return;
     else if (action === "previous") switchSection(-1);
     else if (action === "next") switchSection(1);
     else if (action === "start") {

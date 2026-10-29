@@ -10,6 +10,8 @@ What it does:
   carries, installing a C++ compiler when there is none (see Runtime and Compiler below);
 - edit the runtime settings (game language, gamertag, graphics, display) that `runtime/` reads
   from `azura.toml`, manage the saves and show the achievements;
+- sign the player in to Alboria, our online ecosystem, or let them play with a local account (see
+  Account below);
 - start the game and show its log;
 - update itself, and with it the game, from the published releases (see Updates and releases);
 - work with a mouse, a keyboard or a controller.
@@ -125,11 +127,39 @@ Bluetooth (reading the HID device gets only its connection); on Linux, gilrs.
 control in that direction (`src/gamepad.js`, within the rail or within the section), South (A,
 Cross) presses, East (B, Circle) cancels a prompt or goes back to Play, the shoulder buttons switch
 sections, Start starts the game; left and right change selects and sliders. South on a text field
-(the gamertag) opens the on-screen keyboard (`src/virtualKeyboard.js`): West deletes, North types a
+(the gamertag, an email, a code) opens the on-screen keyboard (`src/virtualKeyboard.js`): West deletes, North types a
 space, Start is Done, East cancels. While a controller is in use, a hint bar shows its buttons with
 the glyphs of its family (Xbox and Steam Deck, PlayStation, Nintendo or generic), drawn in
 `src/gamepadGlyphs.js`; the mouse or the keyboard hides it again. Nothing reacts while the game
-runs. A cancel button that should answer East marks itself with `data-pad-back`.
+runs. A cancel button that should answer East marks itself with `data-pad-back`. A dialog over the
+launcher (the welcome screen, `data-modal`) keeps the focus among its own controls while it is
+open.
+
+## Account
+
+`src/account.js` and `src-tauri/src/alboria.rs`. The player plays with an Alboria account (the
+protocol is in `docs/alboria-relay.md`, sections 3 and 4.6) or with a local account. Until they
+choose, also after updating from a launcher without accounts, a welcome screen asks: create an
+account, sign in to one, or play locally. The choice is `account` in `launcher.toml` and sets the
+game's `network_mode` in `azura.toml`: `online` for an Alboria account, `system_link` for a local
+one.
+
+- An account has no password. A 6-digit code sent to its email creates it, links this installation
+  to it, moves it to another email or deletes it.
+- This installation is a device of the account, with the Ed25519 key in `identity.toml` in the
+  saves folder, which the game also reads; the launcher makes the file, in the game's format, when
+  the game has not run yet. The key never leaves the computer and is never logged.
+- When it links the device, the launcher sends the hash of the computer's own ID (section 3.2), so
+  that a banned player cannot come back with a new account from the same computer.
+- The gamertag lives in the account. With an Alboria account, saving a new one signs in again so
+  that Alboria gives the tag for the new name; with a local account it is saved as it is typed.
+- Two buttons open `https://alboria.org` in the system browser: a small "with Alboria" pill under
+  the brand (hidden in the narrow layout) and one in the Account section. They go through the
+  `open_alboria_site` command (`tauri-plugin-opener`), whose address is fixed in Rust, so the
+  interface cannot open any other.
+- Requests go to `https://api.alboria.org`, or to `ALBORIA_API_URL` for a development server
+  (`ALBORIA_MAILER=console` on that server prints the codes). In a browser, `src/platform.js`
+  simulates the service: the code is always 123456, and `taken@example.com` already has an account.
 
 On Linux, building needs libudev (`libudev-dev`), and `cargo test prints_controller_events --
 --ignored --nocapture` prints what each controller sends.
