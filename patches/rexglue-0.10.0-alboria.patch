@@ -202,10 +202,10 @@ index 0000000..6d9d9b1
 +}  // namespace rex::system::xam::alboria
 diff --git a/include/rex/system/xam/alboria_http.h b/include/rex/system/xam/alboria_http.h
 new file mode 100644
-index 0000000..2318c07
+index 0000000..c7fc5de
 --- /dev/null
 +++ b/include/rex/system/xam/alboria_http.h
-@@ -0,0 +1,31 @@
+@@ -0,0 +1,32 @@
 +/**
 + * @file        system/xam/alboria_http.h
 + * @brief       HTTPS requests to Alboria's control API through each platform's own client
@@ -213,8 +213,9 @@ index 0000000..2318c07
 + * @license     BSD 3-Clause License
 + *              See LICENSE file in the project root for full license text.
 + *
-+ * @remarks     NSURLSession on macOS and libcurl on Linux (loaded when first needed, so the
-+ *              runtime starts without it). TLS and certificate checks are the system's.
++ * @remarks     NSURLSession on macOS, libcurl on Linux (loaded when first needed, so the runtime
++ *              starts without it) and WinHTTP on Windows. TLS and certificate checks are the
++ *              system's.
 + */
 +
 +#pragma once
@@ -962,14 +963,14 @@ index 0000000..19a188d
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria_http.cpp b/src/system/xam/alboria_http.cpp
 new file mode 100644
-index 0000000..9469d1e
+index 0000000..fd0e1ab
 --- /dev/null
 +++ b/src/system/xam/alboria_http.cpp
-@@ -0,0 +1,137 @@
+@@ -0,0 +1,245 @@
 +/**
 + * @file        system/xam/alboria_http.cpp
-+ * @brief       Alboria's HTTPS requests on Linux, through libcurl loaded at run time
-+ *              (rex/system/xam/alboria_http.h)
++ * @brief       Alboria's HTTPS requests on Linux, through libcurl loaded at run time, and on
++ *              Windows, through WinHTTP (rex/system/xam/alboria_http.h)
 + *
 + * @license     BSD 3-Clause License
 + *              See LICENSE file in the project root for full license text.
@@ -977,7 +978,8 @@ index 0000000..9469d1e
 + * @remarks     libcurl is not linked: it is loaded the first time Alboria is used, so the runtime
 + *              starts on systems without it and only online play needs it. Only the few functions
 + *              and option numbers below are used; their values are part of libcurl's stable ABI.
-+ *              Windows has no client yet: requests fail with an explanation.
++ *              On Windows, WinHTTP is part of the system, so it is linked like any other system
++ *              library. macOS has its own client (alboria_http_mac.mm).
 + */
 +
 +#include <rex/system/xam/alboria_http.h>
@@ -988,6 +990,12 @@ index 0000000..9469d1e
 +#include <dlfcn.h>
 +
 +#include <mutex>
++#elif REX_PLATFORM_WIN32
++#include <windows.h>
++#include <winhttp.h>
++
++#include <format>
++#include <vector>
 +#endif
 +
 +namespace rex::system::xam::alboria {
@@ -1092,11 +1100,112 @@ index 0000000..9469d1e
 +  return result;
 +}
 +
-+#elif !REX_PLATFORM_MAC
++#elif REX_PLATFORM_WIN32
++namespace {
 +
-+HttpResponse PostJson(const std::string&, std::string_view, std::string_view) {
++// Each step of a request (resolving, connecting, sending, receiving) gives up after this long.
++constexpr int kTimeoutMs = 15000;
++
++// Closes a WinHTTP handle when it goes out of scope.
++struct Handle {
++  HINTERNET handle = nullptr;
++  explicit Handle(HINTERNET h) : handle(h) {}
++  Handle(const Handle&) = delete;
++  Handle& operator=(const Handle&) = delete;
++  ~Handle() {
++    if (handle) WinHttpCloseHandle(handle);
++  }
++  explicit operator bool() const { return handle != nullptr; }
++};
++
++std::wstring Widen(std::string_view text) {
++  if (text.empty()) return {};
++  const int length = MultiByteToWideChar(CP_UTF8, 0, text.data(), int(text.size()), nullptr, 0);
++  std::wstring wide(size_t(length), L'\0');
++  MultiByteToWideChar(CP_UTF8, 0, text.data(), int(text.size()), wide.data(), length);
++  return wide;
++}
++
++// What failed, with the last WinHTTP error code (winhttp.h lists them, such as 12002 for a time-out
++// and 12007 for a name that does not resolve).
++std::string Failure(const char* step) {
++  return std::format("WinHTTP could not {} (error {})", step, GetLastError());
++}
++
++}  // namespace
++
++HttpResponse PostJson(const std::string& url, std::string_view json, std::string_view bearer) {
 +  HttpResponse result;
-+  result.error = "online play is not available on this system yet";
++  const std::wstring wide_url = Widen(url);
++  URL_COMPONENTS parts = {};
++  parts.dwStructSize = sizeof(parts);
++  parts.dwHostNameLength = DWORD(-1);
++  parts.dwUrlPathLength = DWORD(-1);
++  parts.dwExtraInfoLength = DWORD(-1);
++  if (!WinHttpCrackUrl(wide_url.c_str(), 0, 0, &parts)) {
++    result.error = Failure("read the address");
++    return result;
++  }
++  const std::wstring host(parts.lpszHostName, parts.dwHostNameLength);
++  std::wstring path(parts.lpszUrlPath, parts.dwUrlPathLength);
++  path.append(parts.lpszExtraInfo, parts.dwExtraInfoLength);
++
++  Handle session(WinHttpOpen(L"Azura-Alboria/1", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
++                             WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
++  if (!session) {
++    result.error = Failure("start");
++    return result;
++  }
++  WinHttpSetTimeouts(session.handle, kTimeoutMs, kTimeoutMs, kTimeoutMs, kTimeoutMs);
++  Handle connection(WinHttpConnect(session.handle, host.c_str(), parts.nPort, 0));
++  if (!connection) {
++    result.error = Failure("connect");
++    return result;
++  }
++  const DWORD flags = parts.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0;
++  Handle request(WinHttpOpenRequest(connection.handle, L"POST", path.c_str(), nullptr,
++                                    WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags));
++  if (!request) {
++    result.error = Failure("open the request");
++    return result;
++  }
++
++  std::wstring headers = L"Content-Type: application/json\r\n";
++  if (!bearer.empty()) headers += L"Authorization: Bearer " + Widen(bearer) + L"\r\n";
++  // WinHTTP keeps a pointer to the body until the request is sent, and takes it as non-const.
++  std::string body(json);
++  if (!WinHttpSendRequest(request.handle, headers.c_str(), DWORD(-1), body.data(), DWORD(body.size()),
++                          DWORD(body.size()), 0) ||
++      !WinHttpReceiveResponse(request.handle, nullptr)) {
++    result.error = Failure("reach Alboria");
++    return result;
++  }
++
++  DWORD status = 0;
++  DWORD status_size = sizeof(status);
++  if (!WinHttpQueryHeaders(request.handle, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
++                           WINHTTP_HEADER_NAME_BY_INDEX, &status, &status_size, WINHTTP_NO_HEADER_INDEX)) {
++    result.error = Failure("read the answer");
++    return result;
++  }
++  for (;;) {
++    DWORD available = 0;
++    if (!WinHttpQueryDataAvailable(request.handle, &available)) {
++      result.error = Failure("read the answer");
++      result.body.clear();
++      return result;
++    }
++    if (available == 0) break;
++    std::vector<char> chunk(available);
++    DWORD read = 0;
++    if (!WinHttpReadData(request.handle, chunk.data(), available, &read)) {
++      result.error = Failure("read the answer");
++      result.body.clear();
++      return result;
++    }
++    result.body.append(chunk.data(), read);
++  }
++  result.status = int(status);
 +  return result;
 +}
 +
