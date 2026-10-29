@@ -332,6 +332,7 @@ enum WatchedName {
   kGetPartyType,             // GearProfileSettings.GetPartyType: the profile's party type
   kLocalPartyCreated,        // UIScene_FrontEnd.LocalPartyCreated: the party at start-up, without Live
   kClientSetHUD,             // PlayerController.ClientSetHUD: the player's HUD, first set at start-up
+  kOnCustomMapChanged,       // UIScene_PregameLobby: the map the host's selection control shows changed
   kApplySensitivityScaling,  // GearPC: scales the look input by the profile's look sensitivity
   kViewAdhesion,             // GearPlayerInput: turns the view towards the target (aim assist)
   kGetAdjustedAimFor,        // GearPC: bends a shot towards the target (aim assist)
@@ -356,7 +357,7 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "RefreshButtonBarAndPlayerOptions", "CanInviteGearsPlayers", "CanInviteLivePartyPlayers",
     "InviteGearsPlayers", "InviteLivePartyPlayers", "UpdatePanelTitle", "OnFindOnlineGamesComplete",
     "Callback_Credits",      "Callback_ClientMenuOptionWasSelected", "ConditionalCreatePartySession",
-    "GetPartyType",          "LocalPartyCreated",      "ClientSetHUD",
+    "GetPartyType",          "LocalPartyCreated",      "ClientSetHUD",       "OnCustomMapChanged",
     "ApplySensitivityScaling", "ViewAdhesion",
     "GetAdjustedAimFor"};
 
@@ -1625,6 +1626,71 @@ bool IgnoreOtherPlayersStart(PPCContext& ctx, uint8_t* base, uint32_t function) 
 // up. Each player's (ControllerId's) press is followed on its own. Returns whether the press was
 // used up, so FilterButtonInput must not run.
 std::atomic<bool> g_start_taken[4];
+// --- Choosing the map in the pre-game lobby with the keyboard ---
+//
+// The host chooses the map of a Horde, Versus or custom match with a control made in Flash
+// (UIScene_PregameLobby.bIsInCustomMapSelection): the mouse wheel and the arrows change the map,
+// which the control reports with OnCustomMapChanged(MapId), and accepting it makes the control call
+// OnCustomMapSelected(MapId), which sends the choice to the game and says the host has finished
+// (GRI.SubmitMapSelectionByName, GRI.SubmitHostFinishedMapSelection). The control never gets the
+// keyboard's Return: in this scene it reaches the script as Start (the pre-game lobby counts as
+// play for the keyboard), so there, with the control open, Return calls OnCustomMapSelected itself
+// with the map the control last showed.
+std::atomic<int32_t> g_custom_map_id{-1};
+constexpr uint32_t kCustomMapLocalsSize = 16;  // MapId
+uint32_t g_custom_map_locals = 0;
+
+// Whether bool property `name` of `object` is set; false when it is not found.
+bool BoolPropertySet(const uint8_t* base, uint32_t object, const char* name) {
+  for (uint32_t owner = LoadU32(base, object + kObjectClass); owner; owner = LoadU32(base, owner + kStructSuper)) {
+    for (uint32_t field = LoadU32(base, owner + kStructChildren); field; field = LoadU32(base, field + kFieldNext)) {
+      if (ObjectName(base, field) != name) continue;
+      const uint32_t mask = LoadU32(base, field + kBoolPropertyBitMask);
+      if (ObjectName(base, LoadU32(base, field + kObjectClass)) != "BoolProperty" || !mask || (mask & (mask - 1))) {
+        return false;
+      }
+      return (LoadU32(base, object + LoadU32(base, field + kPropertyOffset)) & mask) != 0;
+    }
+  }
+  return false;
+}
+
+// Whether Return stays Start in the pre-game lobby scene `scene`: for the host, once the map is chosen
+// (not in the map selection control), where Start starts the match (OnHostStartGame, the "Iniciar"
+// prompt shows the key that presses Start). Anyone else's, and the map selection's, is A.
+// The host is whoever's lobby is the authority (GRI.Role 3, ROLE_Authority).
+bool ReturnStartsLobbyMatch(const uint8_t* base, uint32_t scene) {
+  if (BoolPropertySet(base, scene, "bIsInCustomMapSelection")) return false;
+  const int32_t gri_at = ClassPropertyOffset(base, LoadU32(base, scene + kObjectClass), "GRI");
+  const uint32_t gri = gri_at >= 0 ? LoadU32(base, scene + static_cast<uint32_t>(gri_at)) : 0;
+  if (!gri) return false;
+  const int32_t role_at = ClassPropertyOffset(base, LoadU32(base, gri + kObjectClass), "Role");
+  constexpr uint8_t kRoleAuthority = 3;
+  return role_at >= 0 && base[gri + static_cast<uint32_t>(role_at)] == kRoleAuthority;
+}
+
+// Return reached UIScene_PregameLobby.FilterButtonInput (`ctx`, `function`) as Start: with the map
+// selection control open, accepts the map it shows. Returns whether it did.
+bool ConfirmCustomMapWithReturn(PPCContext& ctx, uint8_t* base, uint32_t function) {
+  const uint32_t cls = LoadU32(base, function + kObjectOuter);
+  if (ObjectName(base, cls) != "UIScene_PregameLobby") return false;
+  const uint32_t scene = ctx.r3.u32;
+  const int32_t map = g_custom_map_id.load();
+  if (map < 0 || !BoolPropertySet(base, scene, "bIsInCustomMapSelection")) return false;
+  const uint32_t selected = FindClassFunction(base, cls, "OnCustomMapSelected");
+  if (!selected) return false;
+  if (!g_custom_map_locals) {
+    g_custom_map_locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kCustomMapLocalsSize);
+    if (!g_custom_map_locals) return false;
+  }
+  std::memset(base + g_custom_map_locals, 0, kCustomMapLocalsSize);
+  StoreU32(base, g_custom_map_locals, static_cast<uint32_t>(map));
+  g_custom_map_id.store(-1);
+  REXLOG_INFO("[Azura menus] Return accepts map {} in the pre-game lobby", map);
+  RunInstead(ctx, base, selected, g_custom_map_locals);
+  return true;
+}
+
 bool TakeKeyboardStartAsMenuKey(PPCContext& ctx, uint8_t* base, uint32_t function) {
   const uint32_t locals = LoadU32(base, ctx.r4.u32 + kFrameLocals);
   if (NameText(base, LoadU32(base, locals + kFilterButtonName)) != "XboxTypeS_Start") return false;
@@ -1637,12 +1703,18 @@ bool TakeKeyboardStartAsMenuKey(PPCContext& ctx, uint8_t* base, uint32_t functio
     const std::string scene = ObjectName(base, LoadU32(base, function + kObjectOuter));
     const bool front_end = scene == "UIScene_FrontEnd";
     const bool title_screen = front_end && (LoadU32(base, ctx.r3.u32 + kFrontEndFlags) & kOnTitleScreenBit);
-    const bool keep_start = key == StartKey::kNone || (title_screen && key == StartKey::kReturn);
+    const bool lobby_start = key == StartKey::kReturn && scene == "UIScene_PregameLobby" &&
+                             ReturnStartsLobbyMatch(base, ctx.r3.u32);
+    const bool keep_start = key == StartKey::kNone || (title_screen && key == StartKey::kReturn) || lobby_start;
     g_start_taken[controller].store(!keep_start);
     if (keep_start) return false;
     if (title_screen) {
       // Escape on the title screen: used up, nothing else.
       if (const uint32_t result = ctx.r5.u32) StoreU32(base, result, 1);
+      return true;
+    }
+    if (key == StartKey::kReturn && ConfirmCustomMapWithReturn(ctx, base, function)) {
+      if (const uint32_t result = ctx.r5.u32) StoreU32(base, result, 1);  // the press was handled
       return true;
     }
     rex::input::mnk::PressForMenu(key == StartKey::kReturn ? rex::input::X_INPUT_GAMEPAD_A : rex::input::X_INPUT_GAMEPAD_B);
@@ -3074,6 +3146,9 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   if (Is(base, function, kFilterButtonInput) && HandleOptionsButton(ctx, base, function)) return;
   if (Is(base, function, kFilterButtonInput) && HandleCreditsButton(ctx, base, function)) return;
   if (Is(base, function, kClientSetHUD)) SplitContentUpdatesOnce(ctx, base);
+  if (Is(base, function, kOnCustomMapChanged)) {
+    g_custom_map_id.store(SmallParam(base, function, ctx.r4.u32, "MapId"));
+  }
   if (Is(base, function, kClientMenuSelected) &&
       ObjectName(base, LoadU32(base, function + kObjectOuter)) == "UIScene_FrontEnd") {
     ClientMenuPosition(ctx, base);
