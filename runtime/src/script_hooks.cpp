@@ -2661,6 +2661,50 @@ void OpenSystemLinkBrowserForJoin(PPCContext& ctx, uint8_t* base) {
   ctx.r3.u64 = own_r3;
 }
 
+// --- A room that ended under its member ---
+//
+// A player who joined another's party (an Alboria room) is in that host's party. When the room ends
+// without the player leaving (the host closed it or left, the player was removed, or the relay went
+// silent), the party is gone, and the game would only notice once its own connection times out. What
+// the game itself does when it loses the host (GearPC.ClientWasKicked, among others) is
+// GearPC.ReturnToMainMenu(bReturnToStartScreen = false, bClearMenuHistory = true): it leaves the
+// party, goes back to the main menu and, with no room, creates the player's own party there as at
+// start-up.
+constexpr uint32_t kReturnToMainMenuLocalsSize = 64;  // bReturnToStartScreen, bClearMenuHistory, locals
+uint32_t g_return_to_menu_locals = 0;
+
+// On a player input frame (`ctx`, about to run PlayerInput): sends the player back to the main menu
+// when the room it was a member of ended.
+void ReturnToMainMenuWhenRoomLost(PPCContext& ctx, uint8_t* base) {
+  if (!rex::system::xam::alboria::TakeLostRoom()) return;
+  const uint32_t player_input = ctx.r3.u32;
+  const uint32_t controller = LoadU32(base, player_input + kObjectOuter);
+  uint32_t return_to_menu = 0;
+  for (uint32_t cls = controller ? LoadU32(base, controller + kObjectClass) : 0; cls && !return_to_menu;
+       cls = LoadU32(base, cls + kStructSuper)) {
+    return_to_menu = FindClassFunction(base, cls, "ReturnToMainMenu");
+  }
+  if (!return_to_menu) {
+    REXLOG_WARN("[Azura online] The room ended, but ReturnToMainMenu was not found on the player controller");
+    return;
+  }
+  if (!g_return_to_menu_locals) {
+    g_return_to_menu_locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kReturnToMainMenuLocalsSize);
+    if (!g_return_to_menu_locals) return;
+  }
+  std::memset(base + g_return_to_menu_locals, 0, kReturnToMainMenuLocalsSize);
+  StoreU32(base, g_return_to_menu_locals + 4, 1);  // bClearMenuHistory; bReturnToStartScreen stays 0
+  REXLOG_INFO("[Azura online] The room ended: back to the main menu");
+  const uint32_t frame = ctx.r4.u32;
+  const uint32_t own_object = LoadU32(base, frame + kFrameObject);
+  const uint64_t own_r3 = ctx.r3.u64;
+  StoreU32(base, frame + kFrameObject, controller);
+  ctx.r3.u64 = controller;
+  RunInstead(ctx, base, return_to_menu, g_return_to_menu_locals);
+  StoreU32(base, frame + kFrameObject, own_object);
+  ctx.r3.u64 = own_r3;
+}
+
 // UIScene_SystemLink.OnFindOnlineGamesComplete has just run (`ctx`): joins the first party found,
 // or searches again.
 void JoinFoundParty(PPCContext& ctx, uint8_t* base, uint32_t find_complete) {
@@ -2800,6 +2844,7 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   // Before it runs: it reads aMouseX and aMouseY.
   if (function && IsEnginePlayerInput(base, function)) {
     if (g_open_browser.load(std::memory_order_relaxed)) OpenSystemLinkBrowserForJoin(ctx, base);
+    ReturnToMainMenuWhenRoomLost(ctx, base);
     const uint32_t player_input = ctx.r3.u32;
     const int32_t delta_time_at = ParamOffset(base, function, "DeltaTime");
     const float delta_time =
