@@ -95,7 +95,26 @@ user_name = "User"
 # "offline": no network link, so the game's System Link options stay greyed out.
 # "system_link": play System Link (campaign co-op, Horde, Beast, private Versus) with the other
 # computers of the local network.
-network_mode = "offline"
+# "online": the same, and the party options' Joinable and Invite only host a room on Alboria, our
+# online service, for playing with friends over the internet: the room's code, shown in
+# Manage/Invite, lets them join.
+network_mode = "online"
+# Alboria's control API, and the name and version this build gives it when signing in (the
+# service refuses versions it no longer supports).
+alboria_api_url = "https://api.alboria.org"
+alboria_client = "azura/0.5.0"
+# The party the game starts with, which the game keeps as the player chooses in the party options:
+# joinable (the first time), invite_only, system_link or local. Joinable and Invite only host a
+# room on Alboria; when Alboria does not answer the game starts in Local and this stays as it was.
+startup_party = "joinable"
+# Options > Connection's Direct connection: reach the other players of an Alboria room directly
+# when the network allows it, with the relay as fallback. Lower latency, but they can learn this
+# computer's public IP address. Takes effect from the next room.
+alboria_direct = true
+# Options > Connection's Show latency: the latency in the performance overlay's corner. A member of
+# an Alboria room sees the round trip to the host and whether it is direct or goes through the
+# relay; the host, which runs the game, and a game in no room see 0 ms.
+latency_overlay = false
 # This computer's IPv4 address on the local network System Link plays on (for example
 # "192.168.1.20"). Empty: chosen automatically, preferring a home network address over a VPN or
 # virtual adapter's. Set it when the log line "System Link: local network address" shows the wrong

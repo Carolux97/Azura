@@ -12,6 +12,7 @@
 #include <imgui.h>
 
 #include <rex/input/device.h>
+#include <rex/input/pad_remap.h>
 
 namespace rex::input {
 class InputSystem;
@@ -66,11 +67,25 @@ ImVec2 PadPointPosition(ImVec2 center, float size, PadLook look, PadPoint point)
 // A small left or right arrow, for the button hints.
 void DrawArrow(ImDrawList* draw_list, ImVec2 center, float size, bool left, ImU32 color);
 
+// The name of a shoulder, trigger, stick or menu button on the family `look` ("LB", "L1", "Options").
+const char* ControlName(rex::input::PadControl control, PadLook look);
+
+// A control's glyph as a controller of the family `look` shows it (the face buttons by their shapes
+// or letters and colours, the others by their names on a key cap), centred on `center`, `height`
+// tall. Returns its width.
+float DrawPadGlyph(ImDrawList* draw_list, ImFont* font, ImVec2 center, float height, PadLook look,
+                   rex::input::PadControl control, int alpha, float unit);
+
 // The button that confirms, as `pad` shows it (the cross on PlayStation, A on the others), or the
 // Enter key named `enter` when `pad` is null; its top left at `top_left`, 16 * `unit` tall. Returns
 // its width.
 float DrawConfirmGlyph(ImDrawList* draw_list, ImFont* font, ImVec2 top_left, float unit,
                        const rex::input::DeviceInfo* pad, const char* enter, int alpha);
+
+// The button that goes back, as `pad` shows it (the circle on PlayStation, B on the others), or the
+// key named `escape` when `pad` is null; drawn as DrawConfirmGlyph. Returns its width.
+float DrawCancelGlyph(ImDrawList* draw_list, ImFont* font, ImVec2 top_left, float unit,
+                      const rex::input::DeviceInfo* pad, const char* escape, int alpha);
 
 // Whether a key or button that could have closed a menu is still held: Enter, Escape or Backspace
 // on the keyboard, or any button or trigger of the controllers `pads`. A menu that blocks the

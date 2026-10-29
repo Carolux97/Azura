@@ -35,6 +35,7 @@
 #include "input/scripted_pad.h"
 #include "controls_menu.h"
 #include "local_coop_menu.h"
+#include "connection_menu.h"
 #include "local_coop_notices.h"
 #include "gpu_list.h"
 #include "hle_gfx/frame_capture.h"
@@ -47,10 +48,16 @@
 #include "script_hooks.h"
 #include "perf_overlay.h"
 #include "shader_compile_overlay.h"
+#include "online_room_overlay.h"
+#include "join_by_code_menu.h"
+
+#include <rex/system/xam/alboria.h>
 #include "shader_precompile.h"
 
 // Defined by the SDK (core/perf/counter.cpp), which never opens the file itself.
 REXCVAR_DECLARE(std::string, perf_log_csv);
+// Defined by the SDK (system/xam/system_link.cpp).
+REXCVAR_DECLARE(std::string, network_mode);
 
 #if defined(__APPLE__)
 #include "platform_mac.h"
@@ -228,6 +235,25 @@ class AzuraApp : public rex::ReXApp {
         });
       });
     }
+    // With online play on, the code of the player's room on Alboria and how it is going.
+    if (REXCVAR_GET(network_mode) == "online") {
+      rex::system::xam::alboria::CheckService();
+    }
+    if (REXCVAR_GET(network_mode) == "online" && dialog_drawer_) {
+      online_room_overlay_ = new azura::OnlineRoomOverlay(
+          dialog_drawer_, REXCVAR_GET(user_language), title_font_, body_font_, &online_room_overlay_);
+    }
+    // Manage/Invite's RB, with online play on, opens the Join by code screen, on the UI thread.
+    azura::script::SetJoinByCodeHandler([this] {
+      app_context().CallInUIThread([this] {
+        auto* input = runtime() ? static_cast<rex::input::InputSystem*>(runtime()->input_system()) : nullptr;
+        if (!shutting_down_ && dialog_drawer_ && input && !join_by_code_menu_) {
+          join_by_code_menu_ = new azura::JoinByCodeMenu(dialog_drawer_, input, azura::input::InstalledPlayerAssignment(),
+                                                         REXCVAR_GET(user_language), title_font_, body_font_,
+                                                         &join_by_code_menu_);
+        }
+      });
+    });
     // Choosing Local co-op in the Options opens the Local co-op menu, on the UI thread.
     azura::script::SetLocalCoopHandler([this] {
       app_context().CallInUIThread([this] {
@@ -236,6 +262,17 @@ class AzuraApp : public rex::ReXApp {
           local_coop_menu_ = new azura::LocalCoopMenu(
               dialog_drawer_, input, azura::input::InstalledPlayerAssignment(), REXCVAR_GET(user_language),
               REXCVAR_GET(user_name), title_font_, body_font_, &local_coop_menu_);
+        }
+      });
+    });
+    // Choosing Connection in the Options opens the Alboria menu, on the UI thread.
+    azura::script::SetConnectionHandler([this] {
+      app_context().CallInUIThread([this] {
+        auto* input = runtime() ? static_cast<rex::input::InputSystem*>(runtime()->input_system()) : nullptr;
+        if (!shutting_down_ && dialog_drawer_ && input && !connection_menu_) {
+          connection_menu_ = new azura::ConnectionMenu(dialog_drawer_, input, azura::input::InstalledPlayerAssignment(),
+                                                       REXCVAR_GET(user_language), title_font_, body_font_,
+                                                       &connection_menu_);
         }
       });
     });
@@ -367,7 +404,9 @@ class AzuraApp : public rex::ReXApp {
     azura::menu::SetSharpnessChangedHandler(nullptr);
     azura::menu::SetUpscalingSupport(nullptr);
     azura::script::SetLocalCoopHandler(nullptr);
+    azura::script::SetConnectionHandler(nullptr);
     azura::script::SetControlsMenuHandler(nullptr);
+    azura::script::SetJoinByCodeHandler(nullptr);
     rex::input::mnk::SetMenuKeysQuery(nullptr);
     rex::input::SetPadLayoutQuery(nullptr);
     azura::input::InstallMouseLook(nullptr);
@@ -376,8 +415,14 @@ class AzuraApp : public rex::ReXApp {
     }
     delete shader_compile_overlay_;
     shader_compile_overlay_ = nullptr;
+    delete online_room_overlay_;
+    online_room_overlay_ = nullptr;
+    delete join_by_code_menu_;
+    join_by_code_menu_ = nullptr;
     delete local_coop_menu_;
     local_coop_menu_ = nullptr;
+    delete connection_menu_;
+    connection_menu_ = nullptr;
     delete controls_menu_;
     controls_menu_ = nullptr;
     delete coop_notices_;
@@ -425,9 +470,12 @@ class AzuraApp : public rex::ReXApp {
   ImFont* body_font_ = nullptr;
   // Deletes itself when it closes, clearing this pointer. Accessed on the UI thread only.
   azura::ShaderCompileOverlay* shader_compile_overlay_ = nullptr;
+  azura::OnlineRoomOverlay* online_room_overlay_ = nullptr;
+  azura::JoinByCodeMenu* join_by_code_menu_ = nullptr;
   // The Local co-op menu while it is open; deletes itself when it closes, clearing this pointer.
   // Accessed on the UI thread only.
   azura::LocalCoopMenu* local_coop_menu_ = nullptr;
+  azura::ConnectionMenu* connection_menu_ = nullptr;
   azura::ControlsMenu* controls_menu_ = nullptr;
   // The local co-op notices, from the game's start to its end. Accessed on the UI thread only.
   azura::LocalCoopNotices* coop_notices_ = nullptr;
