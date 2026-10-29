@@ -1,9 +1,9 @@
 diff --git a/include/rex/system/xam/alboria.h b/include/rex/system/xam/alboria.h
 new file mode 100644
-index 0000000..30bfa58
+index 0000000..530864e
 --- /dev/null
 +++ b/include/rex/system/xam/alboria.h
-@@ -0,0 +1,241 @@
+@@ -0,0 +1,247 @@
 +/**
 + * @file        system/xam/alboria.h
 + * @brief       Alboria: System Link over the internet through our relay
@@ -70,6 +70,9 @@ index 0000000..30bfa58
 +  kProbe = 9,
 +  kProbeAck = 10,
 +  kDirect = 11,
++  // From the relay to every member: the room's party type changed, as its byte (1 Joinable,
++  // 2 Invite only).
++  kRoom = 12,
 +};
 +
 +enum class CloseReason : uint8_t {
@@ -201,6 +204,9 @@ index 0000000..30bfa58
 +// Hosts a game for `title_id` with up to `max_members` players, in the background. GetStatus
 +// reports the code once connected.
 +void HostGame(uint32_t title_id, int max_members, PartyType party_type = PartyType::kJoinable);
++// Changes the party type of the room this installation hosts, in the background: the service tells
++// every member, whose GetStatus().party_type follows.
++void SetPartyType(PartyType party_type);
 +// Joins the game with `code`, in the background.
 +void JoinGame(std::string_view code);
 +// Leaves the room (the relay closes it for everyone when this installation hosts it).
@@ -285,10 +291,10 @@ index 0000000..c7fc5de
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria.cpp b/src/system/xam/alboria.cpp
 new file mode 100644
-index 0000000..2d485fc
+index 0000000..e8c1a49
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,1070 @@
+@@ -0,0 +1,1096 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -1007,6 +1013,12 @@ index 0000000..2d485fc
 +        UpdatePeersLocked(*body, last_received);
 +        break;
 +      }
++      case PacketType::kRoom: {
++        if (body->empty()) break;
++        std::lock_guard lock(g_mutex);
++        g_status.party_type = (*body)[0] == 2 ? PartyType::kInviteOnly : PartyType::kJoinable;
++        break;
++      }
 +      case PacketType::kPing: {
 +        std::lock_guard lock(g_mutex);
 +        SendLocked(PacketType::kPong, {});
@@ -1104,7 +1116,7 @@ index 0000000..2d485fc
 +std::optional<Header> ParseHeader(std::span<const uint8_t> packet) {
 +  if (packet.size() < kHeaderSize + kTagSize || packet.size() > kMaxPacketSize) return std::nullopt;
 +  if (packet[0] != kMagic0 || packet[1] != kMagic1 || packet[2] != kVersion) return std::nullopt;
-+  if (packet[3] < uint8_t(PacketType::kHello) || packet[3] > uint8_t(PacketType::kDirect)) {
++  if (packet[3] < uint8_t(PacketType::kHello) || packet[3] > uint8_t(PacketType::kRoom)) {
 +    return std::nullopt;
 +  }
 +  Header header;
@@ -1276,6 +1288,26 @@ index 0000000..2d485fc
 +  g_hosting.store(true);
 +  g_host_party_type.store(party_type);
 +  Start(title_id, max_members, {});
++}
++
++void SetPartyType(PartyType party_type) {
++  std::string code;
++  {
++    std::lock_guard lock(g_mutex);
++    if (g_status.state != State::kConnected || !g_status.host || g_status.party_type == party_type) return;
++    g_status.party_type = party_type;
++    code = g_status.code;
++  }
++  g_host_party_type.store(party_type);
++  std::thread([code, party_type] {
++    const auto session = SignIn();
++    if (!session.error.empty()) return;
++    const auto changed = CallApi(
++        "/v1/rooms/type",
++        {{"code", code}, {"party_type", party_type == PartyType::kInviteOnly ? "invite_only" : "joinable"}},
++        session.json.value("token", std::string()));
++    if (!changed.error.empty()) REXSYS_WARN("Alboria: the room's party type did not change ({})", changed.error);
++  }).detach();
 +}
 +
 +void JoinGame(std::string_view code) {

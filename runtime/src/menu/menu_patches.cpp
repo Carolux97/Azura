@@ -25,7 +25,8 @@
 #include "pc_options.h"
 
 REXCVAR_DEFINE_BOOL(menu_remove_unused, true, "Azura/Menu",
-                    "Remove main menu options that cannot work (event calendar, Marketplace)");
+                    "Remove main menu options that cannot work (event calendar, Marketplace), in the "
+                    "main menu and in the menu of a player who joined another's party");
 REXCVAR_DEFINE_BOOL(menu_coming_soon, true, "Azura/Menu",
                     "Grey out online options and mark them \"(coming soon)\"");
 REXCVAR_DEFINE_BOOL(dlc_campaign, false, "Azura/DLC",
@@ -253,6 +254,16 @@ int PatchMenuStructure(CoalescedSection& section) {
     quit_option = static_cast<int>(entries.size()) - 1;
   });
   if (!main_found) return -1;
+  // The menu of a player who joined another's party: Journal, Calendar, Options, Marketplace (DLC),
+  // Leave party. Its choices are handled by position (Callback_ClientMenuOptionWasSelected), so
+  // script_hooks.cpp turns the positions left into the original ones (ClientMenuPosition).
+  if (REXCVAR_GET(menu_remove_unused)) {
+    EditScreen(section, "MAINMENUOP_ClientMenu", [](std::vector<std::u16string>& entries) {
+      std::erase_if(entries, [](const std::u16string& e) {
+        return EntryLabel(e) == u"Calendar" || EntryLabel(e) == u"DLC";
+      });
+    });
+  }
   // With RAAM's Shadow ready to play, the campaign menu's DLC option ("Coming Soon!" and greyed
   // out on the disc) opens the standard campaign choices; the runtime remembers it was chosen and
   // starts the DLC's chapters (see PatchTravelURL in script_hooks.cpp).
