@@ -7,6 +7,8 @@
  * content_manager.cpp in the SDK), where "/" or ":" would break the path, and the game reads it
  * through a 16-byte buffer (XamUserGetName), where a character of more than one UTF-8 byte could
  * be cut in half.
+ *
+ * email and code: the Alboria account's email and the 6-digit codes sent to it (account.js).
  */
 
 /** A rule: the characters a field may ever hold, what may be added to a text, and a cleaner. */
@@ -32,6 +34,11 @@ const rule = ({ maxLength, character, canStart }) => ({
 
 export const TEXT_RULES = {
   gamertag: rule({ maxLength: 15, character: /^[A-Za-z0-9 ]$/, canStart: /^[A-Za-z]$/ }),
+  // An email address: printable ASCII with no spaces; the service checks the rest (and a code
+  // proves it is the player's).
+  email: rule({ maxLength: 254, character: /^[!-~]$/, canStart: /^[A-Za-z0-9]$/ }),
+  // A code sent by email: six digits.
+  code: rule({ maxLength: 6, character: /^[0-9]$/, canStart: /^[0-9]$/ }),
 };
 
 /** The rule of a field (its data-text-rule), or null when it accepts any text. */

@@ -13,6 +13,11 @@
 //!   `<saves folder>/achievements/<title ID>.toml` (`[unlocked.<id>]` tables with a `filetime`, a
 //!   Windows FILETIME: hundreds of nanoseconds since 1601).
 //!
+//! Downloadable content brings its own achievements in its package (`spa.bin`, the same database
+//! format as the executable's resource). With RAAM's Shadow installed, the launcher exports that
+//! file too (`--export_achievements_from=<spa.bin>`, kept beside the game's export) and adds the
+//! add-on's achievements (`dlc::RAAMS_SHADOW_ACHIEVEMENTS`) to the game's.
+//!
 //! An achievement the original game hid (its `flags` lack `SHOW_UNACHIEVED_FLAG`) is sent without
 //! its name, description, gamerscore or artwork until it is unlocked, so the interface cannot
 //! reveal it by mistake.
@@ -45,7 +50,7 @@ const FALLBACK_LANGUAGE: &str = "en";
 const EXPORT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// SDL hint (read from the environment) that keeps a macOS process out of the Dock.
-const MAC_BACKGROUND_APP_HINT: &str = "SDL_MAC_BACKGROUND_APP";
+pub const MAC_BACKGROUND_APP_HINT: &str = "SDL_MAC_BACKGROUND_APP";
 
 /// Difference between the FILETIME epoch (1601) and the Unix epoch (1970), in FILETIME units.
 const FILETIME_UNIX_EPOCH: u64 = 116_444_736_000_000_000;
@@ -190,18 +195,17 @@ fn icon_data_url(export_dir: &Path, image_id: u32) -> Option<String> {
     Some(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
 }
 
-/// Builds what the section shows from an export, the unlocks and the languages to show the texts
-/// in (most preferred first).
-pub fn build_state(
-    export: &Export,
-    export_dir: &Path,
-    unlocks: &HashMap<u32, u64>,
-    languages: &[&str],
-) -> AchievementsState {
-    let achievements: Vec<Achievement> = export
-        .achievements
+/// Builds what the section shows from exports (each with its folder, for the artwork: the game's,
+/// then those of its downloadable content), the unlocks and the languages to show the texts in
+/// (most preferred first).
+pub fn build_state(sources: &[(&Export, &Path)], unlocks: &HashMap<u32, u64>, languages: &[&str]) -> AchievementsState {
+    let exported_all: Vec<(&ExportedAchievement, &Path)> = sources
         .iter()
-        .map(|exported| {
+        .flat_map(|(export, dir)| export.achievements.iter().map(move |exported| (exported, *dir)))
+        .collect();
+    let achievements: Vec<Achievement> = exported_all
+        .iter()
+        .map(|&(exported, export_dir)| {
             let unlock = unlocks.get(&exported.id).copied();
             let hidden = is_hidden(exported.flags);
             let revealed = unlock.is_some() || !hidden;
@@ -221,13 +225,12 @@ pub fn build_state(
         .collect();
 
     let unlocked_count = achievements.iter().filter(|achievement| achievement.unlocked).count();
-    let earned_gamerscore = export
-        .achievements
+    let earned_gamerscore = exported_all
         .iter()
-        .filter(|exported| unlocks.contains_key(&exported.id))
-        .map(|exported| exported.gamerscore)
+        .filter(|(exported, _)| unlocks.contains_key(&exported.id))
+        .map(|(exported, _)| exported.gamerscore)
         .sum();
-    let total_gamerscore = export.achievements.iter().map(|exported| exported.gamerscore).sum();
+    let total_gamerscore = exported_all.iter().map(|(exported, _)| exported.gamerscore).sum();
     let completed = !achievements.is_empty() && unlocked_count == achievements.len();
     let completed_at = completed
         .then(|| achievements.iter().filter_map(|achievement| achievement.unlocked_at).max())
@@ -242,10 +245,10 @@ pub fn read_export(export_dir: &Path) -> Option<Export> {
     serde_json::from_str(&text).ok()
 }
 
-/// Runs the runtime in `runtime_dir` to export the achievements of the game in `game_folder` to
-/// `export_dir`. It writes into a sibling folder first and renames it, so an interrupted export
-/// never looks finished.
-pub fn export(runtime_dir: &Path, game_folder: &Path, export_dir: &Path) -> Result<Export, String> {
+/// Runs the runtime in `runtime_dir` to export the achievements of the game in `game_folder` (or,
+/// with `from`, of that achievement database) to `export_dir`. It writes into a sibling folder
+/// first and renames it, so an interrupted export never looks finished.
+pub fn export(runtime_dir: &Path, game_folder: &Path, export_dir: &Path, from: Option<&Path>) -> Result<Export, String> {
     let executable = crate::runtime::executable_path(runtime_dir);
     if !executable.is_file() {
         return Err("the runtime is not installed".into());
@@ -255,6 +258,7 @@ pub fn export(runtime_dir: &Path, game_folder: &Path, export_dir: &Path) -> Resu
     let mut child = crate::host_env::use_host_env(&mut Command::new(&executable))
         .arg(format!("--game_data_root={}", game_folder.display()))
         .arg(format!("--export_achievements={}", staging.display()))
+        .args(from.map(|from| format!("--export_achievements_from={}", from.display())))
         .current_dir(runtime_dir)
         // The runtime starts SDL's video before it can tell it will only export, and on macOS that
         // makes it an app with a Dock icon for the second the export takes. SDL reads this hint
@@ -397,7 +401,7 @@ mod tests {
     #[test]
     fn a_locked_hidden_achievement_reveals_nothing() {
         let dir = TempFolder::new("hidden");
-        let (achievements, ..) = ok(build_state(&sample_export(), &dir, &HashMap::new(), &["es"]));
+        let (achievements, ..) = ok(build_state(&[(&sample_export(), &dir)], &HashMap::new(), &["es"]));
         let secret = &achievements[1];
         assert!(secret.hidden && !secret.unlocked);
         assert_eq!((&secret.name, &secret.description, secret.gamerscore, &secret.icon), (&None, &None, None, &None));
@@ -413,7 +417,7 @@ mod tests {
         fs::write(dir.join(ICONS_DIR).join("19.png"), [0x89, b'P', b'N', b'G']).unwrap();
         let unlocks = HashMap::from([(19, filetime(1_000))]);
         let (achievements, unlocked_count, earned, total, completed_at) =
-            ok(build_state(&sample_export(), &dir, &unlocks, &["es"]));
+            ok(build_state(&[(&sample_export(), &dir)], &unlocks, &["es"]));
         let secret = &achievements[1];
         assert_eq!(secret.name.as_deref(), Some("Nombre 19"));
         assert_eq!(secret.description.as_deref(), Some("Hecho"));
@@ -429,8 +433,25 @@ mod tests {
         let dir = TempFolder::new("complete");
         let unlocks = HashMap::from([(1, filetime(3_000)), (19, filetime(9_000)), (20, filetime(5_000))]);
         let (_, unlocked_count, earned, total, completed_at) =
-            ok(build_state(&sample_export(), &dir, &unlocks, &["en"]));
+            ok(build_state(&[(&sample_export(), &dir)], &unlocks, &["en"]));
         assert_eq!((unlocked_count, earned, total, completed_at), (3, 60, 60, Some(9_000)));
+    }
+
+    #[test]
+    fn downloadable_content_adds_its_achievements_with_its_own_artwork() {
+        let game_dir = TempFolder::new("achievements-game");
+        let dlc_dir = TempFolder::new("achievements-dlc");
+        fs::create_dir_all(dlc_dir.join(ICONS_DIR)).unwrap();
+        fs::write(dlc_dir.join(ICONS_DIR).join("56.png"), b"png").unwrap();
+        let dlc = Export { title_id: String::new(), languages: vec!["en".into()], achievements: vec![exported(56, 25, 9)] };
+        let unlocks = HashMap::from([(56, filetime(1_000))]);
+        let (achievements, unlocked, earned, total, _) =
+            ok(build_state(&[(&sample_export(), &game_dir), (&dlc, &dlc_dir)], &unlocks, &["en"]));
+        assert_eq!(achievements.len(), 4);
+        assert_eq!((unlocked, earned, total), (1, 25, 85));
+        let added = achievements.iter().find(|achievement| achievement.id == 56).unwrap();
+        assert_eq!(added.name.as_deref(), Some("Name 56"));
+        assert!(added.icon.as_deref().is_some_and(|icon| icon.starts_with("data:image/png;base64,")));
     }
 
     #[test]

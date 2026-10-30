@@ -26,13 +26,20 @@
 #include <rex/ui/presenter.h>
 
 #include "achievement_export.h"
+#include "dlc/content_install.h"
+#include "dlc/dlc_achievements.h"
+#include "dlc/raams_shadow_patch.h"
 #include "achievement_toast.h"
 #include "input/mouse_look.h"
 #include "input/player_assignment.h"
+#include "input/scripted_pad.h"
 #include "controls_menu.h"
 #include "local_coop_menu.h"
+#include "connection_menu.h"
 #include "local_coop_notices.h"
 #include "gpu_list.h"
+#include "hle_gfx/frame_capture.h"
+#include "hle_gfx/hle_gfx.h"
 #include "menu/menu_patches.h"
 #include "menu/pc_options.h"
 #include "perf_marker.h"
@@ -41,10 +48,16 @@
 #include "script_hooks.h"
 #include "perf_overlay.h"
 #include "shader_compile_overlay.h"
+#include "online_room_overlay.h"
+#include "join_by_code_menu.h"
+
+#include <rex/system/xam/alboria.h>
 #include "shader_precompile.h"
 
 // Defined by the SDK (core/perf/counter.cpp), which never opens the file itself.
 REXCVAR_DECLARE(std::string, perf_log_csv);
+// Defined by the SDK (system/xam/system_link.cpp).
+REXCVAR_DECLARE(std::string, network_mode);
 
 #if defined(__APPLE__)
 #include "platform_mac.h"
@@ -100,15 +113,22 @@ class AzuraApp : public rex::ReXApp {
 
   // Logging is ready and nothing else has started (no window, no GPU). Started by the launcher for
   // a one-off task, the runtime does only that and exits: exporting the achievements, so the
-  // launcher can read them without starting the game, or listing the graphics cards
-  // (--list_gpus). std::_Exit skips the static destructors of a runtime that never set up the
-  // rest.
+  // launcher can read them without starting the game, listing the graphics cards (--list_gpus),
+  // installing a downloadable content package (--install_content), or writing the script patch for
+  // RAAM's Shadow (--make_dlc_patch). std::_Exit skips the static destructors of a runtime that never
+  // set up the rest.
   void OnPostInitLogging() override {
 #if defined(_WIN32)
     azura::LogDisabledVulkanLayers();
 #endif
     if (azura::AchievementExportRequested()) {
       std::_Exit(azura::ExportAchievements(game_data_root()));
+    }
+    if (azura::dlc::ContentInstallRequested()) {
+      std::_Exit(azura::dlc::InstallContent(game_data_root(), REXCVAR_GET(user_data_root)));
+    }
+    if (azura::dlc::DlcPatchRequested()) {
+      std::_Exit(azura::dlc::MakeDlcPatch(game_data_root()));
     }
     if (azura::GpuListRequested()) {
       std::_Exit(azura::PrintGpuList());
@@ -130,10 +150,23 @@ class AzuraApp : public rex::ReXApp {
     azura::menu::ApplyUpscalingSharpness(false);
   }
 
+  // default.xex is loaded with its achievements: add RAAM's Shadow's when it is installed, so their
+  // unlocks are recorded and shown (dlc/dlc_achievements.h).
+  void OnPostLoadXexImage() override {
+    const std::filesystem::path cache =
+        runtime()->cache_root().empty() ? runtime()->user_data_root() / "cache" : runtime()->cache_root();
+    azura::dlc::RegisterDlcAchievements(runtime()->user_data_root(), cache);
+  }
+
   // The runtime has mounted the game files and the game has not started: apply the menu changes
   // and route Quit Game to a normal window close (OnClosing shuts the title down).
   void OnPreLaunchModule() override {
     REXLOG_INFO("[Azura] Active gamertag / user_name: '{}'", REXCVAR_GET(user_name));
+    // Before the game draws: the HLE graphics path's marker handler, when gfx = hle.
+    azura::hle_gfx::Install();
+    // Debug aid for unattended runs: a controller pressing buttons on a schedule (AZURA_SCRIPTED_PAD).
+    azura::input::InstallScriptedPad(
+        runtime() ? static_cast<rex::input::InputSystem*>(runtime()->input_system()) : nullptr);
     // Before the game polls a controller: which controller plays which player (player_assignment.h).
     azura::input::InstallPlayerAssignment(runtime(), [this](std::function<void()> work) {
       app_context().CallInUIThread(std::move(work));
@@ -185,6 +218,10 @@ class AzuraApp : public rex::ReXApp {
              presenter->SupportsGuestOutputEffect(effect);
     });
     azura::menu::InstallMenuPatches(runtime());
+    // Debug aid: periodic captures of the game's output when AZURA_CAPTURE_DIR is set.
+    if (auto* graphics_system = runtime()->graphics_system()) {
+      azura::hle_gfx::StartFrameCapture(graphics_system->presenter());
+    }
     // A notice while the GPU backend compiles shaders in the background, from the shader storage
     // preload that runs right after this hook to the shaders of new areas while playing.
     if (auto* graphics_system = runtime()->graphics_system()) {
@@ -198,6 +235,25 @@ class AzuraApp : public rex::ReXApp {
         });
       });
     }
+    // With online play on, the code of the player's room on Alboria and how it is going.
+    if (REXCVAR_GET(network_mode) == "online") {
+      rex::system::xam::alboria::CheckService();
+    }
+    if (REXCVAR_GET(network_mode) == "online" && dialog_drawer_) {
+      online_room_overlay_ = new azura::OnlineRoomOverlay(
+          dialog_drawer_, REXCVAR_GET(user_language), title_font_, body_font_, &online_room_overlay_);
+    }
+    // Manage/Invite's RB, with online play on, opens the Join by code screen, on the UI thread.
+    azura::script::SetJoinByCodeHandler([this] {
+      app_context().CallInUIThread([this] {
+        auto* input = runtime() ? static_cast<rex::input::InputSystem*>(runtime()->input_system()) : nullptr;
+        if (!shutting_down_ && dialog_drawer_ && input && !join_by_code_menu_) {
+          join_by_code_menu_ = new azura::JoinByCodeMenu(dialog_drawer_, input, azura::input::InstalledPlayerAssignment(),
+                                                         REXCVAR_GET(user_language), title_font_, body_font_,
+                                                         &join_by_code_menu_);
+        }
+      });
+    });
     // Choosing Local co-op in the Options opens the Local co-op menu, on the UI thread.
     azura::script::SetLocalCoopHandler([this] {
       app_context().CallInUIThread([this] {
@@ -206,6 +262,17 @@ class AzuraApp : public rex::ReXApp {
           local_coop_menu_ = new azura::LocalCoopMenu(
               dialog_drawer_, input, azura::input::InstalledPlayerAssignment(), REXCVAR_GET(user_language),
               REXCVAR_GET(user_name), title_font_, body_font_, &local_coop_menu_);
+        }
+      });
+    });
+    // Choosing Connection in the Options opens the Alboria menu, on the UI thread.
+    azura::script::SetConnectionHandler([this] {
+      app_context().CallInUIThread([this] {
+        auto* input = runtime() ? static_cast<rex::input::InputSystem*>(runtime()->input_system()) : nullptr;
+        if (!shutting_down_ && dialog_drawer_ && input && !connection_menu_) {
+          connection_menu_ = new azura::ConnectionMenu(dialog_drawer_, input, azura::input::InstalledPlayerAssignment(),
+                                                       REXCVAR_GET(user_language), title_font_, body_font_,
+                                                       &connection_menu_);
         }
       });
     });
@@ -283,16 +350,37 @@ class AzuraApp : public rex::ReXApp {
   // Barlow (installed in assets/fonts) for the shader compilation notice and the performance
   // overlay, rasterized large and drawn smaller so it stays sharp on high-DPI displays. ImGui's default font stays the first one, so
   // the SDK's own overlays are unchanged.
+  // Barlow only draws Latin scripts, so Noto is merged behind it: Cyrillic always, and the
+  // Japanese, Korean or traditional Chinese font when that is the player's language (each is
+  // several megabytes, and their Han characters differ in shape between the three).
   void OnConfigureFonts(ImFontAtlas* atlas) override {
-    auto load = [&](const char* name) -> ImFont* {
+    // `merge` adds the file's glyphs to the font added last instead of making a new font.
+    auto load = [&](const char* name, bool merge) -> ImFont* {
       std::filesystem::path path = exe_dir_ / "assets" / "fonts" / name;
       std::error_code error_code;
-      return std::filesystem::exists(path, error_code)
-                 ? atlas->AddFontFromFileTTF(path.string().c_str(), 48.0f)
-                 : nullptr;
+      if (!std::filesystem::exists(path, error_code)) {
+        return nullptr;
+      }
+      ImFontConfig config;
+      config.MergeMode = merge;
+      return atlas->AddFontFromFileTTF(path.string().c_str(), 48.0f, &config);
     };
-    title_font_ = load("Barlow-SemiBold.ttf");
-    body_font_ = load("Barlow-Medium.ttf");
+    const char* cjk = nullptr;
+    switch (REXCVAR_GET(user_language)) {
+      case 2: cjk = "NotoSansJP-Medium.ttf"; break;
+      case 7: cjk = "NotoSansKR-Medium.ttf"; break;
+      case 8: cjk = "NotoSansTC-Medium.ttf"; break;
+    }
+    auto load_with_fallbacks = [&](const char* barlow, const char* cyrillic) -> ImFont* {
+      ImFont* font = load(barlow, false);
+      if (font) {
+        load(cyrillic, true);
+        if (cjk) load(cjk, true);
+      }
+      return font;
+    };
+    title_font_ = load_with_fallbacks("Barlow-SemiBold.ttf", "NotoSansCyrillic-SemiBold.ttf");
+    body_font_ = load_with_fallbacks("Barlow-Medium.ttf", "NotoSansCyrillic-Medium.ttf");
   }
 
   // The notice for unlocked achievements, in place of the SDK's toast.
@@ -316,7 +404,9 @@ class AzuraApp : public rex::ReXApp {
     azura::menu::SetSharpnessChangedHandler(nullptr);
     azura::menu::SetUpscalingSupport(nullptr);
     azura::script::SetLocalCoopHandler(nullptr);
+    azura::script::SetConnectionHandler(nullptr);
     azura::script::SetControlsMenuHandler(nullptr);
+    azura::script::SetJoinByCodeHandler(nullptr);
     rex::input::mnk::SetMenuKeysQuery(nullptr);
     rex::input::SetPadLayoutQuery(nullptr);
     azura::input::InstallMouseLook(nullptr);
@@ -325,8 +415,14 @@ class AzuraApp : public rex::ReXApp {
     }
     delete shader_compile_overlay_;
     shader_compile_overlay_ = nullptr;
+    delete online_room_overlay_;
+    online_room_overlay_ = nullptr;
+    delete join_by_code_menu_;
+    join_by_code_menu_ = nullptr;
     delete local_coop_menu_;
     local_coop_menu_ = nullptr;
+    delete connection_menu_;
+    connection_menu_ = nullptr;
     delete controls_menu_;
     controls_menu_ = nullptr;
     delete coop_notices_;
@@ -374,9 +470,12 @@ class AzuraApp : public rex::ReXApp {
   ImFont* body_font_ = nullptr;
   // Deletes itself when it closes, clearing this pointer. Accessed on the UI thread only.
   azura::ShaderCompileOverlay* shader_compile_overlay_ = nullptr;
+  azura::OnlineRoomOverlay* online_room_overlay_ = nullptr;
+  azura::JoinByCodeMenu* join_by_code_menu_ = nullptr;
   // The Local co-op menu while it is open; deletes itself when it closes, clearing this pointer.
   // Accessed on the UI thread only.
   azura::LocalCoopMenu* local_coop_menu_ = nullptr;
+  azura::ConnectionMenu* connection_menu_ = nullptr;
   azura::ControlsMenu* controls_menu_ = nullptr;
   // The local co-op notices, from the game's start to its end. Accessed on the UI thread only.
   azura::LocalCoopNotices* coop_notices_ = nullptr;

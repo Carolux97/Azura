@@ -9,7 +9,14 @@
 #   generator did not find, its differential bench, and the code generator changes they need (the
 #   files in INTERP_PATHS);
 # - patches/rexglue-0.10.0-codegen-stamp.patch: codegen re-running when the generator itself
-#   changes (the files in STAMP_PATHS).
+#   changes (the files in STAMP_PATHS);
+# - patches/rexglue-0.10.0-hle-gfx.patch: the new files of the HLE graphics path
+#   (docs/hle-graphics/02-design.md; the files in HLE_PATHS). Its small changes to existing files
+#   (the gfx option's use, the marker hook in the command processor) go with the patch that already
+#   holds each of those files.
+# - patches/rexglue-0.10.0-alboria.patch: the new files of the Alboria client
+#   (docs/alboria-relay.md; the files in ALBORIA_PATHS), Monocypher among them. Its changes to
+#   existing files (System Link, sockets, the build) go with the patch that already holds each one.
 # Each changed file goes to exactly one patch, so the patches apply in any order. The base is the
 # SDK commit with the patches that come before them, rebuilt in a temporary folder, so nothing
 # outside the repository is needed. Every patch is checked to apply in reverse to the working tree
@@ -30,6 +37,28 @@ XSC_PATCH="${ROOT}/patches/rexglue-0.10.0-xenos-shader-compiler.patch"
 XSC_DIR="src/graphics/pipeline/shader/xsc"
 INTERP_PATCH="${ROOT}/patches/rexglue-0.10.0-ppc-interpreter.patch"
 STAMP_PATCH="${ROOT}/patches/rexglue-0.10.0-codegen-stamp.patch"
+HLE_PATCH="${ROOT}/patches/rexglue-0.10.0-hle-gfx.patch"
+ALBORIA_PATCH="${ROOT}/patches/rexglue-0.10.0-alboria.patch"
+# Files and folders of the Alboria patch.
+ALBORIA_PATHS=(
+  include/rex/system/xam/alboria.h
+  include/rex/system/xam/alboria_http.h
+  src/system/xam/alboria.cpp
+  src/system/xam/alboria_http.cpp
+  src/system/xam/alboria_http_mac.mm
+  tests/unit/system/alboria_test.cpp
+  thirdparty/monocypher
+)
+# Third-party code we add to the SDK. The diff skips thirdparty/ (the SDK's submodules), so these
+# folders are added to the changed files by hand.
+OWN_THIRDPARTY=(
+  thirdparty/monocypher
+)
+# Files and folders of the HLE graphics patch.
+HLE_PATHS=(
+  include/rex/graphics/hle
+  src/system/hle_markers.cpp
+)
 # Files of the codegen stamp patch.
 STAMP_PATHS=(
   resources/templates/init/rexglue_cmake.inja
@@ -88,8 +117,14 @@ echo "==> Diffing"
 changed=$({ diff -rq "${WORK}/base" "${SDK}" -x .git -x out -x thirdparty -x build || true; } | \
   sed -n "s|^Files ${WORK}/base/\(.*\) and .* differ$|\1|p; s|^Only in ${SDK}/\(.*\): \(.*\)$|\1/\2|p" | \
   sed 's|^/||')
+for dir in "${OWN_THIRDPARTY[@]}"; do
+  if [[ -d "${SDK}/${dir}" ]]; then
+    changed+=$'\n'"${dir}"
+  fi
+done
 mkdir -p "${WORK}/metal/a" "${WORK}/metal/b" "${WORK}/xsc/a" "${WORK}/xsc/b" \
-  "${WORK}/interp/a" "${WORK}/interp/b" "${WORK}/stamp/a" "${WORK}/stamp/b"
+  "${WORK}/interp/a" "${WORK}/interp/b" "${WORK}/stamp/a" "${WORK}/stamp/b" \
+  "${WORK}/hle/a" "${WORK}/hle/b" "${WORK}/alboria/a" "${WORK}/alboria/b"
 # Whether $1 is one of the files or folders given after it.
 in_paths() {
   local file="$1" path
@@ -108,6 +143,10 @@ for f in ${changed}; do
     side="${WORK}/interp"
   elif in_paths "${f}" "${STAMP_PATHS[@]}"; then
     side="${WORK}/stamp"
+  elif in_paths "${f}" "${HLE_PATHS[@]}"; then
+    side="${WORK}/hle"
+  elif in_paths "${f}" "${ALBORIA_PATHS[@]}"; then
+    side="${WORK}/alboria"
   else
     side="${WORK}/metal"
   fi
@@ -126,19 +165,26 @@ done
 (cd "${WORK}/xsc" && git diff --no-index --no-prefix a b > "${XSC_PATCH}" || true)
 (cd "${WORK}/interp" && git diff --no-index --no-prefix a b > "${INTERP_PATCH}" || true)
 (cd "${WORK}/stamp" && git diff --no-index --no-prefix a b > "${STAMP_PATCH}" || true)
+(cd "${WORK}/hle" && git diff --no-index --no-prefix a b > "${HLE_PATCH}" || true)
+(cd "${WORK}/alboria" && git diff --no-index --no-prefix a b > "${ALBORIA_PATCH}" || true)
 # git diff --no-index names new files "b/<path>"; the patches use plain paths like the others.
 sed -i.bak 's|^diff --git b/|diff --git a/|' "${METAL_PATCH}" "${XSC_PATCH}" "${INTERP_PATCH}" \
-  "${STAMP_PATCH}"
-rm -f "${METAL_PATCH}.bak" "${XSC_PATCH}.bak" "${INTERP_PATCH}.bak" "${STAMP_PATCH}.bak"
+  "${STAMP_PATCH}" "${HLE_PATCH}" "${ALBORIA_PATCH}"
+rm -f "${METAL_PATCH}.bak" "${XSC_PATCH}.bak" "${INTERP_PATCH}.bak" "${STAMP_PATCH}.bak" \
+  "${HLE_PATCH}.bak" "${ALBORIA_PATCH}.bak"
 
 git -C "${SDK}" apply --reverse --check "${METAL_PATCH}"
 git -C "${SDK}" apply --reverse --check "${XSC_PATCH}"
 git -C "${SDK}" apply --reverse --check "${INTERP_PATCH}"
 git -C "${SDK}" apply --reverse --check "${STAMP_PATCH}"
+git -C "${SDK}" apply --reverse --check "${HLE_PATCH}"
+git -C "${SDK}" apply --reverse --check "${ALBORIA_PATCH}"
 echo "==> metal backend patch: $(grep -c '^diff --git' "${METAL_PATCH}") files"
 echo "==> xenos shader compiler patch: $(grep -c '^diff --git' "${XSC_PATCH}") files"
 echo "==> ppc interpreter patch: $(grep -c '^diff --git' "${INTERP_PATCH}") files"
 echo "==> codegen stamp patch: $(grep -c '^diff --git' "${STAMP_PATCH}") files"
+echo "==> hle graphics patch: $(grep -c '^diff --git' "${HLE_PATCH}") files"
+echo "==> alboria patch: $(grep -c '^diff --git' "${ALBORIA_PATCH}") files"
 # The tree is the whole stack of patches (they were just made from it), which build.sh then need
 # not check one by one.
 sdk_patches_hash > "${SDK_PATCHES_STAMP}"

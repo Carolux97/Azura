@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <string>
 
 namespace azura::script {
 
@@ -17,6 +18,9 @@ void SetRestartHandler(std::function<void()> handler);
 // What choosing Local co-op in the Options runs (from the game's script thread): it opens
 // the Local co-op menu. nullptr to stop.
 void SetLocalCoopHandler(std::function<void()> handler);
+// What choosing Connection in the Options runs (from the game's script thread): it opens the
+// Alboria menu (connection_menu.h). nullptr to stop.
+void SetConnectionHandler(std::function<void()> handler);
 
 // The two controls menus (controls_menu.h), opened from the Options' Keyboard and mouse and
 // Controller categories.
@@ -25,6 +29,22 @@ enum class ControlsMenu { kKeyboardMouse, kController };
 // What choosing one of those categories runs (from the game's script thread): it opens that menu.
 // nullptr to stop.
 void SetControlsMenuHandler(std::function<void(ControlsMenu)> handler);
+
+// What Manage/Invite's RB runs with online play on (from the game's script thread): it opens the
+// Join by code screen (join_by_code_menu.h) over Manage/Invite, which stays open under it until the
+// code joins a room. nullptr to stop.
+void SetJoinByCodeHandler(std::function<void()> handler);
+
+// Why the game stays in Local when the player wants a room on Alboria: the refusal Alboria gave the
+// sign-in (alboria::SignInRefusal, such as "no_account"), handed out once, at the moment the
+// start-up party falls back to Local or the player chooses Joinable or Invite only; empty
+// otherwise. The room overlay shows it then. Any thread.
+std::string TakeRefusalNotice();
+
+// Once the player is in a friend's room on Alboria: opens the game's System Link browser, which
+// finds the host's party in the room, and joins the first party it finds (searching again a few
+// times while there is none). Any thread; it happens on the game's script thread soon after.
+void JoinSystemLinkPartyInRoom();
 
 // Where player 1 is, as of their last input: the title screen (where Return is Start), a menu (the
 // front end and what it opens, or the game paused), or playing. Any thread.

@@ -1,4 +1,4 @@
-# Gears3-Azura settings.
+# Azura settings.
 #
 # The build installs this file beside the executable as azura.default.toml. The runtime loads it
 # first, then azura.toml from the same folder (the player's settings, written by the launcher and
@@ -42,9 +42,15 @@ ppc_interpreter_fallback = true
 
 # ---------- Display ----------
 fullscreen = true
-# Resolution the game is drawn at (the Video menu's Render resolution): auto, 1280x720, 2560x1440
-# or 3840x2160. It sets draw_resolution_scale_x/y and the texture cache limits at start-up.
+# Resolution the game is drawn at (the Video menu's Render resolution): auto, 1280x720, 1920x1080
+# (macOS only), 2560x1440 or 3840x2160. It sets the draw resolution scale and the texture cache
+# limits at start-up.
 render_resolution = "auto"
+# The Video menu's Upscaling preset: custom (render_resolution and the image scaling as set),
+# native, quality, balanced or performance. A preset draws the game at the screen's resolution
+# divided by 1, 1.5, 1.7 or 2 (the nearest render resolution, never below 1280x720) and scales it
+# up with AMD FSR 1 (MetalFX on macOS) when that is below the screen's. It applies at start-up.
+upscaling_preset = "custom"
 # Extra sharpening of AMD CAS and AMD FSR 1, from 0.0 (the effect's own) to 1.0 (the most): the
 # Video menu's Sharpness. It applies while the game runs.
 upscaling_sharpness = 0.0
@@ -53,6 +59,16 @@ upscaling_sharpness = 0.0
 field_of_view = 80.0
 # The Video menu's Film grain: the game's film grain noise. It applies while the game runs.
 film_grain = true
+# The Video menu's Depth of field and Dynamic shadows: the game's own settings, written while it
+# runs. They are the game's most costly effects: on an M4 in combat, turning them off saves about
+# 2 ms and 3 ms of the 10.5 ms of GPU time per frame.
+depth_of_field = true
+dynamic_shadows = true
+# The Video menu's Bloom and Lens flares: the same, for effects that change the look rather than the
+# frame rate. Its Ambient occlusion is not set here: it is on by default, except on Linux, where the
+# game's ambient occlusion leaves black patches on surfaces.
+bloom = true
+lens_flares = true
 # The Video menu's Performance overlay: off, fps for the game's frame rate in a corner of the game,
 # detailed to add the game's CPU and GPU use, or advanced to add its memory use, a graph of frame
 # times, the average frame rate and the 1% low.
@@ -75,6 +91,36 @@ user_language = 5
 # Player gamertag shown in lobbies, menus and multiplayer (15 characters max).
 user_name = "User"
 
+# ---------- Network ----------
+# "offline": no network link, so the game's System Link options stay greyed out.
+# "system_link": play System Link (campaign co-op, Horde, Beast, private Versus) with the other
+# computers of the local network.
+# "online": the same, and the party options' Joinable and Invite only host a room on Alboria, our
+# online service, for playing with friends over the internet: the room's code, shown in
+# Manage/Invite, lets them join.
+network_mode = "online"
+# Alboria's control API, and the name and version this build gives it when signing in (the
+# service refuses versions it no longer supports).
+alboria_api_url = "https://api.alboria.org"
+alboria_client = "azura/0.5.0"
+# The party the game starts with, which the game keeps as the player chooses in the party options:
+# joinable (the first time), invite_only, system_link or local. Joinable and Invite only host a
+# room on Alboria; when Alboria does not answer the game starts in Local and this stays as it was.
+startup_party = "joinable"
+# Options > Connection's Direct connection: reach the other players of an Alboria room directly
+# when the network allows it, with the relay as fallback. Lower latency, but they can learn this
+# computer's public IP address. Takes effect from the next room.
+alboria_direct = true
+# Options > Connection's Show latency: the latency in the performance overlay's corner. A member of
+# an Alboria room sees the round trip to the host and whether it is direct or goes through the
+# relay; the host, which runs the game, and a game in no room see 0 ms.
+latency_overlay = false
+# This computer's IPv4 address on the local network System Link plays on (for example
+# "192.168.1.20"). Empty: chosen automatically, preferring a home network address over a VPN or
+# virtual adapter's. Set it when the log line "System Link: local network address" shows the wrong
+# one; the log lists every interface just above it.
+system_link_address = ""
+
 # ---------- Input ----------
 # Enable keyboard/mouse controller emulation. If a physical gamepad is plugged in,
 # it works concurrently.
@@ -89,10 +135,15 @@ mnk_sensitivity = 1.0
 # matching keybind below, so put the key you want shown first.
 controller_icons = "auto"
 
-# Mouse look while aiming and while zoomed in, as mnk_sensitivity is the rest of the time; moving
-# the mouse forward looks down with mnk_invert_y; mnk_mouse_acceleration from 0 (none) to 1.
+# Mouse look while aiming and while zoomed in, as mnk_sensitivity is the rest of the time;
+# mnk_run_sensitivity, the share of it while roadie running; moving the mouse forward looks down
+# with mnk_invert_y; mnk_mouse_acceleration from 0 (none) to 1.
 mnk_aim_sensitivity = 1.0
 mnk_zoom_sensitivity = 1.0
+mnk_run_sensitivity = 1.0
+# While roadie running, the mouse turns sideways at most this many times as fast as a full A or D
+# steer, so it cannot flick round.
+mnk_run_turn_limit = 2.0
 mnk_invert_y = false
 mnk_mouse_acceleration = 0.0
 # Aim with a press to start and another to stop; zoom while the bind is held (the game's own zoom

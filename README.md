@@ -1,4 +1,4 @@
-# Gears3-Azura
+# Azura
 
 Unofficial native port of Gears of War 3 (Xbox 360) to macOS on Apple Silicon, Linux (x86-64) and
 Windows (x86-64).
@@ -15,7 +15,7 @@ the recompiled code is generated on your machine from your own `default.xex` and
 ## Download
 
 The launcher for macOS (Apple Silicon), Linux (x86-64) and Windows (x86-64) is published in
-[gears3-azura-releases](https://github.com/Carolux97/gears3-azura-releases/releases/latest).
+[azura-releases](https://github.com/Carolux97/azura-releases/releases/latest).
 Point it at your own copy of the game (a folder or a disc image): it builds the game for your
 machine and keeps itself and the game up to date. The macOS launcher is not signed with an Apple
 Developer ID, so the first time it opens from System Settings, Privacy & Security.
@@ -126,7 +126,7 @@ Microsoft, Epic Games or The Coalition.
 
 ## License
 
-Gears3-Azura's own code is source-available under the [PolyForm Strict License 1.0.0](LICENSE):
+Azura's own code is source-available under the [PolyForm Strict License 1.0.0](LICENSE):
 you may read it and use it for noncommercial purposes, but not change it or share it, in source or
 built form, without the copyright holders' permission. Copyright 2026 Carolina Molina Elvira and
 Juan Llorca Martínez. Our changes to the ReXGlue SDK and MoltenVK (`patches/`) stay under those

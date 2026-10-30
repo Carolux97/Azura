@@ -4,8 +4,10 @@
 //! window that shows it and exposes the commands the interface calls through `invoke`.
 
 mod achievements;
+mod alboria;
 mod builder;
 mod disc_image;
+mod dlc;
 mod game_folder;
 mod gamepad;
 mod gpus;
@@ -25,6 +27,7 @@ mod versions;
 use std::path::Path;
 
 use achievements::AchievementsState;
+use alboria::{Alboria, AlboriaError, CodeSent, Identity, Session};
 use game_folder::FolderCheck;
 use install::RuntimeStatus;
 use runtime::{GameProcess, LaunchError, LaunchFolders};
@@ -113,20 +116,35 @@ async fn get_achievements(
     let export_dir = achievements_dir(&app)?.join(&version_id);
     let export = match achievements::read_export(&export_dir) {
         Some(export) => export,
-        // No runtime yet, or one older than the build: an older one may not know
+        // No runtime yet, or one that needs an update: an older one may not know
         // --export_achievements and would start the game instead. The section asks for it to be
         // installed, as Play would do first.
-        None if !runtime::executable_path(&runtime).is_file()
-            || install::status(&runtime, install::find_build().as_deref()).update_available =>
-        {
-            return Ok(AchievementsState::NoRuntime)
-        }
-        None => match achievements::export(&runtime, Path::new(&folder), &export_dir) {
+        None if !runtime_current(&app) => return Ok(AchievementsState::NoRuntime),
+        None => match achievements::export(&runtime, Path::new(&folder), &export_dir, None) {
             Ok(export) => export,
             Err(detail) => return Ok(AchievementsState::Unavailable { detail }),
         },
     };
     let saves = settings_paths(&app)?.saves_folder()?;
+    // RAAM's Shadow's own achievements, when it is installed (its database also holds the game's
+    // and other packs', which are left out). A failed export leaves them out too, and so does a
+    // runtime that needs an update (it may not know --export_achievements_from).
+    let dlc_dir = export_dir.join("raams-shadow");
+    let game_ids: std::collections::HashSet<u32> = export.achievements.iter().map(|exported| exported.id).collect();
+    let dlc_export = dlc::raams_shadow_achievements(&saves).and_then(|spa| {
+        achievements::read_export(&dlc_dir)
+            .or_else(|| {
+                runtime_current(&app)
+                    .then(|| achievements::export(&runtime, Path::new(&folder), &dlc_dir, Some(&spa)).ok())
+                    .flatten()
+            })
+            .map(|mut dlc_export| {
+                dlc_export.achievements.retain(|exported| {
+                    dlc::RAAMS_SHADOW_ACHIEVEMENTS.contains(&exported.id) && !game_ids.contains(&exported.id)
+                });
+                dlc_export
+            })
+    });
     let unlocks = achievements::read_unlocks(&achievements::unlocks_path(&saves, &export.title_id));
     let languages: Vec<&str> = game_language
         .as_deref()
@@ -134,7 +152,11 @@ async fn get_achievements(
         .into_iter()
         .chain(std::iter::once(ui_locale.as_str()))
         .collect();
-    Ok(achievements::build_state(&export, &export_dir, &unlocks, &languages))
+    let mut sources = vec![(&export, export_dir.as_path())];
+    if let Some(dlc_export) = &dlc_export {
+        sources.push((dlc_export, dlc_dir.as_path()));
+    }
+    Ok(achievements::build_state(&sources, &unlocks, &languages))
 }
 
 /// Where the runtime comes from. A developer's explicit choice wins (`AZURA_RUNTIME_BUILD`, then
@@ -185,17 +207,22 @@ fn work_dir(app: &tauri::AppHandle, version: &versions::KnownVersion) -> Result<
 /// from this kit for the game in the saved folder.
 #[tauri::command]
 async fn get_runtime_status(app: tauri::AppHandle) -> Result<RuntimeStatus, String> {
-    let dir = runtime_dir(&app)?;
-    match runtime_source(&app) {
+    runtime_status(&app)
+}
+
+/// The runtime status get_runtime_status reports, for the commands that run the runtime too.
+fn runtime_status(app: &tauri::AppHandle) -> Result<RuntimeStatus, String> {
+    let dir = runtime_dir(app)?;
+    match runtime_source(app) {
         RuntimeSource::Build(build) => Ok(install::status(&dir, Some(&build))),
         RuntimeSource::None => Ok(install::status(&dir, None)),
         RuntimeSource::Kit(kit) => {
             let mut status = install::status(&dir, None);
             status.source = "kit";
             status.build_found = true;
-            let kind = match (builder::read_kit(&kit), game_build(&app)) {
+            let kind = match (builder::read_kit(&kit), game_build(app)) {
                 (Ok(kit), Ok((_, version))) => {
-                    let work = work_dir(&app, &version)?;
+                    let work = work_dir(app, &version)?;
                     let state = builder::read_state(&work);
                     // Installed means built here from the kit for this game: a runtime folder
                     // that holds an executable from elsewhere (a copied project build) is not.
@@ -348,6 +375,39 @@ fn start_runtime(app: tauri::AppHandle, process: &GameProcess, extra: &[&str]) -
     process.launch_with(app, &folders, &gpu, extra)
 }
 
+/// The downloadable content installed in the saves folder, and whether RAAM's Shadow can be
+/// played. `async`: it hashes the game's script package, which takes a moment.
+#[tauri::command]
+async fn dlc_state(app: tauri::AppHandle) -> Result<dlc::DlcState, String> {
+    let paths = settings_paths(&app)?;
+    let game = paths.load()?.game_folder.map(std::path::PathBuf::from);
+    let saves = paths.saves_folder()?;
+    let runtime = runtime_dir(&app)?;
+    Ok(dlc::state(&runtime, game.as_deref(), &saves, runtime_current(&app)))
+}
+
+/// Whether the runtime is installed and needs no update, by the same check as Play (a project build,
+/// or the launcher's kit): an older runtime may not know the one-off tasks the launcher asks of it
+/// (--install_content, --make_dlc_patch, --export_achievements_from) and would start the game
+/// instead. Play installs the newer one first.
+fn runtime_current(app: &tauri::AppHandle) -> bool {
+    runtime_status(app).is_ok_and(|status| status.installed && !status.update_available)
+}
+
+/// Installs a downloadable content package the player chose into the saves folder. Returns its
+/// name.
+#[tauri::command]
+async fn install_dlc(app: tauri::AppHandle, package: String) -> Result<String, String> {
+    let paths = settings_paths(&app)?;
+    let game = paths.load()?.game_folder.map(std::path::PathBuf::from).ok_or("no game folder")?;
+    let saves = paths.saves_folder()?;
+    let runtime = runtime_dir(&app)?;
+    if !runtime_current(&app) {
+        return Err("the runtime needs its update first (Play installs it)".into());
+    }
+    dlc::install(&runtime, &game, &saves, std::path::Path::new(&package))
+}
+
 /// Event sent when the chosen graphics card is not in the computer any more, before the game starts
 /// with the automatic choice.
 const GPU_MISSING_EVENT: &str = "gpu-missing";
@@ -405,6 +465,13 @@ async fn open_saves_folder(app: tauri::AppHandle) -> Result<(), String> {
     saves::open_saves_folder_internal(&saves)
 }
 
+/// Opens the file picker for a downloadable content package. Returns `None` when the user cancels.
+#[tauri::command]
+async fn pick_dlc_package(app: tauri::AppHandle) -> Option<String> {
+    let picked = app.dialog().file().blocking_pick_file()?;
+    Some(picked.into_path().ok()?.to_string_lossy().into_owned())
+}
+
 /// Opens the folder picker for a new saves folder. Returns `None` when the user cancels; nothing
 /// moves until `change_saves_folder`.
 #[tauri::command]
@@ -446,6 +513,211 @@ async fn load_settings(app: tauri::AppHandle) -> Result<Settings, String> {
 #[tauri::command]
 async fn save_settings(app: tauri::AppHandle, settings: Settings) -> Result<(), String> {
     settings_paths(&app)?.save(&settings)
+}
+
+/// The installation's identity in the saves folder (see `alboria.rs`), made when the game has not
+/// made it yet.
+fn alboria_identity(app: &tauri::AppHandle) -> Result<Identity, AlboriaError> {
+    let folder = settings_paths(app)
+        .and_then(|paths| paths.saves_folder())
+        .map_err(|e| AlboriaError::local_error("identity", e))?;
+    alboria::load_or_create_identity(&folder).map_err(|e| AlboriaError::local_error("identity", e))
+}
+
+/// The gamertag the launcher keeps (`user_name`), which the account follows when it signs in.
+fn alboria_gamertag(app: &tauri::AppHandle) -> Result<String, AlboriaError> {
+    let settings = settings_paths(app)
+        .and_then(|paths| paths.load())
+        .map_err(|e| AlboriaError::local_error("settings", e))?;
+    Ok(settings.user_name.map(|name| name.trim().to_string()).filter(|name| !name.is_empty()).unwrap_or_else(|| "User".into()))
+}
+
+/// Signs this installation in to its Alboria account with `gamertag`, which the account takes on.
+/// `no_account` (403) while no account has linked it.
+#[tauri::command]
+async fn alboria_sign_in(
+    app: tauri::AppHandle,
+    alboria: tauri::State<'_, Alboria>,
+    gamertag: String,
+) -> Result<Session, AlboriaError> {
+    let identity = alboria_identity(&app)?;
+    alboria.sign_in(&identity, gamertag.trim()).await
+}
+
+/// Asks for a code sent to `email`: to create an account with `gamertag` ("create") or to link this
+/// installation to the account of the email ("signin"). `language` is the interface's.
+#[tauri::command]
+async fn alboria_request_code(
+    app: tauri::AppHandle,
+    alboria: tauri::State<'_, Alboria>,
+    purpose: String,
+    email: String,
+    gamertag: Option<String>,
+    language: String,
+) -> Result<CodeSent, AlboriaError> {
+    let identity = alboria_identity(&app)?;
+    alboria.request_code(&identity, &purpose, &email, gamertag.as_deref().map(str::trim), &language).await
+}
+
+/// Uses the code: creates the account with `gamertag` or links this installation to it, and signs
+/// in. No code (`None`) while the service sends none: the account is created unverified.
+#[tauri::command]
+async fn alboria_verify(
+    app: tauri::AppHandle,
+    alboria: tauri::State<'_, Alboria>,
+    purpose: String,
+    email: String,
+    code: Option<String>,
+    gamertag: Option<String>,
+    language: Option<String>,
+) -> Result<Session, AlboriaError> {
+    let identity = alboria_identity(&app)?;
+    let code = code.as_deref().map(str::trim);
+    let gamertag = gamertag.as_deref().map(str::trim);
+    alboria.verify(&identity, &purpose, &email, code, gamertag, language.as_deref().unwrap_or("en")).await
+}
+
+/// Whether the service sends codes now (false while accounts are made unverified).
+#[tauri::command]
+async fn alboria_status(alboria: tauri::State<'_, Alboria>) -> Result<alboria::Status, AlboriaError> {
+    alboria.status().await
+}
+
+/// Asks for a code to verify the email of an account made while the service sent no codes.
+#[tauri::command]
+async fn alboria_verify_email_code(
+    app: tauri::AppHandle,
+    alboria: tauri::State<'_, Alboria>,
+    language: String,
+) -> Result<CodeSent, AlboriaError> {
+    let body = serde_json::json!({ "language": language });
+    let answer = alboria_account_request(&app, &alboria, "/v1/account/verify-email/code", body).await?;
+    Ok(alboria::code_sent_from(&answer))
+}
+
+/// Verifies the account's email with `code`.
+#[tauri::command]
+async fn alboria_verify_email(app: tauri::AppHandle, alboria: tauri::State<'_, Alboria>, code: String) -> Result<bool, AlboriaError> {
+    alboria_account_request(&app, &alboria, "/v1/account/verify-email", serde_json::json!({ "code": code.trim() })).await?;
+    Ok(true)
+}
+
+/// A request of the signed-in account, signing in first when needed.
+async fn alboria_account_request(
+    app: &tauri::AppHandle,
+    alboria: &Alboria,
+    path: &str,
+    body: serde_json::Value,
+) -> Result<serde_json::Value, AlboriaError> {
+    let identity = alboria_identity(app)?;
+    let gamertag = alboria_gamertag(app)?;
+    alboria.account_request(&identity, &gamertag, path, body).await
+}
+
+/// The account as the Account screen shows it: email, gamertag, tag and devices (each with
+/// `current` for this one).
+#[tauri::command]
+async fn alboria_account(app: tauri::AppHandle, alboria: tauri::State<'_, Alboria>) -> Result<serde_json::Value, AlboriaError> {
+    alboria_account_request(&app, &alboria, "/v1/account", serde_json::json!({})).await
+}
+
+/// Removes a device from the account; this one too, which signs this installation out of it.
+#[tauri::command]
+async fn alboria_remove_device(
+    app: tauri::AppHandle,
+    alboria: tauri::State<'_, Alboria>,
+    public_key: String,
+) -> Result<(), AlboriaError> {
+    let this_one = alboria_identity(&app)?.public_key().map_err(|e| AlboriaError::local_error("identity", e))? == public_key;
+    alboria_account_request(&app, &alboria, "/v1/account/devices/remove", serde_json::json!({ "public_key": public_key })).await?;
+    if this_one {
+        alboria.forget_token();
+    }
+    Ok(())
+}
+
+/// Asks for a code sent to `email`, to move the account there.
+#[tauri::command]
+async fn alboria_email_code(
+    app: tauri::AppHandle,
+    alboria: tauri::State<'_, Alboria>,
+    email: String,
+    language: String,
+) -> Result<CodeSent, AlboriaError> {
+    let body = serde_json::json!({ "email": email, "language": language });
+    let answer = alboria_account_request(&app, &alboria, "/v1/account/email/code", body).await?;
+    Ok(alboria::code_sent_from(&answer))
+}
+
+/// Moves the account to `email` with the code sent there.
+#[tauri::command]
+async fn alboria_change_email(
+    app: tauri::AppHandle,
+    alboria: tauri::State<'_, Alboria>,
+    email: String,
+    code: String,
+) -> Result<(), AlboriaError> {
+    let body = serde_json::json!({ "email": email, "code": code.trim() });
+    alboria_account_request(&app, &alboria, "/v1/account/email/verify", body).await.map(|_| ())
+}
+
+/// Saves everything Alboria keeps about the account in a JSON file the player picks; `false` when
+/// they cancel. `async` so the picker does not freeze the window.
+#[tauri::command]
+async fn alboria_export(app: tauri::AppHandle, alboria: tauri::State<'_, Alboria>) -> Result<bool, AlboriaError> {
+    let data = alboria_account_request(&app, &alboria, "/v1/account/export", serde_json::json!({})).await?;
+    let Some(picked) = app
+        .dialog()
+        .file()
+        .set_file_name("alboria-account.json")
+        .add_filter("JSON", &["json"])
+        .blocking_save_file()
+    else {
+        return Ok(false);
+    };
+    let path = picked.into_path().map_err(|e| AlboriaError::local_error("export", e.to_string()))?;
+    let text = serde_json::to_string_pretty(&data).map_err(|e| AlboriaError::local_error("export", e.to_string()))?;
+    std::fs::write(&path, text).map_err(|e| AlboriaError::local_error("export", e.to_string()))?;
+    Ok(true)
+}
+
+/// Asks for the code that confirms deleting the account, sent to its email.
+#[tauri::command]
+async fn alboria_delete_code(
+    app: tauri::AppHandle,
+    alboria: tauri::State<'_, Alboria>,
+    language: String,
+) -> Result<CodeSent, AlboriaError> {
+    let answer = alboria_account_request(&app, &alboria, "/v1/account/delete/code", serde_json::json!({ "language": language })).await?;
+    Ok(alboria::code_sent_from(&answer))
+}
+
+/// Deletes the account with the code (none while the service sends no codes: this device's key is
+/// the proof); every device, this one too, is signed out.
+#[tauri::command]
+async fn alboria_delete(
+    app: tauri::AppHandle,
+    alboria: tauri::State<'_, Alboria>,
+    code: Option<String>,
+) -> Result<(), AlboriaError> {
+    let body = match code {
+        Some(code) => serde_json::json!({ "code": code.trim() }),
+        None => serde_json::json!({}),
+    };
+    alboria_account_request(&app, &alboria, "/v1/account/delete", body).await?;
+    alboria.forget_token();
+    Ok(())
+}
+
+/// Alboria's website, which the launcher's Alboria buttons open.
+const ALBORIA_SITE: &str = "https://alboria.org";
+
+/// Opens Alboria's website in the system browser. The address is fixed here: the interface can open
+/// nothing else.
+#[tauri::command]
+fn open_alboria_site(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener().open_url(ALBORIA_SITE, None::<&str>).map_err(|e| e.to_string())
 }
 
 /// Whether there is a working C++ compiler to build the runtime with, and how to install one
@@ -493,7 +765,9 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_opener::init())
         .manage(GameProcess::default())
+        .manage(Alboria::default())
         .invoke_handler(tauri::generate_handler![
             pick_game_folder,
             pick_game_image,
@@ -503,6 +777,9 @@ pub fn run() {
             get_system_info,
             get_release_notes,
             list_gpus,
+            dlc_state,
+            install_dlc,
+            pick_dlc_package,
             get_runtime_status,
             install_runtime,
             launch_game,
@@ -521,7 +798,21 @@ pub fn run() {
             get_achievements,
             get_compiler_status,
             install_compiler,
-            show_build_log
+            show_build_log,
+            alboria_sign_in,
+            alboria_request_code,
+            alboria_verify,
+            alboria_status,
+            alboria_verify_email_code,
+            alboria_verify_email,
+            alboria_account,
+            alboria_remove_device,
+            alboria_email_code,
+            alboria_change_email,
+            alboria_export,
+            alboria_delete_code,
+            alboria_delete,
+            open_alboria_site
         ])
         .setup(|app| {
             // Controllers navigate the interface (gamepad.rs).

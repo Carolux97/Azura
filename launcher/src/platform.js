@@ -156,6 +156,18 @@ export const pickSavesFolder = async () =>
 export const changeSavesFolder = async (folder, replace = false) =>
   isNativeApp ? tauri.core.invoke("change_saves_folder", { folder, replace }) : folder;
 
+/** Opens the file picker for a downloadable content package; null when cancelled. */
+export const pickDlcPackage = async () => (isNativeApp ? tauri.core.invoke("pick_dlc_package") : null);
+
+/** Installs a downloadable content package into the saves folder; resolves with its name. */
+export const installDlc = async (pkg) => (isNativeApp ? tauri.core.invoke("install_dlc", { package: pkg }) : "RAAM's Shadow");
+
+/**
+ * The installed downloadable content: { packages, raamsShadow, raamsShadowPlayable }.
+ */
+export const dlcState = async () =>
+  isNativeApp ? tauri.core.invoke("dlc_state") : { packages: [], raamsShadow: false, raamsShadowPlayable: false };
+
 /** Listeners for the simulated game in a browser; the app uses Tauri events instead. */
 const simulated = { output: new Set(), exit: new Set() };
 
@@ -356,3 +368,126 @@ export const onRuntimeBuildProgress = (listener) => {
 
 /** Shows a build log (the path a failed build reported) in the system's file manager. */
 export const showBuildLog = async (path) => (isNativeApp ? tauri.core.invoke("show_build_log", { path }) : undefined);
+
+// --- Alboria account (src-tauri/src/alboria.rs) ------------------------------------------------
+//
+// Each call resolves to the service's answer or rejects with { status, error, message, retryIn,
+// attemptsLeft }: `error` is the service's code ("bad_code", "email_taken", "no_account", ...), or
+// "network" when the service could not be reached. In a browser a small simulation answers: any
+// email works, the code is always 123456, and "taken@example.com" already has an account.
+
+/** The browser simulation's account, once created or signed in to. */
+const simulatedAccount = { account: null, devices: [] };
+// The service's codes in the simulation: "?codesoff" in the address leaves them off (accounts are
+// made unverified, as while Amazon SES could not send them), and "?verifyby=<date>" turns them on
+// again with that deadline for unverified accounts.
+const simulatedQuery = new URLSearchParams(typeof location === "undefined" ? "" : location.search);
+const simulatedCodesOff = simulatedQuery.has("codesoff");
+const simulatedVerifyBy = simulatedQuery.get("verifyby");
+const simulatedError = (error, extra = {}) => ({ status: 400, error, message: error, retryIn: null, attemptsLeft: null, ...extra });
+const SIMULATED_CODE = "123456";
+
+/** Signs this installation in with `gamertag`; { gamertag, tag }. Rejects with no_account until it is linked. */
+export const alboriaSignIn = async (gamertag) => {
+  if (isNativeApp) return tauri.core.invoke("alboria_sign_in", { gamertag });
+  if (!simulatedAccount.account) throw simulatedError("no_account");
+  simulatedAccount.account.gamertag = gamertag;
+  return { gamertag, tag: simulatedAccount.account.tag };
+};
+
+/** Asks for a code: purpose "create" (with the gamertag) or "signin"; { expiresIn, resendIn }. */
+/** Whether the service sends codes now: `{ emailCodes }`, false while accounts are made unverified. */
+export const alboriaStatus = async () =>
+  isNativeApp ? tauri.core.invoke("alboria_status") : { emailCodes: !simulatedCodesOff };
+
+export const alboriaRequestCode = async ({ purpose, email, gamertag = null, language }) => {
+  if (isNativeApp) return tauri.core.invoke("alboria_request_code", { purpose, email, gamertag, language });
+  if (simulatedCodesOff && purpose === "signin") throw simulatedError("codes_unavailable");
+  if (simulatedCodesOff && purpose === "create" && email.trim().toLowerCase() !== "taken@example.com") return { codeNeeded: false };
+  const taken = email.trim().toLowerCase() === "taken@example.com";
+  if (purpose === "create" && taken) throw simulatedError("email_taken");
+  if (purpose === "signin" && !taken && !simulatedAccount.account) throw simulatedError("no_account");
+  return { expiresIn: 600, resendIn: 60 };
+};
+
+/** Uses the code to create the account or link this installation; { gamertag, tag }. */
+export const alboriaVerify = async ({ purpose, email, code, gamertag = "User", language = "en" }) => {
+  if (isNativeApp) return tauri.core.invoke("alboria_verify", { purpose, email, code, gamertag, language });
+  // With codes off an account is made with no code (null).
+  if (!(simulatedCodesOff && code === null) && code !== SIMULATED_CODE) throw simulatedError("bad_code", { attemptsLeft: 4 });
+  const verified = !simulatedCodesOff && !simulatedVerifyBy;
+  simulatedAccount.account = {
+    email, gamertag, tag: purpose === "signin" ? 97 : 3290,
+    email_verified: verified, verify_by: verified ? null : simulatedVerifyBy,
+  };
+  simulatedAccount.devices = [{ public_key: "this", title_id: "4D5308AB", platform: "Mac", created_at: new Date().toISOString(), last_seen_at: new Date().toISOString(), current: true }];
+  return {
+    gamertag: simulatedAccount.account.gamertag,
+    tag: simulatedAccount.account.tag,
+    emailVerified: simulatedAccount.account.email_verified,
+    verifyBy: simulatedAccount.account.verify_by,
+  };
+};
+
+/** The account: { email, gamertag, tag, devices: [{ public_key, title_id, platform, created_at, last_seen_at, current }] }. */
+export const alboriaAccount = async () => {
+  if (isNativeApp) return tauri.core.invoke("alboria_account");
+  if (!simulatedAccount.account) throw simulatedError("no_account");
+  return { ...simulatedAccount.account, devices: simulatedAccount.devices };
+};
+
+/** Removes a device from the account (this one signs this installation out). */
+export const alboriaRemoveDevice = async (publicKey) => {
+  if (isNativeApp) return tauri.core.invoke("alboria_remove_device", { publicKey });
+  simulatedAccount.devices = simulatedAccount.devices.filter((device) => device.public_key !== publicKey);
+  if (publicKey === "this") simulatedAccount.account = null;
+};
+
+/** Asks for a code sent to `email`, to move the account there; { expiresIn, resendIn }. */
+export const alboriaEmailCode = async (email, language) =>
+  isNativeApp ? tauri.core.invoke("alboria_email_code", { email, language }) : { expiresIn: 600, resendIn: 60 };
+
+/** Moves the account to `email` with the code sent there. */
+export const alboriaChangeEmail = async (email, code) => {
+  if (isNativeApp) return tauri.core.invoke("alboria_change_email", { email, code });
+  if (code !== SIMULATED_CODE) throw simulatedError("bad_code", { attemptsLeft: 4 });
+  simulatedAccount.account.email = email;
+};
+
+/** Saves the account's data in a JSON file the player picks; false when they cancel. */
+export const alboriaExport = async () => (isNativeApp ? tauri.core.invoke("alboria_export") : true);
+
+/** Asks for the code that confirms deleting the account; { expiresIn, resendIn }. */
+export const alboriaDeleteCode = async (language) => {
+  if (isNativeApp) return tauri.core.invoke("alboria_delete_code", { language });
+  return simulatedCodesOff ? { codeNeeded: false } : { expiresIn: 600, resendIn: 60 };
+};
+
+/** Asks for a code to verify the account's email (an account made while codes were off). */
+export const alboriaVerifyEmailCode = async (language) => {
+  if (isNativeApp) return tauri.core.invoke("alboria_verify_email_code", { language });
+  if (simulatedCodesOff) throw simulatedError("codes_unavailable");
+  return { expiresIn: 600, resendIn: 60 };
+};
+
+/** Verifies the account's email with `code`. */
+export const alboriaVerifyEmail = async (code) => {
+  if (isNativeApp) return tauri.core.invoke("alboria_verify_email", { code });
+  if (code !== SIMULATED_CODE) throw simulatedError("bad_code");
+  Object.assign(simulatedAccount.account, { email_verified: true, verify_by: null });
+  return true;
+};
+
+/** Deletes the account with the code. */
+export const alboriaDelete = async (code) => {
+  if (isNativeApp) return tauri.core.invoke("alboria_delete", { code });
+  if (code !== SIMULATED_CODE) throw simulatedError("bad_code", { attemptsLeft: 4 });
+  simulatedAccount.account = null;
+  simulatedAccount.devices = [];
+};
+
+/** Opens alboria.org in the system browser (the address is fixed on the Rust side); a new tab in a browser. */
+export const openAlboriaSite = async () => {
+  if (isNativeApp) return tauri.core.invoke("open_alboria_site");
+  window.open("https://alboria.org", "_blank", "noopener");
+};

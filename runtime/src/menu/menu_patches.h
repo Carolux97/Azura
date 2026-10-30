@@ -32,6 +32,10 @@ struct Coalesced;
 
 // Screen index of the main menu in the game's main-menu screen enum (MAINMENUOP_MainMenu).
 constexpr int kMainMenuScreen = 1;
+// Screen index of the campaign menu (MAINMENUOP_Campaign) and the position of its DLC option, after
+// Standard and Arcade.
+constexpr int kCampaignScreen = 3;
+constexpr int kCampaignDlcOption = 2;
 
 // Applies the menu changes to `coalesced`. Texts are chosen by the extension of each GearGameUI
 // localization file it holds ("esn", "int", ...). Returns the index of the Quit Game option in the

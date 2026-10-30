@@ -38,9 +38,17 @@ test("the filters never overlap, so their counts add up to the total", () => {
   assert.ok(matchesFilter(revealed[18], "unlocked") && !matchesFilter(revealed[18], "hidden"));
 });
 
-test("every achievement of the game is in exactly one section", () => {
+test("every achievement of the game and of RAAM's Shadow is in exactly one section", () => {
   const ids = ACHIEVEMENT_SECTIONS.flatMap((section) => section.ids).sort((a, b) => a - b);
-  assert.deepEqual(ids, Array.from({ length: 50 }, (_, index) => index + 1));
+  const raamsShadow = Array.from({ length: 10 }, (_, index) => index + 56);
+  assert.deepEqual(ids, [...Array.from({ length: 50 }, (_, index) => index + 1), ...raamsShadow]);
+});
+
+test("RAAM's Shadow's section shows only with its achievements", () => {
+  assert.ok(!achievementSections(achievements()).some(({ key }) => key === "raamsShadow"));
+  const withDlc = [...achievements(), ...[56, 61].map((id) => ({ id, hidden: false, unlocked: id === 56, gamerscore: 25 }))];
+  const section = achievementSections(withDlc).find(({ key }) => key === "raamsShadow");
+  assert.deepEqual([section.unlocked, section.total, section.chapters], [1, 2, 5]);
 });
 
 test("sections count their unlocks and drop the ones the filter empties", () => {

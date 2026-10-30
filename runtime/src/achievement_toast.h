@@ -7,8 +7,8 @@
 // event per unlock, from the guest thread that asked for it; this dialog queues them and shows them
 // one at a time on the UI thread. The achievement's name and description come in the player's
 // language already: the SDK reads them from the game's own data for the user_language setting.
-// Fonts that cannot draw a text (Japanese, Korean, Chinese or Russian names with the Latin Barlow
-// fonts) make the dialog show the game's English text for that achievement instead.
+// Fonts that cannot draw a text (a character outside Barlow and the Noto fonts merged behind it)
+// make the dialog show the game's English text for that achievement instead.
 //
 // It draws on ImGui's foreground draw list, with no window, so it never takes input.
 
