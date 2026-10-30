@@ -1,4 +1,4 @@
-# Gears3-Azura settings.
+# Azura settings.
 #
 # The build installs this file beside the executable as azura.default.toml. The runtime loads it
 # first, then azura.toml from the same folder (the player's settings, written by the launcher and

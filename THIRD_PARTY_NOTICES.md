@@ -1,6 +1,6 @@
 # Third-party notices
 
-Gears3-Azura's own code is under the PolyForm Strict License 1.0.0 (see [LICENSE](LICENSE)). It
+Azura's own code is under the PolyForm Strict License 1.0.0 (see [LICENSE](LICENSE)). It
 builds on and includes work by others, listed here with their licenses, which keep applying to
 that work.
 
@@ -38,7 +38,7 @@ the SDK bundles, each under its own license, which ships with the SDK's source t
 
 ## Used by the launcher
 
-The launcher is the part of Gears3-Azura distributed in binary form: the macOS `.dmg` and the
+The launcher is the part of Azura distributed in binary form: the macOS `.dmg` and the
 Linux packages. It is built with [Tauri](https://tauri.app) and depends on Rust crates and npm
 packages listed in `launcher/src-tauri/Cargo.lock` and `launcher/package-lock.json`. The npm
 packages are build tools only; the Rust crates compiled into the launcher are almost all under MIT

@@ -6,7 +6,7 @@
 # endpoint of launcher/src-tauri/tauri.conf.json; change both together. Launchers installed before
 # it was renamed from Carolux97/files reach it through GitHub's redirect of the old name.
 
-readonly RELEASES_REPO="Carolux97/gears3-azura-releases"
+readonly RELEASES_REPO="Carolux97/azura-releases"
 
 # The fixed release whose latest.json installed launchers read (the updater endpoint).
 readonly UPDATES_TAG="launcher-updates"
