@@ -357,7 +357,11 @@
     "linkedText": "Ez az eszköz most már az Alboria-fiókodhoz tartozik. A gamertaged és a címkéd minden játékunkban ugyanaz.",
     "start": "Kezdés",
     "localTitle": "Helyi fiók",
-    "localText": "A kampányt, a helyi játékot és a System Linket az Alboriához való csatlakozás nélkül játszod. Ha az interneten akarsz játszani, hozd létre a fiókodat, vagy jelentkezz be a Fiók részben."
+    "localText": "A kampányt, a helyi játékot és a System Linket az Alboriához való csatlakozás nélkül játszod. Ha az interneten akarsz játszani, hozd létre a fiókodat, vagy jelentkezz be a Fiók részben.",
+    "codesOffCreate": "Jelenleg nem küldünk kódokat. A fiókod az e-mail-cím megerősítése nélkül jön létre. Amikor újra küldünk kódokat, 48 órád lesz megerősíteni, különben a fiók törlődik.",
+    "codesOffSignIn": "Jelenleg nem küldünk kódokat, ezért egyelőre nem lehet másik számítógépről bejelentkezni egy fiókba. Próbáld újra később.",
+    "createNow": "Fiók létrehozása",
+    "createdUnverified": "Az e-mail-címed nincs megerősítve: amikor újra küldünk kódokat, erősítsd meg a Fiók részben 48 órán belül, különben a fiók törlődik."
   },
   "account": {
     "title": "Fiók",
@@ -400,7 +404,12 @@
     "exported": "Adatok mentve.",
     "emailChanged": "E-mail-cím módosítva.",
     "deleted": "Fiók törölve.",
-    "signedOut": "Kijelentkeztél ezen az eszközön."
+    "signedOut": "Kijelentkeztél ezen az eszközön.",
+    "verifyLater": "Az e-mail-címed nincs megerősítve. Jelenleg nem küldünk kódokat: amikor újra küldünk, 48 órád lesz megerősíteni, különben a fiók törlődik.",
+    "verifyBy": "Erősítsd meg az e-mail-címed {date} előtt, különben a fiók törlődik.",
+    "verifyEmail": "E-mail megerősítése",
+    "emailVerified": "E-mail-cím megerősítve.",
+    "playVerifyBy": "Az Alboria-fiókod nincs megerősítve. Erősítsd meg az e-mail-címed {date} előtt, különben törlődik."
   },
   "accountErrors": {
     "network": "Az Alboria nem érhető el. Ellenőrizd a kapcsolatot, és próbáld újra.",
@@ -419,6 +428,8 @@
     "codeLength": "A kód 6 számjegyből áll.",
     "consent": "A fiók létrehozásához erősítsd meg, hogy elmúltál 18 éves, és fogadd el, hogy az Alboria tárolja ezeket az adatokat.",
     "unlinked": "Ez az eszköz már nincs összekapcsolva a fiókoddal. Jelentkezz be újra, vagy válassz másik lehetőséget.",
-    "email_suppressed": "A leveleink már nem érkeznek meg erre a címre (visszapattantak vagy spamnek jelölték őket). Használj másik e-mail-címet."
+    "email_suppressed": "A leveleink már nem érkeznek meg erre a címre (visszapattantak vagy spamnek jelölték őket). Használj másik e-mail-címet.",
+    "codes_unavailable": "Jelenleg nem tudunk kódokat küldeni. Próbáld újra később.",
+    "already_verified": "Az e-mail-címed már meg van erősítve."
   }
 }

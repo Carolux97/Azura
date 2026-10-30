@@ -357,7 +357,11 @@
     "linkedText": "You signed in to your Alboria account on this device. Your gamertag and tag are the same in all our games.",
     "start": "Start",
     "localTitle": "Local account",
-    "localText": "You will play the campaign, Local and System Link without connecting to Alboria. When you want to play over the internet, create your account or sign in from Account."
+    "localText": "You will play the campaign, Local and System Link without connecting to Alboria. When you want to play over the internet, create your account or sign in from Account.",
+    "codesOffCreate": "We are not sending codes right now. Your account will be made without verifying your email. Once we send codes again, you will have 48 hours to verify it, or the account will be deleted.",
+    "codesOffSignIn": "We are not sending codes right now, so signing in to an account from another computer is not possible yet. Try again later.",
+    "createNow": "Create account",
+    "createdUnverified": "Your email is not verified: once we send codes again, verify it in Account within 48 hours, or the account will be deleted."
   },
   "account": {
     "title": "Account",
@@ -400,7 +404,12 @@
     "exported": "Data saved.",
     "emailChanged": "Email changed.",
     "deleted": "Account deleted.",
-    "signedOut": "Signed out on this device."
+    "signedOut": "Signed out on this device.",
+    "verifyLater": "Your email is not verified. We are not sending codes right now: once we do, you will have 48 hours to verify it, or the account will be deleted.",
+    "verifyBy": "Verify your email before {date}, or the account will be deleted.",
+    "verifyEmail": "Verify email",
+    "emailVerified": "Email verified.",
+    "playVerifyBy": "Your Alboria account is not verified. Verify your email before {date}, or it will be deleted."
   },
   "accountErrors": {
     "network": "Alboria cannot be reached. Check your connection and try again.",
@@ -419,6 +428,8 @@
     "codeLength": "The code has 6 digits.",
     "consent": "To create the account, confirm you are 18 or older and agree to Alboria keeping these data.",
     "unlinked": "This device is no longer linked to your account. Sign in again or choose another option.",
-    "email_suppressed": "Our emails no longer reach that address (they bounced or were marked as spam). Use another email."
+    "email_suppressed": "Our emails no longer reach that address (they bounced or were marked as spam). Use another email.",
+    "codes_unavailable": "We cannot send codes right now. Try again later.",
+    "already_verified": "Your email is already verified."
   }
 }

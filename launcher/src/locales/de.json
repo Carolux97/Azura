@@ -357,7 +357,11 @@
     "linkedText": "Du bist auf diesem Gerät mit deinem Alboria-Konto angemeldet. Dein Gamertag und dein Tag sind in all unseren Spielen gleich.",
     "start": "Los geht’s",
     "localTitle": "Lokales Konto",
-    "localText": "Du spielst die Kampagne, Lokal und System Link, ohne Verbindung zu Alboria. Wenn du über das Internet spielen möchtest, erstelle dein Konto oder melde dich unter Konto an."
+    "localText": "Du spielst die Kampagne, Lokal und System Link, ohne Verbindung zu Alboria. Wenn du über das Internet spielen möchtest, erstelle dein Konto oder melde dich unter Konto an.",
+    "codesOffCreate": "Wir senden gerade keine Codes. Dein Konto wird ohne bestätigte E-Mail-Adresse erstellt. Sobald wir wieder Codes senden, hast du 48 Stunden Zeit, sie zu bestätigen, sonst wird das Konto gelöscht.",
+    "codesOffSignIn": "Wir senden gerade keine Codes, daher ist die Anmeldung bei einem Konto von einem anderen Computer noch nicht möglich. Versuche es später erneut.",
+    "createNow": "Konto erstellen",
+    "createdUnverified": "Deine E-Mail-Adresse ist nicht bestätigt: Sobald wir wieder Codes senden, bestätige sie innerhalb von 48 Stunden unter Konto, sonst wird das Konto gelöscht."
   },
   "account": {
     "title": "Konto",
@@ -400,7 +404,12 @@
     "exported": "Daten gespeichert.",
     "emailChanged": "E-Mail-Adresse geändert.",
     "deleted": "Konto gelöscht.",
-    "signedOut": "Auf diesem Gerät abgemeldet."
+    "signedOut": "Auf diesem Gerät abgemeldet.",
+    "verifyLater": "Deine E-Mail-Adresse ist nicht bestätigt. Wir senden gerade keine Codes: Sobald wir es wieder tun, hast du 48 Stunden Zeit, sie zu bestätigen, sonst wird das Konto gelöscht.",
+    "verifyBy": "Bestätige deine E-Mail-Adresse vor dem {date}, sonst wird das Konto gelöscht.",
+    "verifyEmail": "E-Mail bestätigen",
+    "emailVerified": "E-Mail-Adresse bestätigt.",
+    "playVerifyBy": "Dein Alboria-Konto ist nicht bestätigt. Bestätige deine E-Mail-Adresse vor dem {date}, sonst wird es gelöscht."
   },
   "accountErrors": {
     "network": "Alboria ist nicht erreichbar. Prüfe deine Verbindung und versuche es erneut.",
@@ -419,6 +428,8 @@
     "codeLength": "Der Code hat 6 Ziffern.",
     "consent": "Um das Konto zu erstellen, bestätige, dass du mindestens 18 Jahre alt bist, und stimme zu, dass Alboria diese Daten speichert.",
     "unlinked": "Dieses Gerät ist nicht mehr mit deinem Konto verknüpft. Melde dich erneut an oder wähle eine andere Option.",
-    "email_suppressed": "Unsere E-Mails kommen bei dieser Adresse nicht mehr an (sie kamen zurück oder wurden als Spam markiert). Verwende eine andere E-Mail-Adresse."
+    "email_suppressed": "Unsere E-Mails kommen bei dieser Adresse nicht mehr an (sie kamen zurück oder wurden als Spam markiert). Verwende eine andere E-Mail-Adresse.",
+    "codes_unavailable": "Wir können gerade keine Codes senden. Versuche es später erneut.",
+    "already_verified": "Deine E-Mail-Adresse ist bereits bestätigt."
   }
 }

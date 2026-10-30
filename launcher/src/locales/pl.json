@@ -357,7 +357,11 @@
     "linkedText": "To urządzenie jest teraz połączone z Twoim kontem Alboria. Twój gamertag i tag są takie same we wszystkich naszych grach.",
     "start": "Zaczynamy",
     "localTitle": "Konto lokalne",
-    "localText": "Zagrasz w kampanię, grę lokalną i System Link bez łączenia z Alborią. Gdy zechcesz grać przez internet, utwórz konto lub zaloguj się w sekcji Konto."
+    "localText": "Zagrasz w kampanię, grę lokalną i System Link bez łączenia z Alborią. Gdy zechcesz grać przez internet, utwórz konto lub zaloguj się w sekcji Konto.",
+    "codesOffCreate": "Obecnie nie wysyłamy kodów. Twoje konto zostanie utworzone bez weryfikacji adresu e-mail. Gdy znów zaczniemy je wysyłać, będziesz mieć 48 godzin na weryfikację, inaczej konto zostanie usunięte.",
+    "codesOffSignIn": "Obecnie nie wysyłamy kodów, więc logowanie do konta z innego komputera nie jest jeszcze możliwe. Spróbuj ponownie później.",
+    "createNow": "Utwórz konto",
+    "createdUnverified": "Twój adres e-mail nie jest zweryfikowany: gdy znów zaczniemy wysyłać kody, zweryfikuj go w sekcji Konto w ciągu 48 godzin, inaczej konto zostanie usunięte."
   },
   "account": {
     "title": "Konto",
@@ -400,7 +404,12 @@
     "exported": "Dane zapisane.",
     "emailChanged": "E-mail zmieniony.",
     "deleted": "Konto usunięte.",
-    "signedOut": "Wylogowano na tym urządzeniu."
+    "signedOut": "Wylogowano na tym urządzeniu.",
+    "verifyLater": "Twój adres e-mail nie jest zweryfikowany. Obecnie nie wysyłamy kodów: gdy znów zaczniemy, będziesz mieć 48 godzin na weryfikację, inaczej konto zostanie usunięte.",
+    "verifyBy": "Zweryfikuj adres e-mail przed {date}, inaczej konto zostanie usunięte.",
+    "verifyEmail": "Zweryfikuj e-mail",
+    "emailVerified": "Adres e-mail zweryfikowany.",
+    "playVerifyBy": "Twoje konto Alboria nie jest zweryfikowane. Zweryfikuj adres e-mail przed {date}, inaczej zostanie usunięte."
   },
   "accountErrors": {
     "network": "Brak połączenia z Alborią. Sprawdź połączenie i spróbuj ponownie.",
@@ -419,6 +428,8 @@
     "codeLength": "Kod ma 6 cyfr.",
     "consent": "Aby utworzyć konto, potwierdź, że masz co najmniej 18 lat, i zgódź się na przechowywanie tych danych przez Alborię.",
     "unlinked": "To urządzenie nie jest już połączone z Twoim kontem. Zaloguj się ponownie lub wybierz inną opcję.",
-    "email_suppressed": "Nasze e-maile nie docierają już na ten adres (zostały odrzucone lub oznaczone jako spam). Użyj innego adresu."
+    "email_suppressed": "Nasze e-maile nie docierają już na ten adres (zostały odrzucone lub oznaczone jako spam). Użyj innego adresu.",
+    "codes_unavailable": "Obecnie nie możemy wysyłać kodów. Spróbuj ponownie później.",
+    "already_verified": "Twój adres e-mail jest już zweryfikowany."
   }
 }
