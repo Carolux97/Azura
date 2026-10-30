@@ -300,6 +300,27 @@ With the token of a signed-in device:
 | `POST /v1/account/export` | `{}` | everything the server keeps about the account (section 8), as JSON |
 | `POST /v1/account/delete/code` | `{ "language": "es" }` | as `/v1/account/code`; the code goes to the account's email |
 | `POST /v1/account/delete` | `{ "code": "…" }` | `{}`; the account and its devices are deleted, and every device is signed out |
+| `POST /v1/account/verify-email/code` | `{ "language": "es" }` | as `/v1/account/code`; the code goes to the account's email. `400 already_verified` |
+| `POST /v1/account/verify-email` | `{ "code": "…" }` | `{ "email_verified": true }` |
+
+#### While the service sends no codes (temporary)
+
+While Amazon SES cannot deliver codes yet, the service's admin tool turns codes off. `POST
+/v1/status` then answers `"email_codes": false`, and:
+
+- `/v1/account/code` with `purpose: create` answers `{ "code_needed": false }`; `/v1/account/verify`
+  then takes no `code` (with the `gamertag`) and makes the account with its email unverified.
+- Signing in on another device (`purpose: signin`) and moving to another email answer
+  `403 codes_unavailable`: each such account works only on the device that made it.
+- `/v1/account/delete/code` answers `{ "code_needed": false }`, and `/v1/account/delete` takes no code.
+
+Signing in, `/v1/account/verify` and `POST /v1/account` also answer `email_verified` and `verify_by`.
+Once codes are on again, `verify_by` is the deadline (48 hours): the account's email gets a notice,
+the launcher shows the deadline in Account and Play with a button that verifies the email
+(`/v1/account/verify-email/code` and `/verify-email`), and an account still unverified then is
+deleted. Creating an account with a code for an email that an unverified account holds deletes that
+account first, and signing in to one with a code unlinks its earlier devices: whoever proves the
+email wins.
 
 ## 5. Relay protocol (UDP)
 
