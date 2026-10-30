@@ -34,10 +34,11 @@ indented lines.
 - The controller menu's texts follow the game's language.
 - Alboria accounts, for playing over the internet with friends in this game and in the ones that
   come after it. The first time the launcher opens, also after updating, it asks how you want to
-  play: create an account, sign in to yours or play with a local account (Local and System Link,
-  no internet). An account has no password: a 6-digit code sent to your email signs you in. The
-  new Account section shows your identity as Gamertag#tag, the gamertag (moved here from
-  Installation), your devices, and lets you download or delete your data.
+  play: create an account, sign in to yours or play with a local account (Local and System Link, no
+  internet). Creating an account asks you to confirm you are 18 or older. An account has no
+  password: a 6-digit code sent to your email signs you in. The new Account section shows your
+  identity as Gamertag#tag, the gamertag (moved here from Installation), your devices, and lets you
+  download or delete your data.
 
 ## 0.4.5
 

@@ -339,7 +339,7 @@
     "localHelp": "No internet: campaign, Local and System Link.",
     "createTitle": "Create account",
     "privacy": "Alboria keeps your email, your gamertag with its tag and your devices, only to run your account. You can download or delete them from Account.",
-    "consent": "I agree",
+    "consent": "I am 18 or older and I agree",
     "back": "Back",
     "cancel": "Cancel",
     "sendCode": "Send code",
@@ -417,7 +417,7 @@
     "client_too_old": "Update the launcher to use Alboria.",
     "generic": "Something went wrong ({code}). Try again.",
     "codeLength": "The code has 6 digits.",
-    "consent": "To create the account, agree to Alboria keeping these data.",
+    "consent": "To create the account, confirm you are 18 or older and agree to Alboria keeping these data.",
     "unlinked": "This device is no longer linked to your account. Sign in again or choose another option.",
     "email_suppressed": "Our emails no longer reach that address (they bounced or were marked as spam). Use another email."
   }

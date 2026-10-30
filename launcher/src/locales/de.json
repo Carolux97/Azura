@@ -339,7 +339,7 @@
     "localHelp": "Ohne Internet: Kampagne, Lokal und System Link.",
     "createTitle": "Konto erstellen",
     "privacy": "Alboria speichert deine E-Mail-Adresse, deinen Gamertag mit seinem Tag und deine Geräte, nur damit dein Konto funktioniert. Unter Konto kannst du sie herunterladen oder löschen.",
-    "consent": "Ich bin einverstanden",
+    "consent": "Ich bin mindestens 18 Jahre alt und einverstanden",
     "back": "Zurück",
     "cancel": "Abbrechen",
     "sendCode": "Code senden",
@@ -417,7 +417,7 @@
     "client_too_old": "Aktualisiere den Launcher, um Alboria zu nutzen.",
     "generic": "Etwas ist schiefgelaufen ({code}). Versuche es erneut.",
     "codeLength": "Der Code hat 6 Ziffern.",
-    "consent": "Um das Konto zu erstellen, stimme zu, dass Alboria diese Daten speichert.",
+    "consent": "Um das Konto zu erstellen, bestätige, dass du mindestens 18 Jahre alt bist, und stimme zu, dass Alboria diese Daten speichert.",
     "unlinked": "Dieses Gerät ist nicht mehr mit deinem Konto verknüpft. Melde dich erneut an oder wähle eine andere Option.",
     "email_suppressed": "Unsere E-Mails kommen bei dieser Adresse nicht mehr an (sie kamen zurück oder wurden als Spam markiert). Verwende eine andere E-Mail-Adresse."
   }

@@ -339,7 +339,7 @@
     "localHelp": "Bez internetu: kampaň, místní hra a System Link.",
     "createTitle": "Vytvořit účet",
     "privacy": "Alboria uchovává váš e-mail, gamertag s tagem a vaše zařízení, jen aby účet fungoval. Můžete je stáhnout nebo smazat v sekci Účet.",
-    "consent": "Souhlasím",
+    "consent": "Je mi 18 let nebo více a souhlasím",
     "back": "Zpět",
     "cancel": "Zrušit",
     "sendCode": "Odeslat kód",
@@ -417,7 +417,7 @@
     "client_too_old": "Aktualizujte launcher, abyste mohli používat Alborii.",
     "generic": "Něco se pokazilo ({code}). Zkuste to znovu.",
     "codeLength": "Kód má 6 číslic.",
-    "consent": "Pro vytvoření účtu souhlaste s tím, že Alboria tyto údaje uchovává.",
+    "consent": "Pro vytvoření účtu potvrďte, že je vám alespoň 18 let, a souhlaste s tím, že Alboria tyto údaje uchovává.",
     "unlinked": "Toto zařízení už není propojené s vaším účtem. Přihlaste se znovu nebo zvolte jinou možnost.",
     "email_suppressed": "Naše e-maily už na tuto adresu nedorazí (vrátily se nebo byly označeny jako spam). Použijte jiný e-mail."
   }
