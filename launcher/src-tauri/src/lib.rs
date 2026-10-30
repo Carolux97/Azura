@@ -559,17 +559,47 @@ async fn alboria_request_code(
     alboria.request_code(&identity, &purpose, &email, gamertag.as_deref().map(str::trim), &language).await
 }
 
-/// Uses the code: creates the account or links this installation to it, and signs in.
+/// Uses the code: creates the account with `gamertag` or links this installation to it, and signs
+/// in. No code (`None`) while the service sends none: the account is created unverified.
 #[tauri::command]
 async fn alboria_verify(
     app: tauri::AppHandle,
     alboria: tauri::State<'_, Alboria>,
     purpose: String,
     email: String,
-    code: String,
+    code: Option<String>,
+    gamertag: Option<String>,
+    language: Option<String>,
 ) -> Result<Session, AlboriaError> {
     let identity = alboria_identity(&app)?;
-    alboria.verify(&identity, &purpose, &email, code.trim()).await
+    let code = code.as_deref().map(str::trim);
+    let gamertag = gamertag.as_deref().map(str::trim);
+    alboria.verify(&identity, &purpose, &email, code, gamertag, language.as_deref().unwrap_or("en")).await
+}
+
+/// Whether the service sends codes now (false while accounts are made unverified).
+#[tauri::command]
+async fn alboria_status(alboria: tauri::State<'_, Alboria>) -> Result<alboria::Status, AlboriaError> {
+    alboria.status().await
+}
+
+/// Asks for a code to verify the email of an account made while the service sent no codes.
+#[tauri::command]
+async fn alboria_verify_email_code(
+    app: tauri::AppHandle,
+    alboria: tauri::State<'_, Alboria>,
+    language: String,
+) -> Result<CodeSent, AlboriaError> {
+    let body = serde_json::json!({ "language": language });
+    let answer = alboria_account_request(&app, &alboria, "/v1/account/verify-email/code", body).await?;
+    Ok(alboria::code_sent_from(&answer))
+}
+
+/// Verifies the account's email with `code`.
+#[tauri::command]
+async fn alboria_verify_email(app: tauri::AppHandle, alboria: tauri::State<'_, Alboria>, code: String) -> Result<bool, AlboriaError> {
+    alboria_account_request(&app, &alboria, "/v1/account/verify-email", serde_json::json!({ "code": code.trim() })).await?;
+    Ok(true)
 }
 
 /// A request of the signed-in account, signing in first when needed.
@@ -662,10 +692,19 @@ async fn alboria_delete_code(
     Ok(alboria::code_sent_from(&answer))
 }
 
-/// Deletes the account with the code; every device, this one too, is signed out.
+/// Deletes the account with the code (none while the service sends no codes: this device's key is
+/// the proof); every device, this one too, is signed out.
 #[tauri::command]
-async fn alboria_delete(app: tauri::AppHandle, alboria: tauri::State<'_, Alboria>, code: String) -> Result<(), AlboriaError> {
-    alboria_account_request(&app, &alboria, "/v1/account/delete", serde_json::json!({ "code": code.trim() })).await?;
+async fn alboria_delete(
+    app: tauri::AppHandle,
+    alboria: tauri::State<'_, Alboria>,
+    code: Option<String>,
+) -> Result<(), AlboriaError> {
+    let body = match code {
+        Some(code) => serde_json::json!({ "code": code.trim() }),
+        None => serde_json::json!({}),
+    };
+    alboria_account_request(&app, &alboria, "/v1/account/delete", body).await?;
     alboria.forget_token();
     Ok(())
 }
@@ -763,6 +802,9 @@ pub fn run() {
             alboria_sign_in,
             alboria_request_code,
             alboria_verify,
+            alboria_status,
+            alboria_verify_email_code,
+            alboria_verify_email,
             alboria_account,
             alboria_remove_device,
             alboria_email_code,

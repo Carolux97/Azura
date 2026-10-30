@@ -378,6 +378,12 @@ export const showBuildLog = async (path) => (isNativeApp ? tauri.core.invoke("sh
 
 /** The browser simulation's account, once created or signed in to. */
 const simulatedAccount = { account: null, devices: [] };
+// The service's codes in the simulation: "?codesoff" in the address leaves them off (accounts are
+// made unverified, as while Amazon SES could not send them), and "?verifyby=<date>" turns them on
+// again with that deadline for unverified accounts.
+const simulatedQuery = new URLSearchParams(typeof location === "undefined" ? "" : location.search);
+const simulatedCodesOff = simulatedQuery.has("codesoff");
+const simulatedVerifyBy = simulatedQuery.get("verifyby");
 const simulatedError = (error, extra = {}) => ({ status: 400, error, message: error, retryIn: null, attemptsLeft: null, ...extra });
 const SIMULATED_CODE = "123456";
 
@@ -390,8 +396,14 @@ export const alboriaSignIn = async (gamertag) => {
 };
 
 /** Asks for a code: purpose "create" (with the gamertag) or "signin"; { expiresIn, resendIn }. */
+/** Whether the service sends codes now: `{ emailCodes }`, false while accounts are made unverified. */
+export const alboriaStatus = async () =>
+  isNativeApp ? tauri.core.invoke("alboria_status") : { emailCodes: !simulatedCodesOff };
+
 export const alboriaRequestCode = async ({ purpose, email, gamertag = null, language }) => {
   if (isNativeApp) return tauri.core.invoke("alboria_request_code", { purpose, email, gamertag, language });
+  if (simulatedCodesOff && purpose === "signin") throw simulatedError("codes_unavailable");
+  if (simulatedCodesOff && purpose === "create" && email.trim().toLowerCase() !== "taken@example.com") return { codeNeeded: false };
   const taken = email.trim().toLowerCase() === "taken@example.com";
   if (purpose === "create" && taken) throw simulatedError("email_taken");
   if (purpose === "signin" && !taken && !simulatedAccount.account) throw simulatedError("no_account");
@@ -399,12 +411,22 @@ export const alboriaRequestCode = async ({ purpose, email, gamertag = null, lang
 };
 
 /** Uses the code to create the account or link this installation; { gamertag, tag }. */
-export const alboriaVerify = async ({ purpose, email, code, gamertag = "User" }) => {
-  if (isNativeApp) return tauri.core.invoke("alboria_verify", { purpose, email, code });
-  if (code !== SIMULATED_CODE) throw simulatedError("bad_code", { attemptsLeft: 4 });
-  simulatedAccount.account = { email, gamertag, tag: purpose === "signin" ? 97 : 3290 };
+export const alboriaVerify = async ({ purpose, email, code, gamertag = "User", language = "en" }) => {
+  if (isNativeApp) return tauri.core.invoke("alboria_verify", { purpose, email, code, gamertag, language });
+  // With codes off an account is made with no code (null).
+  if (!(simulatedCodesOff && code === null) && code !== SIMULATED_CODE) throw simulatedError("bad_code", { attemptsLeft: 4 });
+  const verified = !simulatedCodesOff && !simulatedVerifyBy;
+  simulatedAccount.account = {
+    email, gamertag, tag: purpose === "signin" ? 97 : 3290,
+    email_verified: verified, verify_by: verified ? null : simulatedVerifyBy,
+  };
   simulatedAccount.devices = [{ public_key: "this", title_id: "4D5308AB", platform: "Mac", created_at: new Date().toISOString(), last_seen_at: new Date().toISOString(), current: true }];
-  return { gamertag: simulatedAccount.account.gamertag, tag: simulatedAccount.account.tag };
+  return {
+    gamertag: simulatedAccount.account.gamertag,
+    tag: simulatedAccount.account.tag,
+    emailVerified: simulatedAccount.account.email_verified,
+    verifyBy: simulatedAccount.account.verify_by,
+  };
 };
 
 /** The account: { email, gamertag, tag, devices: [{ public_key, title_id, platform, created_at, last_seen_at, current }] }. */
@@ -436,8 +458,25 @@ export const alboriaChangeEmail = async (email, code) => {
 export const alboriaExport = async () => (isNativeApp ? tauri.core.invoke("alboria_export") : true);
 
 /** Asks for the code that confirms deleting the account; { expiresIn, resendIn }. */
-export const alboriaDeleteCode = async (language) =>
-  isNativeApp ? tauri.core.invoke("alboria_delete_code", { language }) : { expiresIn: 600, resendIn: 60 };
+export const alboriaDeleteCode = async (language) => {
+  if (isNativeApp) return tauri.core.invoke("alboria_delete_code", { language });
+  return simulatedCodesOff ? { codeNeeded: false } : { expiresIn: 600, resendIn: 60 };
+};
+
+/** Asks for a code to verify the account's email (an account made while codes were off). */
+export const alboriaVerifyEmailCode = async (language) => {
+  if (isNativeApp) return tauri.core.invoke("alboria_verify_email_code", { language });
+  if (simulatedCodesOff) throw simulatedError("codes_unavailable");
+  return { expiresIn: 600, resendIn: 60 };
+};
+
+/** Verifies the account's email with `code`. */
+export const alboriaVerifyEmail = async (code) => {
+  if (isNativeApp) return tauri.core.invoke("alboria_verify_email", { code });
+  if (code !== SIMULATED_CODE) throw simulatedError("bad_code");
+  Object.assign(simulatedAccount.account, { email_verified: true, verify_by: null });
+  return true;
+};
 
 /** Deletes the account with the code. */
 export const alboriaDelete = async (code) => {

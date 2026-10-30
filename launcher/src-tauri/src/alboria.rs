@@ -300,20 +300,33 @@ impl AlboriaError {
     }
 }
 
-/// Who the player is once signed in (`gamertag`, `tag`).
+/// Who the player is once signed in (`gamertag`, `tag`), and whether the account's email is
+/// verified: an account made while the service sent no codes is not, and must be by `verify_by`
+/// (an ISO time) once codes are back, or it is deleted.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Session {
     pub gamertag: String,
     pub tag: u64,
+    pub email_verified: bool,
+    pub verify_by: Option<String>,
 }
 
-/// A code on its way (`/v1/account/code`).
+/// A code on its way (`/v1/account/code`); or, while the service sends no codes, that none is
+/// needed (`code_needed` false): the request goes on without one.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodeSent {
     pub expires_in: u64,
     pub resend_in: u64,
+    pub code_needed: bool,
+}
+
+/// What the service says about itself (`/v1/status`): whether it sends codes now.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Status {
+    pub email_codes: bool,
 }
 
 /// The connection to the service, and the token of this device while it is signed in.
@@ -386,10 +399,14 @@ impl Alboria {
         if let Some(token) = answer.get("token").and_then(Value::as_str) {
             *self.token.lock().unwrap() = Some(token.to_string());
         }
-        Session {
-            gamertag: answer.get("gamertag").and_then(Value::as_str).unwrap_or_default().to_string(),
-            tag: answer.get("tag").and_then(Value::as_u64).unwrap_or_default(),
-        }
+        session_from(answer)
+    }
+
+    /// Whether the service is up, and whether it sends codes now.
+    pub async fn status(&self) -> Result<Status, AlboriaError> {
+        let answer = self.post("/v1/status", json!({}), None).await?;
+        // A server from before codes could be off always sends them.
+        Ok(Status { email_codes: answer.get("email_codes").and_then(Value::as_bool).unwrap_or(true) })
     }
 
     /// Signs this device in with `gamertag`, which the account takes on (keeping its tag when it
@@ -423,12 +440,27 @@ impl Alboria {
         Ok(code_sent(&answer))
     }
 
-    /// Uses `code` to create the account or link this device to it, and signs in.
-    pub async fn verify(&self, identity: &Identity, purpose: &str, email: &str, code: &str) -> Result<Session, AlboriaError> {
+    /// Uses `code` to create the account (with `gamertag`) or link this device to it, and signs in.
+    /// While the service sends no codes, an account is created with no code (`None`), unverified.
+    pub async fn verify(
+        &self,
+        identity: &Identity,
+        purpose: &str,
+        email: &str,
+        code: Option<&str>,
+        gamertag: Option<&str>,
+        language: &str,
+    ) -> Result<Session, AlboriaError> {
         let mut body = self.proof(identity).await?;
         body.insert("purpose".into(), json!(purpose));
         body.insert("email".into(), json!(email));
-        body.insert("code".into(), json!(code));
+        if let Some(code) = code {
+            body.insert("code".into(), json!(code));
+        }
+        if let Some(gamertag) = gamertag {
+            body.insert("gamertag".into(), json!(gamertag));
+        }
+        body.insert("language".into(), json!(language));
         body.insert("title_id".into(), json!(TITLE_ID));
         body.insert("platform".into(), json!(platform_name()));
         body.insert("machine_id".into(), json!(machine_hash(identity)));
@@ -467,6 +499,18 @@ fn code_sent(answer: &Value) -> CodeSent {
     CodeSent {
         expires_in: answer.get("expires_in").and_then(Value::as_u64).unwrap_or(600),
         resend_in: answer.get("resend_in").and_then(Value::as_u64).unwrap_or(60),
+        code_needed: answer.get("code_needed").and_then(Value::as_bool).unwrap_or(true),
+    }
+}
+
+/// Who the player is, from an answer that signed in. A server from before unverified accounts says
+/// nothing about the email: it is verified.
+fn session_from(answer: &Value) -> Session {
+    Session {
+        gamertag: answer.get("gamertag").and_then(Value::as_str).unwrap_or_default().to_string(),
+        tag: answer.get("tag").and_then(Value::as_u64).unwrap_or_default(),
+        email_verified: answer.get("email_verified").and_then(Value::as_bool).unwrap_or(true),
+        verify_by: answer.get("verify_by").and_then(Value::as_str).map(str::to_string),
     }
 }
 
@@ -491,6 +535,22 @@ mod tests {
         xuid = \"E0007A75AC144039\"\n\
         machine_id = \"e22c2af621f6\"\n\
         key_seed = \"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\"\n";
+
+    #[test]
+    fn reads_whether_a_code_is_needed_and_the_email_verified() {
+        // While the service sends no codes, it says so, and the account it makes is unverified.
+        assert!(!code_sent(&json!({ "code_needed": false })).code_needed);
+        assert!(code_sent(&json!({ "expires_in": 600, "resend_in": 60 })).code_needed);
+        let unverified = session_from(&json!({
+            "token": "t", "gamertag": "Anya", "tag": 1500, "email_verified": false, "verify_by": "2026-11-03T12:00:00.000Z"
+        }));
+        assert!(!unverified.email_verified);
+        assert_eq!(unverified.verify_by.as_deref(), Some("2026-11-03T12:00:00.000Z"));
+        // A server from before unverified accounts says nothing: the email is verified.
+        let older = session_from(&json!({ "token": "t", "gamertag": "Anya", "tag": 1500 }));
+        assert!(older.email_verified);
+        assert_eq!(older.verify_by, None);
+    }
 
     #[test]
     fn reads_and_writes_the_games_identity_format() {

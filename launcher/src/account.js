@@ -15,6 +15,11 @@
  *
  * The same dialog box holds the account's other steps: moving it to another email and deleting it,
  * each confirmed with a code.
+ *
+ * While the service cannot send codes (alboriaStatus: emailCodes false), an account is made with
+ * no code and its email stays unverified; signing in on another device waits until codes are back.
+ * Once they are, the Account section asks to verify the email by the deadline the service gives
+ * (verify_by), after which an unverified account is deleted.
  */
 
 import {
@@ -27,7 +32,10 @@ import {
   alboriaRemoveDevice,
   alboriaRequestCode,
   alboriaSignIn,
+  alboriaStatus,
   alboriaVerify,
+  alboriaVerifyEmail,
+  alboriaVerifyEmailCode,
   openAlboriaSite,
 } from "./platform.js";
 import { TEXT_RULES } from "./textRules.js";
@@ -54,6 +62,8 @@ const KNOWN_ERRORS = new Set([
   "mail_failed",
   "bad_request",
   "client_too_old",
+  "codes_unavailable",
+  "already_verified",
 ]);
 
 /**
@@ -120,6 +130,7 @@ export const setupAccount = ({ state, persist, renderPlay, toast, t, getLocale }
     for (const section of welcome.querySelectorAll("[data-step]")) section.hidden = section.dataset.step !== step;
     showError(null);
     if (step === "code") renderCode();
+    if (step === "create" || step === "signin") refreshCodes();
     renderResend();
     const first = welcome.querySelector(`[data-step="${step}"] :is(input, button.choice, button[type="submit"])`);
     first?.focus({ preventScroll: true });
@@ -154,6 +165,25 @@ export const setupAccount = ({ state, persist, renderPlay, toast, t, getLocale }
     showStep(step);
   };
 
+  // --- Codes off -----------------------------------------------------------------------------
+
+  /**
+   * Asks the service whether it sends codes now and shows what that changes in the create and
+   * sign-in steps: a note, and Create account instead of Send code. Unknown (no answer) counts
+   * as on: the request itself then tells.
+   */
+  const refreshCodes = async () => {
+    let codesOff = false;
+    try {
+      codesOff = (await alboriaStatus()).emailCodes === false;
+    } catch (error) {
+      console.warn("Reading the Alboria status failed:", error?.error ?? error);
+    }
+    $("create-codes-off").hidden = !codesOff;
+    $("signin-codes-off").hidden = !codesOff;
+    $("create-submit").textContent = t(codesOff ? "welcome.createNow" : "welcome.sendCode");
+  };
+
   // --- The code step -----------------------------------------------------------------------
 
   const renderCode = () => {
@@ -180,14 +210,22 @@ export const setupAccount = ({ state, persist, renderPlay, toast, t, getLocale }
     button.textContent = left > 0 ? t("welcome.resendIn", { seconds: left }) : t("welcome.resend");
   };
 
-  /** Asks for a code for the flow's purpose and email, and shows the code step. */
+  /**
+   * Asks for a code for the flow's purpose and email, and shows the code step; or, when the
+   * service needs no code now (codes off), goes on without one.
+   */
   const sendCode = async () => {
     const language = getLocale();
     const sent = await busy(async () => {
       if (flow.purpose === "email") return alboriaEmailCode(flow.email, language);
       if (flow.purpose === "delete") return alboriaDeleteCode(language);
+      if (flow.purpose === "verify") return alboriaVerifyEmailCode(language);
       return alboriaRequestCode({ purpose: flow.purpose, email: flow.email, gamertag: flow.gamertag || null, language });
     });
+    if (sent?.codeNeeded === false) {
+      await finish(null);
+      return;
+    }
     flow.resendAt = Date.now() + (sent?.resendIn ?? 60) * 1000;
     clearInterval(resendTimer);
     resendTimer = setInterval(() => {
@@ -222,20 +260,33 @@ export const setupAccount = ({ state, persist, renderPlay, toast, t, getLocale }
     loadAccount();
   };
 
-  /** Uses the code for the flow's purpose. */
+  /** Uses the code typed for the flow's purpose. */
   const confirmCode = async () => {
     const code = $("code-input").value;
     if (code.length !== 6) {
       showError(t("accountErrors.codeLength"));
       return;
     }
+    await finish(code);
+  };
+
+  /** Does what the flow is for, with `code`; null when the service needs none now. */
+  const finish = async (code) => {
     if (flow.purpose === "create" || flow.purpose === "signin") {
       const identity = await busy(() =>
-        alboriaVerify({ purpose: flow.purpose, email: flow.email, code, gamertag: flow.gamertag || state.userName }),
+        alboriaVerify({
+          purpose: flow.purpose,
+          email: flow.email,
+          code,
+          gamertag: flow.gamertag || state.userName,
+          language: getLocale(),
+        }),
       );
       signedIn(identity);
       $("done-title").textContent = t(flow.purpose === "create" ? "welcome.createdTitle" : "welcome.linkedTitle");
-      $("done-text").textContent = t(flow.purpose === "create" ? "welcome.createdText" : "welcome.linkedText");
+      $("done-text").textContent = identity.emailVerified === false
+        ? `${t("welcome.createdText")} ${t("welcome.createdUnverified")}`
+        : t(flow.purpose === "create" ? "welcome.createdText" : "welcome.linkedText");
       $("done-name").textContent = identity.gamertag;
       $("done-tag").textContent = `#${identity.tag}`;
       showStep("done");
@@ -252,6 +303,13 @@ export const setupAccount = ({ state, persist, renderPlay, toast, t, getLocale }
       await busy(() => alboriaDelete(code));
       leaveAccount();
       toast(t("account.deleted"));
+      return;
+    }
+    if (flow.purpose === "verify") {
+      await busy(() => alboriaVerifyEmail(code));
+      closeDialog();
+      toast(t("account.emailVerified"));
+      loadAccount();
     }
   };
 
@@ -302,6 +360,8 @@ export const setupAccount = ({ state, persist, renderPlay, toast, t, getLocale }
   };
 
   const formatDate = (iso) => new Intl.DateTimeFormat(getLocale(), { dateStyle: "long" }).format(new Date(iso));
+  const formatDateTime = (iso) =>
+    new Intl.DateTimeFormat(getLocale(), { dateStyle: "long", timeStyle: "short" }).format(new Date(iso));
 
   /** One device of the account, with Remove for the others. */
   const deviceRow = (device) => {
@@ -341,6 +401,11 @@ export const setupAccount = ({ state, persist, renderPlay, toast, t, getLocale }
 
   const renderAccount = () => {
     const alboria = state.account === ACCOUNT_ALBORIA;
+    // In Play too, once the email must be verified by a deadline: gone when it is verified, or
+    // when the account is no longer this launcher's (signed out, or deleted at the deadline).
+    const deadline = alboria && state.alboria.account?.email_verified === false ? state.alboria.account.verify_by : null;
+    $("play-verify").hidden = !deadline;
+    if (deadline) $("play-verify-text").textContent = t("account.playVerifyBy", { date: formatDateTime(deadline) });
     $("account-alboria").hidden = !alboria;
     $("account-local").hidden = state.account !== ACCOUNT_LOCAL;
     const local = $("local-gamertag");
@@ -368,6 +433,15 @@ export const setupAccount = ({ state, persist, renderPlay, toast, t, getLocale }
     $("account-save").hidden = !editing || !field.value.trim();
     $("account-retry").hidden = status !== "offline" && status !== "error";
     $("account-email").value = account?.email ?? "";
+    // An account made while codes were off: verify by the deadline, or, before there is one, later.
+    const unverified = account?.email_verified === false;
+    $("account-verify").hidden = !unverified;
+    if (unverified) {
+      $("account-verify-text").textContent = account.verify_by
+        ? t("account.verifyBy", { date: formatDateTime(account.verify_by) })
+        : t("account.verifyLater");
+      $("account-verify-email").hidden = !account.verify_by;
+    }
     $("account-change-email").disabled = !account;
     $("account-export").disabled = status !== "connected";
     $("account-sign-out").disabled = status !== "connected";
@@ -410,7 +484,7 @@ export const setupAccount = ({ state, persist, renderPlay, toast, t, getLocale }
     if (event.target.closest("[data-welcome-back]")) {
       // From the code, back to the step that asked for it; from the others, to the first one, or
       // closed when it is one of the account's dialogs.
-      if (flow.step === "code") showStep(flow.purpose);
+      if (flow.step === "code" && flow.purpose !== "verify") showStep(flow.purpose);
       else if (flow.dialog) closeDialog();
       else showStep("choose");
       return;
@@ -455,6 +529,21 @@ export const setupAccount = ({ state, persist, renderPlay, toast, t, getLocale }
   });
 
   $("code-resend").addEventListener("click", () => attempt(sendCode));
+
+  // Verify email (an account made while codes were off): a code to the account's email, from the
+  // Account section or from Play.
+  const verifyEmail = async () => {
+    flow.dialog = true;
+    Object.assign(flow, { purpose: "verify", email: state.alboria.account?.email ?? "", gamertag: "" });
+    try {
+      await sendCode();
+    } catch (error) {
+      // The dialog is not open yet: a toast says why.
+      toast(errorMessage(error));
+    }
+  };
+  $("account-verify-email").addEventListener("click", verifyEmail);
+  $("play-verify-email").addEventListener("click", verifyEmail);
 
   // The Account section.
   const gamertagField = $("account-gamertag");
