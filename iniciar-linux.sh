@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Starts the Gears3-Azura launcher from a checkout on Linux, setting up what it needs first:
+# Starts the Azura launcher from a checkout on Linux, setting up what it needs first:
 # the system packages, the ReXGlue SDK and the npm modules.
 
 set -euo pipefail
@@ -20,7 +20,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LAUNCHER_DIR="${ROOT}/launcher"
 
 echo "=========================================================="
-echo "        Gears3-Azura launcher: start and set-up           "
+echo "        Azura launcher: start and set-up                  "
 echo "=========================================================="
 echo ""
 
@@ -193,7 +193,7 @@ fi
 
 # 7. Start the launcher.
 echo "=========================================================="
-echo "   Starting the Gears3-Azura launcher...                  "
+echo "   Starting the Azura launcher...                         "
 echo "=========================================================="
 cd "${LAUNCHER_DIR}"
 if [ -x "${LAUNCHER_DIR}/src-tauri/target/release/azura-launcher" ]; then

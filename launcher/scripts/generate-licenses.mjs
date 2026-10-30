@@ -87,7 +87,7 @@ for (const [label, pkg] of [...crates].sort(([a], [b]) => a.localeCompare(b))) {
 
 const rule = "=".repeat(78);
 const parts = [
-  "Licenses of the Rust crates compiled into the Gears3-Azura launcher",
+  "Licenses of the Rust crates compiled into the Azura launcher",
   `Generated from Cargo.lock for ${TARGETS.join(", ")}: ${crates.size} crates.`,
   "",
 ];

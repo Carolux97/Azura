@@ -339,7 +339,7 @@
     "localHelp": "Bez internetu: kampania, gra lokalna i System Link.",
     "createTitle": "Utwórz konto",
     "privacy": "Alboria przechowuje Twój e-mail, gamertag z tagiem i Twoje urządzenia wyłącznie po to, aby konto działało. Możesz je pobrać lub usunąć w sekcji Konto.",
-    "consent": "Zgadzam się",
+    "consent": "Mam co najmniej 18 lat i zgadzam się",
     "back": "Wstecz",
     "cancel": "Anuluj",
     "sendCode": "Wyślij kod",
@@ -417,7 +417,7 @@
     "client_too_old": "Zaktualizuj launcher, aby korzystać z Alborii.",
     "generic": "Coś poszło nie tak ({code}). Spróbuj ponownie.",
     "codeLength": "Kod ma 6 cyfr.",
-    "consent": "Aby utworzyć konto, zgódź się na przechowywanie tych danych przez Alborię.",
+    "consent": "Aby utworzyć konto, potwierdź, że masz co najmniej 18 lat, i zgódź się na przechowywanie tych danych przez Alborię.",
     "unlinked": "To urządzenie nie jest już połączone z Twoim kontem. Zaloguj się ponownie lub wybierz inną opcję.",
     "email_suppressed": "Nasze e-maile nie docierają już na ten adres (zostały odrzucone lub oznaczone jako spam). Użyj innego adresu."
   }
