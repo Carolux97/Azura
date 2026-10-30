@@ -3,7 +3,7 @@ new file mode 100644
 index 0000000..3477d5a
 --- /dev/null
 +++ b/include/rex/system/xam/alboria.h
-@@ -0,0 +1,330 @@
+@@ -0,0 +1,331 @@
 +/**
 + * @file        system/xam/alboria.h
 + * @brief       Alboria: System Link over the internet through our relay
@@ -210,9 +210,10 @@ index 0000000..3477d5a
 +void CheckService();
 +// Whether the last check reached Alboria (false before the first one ends).
 +bool ServiceReachable();
-+// Why Alboria refused the last sign-in that reached it, such as "no_account" (this installation's
-+// key is not linked to an account), "banned:<reason>" or "client_too_old"; empty when it was
-+// accepted or none reached it yet. The title cannot play on Alboria while it is not empty.
++// Why Alboria refused this installation's account at the last sign-in: "no_account" (its key is not
++// linked to an account), "banned:<reason>" or "client_too_old"; empty once a sign-in is accepted,
++// or before any is refused. Other failures (the network, too many requests, the server) leave it
++// as it was. The title cannot play on Alboria while it is not empty.
 +std::string SignInRefusal();
 +
 +// Hosts a game for `title_id` with up to `max_members` players, in the background. GetStatus
@@ -377,7 +378,7 @@ new file mode 100644
 index 0000000..7ef17ca
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,1663 @@
+@@ -0,0 +1,1674 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -941,6 +942,12 @@ index 0000000..7ef17ca
 +  return {std::move(json), {}};
 +}
 +
++// Whether `error`, from signing in, refuses this installation's account until something changes:
++// no account has its key, it is banned, or the client is too old.
++bool IsAccountRefusal(const std::string& error) {
++  return error == "no_account" || error == "client_too_old" || error.rfind("banned", 0) == 0;
++}
++
 +// Signs in with the installation's key; the token, or the error.
 +ApiResult SignIn() {
 +  auto* kernel_state = REX_KERNEL_STATE();
@@ -963,8 +970,13 @@ index 0000000..7ef17ca
 +                          {"client", REXCVAR_GET(alboria_client)}},
 +                         {});
 +  std::lock_guard lock(g_identity_mutex);
-+  // An answer from Alboria, yes or no, replaces the last one; a network failure tells nothing new.
-+  if (session.error != "network") g_sign_in_refusal = session.error;
++  // An accepted sign-in clears the last refusal; a refusal of the account itself replaces it. Any
++  // other failure (the network, too many requests, the server) says nothing about the account.
++  if (session.error.empty()) {
++    g_sign_in_refusal.clear();
++  } else if (IsAccountRefusal(session.error)) {
++    g_sign_in_refusal = session.error;
++  }
 +  // A server older than account tags answers no tag: the identity stays unknown.
 +  if (session.error.empty() && session.json.contains("tag")) {
 +    g_identity.known = true;
@@ -1770,7 +1782,7 @@ index 0000000..7ef17ca
 +    // Signing in before the answer is told, so that a refusal is known as soon as Alboria is.
 +    if (reachable) {
 +      const auto session = SignIn();
-+      if (!session.error.empty() && session.error != "network") {
++      if (IsAccountRefusal(session.error)) {
 +        REXSYS_WARN("Alboria: the sign-in was refused ({})", session.error);
 +      }
 +    }
