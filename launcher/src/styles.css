@@ -178,22 +178,34 @@ code, kbd {
 
 .backdrop { position: fixed; inset: 0; pointer-events: none; z-index: 0; }
 
-.veins { position: absolute; inset: 0; width: 100%; height: 100%; }
+.veins { position: absolute; inset: 0; }
+.vein-layer { position: absolute; inset: 0; width: 100%; height: 100%; }
 
 .vein {
   fill: none;
-  stroke: var(--imulsion);
+  stroke: var(--imulsion-hot);
   stroke-width: 2.4;
   stroke-linecap: round;
-  opacity: 0.75;
+  opacity: 0.95;
+}
+.vein.v2 { stroke-width: 1.6; }
+.vein.v3 { stroke-width: 1.1; }
+.is-dim .vein { stroke: var(--imulsion-deep); opacity: 0.35; }
+
+/* The hot layers fade in and out over the dim one, each group of veins at its own time. Only their
+   opacity changes, which the compositor does without drawing the veins or their glow again. With
+   reduced motion they rest halfway. */
+.vein-layer.is-hot {
+  opacity: 0.5;
+  will-change: opacity;
   animation: pulse 5s ease-in-out infinite;
 }
-.vein.v2 { stroke-width: 1.6; animation-delay: -1.7s; }
-.vein.v3 { stroke-width: 1.1; animation-delay: -3.1s; opacity: 0.5; }
+.vein-layer.hot-2 { animation-delay: -1.7s; }
+.vein-layer.hot-3 { animation-delay: -3.1s; }
 
 @keyframes pulse {
-  0%, 100% { opacity: 0.35; stroke: var(--imulsion-deep); }
-  50%      { opacity: 0.95; stroke: var(--imulsion-hot); }
+  0%, 100% { opacity: 0; }
+  50%      { opacity: 1; }
 }
 
 .spores { position: absolute; inset: 0; overflow: hidden; }
