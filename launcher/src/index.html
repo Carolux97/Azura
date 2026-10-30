@@ -12,28 +12,70 @@
 <body>
   <!-- Lambent backdrop: dark rock with glowing imulsion veins and drifting spores. Decorative only. -->
   <div class="backdrop" aria-hidden="true">
-    <svg class="veins" viewBox="0 0 1200 760" preserveAspectRatio="xMidYMid slice">
-      <defs>
-        <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+    <!-- The veins pulse between a dim and a hot imulsion. Each is drawn twice, already glowing: a dim
+         layer that stays, and a hot layer per group of veins whose opacity alone is animated. The
+         glow is a full-screen blur, so it is drawn once; animating the strokes themselves made
+         WebKit redraw it every frame. -->
+    <div class="veins">
+      <svg class="vein-layer" viewBox="0 0 1200 760" preserveAspectRatio="xMidYMid slice">
+        <defs>
+          <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="6" result="blur"/>
+            <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+          <radialGradient id="pool" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#ffd25a" stop-opacity=".55"/>
+            <stop offset="100%" stop-color="#ff9e1b" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+        <ellipse cx="1040" cy="690" rx="260" ry="120" fill="url(#pool)"/>
+        <ellipse cx="160" cy="80" rx="180" ry="90" fill="url(#pool)" opacity=".5"/>
+        <g class="vein-group is-dim" filter="url(#glow)">
+          <path class="vein v1" d="M1200 640 C1080 610 1010 560 930 575 S790 640 700 610 S560 520 470 540"/>
+          <path class="vein v1" d="M190 120 C210 170 190 220 230 260"/>
+          <path class="vein v2" d="M930 575 C905 520 920 470 880 430 S800 390 770 340"/>
+          <path class="vein v2" d="M700 610 C680 660 640 690 600 760"/>
+          <path class="vein v3" d="M1200 720 C1120 700 1060 720 990 760"/>
+          <path class="vein v3" d="M0 120 C70 110 130 140 190 120 S300 60 360 80"/>
+        </g>
+      </svg>
+      <svg class="vein-layer is-hot hot-1" viewBox="0 0 1200 760" preserveAspectRatio="xMidYMid slice">
+        <defs>
+        <filter id="glow-1" x="-50%" y="-50%" width="200%" height="200%">
           <feGaussianBlur stdDeviation="6" result="blur"/>
           <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
         </filter>
-        <radialGradient id="pool" cx="50%" cy="50%" r="50%">
-          <stop offset="0%" stop-color="#ffd25a" stop-opacity=".55"/>
-          <stop offset="100%" stop-color="#ff9e1b" stop-opacity="0"/>
-        </radialGradient>
-      </defs>
-      <ellipse cx="1040" cy="690" rx="260" ry="120" fill="url(#pool)"/>
-      <ellipse cx="160" cy="80" rx="180" ry="90" fill="url(#pool)" opacity=".5"/>
-      <g class="vein-group" filter="url(#glow)">
-        <path class="vein" d="M1200 640 C1080 610 1010 560 930 575 S790 640 700 610 S560 520 470 540"/>
-        <path class="vein v2" d="M930 575 C905 520 920 470 880 430 S800 390 770 340"/>
-        <path class="vein v3" d="M1200 720 C1120 700 1060 720 990 760"/>
-        <path class="vein v2" d="M700 610 C680 660 640 690 600 760"/>
-        <path class="vein v3" d="M0 120 C70 110 130 140 190 120 S300 60 360 80"/>
-        <path class="vein" d="M190 120 C210 170 190 220 230 260"/>
-      </g>
-    </svg>
+        </defs>
+        <g class="vein-group" filter="url(#glow-1)">
+          <path class="vein v1" d="M1200 640 C1080 610 1010 560 930 575 S790 640 700 610 S560 520 470 540"/>
+          <path class="vein v1" d="M190 120 C210 170 190 220 230 260"/>
+        </g>
+      </svg>
+      <svg class="vein-layer is-hot hot-2" viewBox="0 0 1200 760" preserveAspectRatio="xMidYMid slice">
+        <defs>
+        <filter id="glow-2" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur stdDeviation="6" result="blur"/>
+          <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+        </defs>
+        <g class="vein-group" filter="url(#glow-2)">
+          <path class="vein v2" d="M930 575 C905 520 920 470 880 430 S800 390 770 340"/>
+          <path class="vein v2" d="M700 610 C680 660 640 690 600 760"/>
+        </g>
+      </svg>
+      <svg class="vein-layer is-hot hot-3" viewBox="0 0 1200 760" preserveAspectRatio="xMidYMid slice">
+        <defs>
+        <filter id="glow-3" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur stdDeviation="6" result="blur"/>
+          <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+        </defs>
+        <g class="vein-group" filter="url(#glow-3)">
+          <path class="vein v3" d="M1200 720 C1120 700 1060 720 990 760"/>
+          <path class="vein v3" d="M0 120 C70 110 130 140 190 120 S300 60 360 80"/>
+        </g>
+      </svg>
+    </div>
     <div class="spores"></div>
     <div class="grain"></div>
   </div>
