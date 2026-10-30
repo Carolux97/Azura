@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the Gears3-Azura runtime on macOS (Apple Silicon) or Linux (x86_64, ARM64), from default.xex
+# Builds the Azura runtime on macOS (Apple Silicon) or Linux (x86_64, ARM64), from default.xex
 # to the executable.
 #
 # Steps:
