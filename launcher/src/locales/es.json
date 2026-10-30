@@ -357,7 +357,11 @@
     "linkedText": "Has entrado con tu cuenta de Alboria en este equipo. Tu gamertag y tu etiqueta son los mismos en todos nuestros juegos.",
     "start": "Empezar",
     "localTitle": "Cuenta local",
-    "localText": "Jugarás la campaña, en Local y por Interconexión en red local, sin conectar con Alboria. Cuando quieras jugar por internet, crea tu cuenta o entra con ella desde Cuenta."
+    "localText": "Jugarás la campaña, en Local y por Interconexión en red local, sin conectar con Alboria. Cuando quieras jugar por internet, crea tu cuenta o entra con ella desde Cuenta.",
+    "codesOffCreate": "Ahora no enviamos códigos. Tu cuenta se creará sin verificar el correo. Cuando volvamos a enviarlos, tendrás 48 horas para verificarlo o la cuenta se borrará.",
+    "codesOffSignIn": "Ahora no enviamos códigos, así que de momento no se puede entrar en una cuenta desde otro equipo. Vuelve a intentarlo más adelante.",
+    "createNow": "Crear cuenta",
+    "createdUnverified": "Tu correo está sin verificar: cuando volvamos a enviar códigos, verifícalo en Cuenta en 48 horas o la cuenta se borrará."
   },
   "account": {
     "title": "Cuenta",
@@ -400,7 +404,12 @@
     "exported": "Datos guardados.",
     "emailChanged": "Correo cambiado.",
     "deleted": "Cuenta borrada.",
-    "signedOut": "Has cerrado la sesión en este equipo."
+    "signedOut": "Has cerrado la sesión en este equipo.",
+    "verifyLater": "Tu correo está sin verificar. Ahora no enviamos códigos: cuando volvamos a hacerlo, tendrás 48 horas para verificarlo o la cuenta se borrará.",
+    "verifyBy": "Verifica tu correo antes del {date} o la cuenta se borrará.",
+    "verifyEmail": "Verificar correo",
+    "emailVerified": "Correo verificado.",
+    "playVerifyBy": "Tu cuenta de Alboria no está verificada. Verifica tu correo antes del {date} o se borrará."
   },
   "accountErrors": {
     "network": "No se puede conectar con Alboria. Comprueba tu conexión y vuelve a intentarlo.",
@@ -419,6 +428,8 @@
     "codeLength": "El código tiene 6 cifras.",
     "consent": "Para crear la cuenta, confirma que tienes 18 años o más y acepta que Alboria guarde estos datos.",
     "unlinked": "Este equipo ya no está vinculado a tu cuenta. Vuelve a iniciar sesión o elige otra opción.",
-    "email_suppressed": "Nuestros correos ya no llegan a esa dirección (rebotaron o se marcaron como spam). Usa otro correo."
+    "email_suppressed": "Nuestros correos ya no llegan a esa dirección (rebotaron o se marcaron como spam). Usa otro correo.",
+    "codes_unavailable": "Ahora no podemos enviar códigos. Vuelve a intentarlo más adelante.",
+    "already_verified": "Tu correo ya está verificado."
   }
 }

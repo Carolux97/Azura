@@ -1232,3 +1232,30 @@ input[type="range"] { width: 100%; accent-color: var(--imulsion); }
 }
 .btn.alboria-open:hover:not([disabled]) { background: #c9e8ff; color: #1e2a4f; border-color: #5aa9f0; }
 .alboria-open svg { width: 20px; height: 20px; }
+
+/* While Alboria sends no codes: a note in the create and sign-in steps (account.js, refreshCodes). */
+.codes-off-note {
+  margin: 4px 0 12px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--imulsion);
+  background: var(--bg-0);
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+/* An account whose email is not verified yet: when it must be verified by, and the button to. */
+.verify-notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--imulsion);
+  border-radius: 4px;
+  background: var(--bg-0);
+}
+.verify-notice[hidden] { display: none; }
+.play-verify { margin: 0 0 20px; }
+.verify-notice .dot { margin-top: 0; background: var(--imulsion); box-shadow: 0 0 8px var(--imulsion-glow); }
+.verify-notice p { flex: 1; margin: 0; font-size: 13px; line-height: 1.45; color: var(--text); }

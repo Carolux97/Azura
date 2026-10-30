@@ -357,7 +357,11 @@
     "linkedText": "Cet appareil est maintenant associé à votre compte Alboria. Votre gamertag et votre tag sont les mêmes dans tous nos jeux.",
     "start": "Commencer",
     "localTitle": "Compte local",
-    "localText": "Vous jouerez à la campagne, en Local et en Liaison système, sans vous connecter à Alboria. Quand vous voudrez jouer en ligne, créez votre compte ou connectez-vous depuis Compte."
+    "localText": "Vous jouerez à la campagne, en Local et en Liaison système, sans vous connecter à Alboria. Quand vous voudrez jouer en ligne, créez votre compte ou connectez-vous depuis Compte.",
+    "codesOffCreate": "Nous n'envoyons pas de codes pour le moment. Votre compte sera créé sans vérifier votre e-mail. Quand nous en enverrons à nouveau, vous aurez 48 heures pour le vérifier, sinon le compte sera supprimé.",
+    "codesOffSignIn": "Nous n'envoyons pas de codes pour le moment : impossible pour l'instant de se connecter à un compte depuis un autre ordinateur. Réessayez plus tard.",
+    "createNow": "Créer le compte",
+    "createdUnverified": "Votre e-mail n'est pas vérifié : quand nous enverrons à nouveau des codes, vérifiez-le dans Compte sous 48 heures, sinon le compte sera supprimé."
   },
   "account": {
     "title": "Compte",
@@ -400,7 +404,12 @@
     "exported": "Données enregistrées.",
     "emailChanged": "Adresse e-mail modifiée.",
     "deleted": "Compte supprimé.",
-    "signedOut": "Session fermée sur cet appareil."
+    "signedOut": "Session fermée sur cet appareil.",
+    "verifyLater": "Votre e-mail n'est pas vérifié. Nous n'envoyons pas de codes pour le moment : ensuite, vous aurez 48 heures pour le vérifier, sinon le compte sera supprimé.",
+    "verifyBy": "Vérifiez votre e-mail avant le {date}, sinon le compte sera supprimé.",
+    "verifyEmail": "Vérifier l'e-mail",
+    "emailVerified": "E-mail vérifié.",
+    "playVerifyBy": "Votre compte Alboria n'est pas vérifié. Vérifiez votre e-mail avant le {date}, sinon il sera supprimé."
   },
   "accountErrors": {
     "network": "Impossible de joindre Alboria. Vérifiez votre connexion et réessayez.",
@@ -419,6 +428,8 @@
     "codeLength": "Le code comporte 6 chiffres.",
     "consent": "Pour créer le compte, confirmez que vous avez 18 ans ou plus et acceptez qu'Alboria conserve ces données.",
     "unlinked": "Cet appareil n'est plus associé à votre compte. Reconnectez-vous ou choisissez une autre option.",
-    "email_suppressed": "Nos e-mails n'arrivent plus à cette adresse (ils ont été rejetés ou signalés comme spam). Utilisez une autre adresse."
+    "email_suppressed": "Nos e-mails n'arrivent plus à cette adresse (ils ont été rejetés ou signalés comme spam). Utilisez une autre adresse.",
+    "codes_unavailable": "Nous ne pouvons pas envoyer de codes pour le moment. Réessayez plus tard.",
+    "already_verified": "Votre e-mail est déjà vérifié."
   }
 }

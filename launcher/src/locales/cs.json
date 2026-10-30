@@ -357,7 +357,11 @@
     "linkedText": "Toto zařízení je teď propojené s vaším účtem Alboria. Váš gamertag a tag jsou stejné ve všech našich hrách.",
     "start": "Začít",
     "localTitle": "Místní účet",
-    "localText": "Budete hrát kampaň, místní hru a System Link bez připojení k Alborii. Až budete chtít hrát přes internet, vytvořte si účet nebo se přihlaste v sekci Účet."
+    "localText": "Budete hrát kampaň, místní hru a System Link bez připojení k Alborii. Až budete chtít hrát přes internet, vytvořte si účet nebo se přihlaste v sekci Účet.",
+    "codesOffCreate": "Momentálně neposíláme kódy. Váš účet se vytvoří bez ověření e-mailu. Až je začneme znovu posílat, budete mít 48 hodin na jeho ověření, jinak bude účet smazán.",
+    "codesOffSignIn": "Momentálně neposíláme kódy, takže se zatím nelze přihlásit k účtu z jiného počítače. Zkuste to později.",
+    "createNow": "Vytvořit účet",
+    "createdUnverified": "Váš e-mail není ověřený: až znovu začneme posílat kódy, ověřte ho v části Účet do 48 hodin, jinak bude účet smazán."
   },
   "account": {
     "title": "Účet",
@@ -400,7 +404,12 @@
     "exported": "Údaje uloženy.",
     "emailChanged": "E-mail změněn.",
     "deleted": "Účet smazán.",
-    "signedOut": "Odhlášeno na tomto zařízení."
+    "signedOut": "Odhlášeno na tomto zařízení.",
+    "verifyLater": "Váš e-mail není ověřený. Momentálně neposíláme kódy: až je začneme posílat, budete mít 48 hodin na jeho ověření, jinak bude účet smazán.",
+    "verifyBy": "Ověřte svůj e-mail do {date}, jinak bude účet smazán.",
+    "verifyEmail": "Ověřit e-mail",
+    "emailVerified": "E-mail ověřen.",
+    "playVerifyBy": "Váš účet Alboria není ověřený. Ověřte svůj e-mail do {date}, jinak bude smazán."
   },
   "accountErrors": {
     "network": "Nelze se připojit k Alborii. Zkontrolujte připojení a zkuste to znovu.",
@@ -419,6 +428,8 @@
     "codeLength": "Kód má 6 číslic.",
     "consent": "Pro vytvoření účtu potvrďte, že je vám alespoň 18 let, a souhlaste s tím, že Alboria tyto údaje uchovává.",
     "unlinked": "Toto zařízení už není propojené s vaším účtem. Přihlaste se znovu nebo zvolte jinou možnost.",
-    "email_suppressed": "Naše e-maily už na tuto adresu nedorazí (vrátily se nebo byly označeny jako spam). Použijte jiný e-mail."
+    "email_suppressed": "Naše e-maily už na tuto adresu nedorazí (vrátily se nebo byly označeny jako spam). Použijte jiný e-mail.",
+    "codes_unavailable": "Momentálně nemůžeme posílat kódy. Zkuste to později.",
+    "already_verified": "Váš e-mail je již ověřený."
   }
 }
