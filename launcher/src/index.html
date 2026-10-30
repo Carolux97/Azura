@@ -126,6 +126,14 @@
           </div>
         </div>
 
+        <!-- An Alboria account made while codes were off, once codes are back: verify the email by
+             the deadline, or the account is deleted (account.js, renderAccount). -->
+        <div class="verify-notice play-verify" id="play-verify" hidden>
+          <span class="dot"></span>
+          <p id="play-verify-text"></p>
+          <button class="btn btn-primary" id="play-verify-email" data-i18n="account.verifyEmail"></button>
+        </div>
+
         <!-- A runtime build from the kit: its step, a bar and the time left, or why it failed;
              renderBuildCard() fills it. -->
         <div class="panel build-card" id="build-card" hidden>
@@ -412,6 +420,11 @@
                 </div>
               </div>
             </div>
+            <div class="verify-notice" id="account-verify" hidden>
+              <span class="dot"></span>
+              <p id="account-verify-text"></p>
+              <button class="btn btn-primary" id="account-verify-email" hidden data-i18n="account.verifyEmail"></button>
+            </div>
             <div class="account-actions">
               <button class="btn btn-primary" id="account-save" hidden data-i18n="account.saveGamertag"></button>
               <button class="btn" id="account-retry" hidden data-i18n="account.retry"></button>
@@ -488,18 +501,20 @@
           <label class="field"><span data-i18n="account.gamertag"></span><input class="path" id="create-gamertag" type="text" maxlength="15" data-text-rule="gamertag" autocomplete="nickname"></label>
           <label class="field"><span data-i18n="account.email"></span><input class="path" id="create-email" type="text" inputmode="email" autocomplete="email" maxlength="254" data-text-rule="email"></label>
         </div>
+        <p class="codes-off-note" id="create-codes-off" hidden data-i18n="welcome.codesOffCreate"></p>
         <p class="help consent-text" data-i18n="welcome.privacy"></p>
         <label class="consent"><input type="checkbox" id="create-consent"> <span data-i18n="welcome.consent"></span></label>
         <p class="save-detail-msg is-error" data-step-error hidden></p>
         <div class="account-actions">
           <button class="btn" type="button" data-welcome-back data-pad-back data-i18n="welcome.back"></button>
-          <button class="btn btn-primary" type="submit" data-i18n="welcome.sendCode"></button>
+          <button class="btn btn-primary" type="submit" id="create-submit" data-i18n="welcome.sendCode"></button>
         </div>
       </form>
 
       <form data-step="signin" hidden>
         <h2 class="panel-title" data-i18n="welcome.signInTitle"></h2>
         <p class="help" data-i18n="welcome.signInText"></p>
+        <p class="codes-off-note" id="signin-codes-off" hidden data-i18n="welcome.codesOffSignIn"></p>
         <div class="field-grid one">
           <label class="field"><span data-i18n="account.email"></span><input class="path" id="signin-email" type="text" inputmode="email" autocomplete="email" maxlength="254" data-text-rule="email"></label>
         </div>
