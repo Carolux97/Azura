@@ -339,7 +339,7 @@
     "localHelp": "Internet nélkül: kampány, helyi játék és System Link.",
     "createTitle": "Fiók létrehozása",
     "privacy": "Az Alboria csak a fiókod működéséhez tárolja az e-mail-címedet, a gamertagedet a címkéjével és az eszközeidet. A Fiók részben letöltheted vagy törölheted őket.",
-    "consent": "Elfogadom",
+    "consent": "Elmúltam 18 éves, és elfogadom",
     "back": "Vissza",
     "cancel": "Mégse",
     "sendCode": "Kód küldése",
@@ -417,7 +417,7 @@
     "client_too_old": "Frissítsd a launchert az Alboria használatához.",
     "generic": "Valami hiba történt ({code}). Próbáld újra.",
     "codeLength": "A kód 6 számjegyből áll.",
-    "consent": "A fiók létrehozásához fogadd el, hogy az Alboria tárolja ezeket az adatokat.",
+    "consent": "A fiók létrehozásához erősítsd meg, hogy elmúltál 18 éves, és fogadd el, hogy az Alboria tárolja ezeket az adatokat.",
     "unlinked": "Ez az eszköz már nincs összekapcsolva a fiókoddal. Jelentkezz be újra, vagy válassz másik lehetőséget.",
     "email_suppressed": "A leveleink már nem érkeznek meg erre a címre (visszapattantak vagy spamnek jelölték őket). Használj másik e-mail-címet."
   }
