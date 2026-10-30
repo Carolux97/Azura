@@ -39,6 +39,21 @@ indented lines.
   password: a 6-digit code sent to your email signs you in. The new Account section shows your
   identity as Gamertag#tag, the gamertag (moved here from Installation), your devices, and lets you
   download or delete your data.
+- Play with friends. System Link works on a local network: campaign co-op, Horde, Beast and
+  private Versus, choosing System Link in the party options. Over the internet, with an Alboria
+  account, a Joinable or Invite only party is a room on Alboria: friends join it with its code
+  (Manage/Invite, Join by code). Players connect directly when their routers allow it, and through
+  Alboria's relay when they don't. Options has a new Connection section with your Gamertag#tag, the
+  direct connection setting and the latency.
+- While Alboria can't send emails yet, accounts are created without a code. Once codes are back
+  you'll have 48 hours to verify your email from Account (or Play), or the account will be deleted.
+- Upscaling preset in the Video menu: it picks the render resolution for your screen and turns on
+  image scaling (AMD FSR 1; MetalFX on macOS).
+- Mouse: native mouse look with no aim assist, and the sideways turn while roadie running is
+  capped.
+- Linux and Windows: faster Vulkan, and 3840 × 2160 no longer shows a black picture.
+- The launcher no longer stutters while it's in front: its animated background now costs a
+  fraction of what it did.
 
 ## 0.4.5
 
