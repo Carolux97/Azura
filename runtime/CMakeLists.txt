@@ -71,6 +71,7 @@ set(AZURA_SOURCES
     src/connection_menu.cpp
     src/shader_precompile.cpp
     src/system_settings.cpp
+    src/window_icon.cpp
     src/local_coop_menu.cpp
     src/controls_menu.cpp
     src/coop_ui.cpp
@@ -96,8 +97,9 @@ if(APPLE)
 endif()
 if(WIN32)
     # Keeps overlay programs' Vulkan layers that close the game out of it, and tells which guest
-    # memory is committed (the button prompts scan it).
-    list(APPEND AZURA_SOURCES src/platform_win.cpp)
+    # memory is committed (the button prompts scan it). azura.rc gives azura.exe the Azura icon.
+    enable_language(RC)
+    list(APPEND AZURA_SOURCES src/platform_win.cpp src/azura.rc)
 endif()
 if(AZURA_PM4_TRACE)
     # The PM4 writer trace (src/hle_gfx/pm4_trace.h): debug builds only. Its pass-through hooks
