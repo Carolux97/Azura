@@ -528,7 +528,7 @@ Decided on 29 October 2026.
 - Devices of each account: public key, game (title ID), system (such as "Mac"), the hash of the
   computer's ID (section 3.2), the address it last signed in from and the dates it was linked and
   last signed in, until removed from the account. The address is kept only to ban it with its
-  account.
+  account, and forgotten 30 days after the device last signed in.
 - Bans: account, public key, computer or IP address, reason, date and end date (30 days for the
   addresses of a banned account; none for the rest), until removed or ended.
 - Codes: in memory only, as a hash, for their 10 minutes.
