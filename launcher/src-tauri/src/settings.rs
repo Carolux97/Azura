@@ -32,7 +32,7 @@ const LAUNCHER_CONFIG: &str = "launcher.toml";
 
 /// Header written at the top of a new `azura.toml`.
 const RUNTIME_CONFIG_HEADER: &str = "\
-# Gears3-Azura runtime settings.
+# Azura runtime settings.
 #
 # Written by the launcher and by the in-game settings menu (F4). Every key is a runtime setting
 # (cvar) name; azura.default.toml, beside the runtime, documents all of them.

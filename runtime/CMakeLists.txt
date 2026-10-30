@@ -1,4 +1,4 @@
-# Gears3-Azura runtime: the recompiled game plus our own hooks, built as a native macOS executable.
+# Azura runtime: the recompiled game plus our own hooks, built as a native macOS executable.
 #
 # The recompiled game code in generated/ is produced from your own default.xex by `rexglue codegen`
 # and is not part of this repository. scripts/build.sh runs the whole sequence.

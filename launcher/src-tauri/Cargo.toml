@@ -1,8 +1,8 @@
 [package]
 name = "azura-launcher"
 version = "0.5.0"
-description = "Launcher for the Gears3-Azura native macOS port"
-authors = ["Gears3-Azura contributors"]
+description = "Launcher for the Azura native port"
+authors = ["Azura contributors"]
 license = "PolyForm-Strict-1.0.0"
 edition = "2024"
 rust-version = "1.90"
