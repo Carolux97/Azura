@@ -3,12 +3,15 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <functional>
 #include <map>
 #include <mutex>
 #include <sstream>
 #include <vector>
+
+#include <SDL3/SDL.h>
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
@@ -28,9 +31,20 @@ REXCVAR_DEFINE_BOOL(motion_blur, true, "Azura/Graphics",
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_STRING(render_resolution, "auto", "Azura/Graphics",
                       "Resolution the game is drawn at: auto (chosen for this computer), 1280x720 (the "
-                      "Xbox 360's), 2560x1440 or 3840x2160. Sets draw_resolution_scale_x/y and the "
-                      "texture cache limits when the game starts")
-    .allowed({"auto", "1280x720", "2560x1440", "3840x2160"})
+                      "Xbox 360's), 1920x1080 (drawn at 3/2 on macOS with gfx = hle, at 2560x1440 "
+                      "and scaled down to the window on Vulkan), "
+                      "2560x1440 or 3840x2160. Sets the draw resolution scale and the texture cache "
+                      "limits when the game starts")
+    .allowed({"auto", "1280x720", "1920x1080", "2560x1440", "3840x2160"})
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_STRING(upscaling_preset, "custom", "Azura/Graphics",
+                      "Quality preset of the image scaling: custom (render_resolution and present_effect "
+                      "as set), native, quality, balanced or performance. A preset draws the game at the "
+                      "screen's resolution divided by 1, 1.5, 1.7 or 2, rounded to the nearest render "
+                      "resolution this build draws (not 1920x1080 off macOS, which Vulkan draws at "
+                      "2560x1440) and never below 1280x720, and scales it with AMD FSR 1 "
+                      "(Apple MetalFX on macOS) when that is below the screen's")
+    .allowed({"custom", "native", "quality", "balanced", "performance"})
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_DOUBLE(upscaling_sharpness, 0.0, "Azura/Graphics",
                       "Extra sharpening of the image scaling effects that sharpen (AMD CAS, and AMD FSR 1 "
@@ -46,6 +60,25 @@ REXCVAR_DEFINE_DOUBLE(field_of_view, 80.0, "Azura/Graphics",
 REXCVAR_DEFINE_BOOL(film_grain, true, "Azura/Graphics",
                     "The game's film grain (UberPostProcessEffect.bEnableImageGrain); applies while the "
                     "game runs");
+REXCVAR_DEFINE_BOOL(depth_of_field, true, "Azura/Graphics",
+                    "The game's depth of field (SystemSettings.DepthOfField); applies while the game "
+                    "runs");
+REXCVAR_DEFINE_BOOL(dynamic_shadows, true, "Azura/Graphics",
+                    "The game's dynamic shadows (SystemSettings.DynamicShadows); applies while the game "
+                    "runs");
+// Off by default on Linux, where the game's ambient occlusion leaves black patches on surfaces.
+#if defined(__linux__)
+constexpr bool kAmbientOcclusionDefault = false;
+#else
+constexpr bool kAmbientOcclusionDefault = true;
+#endif
+REXCVAR_DEFINE_BOOL(ambient_occlusion, kAmbientOcclusionDefault, "Azura/Graphics",
+                    "The game's ambient occlusion (SystemSettings.AmbientOcclusion); applies while the "
+                    "game runs. Off by default on Linux");
+REXCVAR_DEFINE_BOOL(bloom, true, "Azura/Graphics",
+                    "The game's bloom (SystemSettings.Bloom); applies while the game runs");
+REXCVAR_DEFINE_BOOL(lens_flares, true, "Azura/Graphics",
+                    "The game's lens flares (SystemSettings.LensFlares); applies while the game runs");
 
 namespace azura::menu {
 
@@ -70,6 +103,12 @@ enum class Label {
   kPerformanceOverlayPosition,
   kFieldOfView,
   kFilmGrain,
+  kDepthOfField,
+  kDynamicShadows,
+  kAmbientOcclusion,
+  kBloom,
+  kLensFlares,
+  kUpscalingPreset,
   kCount
 };
 
@@ -88,6 +127,12 @@ struct Option {
   std::vector<const char*> choices;  // kChoice: the cvar value for each list index
   float slider_min = 0, slider_max = 0, slider_step = 0;
 };
+
+// The render resolutions the Video menu offers, in order. 1920x1080 is a draw resolution scale of
+// 3/2: the Metal renderer (macOS) draws it as it is, Vulkan at 2 and scales the image down.
+std::vector<const char*> RenderResolutionChoices() {
+  return {"auto", "1280x720", "1920x1080", "2560x1440", "3840x2160"};
+}
 
 // The upscaling effects present_effect accepts in this build of the SDK, in menu order. Others it
 // may accept (the experimental temporal FSR) are not offered. The menu shows the ones the running
@@ -131,25 +176,39 @@ const std::vector<Option>& Options() {
       // a toggle would need a definition of a profile setting the game does not use, and none is
       // left with two values.
       {kVideoCategory, 6, Label::kFilmGrain, "film_grain", Kind::kChoice, 9113, -1, {"false", "true"}},
+      // Apply while the game runs, as the engine's settings object is written every frame
+      // (system_settings.cpp). Lists of our own (IDs 9114 and 9115), as film grain's; these two
+      // save the most GPU time.
+      {kVideoCategory, 7, Label::kDepthOfField, "depth_of_field", Kind::kChoice, 9114, -1, {"false", "true"}},
+      {kVideoCategory, 8, Label::kDynamicShadows, "dynamic_shadows", Kind::kChoice, 9115, -1, {"false", "true"}},
+      // The same for the effects that change the look more than the frame rate (IDs 9116 to 9118).
+      {kVideoCategory, 9, Label::kAmbientOcclusion, "ambient_occlusion", Kind::kChoice, 9116, -1, {"false", "true"}},
+      {kVideoCategory, 10, Label::kBloom, "bloom", Kind::kChoice, 9117, -1, {"false", "true"}},
+      {kVideoCategory, 11, Label::kLensFlares, "lens_flares", Kind::kChoice, 9118, -1, {"false", "true"}},
       // Generic Xbox profile settings with three values that Gears never reads: Controller
       // Sensitivity (it has its own, 368, 59 and 60) and Voice Via Speakers.
-      {kVideoCategory, 7, Label::kAnisotropic, "anisotropic_override", Kind::kChoice, 13, 2, {"0", "3", "5"}},
+      {kVideoCategory, 12, Label::kAnisotropic, "anisotropic_override", Kind::kChoice, 13, 2, {"0", "3", "5"}},
+      // A list of our own (ID 9119), above the two rows it decides for: with a preset other than
+      // custom, ApplyRenderResolution picks the render resolution and the image scaling.
+      {kVideoCategory, 13, Label::kUpscalingPreset, "upscaling_preset", Kind::kChoice, 9119, -1,
+       {"custom", "native", "quality", "balanced", "performance"}},
       // Lists of our own too: the resolution's value names include "Automatic" in the player's
-      // language, and the upscaling values depend on the platform (UpscalingChoices).
-      {kVideoCategory, 8, Label::kRenderResolution, "render_resolution", Kind::kChoice, 9108, -1,
-       {"auto", "1280x720", "2560x1440", "3840x2160"}},
+      // language, and the resolution and upscaling values depend on the platform
+      // (RenderResolutionChoices, UpscalingChoices).
+      {kVideoCategory, 14, Label::kRenderResolution, "render_resolution", Kind::kChoice, 9108, -1,
+       RenderResolutionChoices()},
       // Right above the sharpness row, which belongs to it.
-      {kVideoCategory, 9, Label::kUpscaling, "present_effect", Kind::kChoice, 9107, -1, UpscalingChoices()},
+      {kVideoCategory, 15, Label::kUpscaling, "present_effect", Kind::kChoice, 9107, -1, UpscalingChoices()},
       // Applies while the game runs, so the player sees the sharpening change (ApplyUpscalingSharpness).
       // Only shown with an image scaling effect that sharpens; the rows below it then move up one.
-      {kVideoCategory, 10, Label::kSharpness, "upscaling_sharpness", Kind::kSlider, 9109, -1, {}, 0.0f, 1.0f,
+      {kVideoCategory, 16, Label::kSharpness, "upscaling_sharpness", Kind::kSlider, 9109, -1, {}, 0.0f, 1.0f,
        0.1f},
       // A list of our own (ID 9110): its values grow as the overlay gets more modes. Last in the
       // list, with its position below it.
-      {kVideoCategory, 11, Label::kPerformanceOverlay, "performance_overlay", Kind::kChoice, 9110, -1,
+      {kVideoCategory, 17, Label::kPerformanceOverlay, "performance_overlay", Kind::kChoice, 9110, -1,
        {"off", "fps", "detailed", "advanced"}},
       // Our own list too (ID 9111): the corner the overlay is shown in.
-      {kVideoCategory, 12, Label::kPerformanceOverlayPosition, "performance_overlay_position", Kind::kChoice, 9111, -1,
+      {kVideoCategory, 18, Label::kPerformanceOverlayPosition, "performance_overlay_position", Kind::kChoice, 9111, -1,
        {"top_left", "top_right", "bottom_left", "bottom_right"}},
   };
   return options;
@@ -170,6 +229,7 @@ struct Texts {
   const char* corners[4];  // the performance overlay's positions: top left, top right, bottom left, bottom right
   const char* detailed;    // the performance overlay's mode with the CPU and GPU use
   const char* advanced;    // the performance overlay's mode with memory use, frame time graph and 1% low
+  const char* presets[5];  // the upscaling presets: custom, native, quality, balanced, performance
 };
 
 // Keyed by the extension of the localization files. Labels are upper case like the game's own.
@@ -193,8 +253,15 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"PERFORMANCE OVERLAY", "Show the game's frame rate in a corner of the screen."},
          {"OVERLAY POSITION", "Corner of the screen the performance overlay is shown in."},
          {"FIELD OF VIEW", "How wide the camera sees. 80 is the original; aiming and cover widen or narrow with it."},
-         {"FILM GRAIN", "The film grain noise the game adds to the image."}},
-        "Off", "On", "FXAA", "FXAA extreme", "Open", "Bilinear (original)", "AMD CAS (sharpening)", "AMD FSR 1", "Automatic", {"Top left", "Top right", "Bottom left", "Bottom right"}, "Detailed", "Advanced"}},
+         {"FILM GRAIN", "The film grain noise the game adds to the image."},
+         {"DEPTH OF FIELD", "The blur of what is out of focus. Turn it off to make the game run faster."},
+         {"DYNAMIC SHADOWS", "The shadows of characters and moving objects. Turn them off to make the game run faster."},
+         {"AMBIENT OCCLUSION", "The soft shadows in corners and where objects meet."},
+         {"BLOOM", "The glow around bright lights."},
+         {"LENS FLARES", "The flares bright lights draw over the image."},
+         {"UPSCALING PRESET",
+          "Draw the game below the screen's resolution and scale it up to the screen. Custom keeps Render resolution and Image scaling as set. Takes effect the next time the game starts."}},
+        "Off", "On", "FXAA", "FXAA extreme", "Open", "Bilinear (original)", "AMD CAS (sharpening)", "AMD FSR 1", "Automatic", {"Top left", "Top right", "Bottom left", "Bottom right"}, "Detailed", "Advanced", {"Custom", "Native", "Quality", "Balanced", "Performance"}}},
       {"esn",
        {{"TECLADO Y RATÓN", "Ajuste las opciones del teclado y el ratón."},
         {{"CALIBRAR BRILLO", "Abra la pantalla de calibración del brillo."},
@@ -214,8 +281,15 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"INDICADOR DE RENDIMIENTO", "Muestre los fotogramas por segundo del juego en una esquina de la pantalla."},
          {"POSICIÓN DEL INDICADOR", "Esquina de la pantalla en la que se muestra el indicador de rendimiento."},
          {"CAMPO DE VISIÓN", "Amplitud de la vista de la cámara. 80 es el original; apuntar y cubrirse cambian en la misma proporción."},
-         {"GRANO DE PELÍCULA", "El ruido de grano de película que el juego añade a la imagen."}},
-        "Desactivado", "Activado", "FXAA", "FXAA extremo", "Abrir", "Bilineal (original)", "AMD CAS (nitidez)", "AMD FSR 1", "Automática", {"Arriba a la izquierda", "Arriba a la derecha", "Abajo a la izquierda", "Abajo a la derecha"}, "Detallado", "Avanzado"}},
+         {"GRANO DE PELÍCULA", "El ruido de grano de película que el juego añade a la imagen."},
+         {"PROFUNDIDAD DE CAMPO", "El desenfoque de lo que queda fuera de foco. Desactívela para que el juego vaya más rápido."},
+         {"SOMBRAS DINÁMICAS", "Las sombras de los personajes y de los objetos que se mueven. Desactívelas para que el juego vaya más rápido."},
+         {"OCLUSIÓN AMBIENTAL", "Las sombras suaves en las esquinas y donde se juntan los objetos."},
+         {"RESPLANDOR", "El halo que rodea las luces intensas."},
+         {"DESTELLOS DE LENTE", "Los destellos que las luces intensas dibujan sobre la imagen."},
+         {"CALIDAD DE ESCALADO",
+          "Dibuje el juego por debajo de la resolución de la pantalla y escálelo hasta ella. Personalizado usa la resolución de renderizado y el escalado de imagen elegidos. Se aplica la próxima vez que inicie el juego."}},
+        "Desactivado", "Activado", "FXAA", "FXAA extremo", "Abrir", "Bilineal (original)", "AMD CAS (nitidez)", "AMD FSR 1", "Automática", {"Arriba a la izquierda", "Arriba a la derecha", "Abajo a la izquierda", "Abajo a la derecha"}, "Detallado", "Avanzado", {"Personalizado", "Nativo", "Calidad", "Equilibrado", "Rendimiento"}}},
       {"deu",
        {{"TASTATUR UND MAUS", "Passen Sie die Einstellungen für Tastatur und Maus an."},
         {{"HELLIGKEIT KALIBRIEREN", "Öffnet den Bildschirm zur Kalibrierung der Helligkeit."},
@@ -234,8 +308,15 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"LEISTUNGSANZEIGE", "Zeigt die Bildrate des Spiels in einer Ecke des Bildschirms an."},
          {"POSITION DER ANZEIGE", "Bildschirmecke, in der die Leistungsanzeige erscheint."},
          {"SICHTFELD", "Wie weit die Kamera sieht. 80 ist der ursprüngliche Wert; Zielen und Deckung ändern sich im gleichen Verhältnis."},
-         {"FILMKORN", "Das Filmkorn, das das Spiel dem Bild hinzufügt."}},
-        "Aus", "Ein", "FXAA", "FXAA extrem", "Öffnen", "Bilinear (Original)", "AMD CAS (Schärfung)", "AMD FSR 1", "Automatisch", {"Oben links", "Oben rechts", "Unten links", "Unten rechts"}, "Detailliert", "Erweitert"}},
+         {"FILMKORN", "Das Filmkorn, das das Spiel dem Bild hinzufügt."},
+         {"TIEFENSCHÄRFE", "Die Unschärfe außerhalb des Fokus. Ausgeschaltet läuft das Spiel schneller."},
+         {"DYNAMISCHE SCHATTEN", "Die Schatten von Figuren und bewegten Objekten. Ausgeschaltet läuft das Spiel schneller."},
+         {"UMGEBUNGSVERDECKUNG", "Die weichen Schatten in Ecken und dort, wo Objekte aufeinandertreffen."},
+         {"BLOOM", "Das Leuchten um helle Lichter."},
+         {"LINSENREFLEXE", "Die Reflexe, die helle Lichter über das Bild legen."},
+         {"SKALIERUNGSQUALITÄT",
+          "Das Spiel unter der Bildschirmauflösung rendern und auf sie hochskalieren. Benutzerdefiniert verwendet die gewählte Renderauflösung und Bildskalierung. Wird beim nächsten Spielstart wirksam."}},
+        "Aus", "Ein", "FXAA", "FXAA extrem", "Öffnen", "Bilinear (Original)", "AMD CAS (Schärfung)", "AMD FSR 1", "Automatisch", {"Oben links", "Oben rechts", "Unten links", "Unten rechts"}, "Detailliert", "Erweitert", {"Benutzerdefiniert", "Nativ", "Qualität", "Ausgewogen", "Leistung"}}},
       {"ita",
        {{"TASTIERA E MOUSE", "Regola le impostazioni di tastiera e mouse."},
         {{"CALIBRA LUMINOSITÀ", "Apri la schermata di calibrazione della luminosità."},
@@ -254,8 +335,15 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"INDICATORE PRESTAZIONI", "Mostra la frequenza dei fotogrammi del gioco in un angolo dello schermo."},
          {"POSIZIONE INDICATORE", "Angolo dello schermo in cui compare l'indicatore delle prestazioni."},
          {"CAMPO VISIVO", "Ampiezza della visuale. 80 è il valore originale; mira e copertura cambiano nella stessa proporzione."},
-         {"GRANA PELLICOLA", "La grana pellicola che il gioco aggiunge all'immagine."}},
-        "Disattivato", "Attivato", "FXAA", "FXAA estremo", "Apri", "Bilineare (originale)", "AMD CAS (nitidezza)", "AMD FSR 1", "Automatica", {"In alto a sinistra", "In alto a destra", "In basso a sinistra", "In basso a destra"}, "Dettagliato", "Avanzato"}},
+         {"GRANA PELLICOLA", "La grana pellicola che il gioco aggiunge all'immagine."},
+         {"PROFONDITÀ DI CAMPO", "La sfocatura di ciò che è fuori fuoco. Disattivala per rendere il gioco più veloce."},
+         {"OMBRE DINAMICHE", "Le ombre dei personaggi e degli oggetti in movimento. Disattivale per rendere il gioco più veloce."},
+         {"OCCLUSIONE AMBIENTALE", "Le ombre morbide negli angoli e dove gli oggetti si incontrano."},
+         {"BLOOM", "Il bagliore attorno alle luci intense."},
+         {"RIFLESSI DELLA LENTE", "I riflessi che le luci intense disegnano sull'immagine."},
+         {"QUALITÀ DI UPSCALING",
+          "Disegna il gioco sotto la risoluzione dello schermo e lo scala fino ad essa. Personalizzato usa la risoluzione di rendering e il ridimensionamento scelti. Ha effetto al prossimo avvio del gioco."}},
+        "Disattivato", "Attivato", "FXAA", "FXAA estremo", "Apri", "Bilineare (originale)", "AMD CAS (nitidezza)", "AMD FSR 1", "Automatica", {"In alto a sinistra", "In alto a destra", "In basso a sinistra", "In basso a destra"}, "Dettagliato", "Avanzato", {"Personalizzato", "Nativo", "Qualità", "Bilanciato", "Prestazioni"}}},
       {"jpn",
        {{"キーボードとマウス", "キーボードとマウスの設定を調整します。"},
         {{"明るさの調整", "明るさの調整画面を開きます。"},
@@ -274,8 +362,15 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"パフォーマンス表示", "ゲームのフレームレートを画面の隅に表示します。"},
          {"表示位置", "パフォーマンス表示を出す画面の隅。"},
          {"視野角", "カメラの視野の広さです。80 がオリジナルです。エイムやカバーも同じ割合で変わります。"},
-         {"フィルムグレイン", "ゲームが映像に加えるフィルムグレインのノイズです。"}},
-        "オフ", "オン", "FXAA", "FXAA (最大)", "開く", "バイリニア（オリジナル）", "AMD CAS（シャープ化）", "AMD FSR 1", "自動", {"左上", "右上", "左下", "右下"}, "詳細", "高度"}},
+         {"フィルムグレイン", "ゲームが映像に加えるフィルムグレインのノイズです。"},
+         {"被写界深度", "ピントの合っていない部分のぼかしです。オフにするとゲームが軽くなります。"},
+         {"動的な影", "キャラクターや動く物体の影です。オフにするとゲームが軽くなります。"},
+         {"アンビエントオクルージョン", "隅や物が接する部分の柔らかい影です。"},
+         {"ブルーム", "明るい光のまわりの輝きです。"},
+         {"レンズフレア", "明るい光が画面に描くフレアです。"},
+         {"アップスケーリング品質",
+          "画面より低い解像度でゲームを描画し、画面の解像度まで拡大します。カスタムは選択したレンダリング解像度と画像スケーリングを使用します。次回ゲーム起動時に適用されます。"}},
+        "オフ", "オン", "FXAA", "FXAA (最大)", "開く", "バイリニア（オリジナル）", "AMD CAS（シャープ化）", "AMD FSR 1", "自動", {"左上", "右上", "左下", "右下"}, "詳細", "高度", {"カスタム", "ネイティブ", "クオリティ", "バランス", "パフォーマンス"}}},
       {"fra",
        {{"CLAVIER ET SOURIS", "Réglez les options du clavier et de la souris."},
         {{"CALIBRER LA LUMINOSITÉ", "Ouvrez l'écran de calibrage de la luminosité."},
@@ -294,8 +389,15 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"INDICATEUR DE PERFORMANCES", "Affiche la fréquence d'images du jeu dans un coin de l'écran."},
          {"POSITION DE L'INDICATEUR", "Coin de l'écran où s'affiche l'indicateur de performances."},
          {"CHAMP DE VISION", "Largeur de la vue de la caméra. 80 est la valeur d'origine ; la visée et le couvert changent dans la même proportion."},
-         {"GRAIN DE FILM", "Le grain de film que le jeu ajoute à l'image."}},
-        "Désactivé", "Activé", "FXAA", "FXAA extrême", "Ouvrir", "Bilinéaire (d'origine)", "AMD CAS (netteté)", "AMD FSR 1", "Automatique", {"En haut à gauche", "En haut à droite", "En bas à gauche", "En bas à droite"}, "Détaillé", "Avancé"}},
+         {"GRAIN DE FILM", "Le grain de film que le jeu ajoute à l'image."},
+         {"PROFONDEUR DE CHAMP", "Le flou de ce qui est hors de la mise au point. Désactivez-la pour que le jeu soit plus rapide."},
+         {"OMBRES DYNAMIQUES", "Les ombres des personnages et des objets en mouvement. Désactivez-les pour que le jeu soit plus rapide."},
+         {"OCCLUSION AMBIANTE", "Les ombres douces dans les coins et là où les objets se touchent."},
+         {"BLOOM", "Le halo autour des lumières vives."},
+         {"REFLETS DE LENTILLE", "Les reflets que les lumières vives dessinent sur l'image."},
+         {"QUALITÉ DE MISE À L'ÉCHELLE",
+          "Affiche le jeu sous la résolution de l'écran puis l'agrandit à celle-ci. Personnalisé utilise la résolution de rendu et la mise à l'échelle choisies. Prend effet au prochain démarrage du jeu."}},
+        "Désactivé", "Activé", "FXAA", "FXAA extrême", "Ouvrir", "Bilinéaire (d'origine)", "AMD CAS (netteté)", "AMD FSR 1", "Automatique", {"En haut à gauche", "En haut à droite", "En bas à gauche", "En bas à droite"}, "Détaillé", "Avancé", {"Personnalisé", "Natif", "Qualité", "Équilibré", "Performances"}}},
       {"ptb",
        {{"TECLADO E MOUSE", "Ajuste as opções do teclado e do mouse."},
         {{"CALIBRAR BRILHO", "Abra a tela de calibração do brilho."},
@@ -315,8 +417,15 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"INDICADOR DE DESEMPENHO", "Mostra a taxa de quadros do jogo em um canto da tela."},
          {"POSIÇÃO DO INDICADOR", "Canto da tela em que o indicador de desempenho aparece."},
          {"CAMPO DE VISÃO", "Amplitude da visão da câmera. 80 é o original; mirar e se proteger mudam na mesma proporção."},
-         {"GRANULAÇÃO DE FILME", "A granulação de filme que o jogo adiciona à imagem."}},
-        "Desativado", "Ativado", "FXAA", "FXAA extremo", "Abrir", "Bilinear (original)", "AMD CAS (nitidez)", "AMD FSR 1", "Automática", {"Superior esquerdo", "Superior direito", "Inferior esquerdo", "Inferior direito"}, "Detalhado", "Avançado"}},
+         {"GRANULAÇÃO DE FILME", "A granulação de filme que o jogo adiciona à imagem."},
+         {"PROFUNDIDADE DE CAMPO", "O desfoque do que está fora de foco. Desative para o jogo ficar mais rápido."},
+         {"SOMBRAS DINÂMICAS", "As sombras dos personagens e dos objetos em movimento. Desative para o jogo ficar mais rápido."},
+         {"OCLUSÃO DE AMBIENTE", "As sombras suaves nos cantos e onde os objetos se encontram."},
+         {"BLOOM", "O brilho em volta das luzes fortes."},
+         {"REFLEXOS DE LENTE", "Os reflexos que as luzes fortes desenham sobre a imagem."},
+         {"QUALIDADE DE ESCALA",
+          "Desenha o jogo abaixo da resolução da tela e o amplia até ela. Personalizado usa a resolução de renderização e a escala de imagem escolhidas. É aplicado na próxima vez que o jogo iniciar."}},
+        "Desativado", "Ativado", "FXAA", "FXAA extremo", "Abrir", "Bilinear (original)", "AMD CAS (nitidez)", "AMD FSR 1", "Automática", {"Superior esquerdo", "Superior direito", "Inferior esquerdo", "Inferior direito"}, "Detalhado", "Avançado", {"Personalizado", "Nativo", "Qualidade", "Equilibrado", "Desempenho"}}},
       {"pol",
        {{"KLAWIATURA I MYSZ", "Dostosuj ustawienia klawiatury i myszy."},
         {{"KALIBRACJA JASNOŚCI", "Otwórz ekran kalibracji jasności."},
@@ -335,8 +444,15 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"WSKAŹNIK WYDAJNOŚCI", "Wyświetla liczbę klatek na sekundę gry w rogu ekranu."},
          {"POŁOŻENIE WSKAŹNIKA", "Róg ekranu, w którym wyświetla się wskaźnik wydajności."},
          {"POLE WIDZENIA", "Szerokość widoku kamery. 80 to wartość oryginalna; celowanie i osłona zmieniają się w tej samej proporcji."},
-         {"ZIARNO FILMOWE", "Ziarno filmowe, które gra dodaje do obrazu."}},
-        "Wyłączone", "Włączone", "FXAA", "FXAA ekstremalne", "Otwórz", "Dwuliniowe (oryginalne)", "AMD CAS (wyostrzanie)", "AMD FSR 1", "Automatyczna", {"Lewy górny róg", "Prawy górny róg", "Lewy dolny róg", "Prawy dolny róg"}, "Szczegółowy", "Zaawansowany"}},
+         {"ZIARNO FILMOWE", "Ziarno filmowe, które gra dodaje do obrazu."},
+         {"GŁĘBIA OSTROŚCI", "Rozmycie tego, co jest poza ostrością. Wyłącz, aby gra działała szybciej."},
+         {"DYNAMICZNE CIENIE", "Cienie postaci i ruchomych obiektów. Wyłącz, aby gra działała szybciej."},
+         {"OKLUZJA OTOCZENIA", "Miękkie cienie w narożnikach i tam, gdzie stykają się obiekty."},
+         {"POŚWIATA", "Blask wokół jasnych świateł."},
+         {"ODBLASKI SOCZEWKI", "Odblaski, które jasne światła rysują na obrazie."},
+         {"JAKOŚĆ SKALOWANIA",
+          "Renderuje grę poniżej rozdzielczości ekranu i skaluje ją do niej. Niestandardowe używa wybranej rozdzielczości renderowania i skalowania obrazu. Zadziała przy następnym uruchomieniu gry."}},
+        "Wyłączone", "Włączone", "FXAA", "FXAA ekstremalne", "Otwórz", "Dwuliniowe (oryginalne)", "AMD CAS (wyostrzanie)", "AMD FSR 1", "Automatyczna", {"Lewy górny róg", "Prawy górny róg", "Lewy dolny róg", "Prawy dolny róg"}, "Szczegółowy", "Zaawansowany", {"Niestandardowe", "Natywne", "Jakość", "Zrównoważone", "Wydajność"}}},
       {"rus",
        {{"КЛАВИАТУРА И МЫШЬ", "Настройте параметры клавиатуры и мыши."},
         {{"КАЛИБРОВКА ЯРКОСТИ", "Откройте экран калибровки яркости."},
@@ -355,8 +471,15 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"ПОКАЗАТЕЛЬ ПРОИЗВОДИТЕЛЬНОСТИ", "Показывает частоту кадров игры в углу экрана."},
          {"ПОЛОЖЕНИЕ ПОКАЗАТЕЛЯ", "Угол экрана, в котором показывается показатель производительности."},
          {"ПОЛЕ ЗРЕНИЯ", "Ширина обзора камеры. 80 — исходное значение; прицеливание и укрытие меняются в той же пропорции."},
-         {"ЗЕРНИСТОСТЬ ПЛЁНКИ", "Эффект зернистости плёнки, который игра добавляет к изображению."}},
-        "Выкл.", "Вкл.", "FXAA", "FXAA (макс.)", "Открыть", "Билинейное (оригинал)", "AMD CAS (резкость)", "AMD FSR 1", "Автоматически", {"Сверху слева", "Сверху справа", "Снизу слева", "Снизу справа"}, "Подробно", "Расширенный"}},
+         {"ЗЕРНИСТОСТЬ ПЛЁНКИ", "Эффект зернистости плёнки, который игра добавляет к изображению."},
+         {"ГЛУБИНА РЕЗКОСТИ", "Размытие того, что находится не в фокусе. Выключите, чтобы игра работала быстрее."},
+         {"ДИНАМИЧЕСКИЕ ТЕНИ", "Тени персонажей и движущихся объектов. Выключите, чтобы игра работала быстрее."},
+         {"ФОНОВОЕ ЗАТЕНЕНИЕ", "Мягкие тени в углах и там, где соприкасаются предметы."},
+         {"СВЕЧЕНИЕ", "Ореол вокруг ярких источников света."},
+         {"БЛИКИ ОБЪЕКТИВА", "Блики, которые яркий свет рисует поверх изображения."},
+         {"КАЧЕСТВО МАСШТАБИРОВАНИЯ",
+          "Игра рисуется в разрешении ниже экранного и масштабируется до него. «Своё» использует выбранные разрешение рендеринга и масштабирование. Вступит в силу при следующем запуске игры."}},
+        "Выкл.", "Вкл.", "FXAA", "FXAA (макс.)", "Открыть", "Билинейное (оригинал)", "AMD CAS (резкость)", "AMD FSR 1", "Автоматически", {"Сверху слева", "Сверху справа", "Снизу слева", "Снизу справа"}, "Подробно", "Расширенный", {"Своё", "Родное", "Качество", "Баланс", "Производительность"}}},
       {"cze",
        {{"KLÁVESNICE A MYŠ", "Upravte nastavení klávesnice a myši."},
         {{"KALIBRACE JASU", "Otevřete obrazovku kalibrace jasu."},
@@ -375,8 +498,15 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"UKAZATEL VÝKONU", "Zobrazí snímkovou frekvenci hry v rohu obrazovky."},
          {"UMÍSTĚNÍ UKAZATELE", "Roh obrazovky, ve kterém se zobrazuje ukazatel výkonu."},
          {"ZORNÉ POLE", "Šířka záběru kamery. 80 je původní hodnota; míření a kryt se mění ve stejném poměru."},
-         {"FILMOVÉ ZRNO", "Filmové zrno, které hra přidává do obrazu."}},
-        "Vypnuto", "Zapnuto", "FXAA", "FXAA extrémní", "Otevřít", "Bilineární (původní)", "AMD CAS (zostření)", "AMD FSR 1", "Automaticky", {"Vlevo nahoře", "Vpravo nahoře", "Vlevo dole", "Vpravo dole"}, "Podrobný", "Pokročilý"}},
+         {"FILMOVÉ ZRNO", "Filmové zrno, které hra přidává do obrazu."},
+         {"HLOUBKA OSTROSTI", "Rozmazání toho, co je mimo ostrost. Vypněte ji, aby hra běžela rychleji."},
+         {"DYNAMICKÉ STÍNY", "Stíny postav a pohyblivých objektů. Vypněte je, aby hra běžela rychleji."},
+         {"OKOLNÍ ZASTÍNĚNÍ", "Měkké stíny v rozích a tam, kde se objekty stýkají."},
+         {"ZÁŘE", "Záře kolem jasných světel."},
+         {"ODLESKY OBJEKTIVU", "Odlesky, které jasná světla kreslí přes obraz."},
+         {"KVALITA ŠKÁLOVÁNÍ",
+          "Vykreslí hru pod rozlišením obrazovky a zvětší ji na něj. Vlastní použije zvolené rozlišení vykreslování a škálování obrazu. Projeví se při příštím spuštění hry."}},
+        "Vypnuto", "Zapnuto", "FXAA", "FXAA extrémní", "Otevřít", "Bilineární (původní)", "AMD CAS (zostření)", "AMD FSR 1", "Automaticky", {"Vlevo nahoře", "Vpravo nahoře", "Vlevo dole", "Vpravo dole"}, "Podrobný", "Pokročilý", {"Vlastní", "Nativní", "Kvalita", "Vyvážené", "Výkon"}}},
       {"hun",
        {{"BILLENTYŰZET ÉS EGÉR", "A billentyűzet és az egér beállításai."},
         {{"FÉNYERŐ KALIBRÁLÁSA", "Megnyitja a fényerő kalibrálási képernyőjét."},
@@ -395,8 +525,15 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"TELJESÍTMÉNYJELZŐ", "Megjeleníti a játék képkockasebességét a képernyő sarkában."},
          {"JELZŐ HELYE", "A képernyő sarka, ahol a teljesítményjelző megjelenik."},
          {"LÁTÓMEZŐ", "A kamera látószögének szélessége. A 80 az eredeti; a célzás és a fedezék ugyanilyen arányban változik."},
-         {"FILMSZEMCSÉZET", "A filmszemcsés zaj, amelyet a játék a képhez ad."}},
-        "Ki", "Be", "FXAA", "FXAA (extrém)", "Megnyitás", "Bilineáris (eredeti)", "AMD CAS (élesítés)", "AMD FSR 1", "Automatikus", {"Bal felső sarok", "Jobb felső sarok", "Bal alsó sarok", "Jobb alsó sarok"}, "Részletes", "Haladó"}},
+         {"FILMSZEMCSÉZET", "A filmszemcsés zaj, amelyet a játék a képhez ad."},
+         {"MÉLYSÉGÉLESSÉG", "A fókuszon kívüli részek elmosása. Kapcsold ki, hogy gyorsabban fusson a játék."},
+         {"DINAMIKUS ÁRNYÉKOK", "A szereplők és a mozgó tárgyak árnyékai. Kapcsold ki őket, hogy gyorsabban fusson a játék."},
+         {"KÖRNYEZETI TAKARÁS", "A lágy árnyékok a sarkokban és ott, ahol a tárgyak összeérnek."},
+         {"RAGYOGÁS", "Az erős fények körüli fényudvar."},
+         {"LENCSECSILLANÁS", "A csillanások, amelyeket az erős fények a képre rajzolnak."},
+         {"FELSKÁLÁZÁSI MINŐSÉG",
+          "A játékot a képernyő felbontása alatt rajzolja meg, majd felnagyítja arra. Az Egyéni a kiválasztott renderelési felbontást és képméretezést használja. A játék következő indításakor lép életbe."}},
+        "Ki", "Be", "FXAA", "FXAA (extrém)", "Megnyitás", "Bilineáris (eredeti)", "AMD CAS (élesítés)", "AMD FSR 1", "Automatikus", {"Bal felső sarok", "Jobb felső sarok", "Bal alsó sarok", "Jobb alsó sarok"}, "Részletes", "Haladó", {"Egyéni", "Natív", "Minőség", "Kiegyensúlyozott", "Teljesítmény"}}},
       {"chn",
        {{"鍵盤與滑鼠", "調整鍵盤與滑鼠設定。"},
         {{"校正亮度", "開啟亮度校正畫面。"},
@@ -415,8 +552,15 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"效能顯示", "在畫面角落顯示遊戲的每秒影格數。"},
          {"顯示位置", "效能顯示出現在畫面的哪個角落。"},
          {"視野", "鏡頭視野的寬度。80 為原始值；瞄準與掩護會以相同比例改變。"},
-         {"底片顆粒", "遊戲加在畫面上的底片顆粒雜訊。"}},
-        "關閉", "開啟", "FXAA", "FXAA 極致", "開啟", "雙線性（原始）", "AMD CAS（銳利化）", "AMD FSR 1", "自動", {"左上角", "右上角", "左下角", "右下角"}, "詳細", "進階"}},
+         {"底片顆粒", "遊戲加在畫面上的底片顆粒雜訊。"},
+         {"景深", "焦點以外部分的模糊效果。關閉可讓遊戲執行得更快。"},
+         {"動態陰影", "角色與移動物體的陰影。關閉可讓遊戲執行得更快。"},
+         {"環境光遮蔽", "角落與物體相接處的柔和陰影。"},
+         {"光暈", "明亮光源周圍的光暈。"},
+         {"鏡頭光暈", "明亮光源在畫面上產生的鏡頭光斑。"},
+         {"升頻品質",
+          "以低於螢幕的解析度繪製遊戲，再放大至螢幕解析度。自訂會使用選擇的渲染解析度與影像縮放。下次啟動遊戲時生效。"}},
+        "關閉", "開啟", "FXAA", "FXAA 極致", "開啟", "雙線性（原始）", "AMD CAS（銳利化）", "AMD FSR 1", "自動", {"左上角", "右上角", "左下角", "右下角"}, "詳細", "進階", {"自訂", "原生", "品質", "平衡", "效能"}}},
       {"kor",
        {{"키보드 및 마우스", "키보드 및 마우스 설정을 조정합니다."},
         {{"밝기 보정", "밝기 보정 화면을 엽니다."},
@@ -435,8 +579,15 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"성능 표시", "화면 모서리에 게임의 프레임 속도를 표시합니다."},
          {"표시 위치", "성능 표시가 나타나는 화면 모서리입니다."},
          {"시야각", "카메라 시야의 넓이입니다. 80이 원래 값이며, 조준과 엄폐도 같은 비율로 바뀝니다."},
-         {"필름 그레인", "게임이 화면에 더하는 필름 그레인 노이즈입니다."}},
-        "끔", "켬", "FXAA", "FXAA 최대", "열기", "바이리니어 (원본)", "AMD CAS (선명화)", "AMD FSR 1", "자동", {"왼쪽 위", "오른쪽 위", "왼쪽 아래", "오른쪽 아래"}, "상세", "고급"}},
+         {"필름 그레인", "게임이 화면에 더하는 필름 그레인 노이즈입니다."},
+         {"피사계 심도", "초점 밖 부분의 흐림 효과입니다. 끄면 게임이 더 빨리 실행됩니다."},
+         {"동적 그림자", "캐릭터와 움직이는 물체의 그림자입니다. 끄면 게임이 더 빨리 실행됩니다."},
+         {"앰비언트 오클루전", "구석과 물체가 맞닿는 곳의 부드러운 그림자입니다."},
+         {"블룸", "밝은 빛 주위의 번짐입니다."},
+         {"렌즈 플레어", "밝은 빛이 화면 위에 그리는 플레어입니다."},
+         {"업스케일링 품질",
+          "화면보다 낮은 해상도로 게임을 그린 뒤 화면 해상도로 확대합니다. 사용자 지정은 선택한 렌더링 해상도와 이미지 스케일링을 사용합니다. 다음에 게임을 시작할 때 적용됩니다."}},
+        "끔", "켬", "FXAA", "FXAA 최대", "열기", "바이리니어 (원본)", "AMD CAS (선명화)", "AMD FSR 1", "자동", {"왼쪽 위", "오른쪽 위", "왼쪽 아래", "오른쪽 아래"}, "상세", "고급", {"사용자 지정", "네이티브", "품질", "균형", "성능"}}},
   };
   return texts;
 }
@@ -460,8 +611,9 @@ std::string PlayerLanguage() {
 
 std::mutex g_mutex;
 std::filesystem::path g_config_path;
-// The game's texts of the controls menus, read as the menu's localization file is patched.
-GameControlsTexts g_controls_texts;
+// The game's texts of the controls menus, read as each language's localization file is patched
+// (the menu shows the player's language's).
+std::map<std::string, GameControlsTexts> g_controls_texts;
 // Value shown for each option once read: settings that apply at the next start keep their old
 // cvar value until then, so the menu shows what was chosen rather than what is in effect.
 std::map<int, float> g_values;
@@ -503,7 +655,8 @@ bool Valid(int option) {
 // Options that the runtime only reads when the game starts.
 bool NeedsRestart(const Option& option) {
   return option.label == Label::kAntialiasing || option.label == Label::kUpscaling ||
-         option.label == Label::kMotionBlur || option.label == Label::kRenderResolution;
+         option.label == Label::kMotionBlur || option.label == Label::kRenderResolution ||
+         option.label == Label::kUpscalingPreset;
 }
 
 // Rows whose changes the script hears of while the menu is open (bHasOnChangeCallback): Flash runs
@@ -767,7 +920,9 @@ bool PcOptionValueNames(int psid, std::vector<std::u16string>& names) {
       const auto found = unlimited.find(REXCVAR_GET(user_language));
       names = {u"30", u"60", u"90", u"120", found != unlimited.end() ? found->second : u"Unlimited"};
     }
-    if (option.label == Label::kFilmGrain) {
+    if (option.label == Label::kFilmGrain || option.label == Label::kDepthOfField ||
+        option.label == Label::kDynamicShadows || option.label == Label::kAmbientOcclusion ||
+        option.label == Label::kBloom || option.label == Label::kLensFlares) {
       const Texts& texts = TextsFor(PlayerLanguage());
       names = {CoalescedString::FromUtf8(texts.off).text, CoalescedString::FromUtf8(texts.on).text};
     }
@@ -784,10 +939,21 @@ bool PcOptionValueNames(int psid, std::vector<std::u16string>& names) {
       const std::string language = PlayerLanguage();
       for (const char* corner : TextsFor(language).corners) names.push_back(CoalescedString::FromUtf8(corner).text);
     }
-    if (option.label == Label::kRenderResolution) {
+    if (option.label == Label::kUpscalingPreset) {
       const std::string language = PlayerLanguage();
-      names = {CoalescedString::FromUtf8(TextsFor(language).automatic).text, u"1280 × 720", u"2560 × 1440",
-               u"3840 × 2160"};
+      for (const char* preset : TextsFor(language).presets) names.push_back(CoalescedString::FromUtf8(preset).text);
+    }
+    if (option.label == Label::kRenderResolution) {
+      // "Automatic" in the player's language, then the sizes as "1920 × 1080".
+      const std::string language = PlayerLanguage();
+      for (const char* resolution : ChoicesOf(option)) {
+        std::string value = resolution;
+        size_t x = value.find('x');
+        std::string name = x == std::string::npos
+                               ? std::string(TextsFor(language).automatic)
+                               : value.substr(0, x) + " × " + value.substr(x + 1);
+        names.push_back(CoalescedString::FromUtf8(name.c_str()).text);
+      }
     }
     if (option.label == Label::kUpscaling) {
       const std::string language = PlayerLanguage();
@@ -812,8 +978,13 @@ void SetPcOptionsConfigPath(std::filesystem::path config_path) {
 }
 
 GameControlsTexts ControlsTextsFromGame() {
+  const std::string language = PlayerLanguage();
   std::lock_guard lock(g_mutex);
-  return g_controls_texts;
+  for (const std::string& candidate : {language, std::string("int")}) {
+    const auto found = g_controls_texts.find(candidate);
+    if (found != g_controls_texts.end()) return found->second;
+  }
+  return g_controls_texts.empty() ? GameControlsTexts{} : g_controls_texts.begin()->second;
 }
 
 void StoreControlsSetting(const std::string& name, const std::string& value, bool quoted) {
@@ -1026,6 +1197,31 @@ void PatchMessageBoxTexts(CoalescedSection& section, const std::string& language
   SetKey(section, kRestartMessageKey, message);
 }
 
+namespace {
+
+// The Connection category's title and tooltip, by the extension of the localization files.
+std::pair<const char*, const char*> ConnectionCategoryTexts(const std::string& language) {
+  static const std::map<std::string, std::pair<const char*, const char*>> texts = {
+      {"int", {"CONNECTION", "Your Alboria account and how you connect to online games."}},
+      {"esn", {"CONEXIÓN", "Su cuenta de Alboria y cómo se conecta a las partidas online."}},
+      {"deu", {"VERBINDUNG", "Ihr Alboria-Konto und wie Sie sich mit Online-Spielen verbinden."}},
+      {"ita", {"CONNESSIONE", "Il tuo account Alboria e come ti colleghi alle partite online."}},
+      {"jpn", {"接続", "Alboria アカウントとオンラインゲームへの接続方法。"}},
+      {"fra", {"CONNEXION", "Votre compte Alboria et votre façon de rejoindre les parties en ligne."}},
+      {"ptb", {"CONEXÃO", "Sua conta Alboria e como você se conecta às partidas online."}},
+      {"pol", {"POŁĄCZENIE", "Twoje konto Alboria i sposób łączenia z grami online."}},
+      {"rus", {"ПОДКЛЮЧЕНИЕ", "Ваша учетная запись Alboria и способ подключения к играм по сети."}},
+      {"cze", {"PŘIPOJENÍ", "Váš účet Alboria a způsob připojení k online hrám."}},
+      {"hun", {"KAPCSOLAT", "Az Alboria-fiókod és az online játékokhoz való kapcsolódás módja."}},
+      {"chn", {"連線", "您的 Alboria 帳號以及連線到線上遊戲的方式。"}},
+      {"kor", {"연결", "Alboria 계정과 온라인 게임 연결 방식."}},
+  };
+  const auto found = texts.find(language);
+  return found != texts.end() ? found->second : texts.at("int");
+}
+
+}  // namespace
+
 void PatchOptionsMenu(CoalescedSection& section, const std::string& language) {
   const Texts& texts = TextsFor(language);
 
@@ -1094,6 +1290,31 @@ void PatchOptionsMenu(CoalescedSection& section, const std::string& language) {
              "\",OnSelectedCallback=\"Callback_SelectStorageLocation\",bIsGlobalValue=false,CategoryOptions=(),"
              "MenuButtons=((ButtonDescription=\"" + back + "\",ButtonType=1,ButtonHandler=OBH_MAX)))");
 
+  // Connection, in place of the credits: choosing it runs Callback_Credits as the credits did, and
+  // script_hooks.cpp opens the Alboria menu there. The credits keep their own title, now on a Y
+  // button of the list of categories, which script_hooks.cpp turns into the credits. The game's
+  // OMI_MAX entry holds that list's buttons; the new one is a new element of its array, so every
+  // field is written.
+  {
+    const auto credits_title = Quoted(CategoryText(section, kConnectionCategory), u"CategoryDescription");
+    const std::string list = Utf8(CategoryText(section, kCategoryListButtons));
+    const size_t buttons_end = ArrayEnd(list, "MenuButtons=(");
+    const auto& [connection_title, connection_tooltip] = ConnectionCategoryTexts(language);
+    SetKey(section, "OptionCategories[" + std::to_string(kConnectionCategory) + "]",
+           std::string("(CategoryDescription=\"") + connection_title + "\",CategoryTooltip=\"" + connection_tooltip +
+               "\",OnSelectedCallback=\"Callback_Credits\",bIsGlobalValue=false,CategoryOptions=(),"
+               "MenuButtons=((ButtonDescription=\"" + back + "\",ButtonType=1,ButtonHandler=OBH_MAX)))");
+    if (!credits_title.empty() && buttons_end != std::string::npos) {
+      SetKey(section, "OptionCategories[" + std::to_string(kCategoryListButtons) + "]",
+             list.substr(0, buttons_end) + ",(ButtonDescription=\"" + credits_title[0] +
+                 "\",ButtonType=3,ButtonHandler=OBH_MAX)" + list.substr(buttons_end));
+    } else {
+      REXLOG_WARN("[Azura options] The credits or the list of categories are not as expected in {}: the "
+                  "credits button is left out",
+                  language);
+    }
+  }
+
   // Keyboard and mouse, in place of the storage location (a device picker without rows): choosing
   // it runs Callback_ResetTutorials, where script_hooks.cpp opens the keyboard and mouse's controls
   // menu. Every field is written, since the position held a different category.
@@ -1135,8 +1356,9 @@ void PatchOptionsMenu(CoalescedSection& section, const std::string& language) {
   controls.back = back;
   controls.defaults = defaults;
   std::lock_guard lock(g_mutex);
-  controls.value_names = std::move(g_controls_texts.value_names);
-  g_controls_texts = std::move(controls);
+  GameControlsTexts& stored = g_controls_texts[language];
+  controls.value_names = std::move(stored.value_names);
+  stored = std::move(controls);
 }
 
 void PatchValueNames(CoalescedSection& section, const std::string& language) {
@@ -1152,7 +1374,7 @@ void PatchValueNames(CoalescedSection& section, const std::string& language) {
       if (key) value_names[psid] = Quoted(key->value.text, u"Name");
     }
     std::lock_guard lock(g_mutex);
-    g_controls_texts.value_names = std::move(value_names);
+    g_controls_texts[language].value_names = std::move(value_names);
   }
   const Texts& texts = TextsFor(language);
   for (const Option& option : Options()) {
@@ -1258,20 +1480,99 @@ int AutoResolutionScale() {
   return 1;
 }
 
+// The size in pixels of the screen the game is shown on: in a window with window_width and
+// window_height set, that size; otherwise the desktop mode of the monitor the window opens on (the
+// monitor setting, counted from 1; 0 for the primary one). {0, 0} when SDL cannot tell.
+std::pair<int, int> ScreenSize() {
+  const std::string fullscreen = rex::cvar::GetFlagByName("fullscreen");
+  if (fullscreen != "true" && fullscreen != "1") {
+    const int width = std::atoi(rex::cvar::GetFlagByName("window_width").c_str());
+    const int height = std::atoi(rex::cvar::GetFlagByName("window_height").c_str());
+    if (width > 0 && height > 0) return {width, height};
+  }
+  int count = 0;
+  SDL_DisplayID* displays = SDL_GetDisplays(&count);
+  if (!displays) return {0, 0};
+  const int monitor = std::atoi(rex::cvar::GetFlagByName("monitor").c_str());
+  const SDL_DisplayID display = monitor > 0 && monitor <= count ? displays[monitor - 1] : SDL_GetPrimaryDisplay();
+  SDL_free(displays);
+  const SDL_DisplayMode* mode = display ? SDL_GetDesktopDisplayMode(display) : nullptr;
+  if (!mode) return {0, 0};
+  // The mode's size is in points; the pixel density turns it into pixels on high-density screens.
+  return {static_cast<int>(std::lround(mode->w * mode->pixel_density)),
+          static_cast<int>(std::lround(mode->h * mode->pixel_density))};
+}
+
+// The render resolution an upscaling preset picks for a screen `screen_height` pixels tall: that
+// height divided by the preset's factor, rounded to the nearest height among the render resolutions
+// this build offers (RenderResolutionChoices), the lower one on a tie, and never below 1280x720.
+// Off macOS 1920x1080 is left out: Vulkan draws it at 2560x1440, at that resolution's cost, so a
+// preset that asks for it gets the cheaper or the sharper of its neighbours instead.
+std::string PresetRenderResolution(const std::string& preset, int screen_height) {
+  const double factor = preset == "quality"       ? 1.5
+                        : preset == "balanced"    ? 1.7
+                        : preset == "performance" ? 2.0
+                                                  : 1.0;
+  const double target = screen_height / factor;
+  std::string best = "1280x720";
+  double best_distance = std::abs(720 - target);
+  for (const char* choice : RenderResolutionChoices()) {
+    const std::string value = choice;
+    const size_t x = value.find('x');
+    if (x == std::string::npos) continue;
+#if !defined(__APPLE__)
+    if (value == "1920x1080") continue;
+#endif
+    const double distance = std::abs(std::atoi(value.c_str() + x + 1) - target);
+    if (distance < best_distance) {
+      best = value;
+      best_distance = distance;
+    }
+  }
+  return best;
+}
+
 }  // namespace
 
 void ApplyRenderResolution() {
-  const std::string chosen = REXCVAR_GET(render_resolution);
-  const int scale = chosen == "1280x720"    ? 1
-                    : chosen == "2560x1440" ? 2
-                    : chosen == "3840x2160" ? 3
-                                            : AutoResolutionScale();
+  std::string chosen = REXCVAR_GET(render_resolution);
+  // An upscaling preset decides the render resolution and, when the game is drawn below the
+  // screen's resolution, the image scaling, for this run only: azura.toml keeps the player's own.
+  const std::string preset = REXCVAR_GET(upscaling_preset);
+  if (preset != "custom") {
+    const auto [screen_width, screen_height] = ScreenSize();
+    if (screen_height > 0) {
+      chosen = PresetRenderResolution(preset, screen_height);
+      const int render_height = std::atoi(chosen.c_str() + chosen.find('x') + 1);
+#if defined(__APPLE__)
+      // The Metal presenter scales with MetalFX; it does not draw FSR.
+      const char* effect = "metalfx";
+#else
+      const char* effect = "fsr";
+#endif
+      if (render_height < screen_height) rex::cvar::SetFlagByName("present_effect", effect);
+      REXLOG_INFO("[Azura options] Upscaling preset {} for a {}x{} screen: render resolution {}, image scaling {}",
+                  preset, screen_width, screen_height, chosen, rex::cvar::GetFlagByName("present_effect"));
+    } else {
+      REXLOG_WARN("[Azura options] Upscaling preset {}: the screen size is unknown, using render_resolution",
+                  preset);
+    }
+  }
+  // The scale as numerator / denominator: 1920x1080 is 3/2 (Vulkan draws it at 2 and scales the
+  // image down to the window).
+  const int numerator = chosen == "1280x720"    ? 1
+                        : chosen == "1920x1080" ? 3
+                        : chosen == "2560x1440" ? 2
+                        : chosen == "3840x2160" ? 3
+                                                : AutoResolutionScale();
+  const int denominator = chosen == "1920x1080" ? 2 : 1;
   // A larger render needs more texture memory; the hard limit is twice the soft one, as in the
   // SDK's defaults (384 and 768 MB).
-  const int texture_memory = scale >= 2 ? 768 : 384;
+  const int texture_memory = numerator > denominator ? 768 : 384;
   const std::pair<const char*, int> settings[] = {
-      {"draw_resolution_scale_x", scale},
-      {"draw_resolution_scale_y", scale},
+      {"draw_resolution_scale_x", numerator},
+      {"draw_resolution_scale_y", numerator},
+      {"draw_resolution_scale_denominator", denominator},
       {"texture_cache_memory_limit_soft", texture_memory},
       {"texture_cache_memory_limit_hard", texture_memory * 2},
   };
@@ -1281,8 +1582,9 @@ void ApplyRenderResolution() {
       REXLOG_WARN("[Azura options] Cannot set {} = {} for the render resolution", name, value);
     }
   }
-  REXLOG_INFO("[Azura options] Render resolution {}: {}x{} (scale {}, texture memory {} MB)", chosen,
-              1280 * scale, 720 * scale, scale, texture_memory);
+  REXLOG_INFO("[Azura options] Render resolution {}: {}x{} (scale {}/{}, texture memory {} MB)",
+              chosen, 1280 * numerator / denominator, 720 * numerator / denominator, numerator,
+              denominator, texture_memory);
   // These values are the ones the game starts with, not changes waiting for a restart.
   rex::cvar::ClearPendingRestartFlags();
 }

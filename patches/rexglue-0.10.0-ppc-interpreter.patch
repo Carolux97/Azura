@@ -1595,10 +1595,31 @@ index 201b623..0bf4d41 100644
    rex::cvar::RegisterCliOptions(app);
  
 diff --git a/src/system/CMakeLists.txt b/src/system/CMakeLists.txt
-index fc46d86..0a25c46 100644
+index fc46d86..beed55c 100644
 --- a/src/system/CMakeLists.txt
 +++ b/src/system/CMakeLists.txt
-@@ -42,6 +42,7 @@ set(REXSYSTEM_SOURCES
+@@ -4,6 +4,7 @@ set(REXSYSTEM_SOURCES
+     achievement_manager.cpp
+     achievements.cpp
+     kernel_state.cpp
++    hle_markers.cpp
+     xmemory.cpp
+     kernel_module.cpp
+     user_module.cpp
+@@ -29,8 +30,12 @@ set(REXSYSTEM_SOURCES
+     util/gameinfo_utils.cpp
+ 
+     # XAM services
++    xam/alboria.cpp
++    xam/alboria_http.cpp
+     xam/app_manager.cpp
+     xam/content_manager.cpp
++    xam/player_identity.cpp
++    xam/system_link.cpp
+     xam/user_profile.cpp
+ 
+     ppc_types.cpp
+@@ -42,12 +47,29 @@ set(REXSYSTEM_SOURCES
      map_parser.cpp
      module.cpp
      function_dispatcher.cpp
@@ -1606,7 +1627,29 @@ index fc46d86..0a25c46 100644
      gpu_plugin_loader.cpp
      thread.cpp
      thread_state.cpp
-@@ -88,6 +89,8 @@ target_link_libraries(rexruntime
+     xex_module.cpp
+ )
+ 
++# Alboria's cryptography (ChaCha20-Poly1305 and Ed25519), and its HTTPS client on macOS.
++list(APPEND REXSYSTEM_SOURCES
++    ${REXGLUE_ROOT}/thirdparty/monocypher/monocypher.c
++    ${REXGLUE_ROOT}/thirdparty/monocypher/monocypher-ed25519.c
++)
++if(APPLE)
++    list(APPEND REXSYSTEM_SOURCES xam/alboria_http_mac.mm)
++endif()
++# The precompiled header is C++: Monocypher is C, and the Objective-C++ client needs none.
++set_source_files_properties(
++    ${REXGLUE_ROOT}/thirdparty/monocypher/monocypher.c
++    ${REXGLUE_ROOT}/thirdparty/monocypher/monocypher-ed25519.c
++    xam/alboria_http_mac.mm
++    PROPERTIES SKIP_PRECOMPILE_HEADERS ON
++)
++
+ add_library(rexruntime SHARED ${REXSYSTEM_SOURCES})
+ add_library(rex::runtime ALIAS rexruntime)
+ add_library(rex::system ALIAS rexruntime)
+@@ -88,6 +110,8 @@ target_link_libraries(rexruntime
          aes128
          mspack
          xxHash::xxhash
@@ -1615,6 +1658,24 @@ index fc46d86..0a25c46 100644
  )
  
  if(REXGLUE_ENABLE_TRACY)
+@@ -105,8 +129,16 @@ if(REXGLUE_ENABLE_PERF_COUNTERS)
+         $<$<NOT:$<CONFIG:Release>>:REXGLUE_ENABLE_PERF_COUNTERS>)
+ endif()
+ 
++if(APPLE)
++    target_link_libraries(rexruntime PRIVATE "-framework Foundation")
++endif()
++if(UNIX AND NOT APPLE)
++    # libcurl for Alboria is loaded at run time (alboria_http.cpp).
++    target_link_libraries(rexruntime PRIVATE ${CMAKE_DL_LIBS})
++endif()
++
+ if(WIN32)
+-    target_link_libraries(rexruntime PRIVATE ws2_32)
++    target_link_libraries(rexruntime PRIVATE ws2_32 iphlpapi)
+     target_link_libraries(rexruntime PUBLIC dxgi dxguid)
+     target_compile_definitions(rexruntime PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
+ endif()
 diff --git a/src/system/function_dispatcher.cpp b/src/system/function_dispatcher.cpp
 index 1fb0d77..58db8ef 100644
 --- a/src/system/function_dispatcher.cpp

@@ -1,6 +1,6 @@
 # Third-party notices
 
-Gears3-Azura's own code is under the PolyForm Strict License 1.0.0 (see [LICENSE](LICENSE)). It
+Azura's own code is under the PolyForm Strict License 1.0.0 (see [LICENSE](LICENSE)). It
 builds on and includes work by others, listed here with their licenses, which keep applying to
 that work.
 
@@ -11,6 +11,8 @@ that work.
 | `patches/rexglue-0.10.0*.patch` | Changes to the [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk), Copyright (c) 2026 Tom Clay, with portions derived from [Xenia](https://xenia.jp), Copyright (c) 2022 Ben Vanik and Xenia project contributors | BSD 3-Clause (the SDK's license) |
 | `patches/moltenvk-*.patch` | Changes to [MoltenVK](https://github.com/KhronosGroup/MoltenVK), Copyright The Brenwill Workshop Ltd. and contributors | Apache License 2.0 |
 | `runtime/assets/fonts/Barlow-*.ttf` | [Barlow](https://github.com/jpt/barlow), Copyright 2017 The Barlow Project Authors | SIL Open Font License 1.1, see [runtime/assets/fonts/Barlow-OFL.txt](runtime/assets/fonts/Barlow-OFL.txt) |
+| `runtime/assets/fonts/NotoSansCyrillic-*.ttf` | [Noto Sans](https://github.com/notofonts/latin-greek-cyrillic), Copyright 2022 The Noto Project Authors (Cyrillic subset made by `scripts/subset_fonts.py`) | SIL Open Font License 1.1, see [runtime/assets/fonts/NotoSans-OFL.txt](runtime/assets/fonts/NotoSans-OFL.txt) |
+| `runtime/assets/fonts/NotoSans{JP,KR,TC}-Medium.ttf` | [Noto Sans CJK](https://github.com/notofonts/noto-cjk), Copyright 2014-2021 Adobe (subsets made by `scripts/subset_fonts.py`) | SIL Open Font License 1.1, see [runtime/assets/fonts/NotoSansCJK-OFL.txt](runtime/assets/fonts/NotoSansCJK-OFL.txt) |
 | `tools/extract-xiso` | [extract-xiso](https://github.com/XboxDev/extract-xiso), Copyright (c) 2003 in <in@fishtank.com> | BSD-style, see [tools/LICENSE.TXT](tools/LICENSE.TXT) |
 
 ## Used by the runtime
@@ -36,7 +38,7 @@ the SDK bundles, each under its own license, which ships with the SDK's source t
 
 ## Used by the launcher
 
-The launcher is the part of Gears3-Azura distributed in binary form: the macOS `.dmg` and the
+The launcher is the part of Azura distributed in binary form: the macOS `.dmg` and the
 Linux packages. It is built with [Tauri](https://tauri.app) and depends on Rust crates and npm
 packages listed in `launcher/src-tauri/Cargo.lock` and `launcher/package-lock.json`. The npm
 packages are build tools only; the Rust crates compiled into the launcher are almost all under MIT

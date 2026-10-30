@@ -20,14 +20,21 @@
 #include <rex/filesystem/vfs.h>
 #include <rex/logging.h>
 #include <rex/runtime.h>
+#include <rex/string.h>
 
 #include "coalesced.h"
 #include "pc_options.h"
 
 REXCVAR_DEFINE_BOOL(menu_remove_unused, true, "Azura/Menu",
-                    "Remove main menu options that cannot work (event calendar, Marketplace)");
+                    "Remove main menu options that cannot work (event calendar, Marketplace), in the "
+                    "main menu and in the menu of a player who joined another's party");
 REXCVAR_DEFINE_BOOL(menu_coming_soon, true, "Azura/Menu",
                     "Grey out online options and mark them \"(coming soon)\"");
+REXCVAR_DEFINE_BOOL(dlc_campaign, false, "Azura/DLC",
+                    "RAAM's Shadow is installed and Azura's script patch for it is mounted: the "
+                    "campaign menu's DLC option opens it (set by the launcher)");
+// Defined by the SDK (system/xam/system_link.cpp).
+REXCVAR_DECLARE(std::string, network_mode);
 
 namespace azura::menu {
 
@@ -48,25 +55,72 @@ struct Texts {
   const char* quit;
   const char* quit_tooltip;
   const char* coming_soon;
+  const char* dlc_name;  // the campaign add-on's title
+  const char* dlc_tooltip;
+  const char* not_installed;  // the option's whole title while it is not installed
+  const char* not_installed_tooltip;
 };
+
+// Texts of online play on Alboria (network_mode = online), for each localization.
+struct OnlineTexts {
+  // The message box the party options show when Joinable or Invite only cannot be chosen, which
+  // with online play on happens when Alboria cannot be reached or refuses this installation's
+  // sign-in (no account linked, a ban, an old client); the room overlay names the refusal.
+  const char* unreachable_title;
+  const char* unreachable_message;
+  // Manage/Invite's LB and RB buttons (UIScene_WhatsUp), in upper case as the game's are. LB shows
+  // the room's code and then hides it (its texts change in script_hooks.cpp); this is its first.
+  const char* show_id;
+  const char* join_by_code;
+  // The message box shown when a room on Alboria fails or ends under the player (the game's
+  // InviteHandlingFailed message, which script_hooks.cpp opens). {joinable} and {invite} become the
+  // game's own names of those party options in that localization.
+  const char* room_lost_title;
+  const char* room_lost_message;
+};
+
+const std::map<std::string, OnlineTexts>& LocalizedOnlineTexts() {
+  static const std::map<std::string, OnlineTexts> texts = {
+      {"int", {"Cannot play online on Alboria", "Online play needs a connection to Alboria with your account. If this computer is not linked to it, sign in from the launcher, in Account. If it is, check your internet connection and try again; Alboria may be down for a while.", "SHOW ID", "JOIN BY CODE", "No connection to the Alboria room", "The Alboria room could not be created, joined or kept open, so the game stays in Local. To try again, choose {joinable} or {invite} in the party options."}},
+      {"esn", {"No se puede jugar online en Alboria", "Para jugar online hace falta conectar con Alboria con tu cuenta. Si este equipo no está vinculado a ella, inicia sesión desde el launcher, en Cuenta. Si lo está, comprueba tu conexión a internet y vuelve a intentarlo; puede que Alboria no esté disponible ahora mismo.", "MOSTRAR ID", "UNIRSE POR CÓDIGO", "Sin conexión con la sala de Alboria", "No se ha podido crear la sala de Alboria, entrar en ella o mantenerla abierta, así que la partida sigue en Local. Para volver a intentarlo, elige {joinable} o {invite} en las opciones de grupo."}},
+      {"esm", {"No se puede jugar en línea en Alboria", "Para jugar en línea hace falta conectar con Alboria con tu cuenta. Si este equipo no está vinculado a ella, inicia sesión desde el launcher, en Cuenta. Si lo está, revisa tu conexión a internet y vuelve a intentarlo; puede que Alboria no esté disponible en este momento.", "MOSTRAR ID", "UNIRSE CON CÓDIGO", "Sin conexión con la sala de Alboria", "No se pudo crear la sala de Alboria, entrar en ella o mantenerla abierta, así que la partida sigue en Local. Para volver a intentarlo, elige {joinable} o {invite} en las opciones de grupo."}},
+      {"deu", {"Online-Spiel auf Alboria nicht möglich", "Für das Online-Spiel ist eine Verbindung zu Alboria mit deinem Konto nötig. Ist dieser Computer nicht damit verknüpft, melde dich im Launcher unter Konto an. Ist er es, prüfe deine Internetverbindung und versuche es erneut; Alboria ist vielleicht gerade nicht erreichbar.", "ID ANZEIGEN", "PER CODE BEITRETEN", "Keine Verbindung zum Alboria-Raum", "Der Alboria-Raum konnte nicht erstellt, betreten oder offen gehalten werden, daher bleibt das Spiel auf Lokal. Um es erneut zu versuchen, wähle {joinable} oder {invite} in den Gruppenoptionen."}},
+      {"ita", {"Impossibile giocare online su Alboria", "Per giocare online serve una connessione ad Alboria con il tuo account. Se questo computer non è collegato all'account, accedi dal launcher, in Account. Se lo è, controlla la connessione a internet e riprova; Alboria potrebbe essere momentaneamente non disponibile.", "MOSTRA ID", "UNISCITI CON CODICE", "Nessuna connessione alla stanza di Alboria", "Non è stato possibile creare la stanza di Alboria, entrarvi o mantenerla aperta, quindi il gioco resta in Locale. Per riprovare, scegli {joinable} o {invite} nelle opzioni del gruppo."}},
+      {"fra", {"Impossible de jouer en ligne sur Alboria", "Le jeu en ligne nécessite une connexion à Alboria avec votre compte. Si cet ordinateur n'y est pas lié, connectez-vous depuis le launcher, dans Compte. S'il l'est, vérifiez votre connexion internet et réessayez ; Alboria est peut-être indisponible pour le moment.", "AFFICHER L'ID", "REJOINDRE PAR CODE", "Pas de connexion au salon Alboria", "Le salon Alboria n'a pas pu être créé, rejoint ou maintenu ouvert : la partie reste en Local. Pour réessayer, choisissez {joinable} ou {invite} dans les options de groupe."}},
+      {"ptb", {"Não é possível jogar online no Alboria", "Para jogar online é preciso conectar ao Alboria com a sua conta. Se este computador não estiver vinculado a ela, entre pelo launcher, em Conta. Se estiver, verifique sua conexão com a internet e tente de novo; o Alboria pode estar indisponível no momento.", "MOSTRAR ID", "ENTRAR COM CÓDIGO", "Sem conexão com a sala do Alboria", "Não foi possível criar a sala do Alboria, entrar nela ou mantê-la aberta, então o jogo continua em Local. Para tentar de novo, escolha {joinable} ou {invite} nas opções de grupo."}},
+      {"pol", {"Nie można grać online w Alborii", "Gra online wymaga połączenia z Alborią przy użyciu Twojego konta. Jeśli ten komputer nie jest z nim powiązany, zaloguj się w launcherze, w sekcji Konto. Jeśli jest, sprawdź połączenie z internetem i spróbuj ponownie; Alboria może być chwilowo niedostępna.", "POKAŻ ID", "DOŁĄCZ KODEM", "Brak połączenia z pokojem Alborii", "Nie udało się utworzyć pokoju Alborii, dołączyć do niego ani utrzymać go otwartego, więc gra pozostaje w trybie lokalnym. Aby spróbować ponownie, wybierz {joinable} lub {invite} w opcjach drużyny."}},
+      {"rus", {"Нельзя играть по сети в Alboria", "Для игры по сети нужно подключение к Alboria с вашей учётной записью. Если этот компьютер к ней не привязан, войдите в лаунчере, в разделе «Учётная запись». Если привязан, проверьте подключение к интернету и попробуйте снова; Alboria может быть временно недоступна.", "ПОКАЗАТЬ ID", "ВОЙТИ ПО КОДУ", "Нет связи с комнатой Alboria", "Не удалось создать комнату Alboria, войти в неё или сохранить её открытой, поэтому игра остаётся в локальном режиме. Чтобы попробовать снова, выберите {joinable} или {invite} в параметрах группы."}},
+      {"cze", {"Na Alborii nelze hrát online", "Hra online vyžaduje připojení k Alborii s vaším účtem. Pokud tento počítač není s účtem propojen, přihlaste se v launcheru v části Účet. Pokud je, zkontrolujte připojení k internetu a zkuste to znovu; Alboria může být dočasně nedostupná.", "ZOBRAZIT ID", "PŘIPOJIT SE KÓDEM", "Žádné spojení s místností Alborie", "Místnost Alborie se nepodařilo vytvořit, připojit se k ní ani ji udržet otevřenou, takže hra zůstává v místním režimu. Chcete-li to zkusit znovu, zvolte {joinable} nebo {invite} v možnostech skupiny."}},
+      {"hun", {"Nem lehet online játszani az Alborián", "Az online játékhoz a fiókoddal kell kapcsolódni az Alboriához. Ha ez a számítógép nincs a fiókodhoz kapcsolva, jelentkezz be a launcherben, a Fiók részben. Ha igen, ellenőrizd az internetkapcsolatot, és próbáld újra; lehet, hogy az Alboria átmenetileg nem érhető el.", "AZONOSÍTÓ MEGJELENÍTÉSE", "CSATLAKOZÁS KÓDDAL", "Nincs kapcsolat az Alboria-szobával", "Az Alboria-szobát nem sikerült létrehozni, csatlakozni hozzá vagy nyitva tartani, ezért a játék helyi módban marad. Az újrapróbálkozáshoz válaszd a(z) {joinable} vagy {invite} lehetőséget a csapatbeállításokban."}},
+      {"jpn", {"Alboria でオンラインプレイできません", "オンラインプレイには、あなたのアカウントで Alboria に接続する必要があります。このコンピューターがアカウントにリンクされていない場合は、ランチャーの「アカウント」からサインインしてください。リンクされている場合は、インターネット接続を確認してもう一度お試しください。Alboria が一時的に利用できない可能性があります。", "IDを表示", "コードで参加", "Alboria のルームに接続できません", "Alboria のルームを作成できなかったか、参加できなかったか、開いたままにできなかったため、ゲームはローカルのままです。もう一度試すには、パーティーオプションで {joinable} または {invite} を選んでください。"}},
+      {"chn", {"無法在 Alboria 線上遊玩", "線上遊玩需要以你的帳號連線至 Alboria。若這台電腦尚未連結至帳號，請在啟動器的「帳號」中登入。若已連結，請檢查網際網路連線後再試一次；Alboria 可能暫時無法使用。", "顯示 ID", "以代碼加入", "無法連線至 Alboria 房間", "無法建立、加入或維持 Alboria 房間，因此遊戲維持在本機模式。若要再試一次，請在隊伍選項中選擇 {joinable} 或 {invite}。"}},
+      {"kor", {"Alboria에서 온라인 플레이를 할 수 없습니다", "온라인 플레이를 하려면 내 계정으로 Alboria에 연결해야 합니다. 이 컴퓨터가 계정에 연결되어 있지 않다면 런처의 계정에서 로그인하세요. 연결되어 있다면 인터넷 연결을 확인하고 다시 시도하세요. Alboria를 일시적으로 사용할 수 없는 것일 수 있습니다.", "ID 표시", "코드로 참가", "Alboria 방에 연결할 수 없습니다", "Alboria 방을 만들거나, 참가하거나, 열어 둘 수 없어 게임이 로컬로 유지됩니다. 다시 시도하려면 파티 옵션에서 {joinable} 또는 {invite}을(를) 선택하세요."}},
+  };
+  return texts;
+}
+
+const OnlineTexts& OnlineTextsFor(const std::string& language) {
+  const auto it = LocalizedOnlineTexts().find(language);
+  return it != LocalizedOnlineTexts().end() ? it->second : LocalizedOnlineTexts().at("int");
+}
 
 // Texts for each localization, keyed by the extension of its files.
 const std::map<std::string, Texts>& LocalizedTexts() {
   static const std::map<std::string, Texts> texts = {
-      {"int", {"Quit Game", "Close Gears of War 3 and return to the desktop.", "(coming soon)"}},
-      {"esn", {"Salir del juego", "Cierra Gears of War 3 y vuelve al escritorio.", "(próximamente)"}},
-      {"deu", {"Spiel beenden", "Beendet Gears of War 3 und kehrt zum Desktop zurück.", "(demnächst)"}},
-      {"ita", {"Esci dal gioco", "Chiudi Gears of War 3 e torna al desktop.", "(prossimamente)"}},
-      {"jpn", {"ゲームを終了", "Gears of War 3 を終了してデスクトップに戻ります。", "(近日公開)"}},
-      {"esm", {"Salir del juego", "Cierra Gears of War 3 y vuelve al escritorio.", "(próximamente)"}},
-      {"fra", {"Quitter le jeu", "Fermer Gears of War 3 et revenir au bureau.", "(bientôt)"}},
-      {"ptb", {"Sair do jogo", "Fecha o Gears of War 3 e volta para a área de trabalho.", "(em breve)"}},
-      {"pol", {"Wyjdź z gry", "Zamknij Gears of War 3 i wróć do pulpitu.", "(wkrótce)"}},
-      {"rus", {"Выйти из игры", "Закрыть Gears of War 3 и вернуться на рабочий стол.", "(скоро)"}},
-      {"cze", {"Ukončit hru", "Zavřít Gears of War 3 a vrátit se na plochu.", "(již brzy)"}},
-      {"hun", {"Kilépés a játékból", "A Gears of War 3 bezárása és visszatérés az asztalra.", "(hamarosan)"}},
-      {"chn", {"退出遊戲", "關閉 Gears of War 3 並返回桌面。", "(即將推出)"}},
-      {"kor", {"게임 종료", "Gears of War 3를 닫고 바탕 화면으로 돌아갑니다.", "(출시 예정)"}},
+      {"int", {"Quit Game", "Close Gears of War 3 and return to the desktop.", "(coming soon)", "RAAM's Shadow", "Play the RAAM's Shadow campaign.", "Not Installed", "Add RAAM's Shadow from the launcher (Installation, Downloadable content) to play it."}},
+      {"esn", {"Salir del juego", "Cierra Gears of War 3 y vuelve al escritorio.", "(próximamente)", "Sombras de RAAM", "Juega la campaña de Sombras de RAAM.", "No instalado", "Añade Sombras de RAAM desde el launcher (Instalación, Contenido descargable) para jugarla."}},
+      {"deu", {"Spiel beenden", "Beendet Gears of War 3 und kehrt zum Desktop zurück.", "(demnächst)", "RAAMs Schatten", "Spiele die Kampagne RAAM's Shadow.", "Nicht installiert", "Füge RAAMs Schatten im Launcher hinzu (Installation, Herunterladbare Inhalte), um es zu spielen."}},
+      {"ita", {"Esci dal gioco", "Chiudi Gears of War 3 e torna al desktop.", "(prossimamente)", "L'ombra di RAAM", "Gioca la campagna RAAM's Shadow.", "Non installato", "Aggiungi L'ombra di RAAM dal launcher (Installazione, Contenuti scaricabili) per giocarlo."}},
+      {"jpn", {"ゲームを終了", "Gears of War 3 を終了してデスクトップに戻ります。", "(近日公開)", "RAAM's Shadow", "RAAM's Shadow のキャンペーンをプレイします。", "未インストール", "ランチャー (インストール、ダウンロードコンテンツ) から RAAM's Shadow を追加するとプレイできます。"}},
+      {"esm", {"Salir del juego", "Cierra Gears of War 3 y vuelve al escritorio.", "(próximamente)", "Sombras de RAAM", "Juega la campaña de Sombras de RAAM.", "No instalado", "Agrega Sombras de RAAM desde el launcher (Instalación, Contenido descargable) para jugarla."}},
+      {"fra", {"Quitter le jeu", "Fermer Gears of War 3 et revenir au bureau.", "(bientôt)", "L'Ombre de RAAM", "Jouer la campagne RAAM's Shadow.", "Non installé", "Ajoutez L'Ombre de RAAM depuis le launcher (Installation, Contenu téléchargeable) pour y jouer."}},
+      {"ptb", {"Sair do jogo", "Fecha o Gears of War 3 e volta para a área de trabalho.", "(em breve)", "A Sombra de RAAM", "Jogue a campanha RAAM's Shadow.", "Não instalado", "Adicione A Sombra de RAAM pelo launcher (Instalação, Conteúdo para download) para jogar."}},
+      {"pol", {"Wyjdź z gry", "Zamknij Gears of War 3 i wróć do pulpitu.", "(wkrótce)", "Cień RAAM-a", "Zagraj w kampanię RAAM's Shadow.", "Niezainstalowane", "Dodaj Cień RAAM-a w launcherze (Instalacja, Zawartość do pobrania), aby zagrać."}},
+      {"rus", {"Выйти из игры", "Закрыть Gears of War 3 и вернуться на рабочий стол.", "(скоро)", "Тень RAAM", "Пройти кампанию RAAM's Shadow.", "Не установлено", "Добавьте «Тень RAAM» в лаунчере (Установка, Загружаемый контент), чтобы играть."}},
+      {"cze", {"Ukončit hru", "Zavřít Gears of War 3 a vrátit se na plochu.", "(již brzy)", "RAAMův stín", "Hrát kampaň RAAM's Shadow.", "Nenainstalováno", "Přidejte RAAMův stín v launcheru (Instalace, Stahovatelný obsah) a můžete hrát."}},
+      {"hun", {"Kilépés a játékból", "A Gears of War 3 bezárása és visszatérés az asztalra.", "(hamarosan)", "RAAM árnyéka", "A RAAM's Shadow kampány játszása.", "Nincs telepítve", "Add hozzá a RAAM árnyékát a launcherben (Telepítés, Letölthető tartalom) a játékhoz."}},
+      {"chn", {"退出遊戲", "關閉 Gears of War 3 並返回桌面。", "(即將推出)", "RAAM's Shadow", "遊玩 RAAM's Shadow 戰役。", "未安裝", "在啟動器（安裝、下載內容）中加入 RAAM's Shadow 即可遊玩。"}},
+      {"kor", {"게임 종료", "Gears of War 3를 닫고 바탕 화면으로 돌아갑니다.", "(출시 예정)", "RAAM's Shadow", "RAAM's Shadow 캠페인을 플레이합니다.", "설치되지 않음", "런처(설치, 다운로드 콘텐츠)에서 RAAM's Shadow를 추가하면 플레이할 수 있습니다."}},
   };
   return texts;
 }
@@ -207,6 +261,26 @@ int PatchMenuStructure(CoalescedSection& section) {
     quit_option = static_cast<int>(entries.size()) - 1;
   });
   if (!main_found) return -1;
+  // The menu of a player who joined another's party: Journal, Calendar, Options, Marketplace (DLC),
+  // Leave party. Its choices are handled by position (Callback_ClientMenuOptionWasSelected), so
+  // script_hooks.cpp turns the positions left into the original ones (ClientMenuPosition).
+  if (REXCVAR_GET(menu_remove_unused)) {
+    EditScreen(section, "MAINMENUOP_ClientMenu", [](std::vector<std::u16string>& entries) {
+      std::erase_if(entries, [](const std::u16string& e) {
+        return EntryLabel(e) == u"Calendar" || EntryLabel(e) == u"DLC";
+      });
+    });
+  }
+  // With RAAM's Shadow ready to play, the campaign menu's DLC option ("Coming Soon!" and greyed
+  // out on the disc) opens the standard campaign choices; the runtime remembers it was chosen and
+  // starts the DLC's chapters (see PatchTravelURL in script_hooks.cpp).
+  if (REXCVAR_GET(dlc_campaign)) {
+    EditScreen(section, "MAINMENUOP_Campaign", [](std::vector<std::u16string>& entries) {
+      for (auto& e : entries) {
+        if (EntryLabel(e) == u"CampaignDLC") e = u"(Label=\"CampaignDLC\",Next=MAINMENUOP_CampaignStandard)";
+      }
+    });
+  }
   if (!REXCVAR_GET(menu_coming_soon)) return quit_option;
   EditScreen(section, "MAINMENUOP_CampaignStandard", DisableLabels({"CreatePublic", "JoinPublic"}));
   EditScreen(section, "MAINMENUOP_CampaignArcade", DisableLabels({"CreatePublic", "JoinPublic"}));
@@ -220,11 +294,20 @@ int PatchMenuStructure(CoalescedSection& section) {
 void PatchMenuTexts(CoalescedSection& section, const Texts& texts) {
   const bool coming_soon = REXCVAR_GET(menu_coming_soon);
   const auto soon = CoalescedString::FromUtf8(std::string(" ") + texts.coming_soon);
+  const bool dlc = REXCVAR_GET(dlc_campaign);
   for (auto& key : section.keys) {
     const std::string name = key.name.Ascii();
-    if (coming_soon && (name == "VS" || name == "TITLE_VS_Competitiveness" || name == "CreatePublic" ||
-                        name == "JoinPublic" || name == "HordeStandard" || name == "SiegeStandard" ||
-                        name == "Recreational" || name == "Competitive")) {
+    // The campaign DLC option: its title, or while the add-on is not installed (the option stays
+    // greyed out and unselectable, as the disc has it) "Not Installed" instead of "Coming Soon!".
+    if (name == "CampaignDLC") {
+      key.value = CoalescedString::FromUtf8(dlc ? texts.dlc_name : texts.not_installed);
+    }
+    if (name == "TOOLTIP_CampaignDLC") {
+      key.value = CoalescedString::FromUtf8(dlc ? texts.dlc_tooltip : texts.not_installed_tooltip);
+    }
+    // Versus itself is not marked: its private matches play locally and over System Link.
+    if (coming_soon && (name == "CreatePublic" || name == "JoinPublic" || name == "HordeStandard" ||
+                        name == "SiegeStandard" || name == "Recreational" || name == "Competitive")) {
       key.value.text += soon.text;
       key.value.wide = key.value.wide || soon.wide;
       key.value.empty_marker = false;
@@ -256,8 +339,130 @@ bool ReadGameFile(rex::filesystem::Entry* entry, std::vector<uint8_t>& out) {
 
 }  // namespace
 
+// The names of the Joinable and Invite only party options in one localization, as the game's own
+// texts call them ([UIScene_FrontEnd] of a GearGame localization file).
+struct PartyOptionNames {
+  CoalescedString joinable;
+  CoalescedString invite;
+};
+
+// `utf8` with "{joinable}" and "{invite}" replaced by `names` (left as they are when a name is
+// missing, which no localization of the game does).
+CoalescedString WithPartyOptionNames(const std::string& utf8, const PartyOptionNames& names) {
+  CoalescedString result = CoalescedString::FromUtf8(utf8);
+  for (const auto& [placeholder, name] : {std::pair{std::u16string(u"{joinable}"), &names.joinable},
+                                          std::pair{std::u16string(u"{invite}"), &names.invite}}) {
+    const size_t at = result.text.find(placeholder);
+    if (at == std::u16string::npos || name->text.empty()) continue;
+    result.text.replace(at, placeholder.size(), name->text);
+    result.wide = result.wide || name->wide;
+  }
+  return result;
+}
+
+// With online play on, in [MessageBoxErrorStrings] of a GearGameUI localization file: the Xbox
+// LIVE Gold message of the party options says that online play on Alboria is not possible, and what
+// to check; the message of an invite that failed, which no Xbox LIVE invite reaches with online
+// play on, says that the room on Alboria failed and how to try again.
+void PatchOnlineMessages(CoalescedSection& section, const std::string& language, const PartyOptionNames& names) {
+  const OnlineTexts& texts = OnlineTextsFor(language);
+  for (auto& key : section.keys) {
+    const std::string name = key.name.Ascii();
+    if (name == "NeedGoldTier_Title" || name == "SignedOut_Title") {
+      key.value = CoalescedString::FromUtf8(texts.unreachable_title);
+    } else if (name == "NeedGoldTierFunctionality_Message") {
+      key.value = CoalescedString::FromUtf8(texts.unreachable_message);
+    } else if (name == "InviteHandlingFailed_Title") {
+      key.value = CoalescedString::FromUtf8(texts.room_lost_title);
+    } else if (name == "InviteHandlingFailed_Message") {
+      key.value = WithPartyOptionNames(texts.room_lost_message, names);
+    }
+  }
+}
+
+// With online play on, Manage/Invite's LB and RB buttons show a room's code and join one instead of
+// inviting Xbox LIVE friends and parties: in [UIScene_WhatsUp] of a GearGame localization file.
+// Each keeps its button's controller font character, which the button prompts replace.
+void PatchManageInviteButtons(CoalescedSection& section, const std::string& language) {
+  const OnlineTexts& texts = OnlineTextsFor(language);
+  for (auto& key : section.keys) {
+    const std::string name = key.name.Ascii();
+    if (name == "InviteGearsButtonActive") {
+      key.value = CoalescedString::FromUtf8(std::string("<Font:$ControllerFont>_</Font> ") + texts.show_id);
+    } else if (name == "InvitePartyButtonActive") {
+      key.value = CoalescedString::FromUtf8(std::string("<Font:$ControllerFont>`</Font> ") + texts.join_by_code);
+    }
+  }
+}
+
+// The party panel's title is "<PPTitlePartyType> <the party type>", in a box of fixed width. Some
+// translations do not fit: in Spanish "TIPO DE GRUPO: SOLO POR INVITACIÓN" overflows it, while "TIPO
+// DE GRUPO: INTERCONEXIÓN" fits. So in any language whose longest title is wider than
+// kPartyTitleWidth characters (CJK ones counting double), the prefix becomes a short word of ours,
+// or goes when even that does not fit; the party types keep the names the party options give them.
+constexpr size_t kPartyTitleWidth = 30;
+
+// The width of `text` in characters, the CJK ones counting double.
+size_t TitleWidth(const std::u16string& text) {
+  size_t width = 0;
+  for (const char16_t c : text) width += (c >= 0x1100 && c <= 0xFFDC) ? 2 : 1;
+  return width;
+}
+
+// "Party:" in each language of the game, short.
+const char* ShortPartyPrefix(const std::string& language) {
+  static const std::map<std::string, const char*> prefixes = {
+      {"int", "PARTY:"},   {"esn", "GRUPO:"},    {"esm", "GRUPO:"},     {"deu", "GRUPPE:"},
+      {"fra", "GROUPE :"}, {"ita", "GRUPPO:"},   {"ptb", "GRUPO:"},     {"pol", "GRUPA:"},
+      {"rus", "ГРУППА:"},  {"cze", "SKUPINA:"},  {"hun", "CSOPORT:"},   {"jpn", "グループ:"},
+      {"kor", "그룹:"},     {"chn", "隊伍："},
+  };
+  const auto found = prefixes.find(language);
+  return found != prefixes.end() ? found->second : "";
+}
+
+void PatchPartyPanelTitle(CoalescedSection& section, const std::string& language) {
+  CoalescedKey* prefix = nullptr;
+  size_t longest_type = 0;
+  for (auto& key : section.keys) {
+    const std::string name = key.name.Ascii();
+    if (name == "PPTitlePartyType") {
+      prefix = &key;
+    } else if (name == "PPTitleFriends" || name == "PPTitleInvite" || name == "PPTitleSystemLink" ||
+               name == "PPTitleNoParty") {
+      longest_type = std::max(longest_type, TitleWidth(key.value.text));
+    }
+  }
+  if (!prefix || longest_type == 0) return;
+  const std::u16string original = prefix->value.text;
+  if (TitleWidth(original) + 1 + longest_type <= kPartyTitleWidth) return;
+  std::string shorter = ShortPartyPrefix(language);
+  // A space when even the short word does not fit: the engine keeps the cooked text for an empty one.
+  if (shorter.empty() || TitleWidth(rex::string::to_utf16(shorter)) + 1 + longest_type > kPartyTitleWidth) {
+    shorter = " ";
+  }
+  prefix->value = CoalescedString::FromUtf8(shorter);
+  REXLOG_INFO("[Azura menu] Party panel title in {}: \"{}\" becomes \"{}\" so the longest fits", language,
+              rex::string::to_utf8(original), shorter);
+}
+
 int PatchMenus(Coalesced& coalesced) {
+  const bool online = REXCVAR_GET(network_mode) == "online";
   int quit_option = -1;
+  // The party options' names in each localization first, for the online messages that name them.
+  std::map<std::string, PartyOptionNames> party_option_names;
+  for (const auto& file : coalesced.files) {
+    const std::string name = BaseName(file.name);
+    if (name.rfind("geargame.", 0) != 0) continue;
+    PartyOptionNames& names = party_option_names[name.substr(name.find('.') + 1)];
+    for (const auto& section : file.sections) {
+      if (section.name.Ascii() != "UIScene_FrontEnd") continue;
+      for (const auto& key : section.keys) {
+        if (key.name.Ascii() == "PartyOptionJoinable") names.joinable = key.value;
+        if (key.name.Ascii() == "PartyOptionInvite") names.invite = key.value;
+      }
+    }
+  }
   for (auto& file : coalesced.files) {
     const std::string name = BaseName(file.name);
     const bool ui_config = name == "xbox360-gearui.ini";
@@ -285,6 +490,12 @@ int PatchMenus(Coalesced& coalesced) {
         PatchSystemSettings(section);
       } else if (engine_config && section_name == "Engine.Engine") {
         PatchEngineSettings(section);
+      } else if (online && ui_texts && section_name == "MessageBoxErrorStrings") {
+        PatchOnlineMessages(section, language, party_option_names[language]);
+      } else if (online && game_texts && section_name == "UIScene_WhatsUp") {
+        PatchManageInviteButtons(section, language);
+      } else if ((game_texts || ui_texts) && section_name == "UIWidget_SmallPartyPanel") {
+        PatchPartyPanelTitle(section, language);
       } else if (ui_texts && section_name == "MessageBoxStrings") {
         PatchMessageBoxTexts(section, language);
       } else if (ui_texts && section_name == "MainMenu") {

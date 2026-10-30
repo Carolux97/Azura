@@ -6,6 +6,55 @@ it as the update's notes (`scripts/release-common.sh`). Bumping the version adds
 release without one fails. One list item (`- `) per change, in English; an item may continue on
 indented lines.
 
+## 0.5.0
+
+- macOS: a new, faster way to draw the game, now the default. The launcher no longer replays the
+  console's graphics commands step by step: it follows what the game means to do, skipping copies
+  of the picture that were not needed and writing finished images straight from the graphics card.
+  It works at every resolution scale. On Linux and Windows the console's way stays the default.
+- The game's own effects can be switched off in the Video options: depth of field, dynamic
+  shadows, ambient occlusion, bloom and lens flares. Turning off depth of field and dynamic shadows
+  saves the most graphics card time (measured on macOS); the other three change the look only.
+  Ambient occlusion stays off by default on Linux, as before.
+- 1920 × 1080 in the render resolutions of the launcher and the game's Video menu. On macOS it sits
+  between 1280 × 720 and 2560 × 1440 in detail and graphics card time; on Linux and Windows the game
+  is drawn at 2560 × 1440 and scaled down to the screen, so it takes the graphics card time of
+  2560 × 1440.
+- macOS: cheaper pixel shaders in textures that need no sign handling, about 10% less graphics
+  card time per frame in the scene measured. The first start after updating compiles the shaders
+  again, with the usual "Compiling shaders" notice.
+- RAAM's Shadow can be played. Downloadable content is a new panel in the launcher: it lists every
+  Gears of War 3 pack with its state, and installs the packages you add into your saves folder. The
+  launcher prepares what RAAM's Shadow needs from your own game files, and its achievements show in
+  the achievements section.
+- Downloadable content: it works when the game is a disc image (`.iso`) and packages can be added
+  inside a `.zip`.
+- Each installation now has a player identity of its own, so two players no longer share the same
+  one. It is kept in the saves folder.
+- The controller menu's texts follow the game's language.
+- Alboria accounts, for playing over the internet with friends in this game and in the ones that
+  come after it. The first time the launcher opens, also after updating, it asks how you want to
+  play: create an account, sign in to yours or play with a local account (Local and System Link, no
+  internet). Creating an account asks you to confirm you are 18 or older. An account has no
+  password: a 6-digit code sent to your email signs you in. The new Account section shows your
+  identity as Gamertag#tag, the gamertag (moved here from Installation), your devices, and lets you
+  download or delete your data.
+- Play with friends. System Link works on a local network: campaign co-op, Horde, Beast and
+  private Versus, choosing System Link in the party options. Over the internet, with an Alboria
+  account, a Joinable or Invite only party is a room on Alboria: friends join it with its code
+  (Manage/Invite, Join by code). Players connect directly when their routers allow it, and through
+  Alboria's relay when they don't. Options has a new Connection section with your Gamertag#tag, the
+  direct connection setting and the latency.
+- While Alboria can't send emails yet, accounts are created without a code. Once codes are back
+  you'll have 48 hours to verify your email from Account (or Play), or the account will be deleted.
+- Upscaling preset in the Video menu: it picks the render resolution for your screen and turns on
+  image scaling (AMD FSR 1; MetalFX on macOS).
+- Mouse: native mouse look with no aim assist, and the sideways turn while roadie running is
+  capped.
+- Linux and Windows: faster Vulkan, and 3840 × 2160 no longer shows a black picture.
+- The launcher no longer stutters while it's in front: its animated background now costs a
+  fraction of what it did.
+
 ## 0.4.5
 
 - Linux and Windows: higher and steadier frame rates, most of all in combat, with light glows

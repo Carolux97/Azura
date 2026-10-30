@@ -7,6 +7,9 @@ run, a dump or the code) or **inferred** (deduced, not yet checked).
 
 Nothing here is game data: only names, offsets and identifiers needed to hook the game.
 
+The RAAM's Shadow DLC and the Title Update it depends on have their own notes in
+[raams-shadow-dlc.md](raams-shadow-dlc.md).
+
 ## Contents
 
 - [Engine basics](#engine-basics)
@@ -16,11 +19,13 @@ Nothing here is game data: only names, offsets and identifiers needed to hook th
 - [Main menu](#main-menu)
 - [Options menu](#options-menu)
 - [Local co-op](#local-co-op)
+- [Party types, System Link and Manage/Invite](#party-types-system-link-and-manageinvite)
 - [Keyboard in menus](#keyboard-in-menus)
 - [Profile settings](#profile-settings)
 - [Mouse look](#mouse-look)
 - [Field of view](#field-of-view)
 - [Film grain](#film-grain)
+- [Engine settings (SystemSettings)](#engine-settings-systemsettings)
 - [Render command queue](#render-command-queue)
 - [Pitfalls](#pitfalls)
 
@@ -181,7 +186,8 @@ How localized values are imported (**verified** by changing them and dumping the
   means writing all its members.
 - Indexed keys (`ProfileMappings[N]`) only fill positions that exist: one past the end is ignored.
 
-Whether the Xbox 360 build honours edited `[SystemSettings]` values is **not verified**.
+The Xbox 360 build honours edited `[SystemSettings]` values (**verified**, see
+[Engine settings (SystemSettings)](#engine-settings-systemsettings)).
 
 ### How patched copies reach the game (verified)
 
@@ -213,7 +219,7 @@ patched (**verified** with `script_trace_args=HandleMenuSelection`).
 | Original index | Label | Opens | After our patch |
 | --- | --- | --- | --- |
 | 0 | `Campaign` | `MAINMENUOP_Campaign` | 0, unchanged |
-| 1 | `VS` | `MAINMENUOP_VS_Competitiveness` | 1, text marked "(coming soon)" |
+| 1 | `VS` | `MAINMENUOP_VS_Competitiveness` | 1, unchanged (its private matches play locally and over System Link) |
 | 2 | `Horde` | `MAINMENUOP_Horde` | 2, unchanged |
 | 3 | `Siege` (Beast) | `MAINMENUOP_Siege` | 3, unchanged |
 | 4 | `Journal` (War Journal) | `MAINMENUOP_WarJournal` | 4, unchanged |
@@ -226,6 +232,15 @@ Indices 0 and 5 were confirmed with `HandleMenuSelection` traces; the others fol
 The button bar's Start "Options" (`[UIWidget_MainMenu] OptionsButtonStr` of `geargame.<lang>`) is
 replaced with a space, since the list has the option.
 Calendar and Marketplace are the last two entries, so removing them shifts no other index.
+
+The menu of a player who joined another's party is another screen, `MAINMENUOP_ClientMenu`:
+Journal, Calendar, Options, Marketplace (`DLC`) and Leave party, all `Next=MAINMENUOP_None`.
+`UIScene_FrontEnd.Callback_ClientMenuOptionWasSelected(SelectedOption)` (a float) handles them by
+position: 0 `HandleOpenWarJournal`, 1 `HandleOpenCalendar`, 2 `Callback_StartButtonPressed`, 3
+`OpenMarketplaceBlade`, 4 `Callback_TransitionToTitle` (**verified** from its bytecode, 29 October
+2026). With `menu_remove_unused` the calendar and Marketplace are removed from that list too, and
+the runtime turns the positions left (0, 1, 2) into the original ones (0, 2, 4) in the callback's
+parameter before it runs.
 
 ### Sub-menus we change
 
@@ -240,7 +255,8 @@ Each screen is another `AllOptions` entry with its own `Identifier`. Rows disabl
 | `MAINMENUOP_VS_Competitiveness` | `Recreational`, `Competitive` (`Private` stays) |
 
 The "(coming soon)" suffix is appended to the row's text key in `geargameui.<lang>` `[MainMenu]`
-(same name as the label, `TITLE_VS_Competitiveness` for the Versus title).
+(same name as the label). The Versus entry and its screen title (`VS`, `TITLE_VS_Competitiveness`)
+are not marked: Versus is played in private matches.
 
 ### Changes and switches
 
@@ -432,6 +448,8 @@ Implemented in `runtime/src/menu/pc_options.{h,cpp}` (data and texts) and `scrip
 | 0 | Game | The game's own rows, then the two of the mature content category (violence 46, mature language 37 with `bRequiresMatureLanguageSupport`) |
 | 5 | Keyboard and mouse | Replaces the storage location: Mouse sensitivity. Back and Defaults |
 | 6 | Local co-op | Replaces the mature content: no list; choosing it opens the Local co-op menu (`runtime/src/local_coop_menu.h`). Greyed out with no controller connected |
+| 7 | Connection | Replaces the credits: no list; choosing it runs `Callback_Credits` as the credits did, and the runtime opens the Alboria menu there (`runtime/src/connection_menu.h`) |
+| 8 | List of categories | Its button bar (`MenuButtons` of the `OMI_MAX` entry: Choose, Back) gets a third button, Y with the credits' own title (`ButtonHandler=OBH_MAX`, so the script does nothing with it): `FilterButtonInput` with `XboxTypeS_Y` while `CurrentMode` is 8 runs `Callback_Credits` in its place, straight in the interpreter, so the credits open (**verified** on screen, 29 October 2026) |
 
 How:
 
@@ -542,6 +560,124 @@ players 2 to 4 have profiles of their own in the SDK, signed in when they get a 
 player 2's Start and Accept on the title screen, and sends `XN_SYS_INPUTDEVICESCHANGED` when a
 player is left with no device or gets one back.
 
+## Party types, System Link and Manage/Invite
+
+What the front end does with parties (**verified** with `script_trace` and `script_dump_code`,
+28 October 2026, with `network_mode = system_link`). This is where Alboria's online play hooks in
+(`docs/alboria-relay.md`).
+
+### Party options
+
+Back (Tab) on the main menu runs `UIScene_FrontEnd.OpenPartyOptions` and `BuildPartyOptions`, which
+fills a list of four: Joinable ("Abierto", party type 1), Invite only (2), System Link
+("Interconexión", 3) and Local (4); the profile setting is `GearProfileSettings.GetPartyType`.
+
+- Joinable and Invite only are disabled when `bNoLIVEFunctionality` is set, which happens when
+  `GearPC.CanAllPlayersPlayOnline()` is false. That script function asks, for each local player,
+  `GetLoginStatus() == 2` (signed in to Live), `CanPlayOnline() == 0` and
+  `ProfileSettings.IsProfileBanned() == false`.
+- System Link is enabled when every player is signed in, none is a guest and
+  `UIInteraction.HasLinkConnection()` (bit 0 of `XNetGetEthernetLinkStatus`) is true.
+- Accepting runs `HandlePartyTypeSelection`. Joinable and Invite only go through
+  `TransitionToLIVEParty` and `CreateLIVEParty`, which clears `bPartyTypeIsSystemLink` and
+  `bPartyTypeIsLocal`, sets the party type and asks for a party session (`bStartPartySession`).
+  System Link goes to `AttemptSystemLinkTransition`, which checks the players and the link again and
+  opens the System Link browser.
+
+### The party at start-up
+
+Leaving the title screen creates the first party in `UIScene_FrontEnd.ConditionalCreatePartySession`
+(**verified** from its bytecode with `script_dump_code`, 29 October 2026; the branch structure below
+is read from the decompiled listing, which shows no jump targets, so it is **inferred**):
+
+- It runs once the primary player is signed in and off the title screen, while
+  `GearPartyGRI.CurrPartyType` is not 3 and `InPartySession()` is false.
+- With the player signed in to Live (`GetLoginStatus() == 2`) it runs `UpdateNatType()`.
+- When `GearPC.CanAllPlayersPlayOnline()` is false, it sets `GearLocalPlayer.bPartyTypeIsSystemLink`
+  from the profile's party type (`GearProfileSettings.GetPartyType`, not Local), the player not
+  being a guest and `HasLinkConnection()`.
+- Then `GearPartyGame_Base.CreateParty(ControllerId, bPartyTypeIsSystemLink)`, or
+  `LocalPartyCreated()` without a party game; `bStartPartySession` goes back to false.
+- A fresh profile's party type is 1, Joinable (**verified** with `script_trace_args=GetPartyType`).
+  Another function of the front end copies the profile's party type into `CurrPartyType` with
+  `SetPartyType`.
+
+So `CreateLIVEParty` does not run at start-up: a Live party made there skips the hook that hosts
+an Alboria room.
+
+Without an Xbox Live sign-in (`GetLoginStatus() != 2`, as always on Azura) the function goes
+straight to `LocalPartyCreated`: it reads no party type and creates no party session (**verified**
+with `script_trace_args`, 29 October 2026), so the game always started in Local.
+
+With `network_mode = "online"` the runtime makes that first party the one `startup_party` names
+(`CreateStartupParty` in `script_hooks.cpp`): the type the player last chose in the party options,
+Joinable the first time. For Joinable or Invite only, when Alboria answered the start-up check, it
+runs `CreateSystemLinkParty` in `LocalPartyCreated`'s place after hosting a room of that type, as
+choosing them in the party options does; when Alboria did not answer, the game starts in Local and
+`startup_party` stays as it was. For System Link it runs `CreateSystemLinkParty` with no room; for
+Local, `LocalPartyCreated` as the game does. Outside a room `GetPartyType` answers the type the
+game started with until the player chooses one; the game copies it into `CurrPartyType` once the
+party exists (`PartySuccessfullyCreatedNotify`). A room's party stays System Link (3) in
+`CurrPartyType`: with Joinable (1) there the game treated it as an Xbox Live party and private
+Horde and Versus matches did not start (**observed** on 29 October 2026); only what the party panel
+and options show is changed (`RunWithOnlinePartyType`).
+
+### Leaving a room's party
+
+Read from the bytecode of `GearPC` and `UIScene_FrontEnd` (`script_dump_code`) and checked with
+`script_trace_args`, 29 October 2026:
+
+- `GearPC.ReturnToMainMenu(bReturnToStartScreen, bClearMenuHistory)` travels to the front end's
+  map again, as leaving a match does. `bReturnToStartScreen` only sets the local player's
+  `bIsFirstFrontEndLoad`; from the main menu the front end still started over at its title screen
+  (**observed**).
+- Choosing Local in the party options ends in `UIScene_FrontEnd.DestroyPartyForLocal`, which
+  destroys the party session (its delegate `OnDestroyPartyForLocalComplete` registers the players
+  with the party, closes the party options and resets the menu), and `CreateLocalParty`, which
+  sets `bPartyTypeUpdated` and runs `LocalPartyCreated`. Run on the front end's scene, the two
+  give a Local party without leaving the main menu (**verified**: the party panel said Local). With
+  `DestroyPartyForLocal` alone the party showed the System Link type the room's party had.
+- `GearPC.NotifyInviteFailed()` takes no parameters: it hides the loading movie and runs
+  `GearUIManager.DisplayErrorMessage("InviteHandlingFailed_Message", "InviteHandlingFailed_Title",
+  "GenericAccept")`, a message box with those `[MessageBoxErrorStrings]` texts and an Accept
+  button. The runtime runs it, with those texts changed, for a room that failed or ended.
+- `GearPC.OnConnectionStatusChange` shows the lost Xbox LIVE connection message and runs
+  `ReturnToMainMenu(true)`; `ClientWasKicked` shows `LostLink_Title` with `AFKKicked_Desc` and
+  runs `ReturnToMainMenu`.
+
+### The System Link browser (`UIScene_SystemLink`)
+
+- Opening it runs `TriggerPartySearch`: `GameInterface.FindOnlineGames` with its `SearchSettings`.
+  On a local network the search is a broadcast to port 14001 (seen on the network by Kabu, PR #113).
+  `OnFindOnlineGamesComplete` (about 3 seconds later) copies `GetGameSearch().Results` into
+  `SearchResults` and fills the list, or shows `NoServersString`.
+- Buttons (`FilterButtonInput`): B closes (`CloseSystemLinkBrowser`), X searches again
+  (`RefreshSearch`), Y creates a party (`CreateHost`, then `CreateSystemLink`: kick the remote
+  players, destroy the party, create a System Link party); A on a row runs
+  `Callback_OnJoinSelected(index)`, which after the same checks runs `JoinSystemLink`.
+- Joining destroys the current party and joins the selected one; `OnJoinPartyComplete('Party',
+  success)` reads `GetResolvedConnectString('Party')` and travels with `start <URL>`, or shows
+  "UnableToConnect".
+
+### Manage/Invite (`UIScene_WhatsUp`)
+
+Opened from the party panel (`UIWidget_SmallPartyPanel.OpenWhatsUpScene`).
+
+- The button bar is built by `RefreshButtonBarAndPlayerOptions` from `ButtonList` (`array<byte>` at
+  +896, set in the class defaults, not in the configuration): 0 line break, 1 player options (A),
+  2 back (B), 3 invite (X), 4 join (Y), 5 mute (Back), 6 mute strangers (Start), 7 invite Gears
+  friends (LB), 8 invite Xbox LIVE party (RB). Each button is shown with its active text, or wrapped
+  in `ButtonInactiveFormat` (grey) when its `Can...` function says no.
+- The texts are in `geargame.<lang>` `[UIScene_WhatsUp]`, for example
+  `InviteGearsButtonActive=<Font:$ControllerFont>_</Font> INVITAR AMIGOS GEARS`: the character in
+  the controller font is the button (`_` LB, `` ` `` RB, `X`, `Y`, `A`, `B`).
+- Presses arrive as `Callback_OnButtonPressed(ButtonString, List, ListIndex)` with `gamepad_Y`
+  (`JoinPlayer`), `gamepad_X` (`InvitePlayer`), `enter-gamepad_A` (player options), `gamepad_L1`
+  (`InviteGearsPlayers`), `gamepad_R1` (`InviteLivePartyPlayers`), `start` (`QuickMute`) and `back`
+  (`ToggleMutePlayer`). `FilterButtonInput` only handles B.
+- Join and Invite work on Xbox LIVE friends and parties (`CanJoinPlayer` asks
+  `CanAllPlayersPlayOnline` and the friend's presence).
+
 ## Keyboard in menus
 
 The SDK's keyboard and mouse driver binds Escape and Return to Start for good (the game needs a
@@ -572,6 +708,16 @@ in `script_hooks.cpp`):
   froze the Options opened from the main menu with Return still held (**observed**; why is
   **inferred**: the scene opening with A down). Each key keeps what it was when pressed
   until it is released, so the Escape that pauses is not also B in the pause menu it opens.
+- **The pre-game lobby** (`UIScene_PregameLobby`, after a Horde, Versus or custom match is created)
+  counts as play for the keyboard: Return reaches its `FilterButtonInput` as Start and is turned
+  into A there. The host's map selection control is Flash (`bIsInCustomMapSelection`): the mouse
+  wheel changes the map and the control calls `OnCustomMapChanged(MapId)` (**verified**, it is in
+  the log), but accepting it never reached `OnCustomMapSelected(MapId)`, the function that sends
+  the choice (`GRI.SubmitMapSelectionByName`, `GRI.SubmitHostFinishedMapSelection`), with the
+  keyboard (**verified**: it never appears in the log of a session that pressed Return). Why the
+  control does not take the injected A is not known. With the control open, Return calls
+  `OnCustomMapSelected` itself with the last `MapId` the control reported
+  (`ConfirmCustomMapWithReturn`).
 
 ## Profile settings
 
@@ -723,6 +869,78 @@ The runtime clears `bEnableImageGrain` in the effects of those three chains whil
 off, every frame as each player's input runs, and puts back the value each effect had otherwise
 (`runtime/src/script_hooks.cpp`, "Film grain").
 
+## Engine settings (SystemSettings)
+
+The engine's settings object (`GSystemSettings` in Unreal Engine 3 terms, an **inference** from its
+contents) is a global at guest `0x8343F488`, with a vtable pointer (`0x8210C898`) at +0. Its fields
+were mapped (**verified**) by starting the game seven times with `[SystemSettings]` values changed
+in the coalesced file, each boolean turned off in a different subset of the runs (a binary code per
+setting) and the numbers set to unique values, and dumping the object when the game first reads it.
+
+It holds the ini's settings three times:
+
+- **+4 to +156**, the main block, in the ini's order with booleans as 32-bit words: `DetailMode`
+  +4, `MaxDrawDistanceScale` +8, `StaticDecals` +24, `DynamicLights` +40, `MotionBlur` +56,
+  `DepthOfField` +64, `AmbientOcclusion` +68, `Bloom` +72, `bAllowLightShafts` +76, `Distortion`
+  +80, `LensFlares` +96, `FogVolumes` +100, `AllowSubsurfaceScattering` +132,
+  `AllowImageReflections` +136, and the others in between. The shadow settings follow further on:
+  `DynamicShadows` +888, `LightEnvironmentShadows` +892, `MinShadowResolution` +900,
+  `MaxShadowResolution` +908, `bAllowWholeSceneDominantShadows` +944, `ShadowFadeResolution` +996.
+- **+1036 to +1084**, a short block with copies of some of them: `MotionBlur` +1036,
+  `AmbientOcclusion` +1040, `DynamicShadows` +1044, `FogVolumes` +1052,
+  `AllowSubsurfaceScattering` +1056, and shadow resolutions.
+- **+1096 onwards**, a full second copy of the main block (`DetailMode` +1096, `DepthOfField`
+  +1156, `AmbientOcclusion` +1160, `Bloom` +1164, ...).
+
+The community patches of the Xenia game-patches file read these fields: depth of field (+64), bloom
+(+72) and lens flares (+96) of the main block, ambient occlusion (+1040) and dynamic shadows (+1044)
+of the short one.
+
+**Changing them while the game runs.** Writing a setting's fields (all its copies) in guest memory
+while the game runs changes the GPU work of the next frames for `DepthOfField`, `DynamicShadows`,
+`MotionBlur` and `bAllowLightShafts` (**verified**: their render passes and draws drop at once and
+come back when the value is restored). For `AmbientOcclusion`, `Bloom`, `LensFlares`, `Distortion`,
+`bAllowWholeSceneDominantShadows`, `FogVolumes`, `AllowSubsurfaceScattering`,
+`AllowImageReflections` and `DetailMode` the counters did not change, so either they do not apply
+while the game runs or the scenes measured did not use them (**not verified**).
+
+**What each costs** on macOS (Metal, `gfx = hle`, M4, 1280x720, `frame_rate_limit = 150`, one run
+of about 10 minutes with the campaign start and its first combat). The run turned one setting off
+and on every 0.5 seconds, in blocks of 8 seconds per setting, and compares each half second with the
+effect off against the half seconds around it with it on, so both see nearly the same scene. Median
+change of the host GPU time per frame:
+
+| Turned off | All gameplay frames | Frames with 1200 or more draws (the combat, an **inference**) |
+| --- | --- | --- |
+| `DynamicShadows` | -2.65 ms (-26%), -18 render passes | -2.9 ms (-30%) |
+| `DepthOfField` | -2.15 ms (-20%), -49 of 94 render passes | -2.15 ms (-20%) |
+| `MotionBlur` | -0.5 ms (-5%) | -0.2 ms |
+| `bAllowLightShafts` | -0.5 ms (-4%) | -0.8 ms |
+| `LensFlares` | none measurable | -0.9 ms (few samples) |
+| The others listed above | none measurable | none measurable |
+
+The frame time follows the GPU time: the game is limited by the GPU there (about 10.5 ms of GPU in
+a 12.3 ms frame in combat). Dynamic shadows and depth of field are the only settings that change the
+frame time by much.
+
+**The Video options Depth of field, Dynamic shadows, Ambient occlusion, Bloom and Lens flares**
+write those settings while the game runs (`runtime/src/system_settings.cpp`). A mid-function hook
+right after the game reads its ambient occlusion setting (`AzuraNoteEngineSettings`) gives them the
+object's address, which the game has in `r10` there, so no edition's address is written into the
+runtime. While an option is off, every frame writes 0 to all the fields of its setting
+(`DepthOfField` +64 and +1156, `DynamicShadows` +888 and +1044, `AmbientOcclusion` +68, +1040 and
++1160, `Bloom` +72 and +1164, `LensFlares` +96 and +1188), in case the engine writes its settings
+again; turning it back on puts back the values the game had.
+
+The game reads depth of field, bloom, lens flares and ambient occlusion with the object's address
+in the code itself (`lis r11,-31932` and `addi r11,r11,-2936`, that is `0x8343F488`, then
+`lwz` of +64, +72, +96 or +1040, in sub_82593DB8, sub_82861F40, sub_82762C30 and sub_827C9610):
+those are the loads the community patches replace with 0 ("Disable Depth of Field" and "Disable
+Bloom" by boma, "Disable Lens Flares" by illusion, "Disable Ambient Occlusion" by illusion and boma,
+in the Xenia game-patches file `4D5308AB - Gears of War 3.patch.toml`), so writing the fields has
+the same effect. Ambient occlusion is off by default on Linux, where it leaves black patches on
+surfaces.
+
 ## Render command queue
 
 Game threads enqueue render commands into the engine's ring buffer (`FRingBuffer`, guest
@@ -829,4 +1047,58 @@ are always zero.
 
 The player a `PlayerInput` belongs to is its outer `PlayerController`'s `Player` (a `LocalPlayer`),
 whose `ControllerId` is the guest user index.
+
+### What the game does to the mouse after `aMouseX`
+
+Read from the bytecode of `script_dump_code` (`GearPC`, `GearPlayerInput`, `PlayerInput`,
+`PlayerController`; **verified** as listings, the effects marked *inferred* are read from the
+order of the listing, not traced):
+
+- `PlayerInput.PlayerInput` runs `SmoothMouse` on both mouse axes when `bEnableMouseSmoothing`
+  (a bool of `PlayerInput`) is set, then adds them to `aTurn`/`aLookUp` and flips those with
+  `bInvertTurn` and `bInvertMouse`. With `bStrafe` the mouse's x goes to `aStrafe`.
+  `bLockTurnUntilRelease` zeroes `aTurn` while `RawJoyLookRight` is held, and `IsLookInputIgnored`
+  (`PlayerController.bIgnoreLookInput` > 0) zeroes both.
+- `GearPlayerInput.PlayerInput` then runs `AutoPitchCentering` and `IsIdle`, which read `aLookUp`
+  and the mouse axes, then `GearPC.ApplySensitivityScaling`: `aTurn` and `aLookUp` times
+  `GetSensitivityMultiplier()`, the profile's look, aim or zoom sensitivity
+  (`RotationSensitivity*`, `TargettingRotationSensitivity*`, `ZoomRotationSensitivity*`), or
+  `GetSensitivityMultiplierForConfig(0)` during some special moves. Then `aLookUp` times
+  `LookPitchSensivityRatio` when `bNewInput`.
+- `GearPC.UpdateRotation` copies `aTurn` and `aLookUp` into the int `DeltaRot` (the fraction of a
+  rotator unit is dropped), divides it by `WorldInfo.TimeDilation` when that is not 1, calls
+  `ApplyAdhesion` and then `ProcessViewRotation` (`LimitViewRotation`, the camera's and the pawn's
+  own).
+- `GearPC.ApplyAdhesion` calls `GearPlayerInput.ViewAdhesion(DeltaTime, W, out_YawRot,
+  out_PitchRot)`, the view adhesion of the aim assist: it turns the view towards the target it
+  finds (`GetFrictionAdhesionTarget`) while the player turns. Forced and melee adhesion are its
+  other paths.
+- `GearPlayerInput.ViewFriction` slows the turn near a target. It runs in `PreProcessInput`, before
+  the mouse axes are added, so it never touches the mouse.
+- `GearPC.GetAdjustedAimFor(W, StartFireLoc)` bends a shot towards the target's aim attractors
+  by `AimAssistScale` (or `AimAssistScaleWhileTargeting`), the bullet aim assist (*inferred*:
+  those are properties of the weapon `W`, which was not dumped).
+
+The runtime keeps the mouse out of all of it (`MouseShare` in `script_hooks.cpp`): it clears
+`bEnableMouseSmoothing`, records the mouse's share of `aTurn` and `aLookUp` as the engine's
+`PlayerInput` returns, takes it out right after `ApplySensitivityScaling` (measuring the
+multiplier as the ratio that function scaled the look input by), so the pitch ratio is the
+stick's alone, and puts it back as `GearPlayerInput.PlayerInput` returns, times `TimeDilation`, with
+the fraction of a rotator unit the last frame dropped. `AutoPitchCentering` and `IsIdle` still see
+the mouse. For a player on the keyboard and mouse it gives `ViewAdhesion`'s out parameters back the
+values they came in with and zeroes the weapon's `AimAssistScale` and
+`AimAssistScaleWhileTargeting` while `GetAdjustedAimFor` runs. A player on a controller keeps
+both.
+While roadie running (`GearPawn.SpecialMove` 4, the value `AutoPitchCentering` tests with
+`IsDoingSpecialMove`), `GSM_RoadieRun.PreProcessInput` (called from `GearPlayerInput.PreProcessInput`
+through `GearPawn.SpecialMoves[SpecialMove]`) sets `aBaseY` to 1, replaces `aTurn` with
+`aStrafe * SteeringPct` (0 while `bDisableSteering`, at the start of the run) and zeroes
+`aStrafe` (**verified**, `script_dump_code` of `GSM_RoadieRun`): the right stick does not turn
+sideways, the left one steers, and `aLookUp` is left alone. The runtime multiplies the mouse's
+share by `mnk_run_sensitivity` (1, no change, by default) then, and caps the sideways turn, with the
+stick's steer, at what a full steer gives that frame (`SteeringPct * 100 * DeltaTime *
+LookRightScale * FOVScale`, over the `field_of_view` compensation, times the profile
+multiplier) times `mnk_run_turn_limit` (2 by default), dropping the rest: the mouse steers better
+than A or D, but a flick cannot turn round. `SteeringPct` is used while `bDisableSteering` too, so
+the mouse is not locked at the start of the run.
 

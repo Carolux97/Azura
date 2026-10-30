@@ -12,28 +12,70 @@
 <body>
   <!-- Lambent backdrop: dark rock with glowing imulsion veins and drifting spores. Decorative only. -->
   <div class="backdrop" aria-hidden="true">
-    <svg class="veins" viewBox="0 0 1200 760" preserveAspectRatio="xMidYMid slice">
-      <defs>
-        <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+    <!-- The veins pulse between a dim and a hot imulsion. Each is drawn twice, already glowing: a dim
+         layer that stays, and a hot layer per group of veins whose opacity alone is animated. The
+         glow is a full-screen blur, so it is drawn once; animating the strokes themselves made
+         WebKit redraw it every frame. -->
+    <div class="veins">
+      <svg class="vein-layer" viewBox="0 0 1200 760" preserveAspectRatio="xMidYMid slice">
+        <defs>
+          <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="6" result="blur"/>
+            <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+          <radialGradient id="pool" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#ffd25a" stop-opacity=".55"/>
+            <stop offset="100%" stop-color="#ff9e1b" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+        <ellipse cx="1040" cy="690" rx="260" ry="120" fill="url(#pool)"/>
+        <ellipse cx="160" cy="80" rx="180" ry="90" fill="url(#pool)" opacity=".5"/>
+        <g class="vein-group is-dim" filter="url(#glow)">
+          <path class="vein v1" d="M1200 640 C1080 610 1010 560 930 575 S790 640 700 610 S560 520 470 540"/>
+          <path class="vein v1" d="M190 120 C210 170 190 220 230 260"/>
+          <path class="vein v2" d="M930 575 C905 520 920 470 880 430 S800 390 770 340"/>
+          <path class="vein v2" d="M700 610 C680 660 640 690 600 760"/>
+          <path class="vein v3" d="M1200 720 C1120 700 1060 720 990 760"/>
+          <path class="vein v3" d="M0 120 C70 110 130 140 190 120 S300 60 360 80"/>
+        </g>
+      </svg>
+      <svg class="vein-layer is-hot hot-1" viewBox="0 0 1200 760" preserveAspectRatio="xMidYMid slice">
+        <defs>
+        <filter id="glow-1" x="-50%" y="-50%" width="200%" height="200%">
           <feGaussianBlur stdDeviation="6" result="blur"/>
           <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
         </filter>
-        <radialGradient id="pool" cx="50%" cy="50%" r="50%">
-          <stop offset="0%" stop-color="#ffd25a" stop-opacity=".55"/>
-          <stop offset="100%" stop-color="#ff9e1b" stop-opacity="0"/>
-        </radialGradient>
-      </defs>
-      <ellipse cx="1040" cy="690" rx="260" ry="120" fill="url(#pool)"/>
-      <ellipse cx="160" cy="80" rx="180" ry="90" fill="url(#pool)" opacity=".5"/>
-      <g class="vein-group" filter="url(#glow)">
-        <path class="vein" d="M1200 640 C1080 610 1010 560 930 575 S790 640 700 610 S560 520 470 540"/>
-        <path class="vein v2" d="M930 575 C905 520 920 470 880 430 S800 390 770 340"/>
-        <path class="vein v3" d="M1200 720 C1120 700 1060 720 990 760"/>
-        <path class="vein v2" d="M700 610 C680 660 640 690 600 760"/>
-        <path class="vein v3" d="M0 120 C70 110 130 140 190 120 S300 60 360 80"/>
-        <path class="vein" d="M190 120 C210 170 190 220 230 260"/>
-      </g>
-    </svg>
+        </defs>
+        <g class="vein-group" filter="url(#glow-1)">
+          <path class="vein v1" d="M1200 640 C1080 610 1010 560 930 575 S790 640 700 610 S560 520 470 540"/>
+          <path class="vein v1" d="M190 120 C210 170 190 220 230 260"/>
+        </g>
+      </svg>
+      <svg class="vein-layer is-hot hot-2" viewBox="0 0 1200 760" preserveAspectRatio="xMidYMid slice">
+        <defs>
+        <filter id="glow-2" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur stdDeviation="6" result="blur"/>
+          <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+        </defs>
+        <g class="vein-group" filter="url(#glow-2)">
+          <path class="vein v2" d="M930 575 C905 520 920 470 880 430 S800 390 770 340"/>
+          <path class="vein v2" d="M700 610 C680 660 640 690 600 760"/>
+        </g>
+      </svg>
+      <svg class="vein-layer is-hot hot-3" viewBox="0 0 1200 760" preserveAspectRatio="xMidYMid slice">
+        <defs>
+        <filter id="glow-3" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur stdDeviation="6" result="blur"/>
+          <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+        </defs>
+        <g class="vein-group" filter="url(#glow-3)">
+          <path class="vein v3" d="M1200 720 C1120 700 1060 720 990 760"/>
+          <path class="vein v3" d="M0 120 C70 110 130 140 190 120 S300 60 360 80"/>
+        </g>
+      </svg>
+    </div>
     <div class="spores"></div>
     <div class="grain"></div>
   </div>
@@ -45,6 +87,8 @@
         <span class="brand-mark" aria-hidden="true"></span>
         <span class="brand-name">Azura</span>
       </div>
+      <!-- Opens alboria.org, our online ecosystem (account.js). Hidden in the narrow layout. -->
+      <button class="alboria-chip" type="button" data-alboria-site><svg viewBox="0 0 40 40" aria-hidden="true"><defs><clipPath id="alboria-chip-front"><rect x="-5" y="20" width="50" height="25"/></clipPath></defs><ellipse cx="20" cy="20" rx="19" ry="6" fill="none" stroke="#5aa9f0" stroke-width="3" transform="rotate(-18 20 20)"/><circle cx="20" cy="20" r="12" fill="#ffe07a" stroke="#1e2a4f" stroke-width="3"/><g transform="rotate(-18 20 20)" clip-path="url(#alboria-chip-front)"><ellipse cx="20" cy="20" rx="19" ry="6" fill="none" stroke="#5aa9f0" stroke-width="3"/></g></svg><span data-i18n="rail.withAlboria"></span></button>
       <ul class="nav">
         <li><button class="nav-item is-active" data-view="play" data-i18n="nav.play"></button></li>
         <li><button class="nav-item" data-view="install" data-i18n="nav.install"></button></li>
@@ -56,12 +100,7 @@
             <span data-i18n="nav.achievements"></span>
           </button>
         </li>
-        <li>
-          <button class="nav-item" data-view="online">
-            <span data-i18n="nav.online"></span>
-            <span class="tag" data-i18n="nav.soon"></span>
-          </button>
-        </li>
+        <li><button class="nav-item" data-view="account" data-i18n="nav.account"></button></li>
       </ul>
       <div class="rail-foot">
         <!-- Shown when a newer launcher version is published; see setupUpdates() in main.js. -->
@@ -127,6 +166,14 @@
               <div><strong data-i18n="status.gpu"></strong><span class="status-detail" id="status-gpu-detail"></span></div>
             </div>
           </div>
+        </div>
+
+        <!-- An Alboria account made while codes were off, once codes are back: verify the email by
+             the deadline, or the account is deleted (account.js, renderAccount). -->
+        <div class="verify-notice play-verify" id="play-verify" hidden>
+          <span class="dot"></span>
+          <p id="play-verify-text"></p>
+          <button class="btn btn-primary" id="play-verify-email" data-i18n="account.verifyEmail"></button>
         </div>
 
         <!-- A runtime build from the kit: its step, a bar and the time left, or why it failed;
@@ -233,6 +280,13 @@
             <button class="btn" id="saves-cancel" data-pad-back data-i18n="install.savesCancel"></button>
           </div>
         </div>
+        <!-- Downloadable content: the player's own packages; renderDlc() fills it. -->
+        <div class="panel" id="dlc-panel">
+          <h2 class="panel-title" data-i18n="install.dlcTitle"></h2>
+          <p class="help" data-i18n="install.dlcHelp"></p>
+          <div class="status-list dlc-list" id="dlc-list" aria-live="polite"></div>
+          <button class="btn" id="add-dlc" data-i18n="install.dlcAdd"></button>
+        </div>
         <div class="panel">
           <h2 class="panel-title" data-i18n="install.languageTitle"></h2>
           <p class="help" data-i18n="install.languageHelp"></p>
@@ -240,16 +294,6 @@
             <label class="field">
               <span data-i18n="install.gameLanguage"></span>
               <select id="game-language"></select>
-            </label>
-          </div>
-        </div>
-        <div class="panel">
-          <h2 class="panel-title" data-i18n="install.playerTitle"></h2>
-          <p class="help" data-i18n="install.playerHelp"></p>
-          <div class="field-grid">
-            <label class="field">
-              <span data-i18n="install.userName"></span>
-              <input class="path" id="player-name" type="text" maxlength="15" data-text-rule="gamertag" data-i18n-attr="placeholder:install.userNamePlaceholder">
             </label>
           </div>
         </div>
@@ -382,19 +426,205 @@
         <div id="achievements-body"></div>
       </section>
 
-      <!-- ONLINE -->
-      <section class="view" data-view="online" aria-labelledby="online-title">
-        <h1 id="online-title" class="view-title" data-i18n="online.title"></h1>
-        <div class="panel panel-locked">
-          <h2 class="panel-title" data-i18n="online.panelTitle"></h2>
-          <p class="help" data-i18n="online.help"></p>
-          <div class="field-grid">
-            <button class="btn" disabled data-i18n="online.host"></button>
-            <button class="btn" disabled data-i18n="online.join"></button>
+      <!-- ACCOUNT: the player's Alboria account, or their local account (account.js). -->
+      <section class="view" data-view="account" aria-labelledby="account-title">
+        <div class="account-title-row">
+          <h1 id="account-title" class="view-title" data-i18n="account.title"></h1>
+          <button class="btn alboria-open" type="button" data-alboria-site><svg viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="11" fill="#ffe07a" stroke="#1e2a4f" stroke-width="2.5"/><ellipse cx="20" cy="20" rx="18" ry="5.5" fill="none" stroke="#1e2a4f" stroke-width="3" transform="rotate(-18 20 20)"/></svg><span>alboria.org</span></button>
+        </div>
+
+        <!-- Signed in to Alboria. -->
+        <div id="account-alboria" hidden>
+          <div class="panel">
+            <div class="panel-head-row">
+              <div>
+                <h2 class="panel-title" data-i18n="account.identityTitle"></h2>
+                <p class="help" data-i18n="account.identityHelp"></p>
+              </div>
+              <div class="status-badge account-badge" id="account-badge" data-state="warn">
+                <span class="dot"></span><span id="account-badge-text"></span>
+              </div>
+            </div>
+            <div class="identity-card">
+              <span class="identity-name" id="account-name"></span><span class="identity-tag" id="account-tag"></span>
+            </div>
+            <p class="save-detail-msg" id="account-detail" aria-live="polite"></p>
+            <div class="field-grid">
+              <label class="field">
+                <span data-i18n="account.gamertag"></span>
+                <input class="path" id="account-gamertag" type="text" maxlength="15" data-text-rule="gamertag" data-i18n-attr="placeholder:account.gamertagPlaceholder">
+              </label>
+              <div class="field">
+                <span data-i18n="account.email"></span>
+                <div class="path-row">
+                  <input class="path" id="account-email" type="text" readonly>
+                  <button class="btn" id="account-change-email" data-i18n="account.changeEmail"></button>
+                </div>
+              </div>
+            </div>
+            <div class="verify-notice" id="account-verify" hidden>
+              <span class="dot"></span>
+              <p id="account-verify-text"></p>
+              <button class="btn btn-primary" id="account-verify-email" hidden data-i18n="account.verifyEmail"></button>
+            </div>
+            <div class="account-actions">
+              <button class="btn btn-primary" id="account-save" hidden data-i18n="account.saveGamertag"></button>
+              <button class="btn" id="account-retry" hidden data-i18n="account.retry"></button>
+            </div>
+          </div>
+
+          <div class="panel" id="account-devices-panel">
+            <h2 class="panel-title" data-i18n="account.devicesTitle"></h2>
+            <p class="help" data-i18n="account.devicesHelp"></p>
+            <div class="device-list" id="account-devices"></div>
+          </div>
+
+          <div class="panel">
+            <h2 class="panel-title" data-i18n="account.dataTitle"></h2>
+            <p class="help" data-i18n="account.dataHelp"></p>
+            <div class="account-actions">
+              <button class="btn" id="account-export" data-i18n="account.download"></button>
+              <button class="btn" id="account-sign-out" data-i18n="account.signOut"></button>
+              <button class="btn btn-danger" id="account-delete" data-i18n="account.delete"></button>
+            </div>
+          </div>
+        </div>
+
+        <!-- A local account: no Alboria. -->
+        <div id="account-local" hidden>
+          <div class="panel">
+            <div class="panel-head-row">
+              <div>
+                <h2 class="panel-title" data-i18n="account.localTitle"></h2>
+                <p class="help" data-i18n="account.localHelp"></p>
+              </div>
+              <div class="status-badge account-badge" data-state="none">
+                <span class="dot"></span><span data-i18n="account.noAccount"></span>
+              </div>
+            </div>
+            <div class="field-grid">
+              <label class="field">
+                <span data-i18n="account.gamertag"></span>
+                <input class="path" id="local-gamertag" type="text" maxlength="15" data-text-rule="gamertag" data-i18n-attr="placeholder:account.gamertagPlaceholder">
+              </label>
+            </div>
+            <div class="account-actions">
+              <button class="btn btn-primary" data-account-open="create" data-i18n="account.create"></button>
+              <button class="btn" data-account-open="signin" data-i18n="account.signIn"></button>
+            </div>
           </div>
         </div>
       </section>
     </main>
+  </div>
+
+  <!-- WELCOME: the account the player plays with, the first time the launcher opens (also after an
+       update from a launcher without accounts), and the account's dialogs (account.js). While it is
+       open, the controller moves only between its controls (data-modal, gamepadNav.js). -->
+  <div class="welcome" id="welcome" data-modal hidden>
+    <div class="welcome-box" role="dialog" aria-modal="true" aria-labelledby="welcome-heading">
+      <p class="eyebrow" data-i18n="welcome.eyebrow"></p>
+      <p class="wordmark welcome-mark" aria-hidden="true">AZURA</p>
+
+      <div data-step="choose">
+        <h2 class="visually-hidden" id="welcome-heading" data-i18n="welcome.eyebrow"></h2>
+        <p class="lede" data-i18n="welcome.lede"></p>
+        <p class="save-detail-msg is-error" data-step-error hidden></p>
+        <div class="welcome-choices">
+          <button class="choice" data-welcome-go="create"><strong data-i18n="welcome.create"></strong><span data-i18n="welcome.createHelp"></span></button>
+          <button class="choice" data-welcome-go="signin"><strong data-i18n="welcome.signIn"></strong><span data-i18n="welcome.signInHelp"></span></button>
+          <button class="choice" data-welcome-go="local"><strong data-i18n="welcome.local"></strong><span data-i18n="welcome.localHelp"></span></button>
+        </div>
+      </div>
+
+      <form data-step="create" hidden>
+        <h2 class="panel-title" data-i18n="welcome.createTitle"></h2>
+        <div class="field-grid one">
+          <label class="field"><span data-i18n="account.gamertag"></span><input class="path" id="create-gamertag" type="text" maxlength="15" data-text-rule="gamertag" autocomplete="nickname"></label>
+          <label class="field"><span data-i18n="account.email"></span><input class="path" id="create-email" type="text" inputmode="email" autocomplete="email" maxlength="254" data-text-rule="email"></label>
+        </div>
+        <p class="codes-off-note" id="create-codes-off" hidden data-i18n="welcome.codesOffCreate"></p>
+        <p class="help consent-text" data-i18n="welcome.privacy"></p>
+        <label class="consent"><input type="checkbox" id="create-consent"> <span data-i18n="welcome.consent"></span></label>
+        <p class="save-detail-msg is-error" data-step-error hidden></p>
+        <div class="account-actions">
+          <button class="btn" type="button" data-welcome-back data-pad-back data-i18n="welcome.back"></button>
+          <button class="btn btn-primary" type="submit" id="create-submit" data-i18n="welcome.sendCode"></button>
+        </div>
+      </form>
+
+      <form data-step="signin" hidden>
+        <h2 class="panel-title" data-i18n="welcome.signInTitle"></h2>
+        <p class="help" data-i18n="welcome.signInText"></p>
+        <p class="codes-off-note" id="signin-codes-off" hidden data-i18n="welcome.codesOffSignIn"></p>
+        <div class="field-grid one">
+          <label class="field"><span data-i18n="account.email"></span><input class="path" id="signin-email" type="text" inputmode="email" autocomplete="email" maxlength="254" data-text-rule="email"></label>
+        </div>
+        <p class="save-detail-msg is-error" data-step-error hidden></p>
+        <div class="account-actions">
+          <button class="btn" type="button" data-welcome-back data-pad-back data-i18n="welcome.back"></button>
+          <button class="btn btn-primary" type="submit" data-i18n="welcome.sendCode"></button>
+        </div>
+      </form>
+
+      <form data-step="email" hidden>
+        <h2 class="panel-title" data-i18n="account.emailTitle"></h2>
+        <p class="help" data-i18n="account.emailText"></p>
+        <div class="field-grid one">
+          <label class="field"><span data-i18n="account.newEmail"></span><input class="path" id="new-email" type="text" inputmode="email" autocomplete="email" maxlength="254" data-text-rule="email"></label>
+        </div>
+        <p class="save-detail-msg is-error" data-step-error hidden></p>
+        <div class="account-actions">
+          <button class="btn" type="button" data-welcome-close data-pad-back data-i18n="welcome.cancel"></button>
+          <button class="btn btn-primary" type="submit" data-i18n="welcome.sendCode"></button>
+        </div>
+      </form>
+
+      <form data-step="delete" hidden>
+        <h2 class="panel-title" data-i18n="account.deleteTitle"></h2>
+        <p class="help" id="delete-text"></p>
+        <p class="save-detail-msg is-error" data-step-error hidden></p>
+        <div class="account-actions">
+          <button class="btn" type="button" data-welcome-close data-pad-back data-i18n="welcome.cancel"></button>
+          <button class="btn btn-danger" type="submit" data-i18n="welcome.sendCode"></button>
+        </div>
+      </form>
+
+      <form data-step="code" hidden>
+        <h2 class="panel-title" data-i18n="welcome.codeTitle"></h2>
+        <p class="help" id="code-text"></p>
+        <label class="code-field">
+          <span class="visually-hidden" data-i18n="welcome.codeLabel"></span>
+          <input id="code-input" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" data-text-rule="code">
+          <span class="code-boxes" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span></span>
+        </label>
+        <p class="save-detail-msg is-error" data-step-error hidden></p>
+        <div class="account-actions">
+          <button class="btn" type="button" data-welcome-back data-pad-back data-i18n="welcome.back"></button>
+          <button class="btn" type="button" id="code-resend"></button>
+          <button class="btn btn-primary" type="submit" id="code-confirm" data-i18n="welcome.confirm"></button>
+        </div>
+      </form>
+
+      <div data-step="done" hidden>
+        <h2 class="panel-title" id="done-title"></h2>
+        <div class="identity-card"><span class="identity-name" id="done-name"></span><span class="identity-tag" id="done-tag"></span></div>
+        <p class="help" id="done-text"></p>
+        <div class="account-actions"><button class="btn btn-primary" data-welcome-close data-pad-back data-i18n="welcome.start"></button></div>
+      </div>
+
+      <form data-step="local" hidden>
+        <h2 class="panel-title" data-i18n="welcome.localTitle"></h2>
+        <p class="help" data-i18n="welcome.localText"></p>
+        <div class="field-grid one">
+          <label class="field"><span data-i18n="account.gamertag"></span><input class="path" id="welcome-local-gamertag" type="text" maxlength="15" data-text-rule="gamertag"></label>
+        </div>
+        <div class="account-actions">
+          <button class="btn" type="button" data-welcome-back data-pad-back data-i18n="welcome.back"></button>
+          <button class="btn btn-primary" type="submit" data-i18n="welcome.start"></button>
+        </div>
+      </form>
+    </div>
   </div>
 
   <!-- The controller buttons and what they do, while a controller is in use (gamepadNav.js). Outside

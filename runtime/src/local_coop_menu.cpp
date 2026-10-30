@@ -44,9 +44,23 @@ struct Texts {
   const char* back;   // the keyboard's hint: Escape goes back
 };
 
-// Fonts carry Latin-1 only, so the languages written in other scripts use the English texts.
+// The Xbox 360 language IDs; the fonts draw Cyrillic and, for those languages, Japanese, Korean and
+// traditional Chinese behind Barlow (OnConfigureFonts in azura_app.h).
 Texts LocalizedTexts(uint32_t language) {
   switch (language) {
+    case 2:  // Japanese
+      return {"ローカル協力プレイ", "デバイスで左右を押すと、別のプレイヤーに渡せます。", "未割り当て",
+              "プレイヤー %d", "キーボードとマウス", "デバイスなし", "移動", "完了", "Enter", "戻る"};
+    case 7:  // Korean
+      return {"로컬 협동", "장치에서 왼쪽이나 오른쪽을 눌러 다른 플레이어에게 넘기세요.", "할당 안 됨",
+              "플레이어 %d", "키보드 및 마우스", "장치 없음", "이동", "완료", "Enter", "뒤로"};
+    case 8:  // Traditional Chinese
+      return {"本機合作", "在裝置上按左或右，即可交給其他玩家。", "未指派", "玩家 %d", "鍵盤與滑鼠", "無裝置",
+              "移動", "完成", "Enter", "返回"};
+    case 12:  // Russian
+      return {"ЛОКАЛЬНЫЙ КООПЕРАТИВ",
+              "Нажмите влево или вправо на устройстве, чтобы передать его другому игроку.", "НЕ НАЗНАЧЕНО",
+              "ИГРОК %d", "Клавиатура и мышь", "Нет устройства", "Переместить", "Готово", "Enter", "Назад"};
     case 3:  // German
       return {"LOKALER KOOP",
               "Dr\xC3\xBC""cke links oder rechts auf einem Ger\xC3\xA4t, um es einem anderen Spieler zu geben.",
@@ -67,7 +81,7 @@ Texts LocalizedTexts(uint32_t language) {
               "NON ASSEGNATO", "GIOCATORE %d", "Tastiera e mouse", "Nessun dispositivo", "Sposta", "Fatto", "Invio", "Indietro"};
     case 9:  // Portuguese
       return {"COOPERATIVO LOCAL",
-              "Pressione esquerda ou direita num dispositivo para pass\xC3\xA1-lo a outro jogador.",
+              "Pressione esquerda ou direita em um dispositivo para pass\xC3\xA1-lo a outro jogador.",
               "N\xC3\x83O ATRIBU\xC3\x8D""DO", "JOGADOR %d", "Teclado e mouse", "Nenhum dispositivo", "Mover",
               "Pronto", "Enter", "Voltar"};
     case 11:  // Polish

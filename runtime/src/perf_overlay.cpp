@@ -15,6 +15,7 @@
 
 #include <rex/cvar.h>
 #include <rex/ppc.h>
+#include <rex/system/xam/alboria.h>
 
 #include "coop_ui.h"
 #include "menu/pc_options.h"
@@ -25,6 +26,10 @@ REXCVAR_DEFINE_STRING(performance_overlay, "off", "Azura/Graphics",
                       "Performance overlay: off, fps for the game's frame rate in a corner, detailed to "
                       "add the game's CPU and GPU use, or advanced to add its memory use, a graph of "
                       "frame times, the average frame rate and the 1% low");
+REXCVAR_DEFINE_BOOL(latency_overlay, false, "Network",
+                    "Show the latency in the performance overlay's corner: in an Alboria room a "
+                    "member's round trip to the host, direct or through the relay; 0 ms for the host, "
+                    "which runs the game, and for a game in no room");
 REXCVAR_DEFINE_STRING(performance_overlay_position, "top_right", "Azura/Graphics",
                       "Corner of the performance overlay: top_left, top_right, bottom_left or bottom_right");
 
@@ -121,9 +126,11 @@ double TargetFramesPerSecond() {
   return (limit <= 0.0 || limit >= menu::kFrameRateUnlimited) ? 60.0 : limit;
 }
 
-// The panel's height below the top of the game image while it shows in the top left corner, in
-// pixels at 720p (PerfOverlayTopLeftHeight). Only the UI thread reads and writes it.
+// The panel's height below the top of the game image while it shows in the top left or the top
+// right corner, in pixels at 720p (PerfOverlayTopLeftHeight, PerfOverlayTopRightHeight). Only the
+// UI thread reads and writes them.
 float g_top_left_height = 0.0f;
+float g_top_right_height = 0.0f;
 
 // Draws text with extra space between its letters, as the panel's "FPS" label; returns its width.
 float DrawSpacedText(ImDrawList* draw_list, ImFont* font, float size, ImVec2 position, ImU32 color,
@@ -143,6 +150,10 @@ float PerfOverlayTopLeftHeight() {
   return g_top_left_height;
 }
 
+float PerfOverlayTopRightHeight() {
+  return g_top_right_height;
+}
+
 PerfOverlay::PerfOverlay(rex::ui::ImGuiDrawer* drawer, ImFont* const* number_font,
                          ImFont* const* text_font)
     : ImGuiDialog(drawer), number_font_(number_font), text_font_(text_font) {}
@@ -150,6 +161,7 @@ PerfOverlay::PerfOverlay(rex::ui::ImGuiDrawer* drawer, ImFont* const* number_fon
 PerfOverlay::~PerfOverlay() {
   g_timing.store(false, std::memory_order_relaxed);
   g_top_left_height = 0.0f;
+  g_top_right_height = 0.0f;
 }
 
 void PerfOverlay::OnDraw(ImGuiIO& io) {
@@ -164,6 +176,12 @@ void PerfOverlay::OnDraw(ImGuiIO& io) {
     g_timing.store(on, std::memory_order_relaxed);
   }
   g_top_left_height = 0.0f;
+  g_top_right_height = 0.0f;
+  // The latency (rex/system/xam/alboria.h): a member's round trip to the host, 0 for the host and
+  // for a game in no room.
+  const bool ping = REXCVAR_GET(latency_overlay);
+  const rex::system::xam::alboria::Latency latency =
+      ping ? rex::system::xam::alboria::GetLatency() : rex::system::xam::alboria::Latency{};
   if (!reading) {
     was_reading_ = false;
   } else if (!was_reading_) {
@@ -177,7 +195,7 @@ void PerfOverlay::OnDraw(ImGuiIO& io) {
     gpu_samples_ = 0;
     was_reading_ = true;
   }
-  if (!on) return;
+  if (!on && !ping) return;
 
   // The GPU use is the last frame's: add it at every draw and show the average, so the number
   // changes as slowly as the frame rate.
@@ -254,6 +272,53 @@ void PerfOverlay::OnDraw(ImGuiIO& io) {
     return DrawSpacedText(nullptr, text_font, label_size, ImVec2(), 0, text, label_spacing);
   };
 
+  // The latency row: "PING 18 ms DIRECT" (or RELAY) for a member, "PING 0 ms HOST" for the host,
+  // "PING 0 ms" in no room; the time green, imulsion gold or red as it grows. It never shows an
+  // address.
+  char ping_ms[16] = "";
+  if (ping) std::snprintf(ping_ms, sizeof(ping_ms), "%d ms", latency.known ? latency.milliseconds : 0);
+  const char* ping_path = latency.host ? "HOST" : latency.known ? (latency.direct ? "DIRECT" : "RELAY") : "";
+  const float ping_row_width = ping ? spaced_width("PING") + gap + text_width(detail_size, ping_ms) +
+                                          (ping_path[0] ? gap + spaced_width(ping_path) : 0.0f)
+                                    : 0.0f;
+  ImU32 ping_color = coop_ui::Ok(255);
+  if (latency.milliseconds >= 120) {
+    ping_color = coop_ui::ErrorText(255);
+  } else if (latency.milliseconds >= 60) {
+    ping_color = coop_ui::Imulsion(255);
+  }
+  auto draw_ping_row = [&](ImDrawList* draw_list, float row_left, float row_top) {
+    const float row_baseline = row_top + detail_size * 0.80f;
+    float at = row_left + DrawSpacedText(draw_list, text_font, label_size,
+                                         ImVec2(row_left, row_baseline - label_size * 0.80f),
+                                         coop_ui::TextFaint(255), "PING", label_spacing) + gap;
+    draw_list->AddText(text_font, detail_size, ImVec2(at, row_top), ping_color, ping_ms);
+    at += text_width(detail_size, ping_ms) + gap;
+    if (ping_path[0]) {
+      DrawSpacedText(draw_list, text_font, label_size, ImVec2(at, row_baseline - label_size * 0.80f),
+                     coop_ui::TextDim(255), ping_path, label_spacing);
+    }
+  };
+  const std::string corner = REXCVAR_GET(performance_overlay_position);
+  const bool right = corner != "top_left" && corner != "bottom_left";
+  const bool bottom = corner == "bottom_left" || corner == "bottom_right";
+  const float margin = 16.0f * unit;
+
+  // Only the latency: a small panel of its own in the overlay's corner.
+  if (!on) {
+    const ImVec2 size(padding_x * 2.0f + ping_row_width, padding_y * 2.0f + detail_size);
+    const ImVec2 min(right ? game_left + game_width - margin - size.x : game_left + margin,
+                     bottom ? game_top + game_height - margin - size.y : game_top + margin);
+    const ImVec2 max(min.x + size.x, min.y + size.y);
+    if (!right && !bottom) g_top_left_height = (max.y - game_top) / unit;
+    if (right && !bottom) g_top_right_height = (max.y - game_top) / unit;
+    ImDrawList* draw_list = ImGui::GetForegroundDrawList();
+    draw_list->AddRectFilled(min, max, coop_ui::Panel(214), 8.0f * unit);
+    draw_list->AddRect(min, max, coop_ui::SteelLine(255), 8.0f * unit, 0, std::max(1.0f, unit));
+    draw_ping_row(draw_list, min.x + padding_x, min.y + padding_y);
+    return;
+  }
+
   // First row: the frame rate, "FPS" and the time per frame, sitting on the number's baseline.
   char number[16];
   std::snprintf(number, sizeof(number), "%d", shown_fps_);
@@ -294,20 +359,19 @@ void PerfOverlay::OnDraw(ImGuiIO& io) {
   float below_height = 0.0f;
   if (detailed) below_height = detail_gap * 2.0f + detail_size;
   if (advanced) below_height = detail_gap * 2.0f + row_height * 3.0f + detail_gap + graph_height + detail_gap + row_height;
-  float content_width = std::max(first_row_width, detailed_row_width);
+  float content_width = std::max({first_row_width, detailed_row_width, ping_row_width});
   if (advanced) content_width = std::max(content_width, advanced_width);
+  // The latency row, under a line, at the bottom of the panel.
+  const float ping_height = ping ? detail_gap * 2.0f + detail_size : 0.0f;
   const ImVec2 panel_size(padding_x * 2.0f + content_width,
-                          padding_y * 2.0f + number_extent.y + below_height);
+                          padding_y * 2.0f + number_extent.y + below_height + ping_height);
 
   // The corner the Video options choose, inside the game image.
-  const float margin = 16.0f * unit;
-  const std::string corner = REXCVAR_GET(performance_overlay_position);
-  const bool right = corner != "top_left" && corner != "bottom_left";
-  const bool bottom = corner == "bottom_left" || corner == "bottom_right";
   const ImVec2 panel_min(right ? game_left + game_width - margin - panel_size.x : game_left + margin,
                          bottom ? game_top + game_height - margin - panel_size.y : game_top + margin);
   const ImVec2 panel_max(panel_min.x + panel_size.x, panel_min.y + panel_size.y);
   if (!right && !bottom) g_top_left_height = (panel_max.y - game_top) / unit;
+  if (right && !bottom) g_top_right_height = (panel_max.y - game_top) / unit;
 
   // The launcher's panel (coop_ui.h), with rounded corners.
   ImDrawList* draw_list = ImGui::GetForegroundDrawList();
@@ -315,6 +379,13 @@ void PerfOverlay::OnDraw(ImGuiIO& io) {
   const float line = std::max(1.0f, unit);
   draw_list->AddRectFilled(panel_min, panel_max, coop_ui::Panel(214), rounding);
   draw_list->AddRect(panel_min, panel_max, coop_ui::SteelLine(255), rounding, 0, line);
+  if (ping) {
+    const float ping_top = panel_max.y - padding_y - detail_size;
+    const float line_y = ping_top - detail_gap;
+    draw_list->AddLine(ImVec2(panel_min.x + padding_x, line_y), ImVec2(panel_max.x - padding_x, line_y),
+                       coop_ui::SteelLine(255), line);
+    draw_ping_row(draw_list, panel_min.x + padding_x, ping_top);
+  }
 
   // The launcher's state colours: green at the frame rate the game aims for, imulsion gold a little
   // under it, red well under it (25 and 29 of 30, as the F6 overlay had for the console's 30).

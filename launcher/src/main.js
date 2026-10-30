@@ -17,11 +17,11 @@
 import { getLocale, getPreference, initI18n, onLocaleChange, setPreference, systemLocale, t } from "./i18n.js";
 import { SUPPORTED_LOCALES } from "./locale.js";
 import {
-  RESOLUTION_SCALES,
   choosableGpus,
   gpuChoiceVisible,
   gpuLabel,
   renderSize,
+  resolutionScalesFor,
   resolutionValue,
   resolveAutoScale,
   scaleOfResolution,
@@ -62,6 +62,9 @@ import {
   pickGameImage,
   onPathDropped,
   pickSavesFolder,
+  pickDlcPackage,
+  installDlc,
+  dlcState,
   repairSaves,
   resetSaves,
   restoreSaveBackup,
@@ -73,6 +76,7 @@ import { TEXT_RULES } from "./textRules.js";
 import { achievementView } from "./achievements.js";
 import { createBuildTracker } from "./buildProgress.js";
 import { LOCK_ICON, completedBanner, renderAchievementsPage } from "./achievementsPage.js";
+import { setupAccount } from "./account.js";
 
 const SPORE_COUNT = 26;
 /** Launcher version shown in a browser; the app reads its real version (see detectSystem). */
@@ -131,6 +135,9 @@ const state = {
   system: null,
   launcherVersion: BROWSER_LAUNCHER_VERSION,
   userName: "",
+  // The account the player plays with: "alboria", "local", or null until the welcome screen asks
+  // (account.js, which also keeps the service's state in `alboria`).
+  account: null,
   fullscreen: true,
   // Render resolution (render_resolution, also in the game's Video menu): "auto" (follows this Mac)
   // or the render size the user chose ("2560x1440").
@@ -179,6 +186,7 @@ const currentSettings = () => ({
   gpu: state.gpu,
   savesFolder: state.savesFolder,
   minimizeWhilePlaying: state.minimizeWhilePlaying,
+  account: state.account,
 });
 
 /** Pending save timer; null when everything is saved. */
@@ -382,8 +390,7 @@ const renderPlay = () => {
 
   const player = document.getElementById("status-player");
   if (player) {
-    const name = state.userName.trim() || t("install.defaultUserName");
-    document.getElementById("status-player-detail").textContent = name;
+    document.getElementById("status-player-detail").textContent = account.playerLine();
   }
 
   const button = document.getElementById("launch");
@@ -947,6 +954,57 @@ const setupCompiler = () => {
   });
 };
 
+/** Downloadable content panel: what is installed, and whether RAAM's Shadow can be played. */
+const dlc = { state: null, installing: null };
+/** One row of the downloadable content list: a light (its state), the name and a line under it. */
+const dlcRow = (name, detail, rowState) => {
+  const row = document.createElement("div");
+  row.className = "status";
+  row.dataset.state = rowState;
+  const dot = document.createElement("span");
+  dot.className = "dot";
+  const text = document.createElement("div");
+  const title = document.createElement("strong");
+  title.textContent = name;
+  const line = document.createElement("span");
+  line.className = "status-detail";
+  line.textContent = detail;
+  text.append(title, line);
+  row.append(dot, text);
+  return row;
+};
+
+/**
+ * The downloadable content list: each of Gears of War 3's, with a green light when it is ready, an
+ * amber one while a package installs, a steady amber one when it is installed and only waits for the
+ * runtime to be updated, and a red one otherwise (not installed, or not playable yet), then the installed packages the list does not identify.
+ */
+const renderDlc = () => {
+  const list = document.getElementById("dlc-list");
+  const button = document.getElementById("add-dlc");
+  if (!list || !button) return;
+  button.disabled = dlc.installing;
+  const rows = [];
+  if (dlc.installing) rows.push(dlcRow(dlc.installing, t("install.dlcStatus.installing"), "progress"));
+  for (const entry of dlc.state?.entries ?? []) {
+    const rowState = entry.status === "ready" ? "ok" : entry.status === "needsRuntime" ? "pending" : "warn";
+    rows.push(dlcRow(t(`install.dlcNames.${entry.id}`), t(`install.dlcStatus.${entry.status}`), rowState));
+  }
+  if (dlc.state?.otherPackages) {
+    rows.push(dlcRow(t("install.dlcOthers"), t("install.dlcOthersCount", { count: dlc.state.otherPackages }), "ok"));
+  }
+  list.replaceChildren(...rows);
+  list.hidden = rows.length === 0;
+};
+const refreshDlc = async () => {
+  try {
+    dlc.state = await dlcState();
+  } catch {
+    dlc.state = null;
+  }
+  renderDlc();
+};
+
 /** Writes the folder path and the result of its check into the Installation view. */
 const renderInstall = () => {
   const check = state.gameCheck;
@@ -954,11 +1012,6 @@ const renderInstall = () => {
   pathField.value = check?.folder ?? "";
   // Long paths are cut off in the field; the tooltip shows them whole.
   pathField.title = pathField.value;
-
-  const playerField = document.getElementById("player-name");
-  if (playerField && playerField.value !== state.userName) {
-    playerField.value = state.userName;
-  }
 
   const [runtimeKey, runtimeTone] = runtimeState();
   const runtimeLine = document.getElementById("runtime-check");
@@ -1088,6 +1141,22 @@ const setupInstall = () => {
     }
     renderInstall();
   };
+  document.getElementById("add-dlc")?.addEventListener("click", async () => {
+    const pkg = await pickDlcPackage();
+    if (!pkg) return;
+    // The package's file name names its row while it installs (what it is, the runtime tells after).
+    dlc.installing = pkg.split(/[\\/]/).pop();
+    renderDlc();
+    try {
+      const name = await installDlc(pkg);
+      toast(t("install.dlcInstalled", { name }));
+    } catch (error) {
+      toast(t("install.dlcFailed", { detail: String(error) }));
+    }
+    dlc.installing = null;
+    await refreshDlc();
+  });
+  refreshDlc();
   document.getElementById("pick-saves").addEventListener("click", async () => {
     const folder = await pickSavesFolder();
     if (folder && folder !== state.savesFolder) await moveSaves(folder, false);
@@ -1097,18 +1166,6 @@ const setupInstall = () => {
     state.savesConflict = null;
     renderInstall();
   });
-
-  const playerField = document.getElementById("player-name");
-  if (playerField) {
-    // Only what a gamertag may hold stays (textRules.js), however it was typed or pasted.
-    playerField.addEventListener("input", () => {
-      const clean = TEXT_RULES.gamertag.clean(playerField.value);
-      if (clean !== playerField.value) playerField.value = clean;
-      state.userName = playerField.value;
-      renderPlay();
-      persist();
-    });
-  }
 };
 
 /** Checks the folder saved in an earlier session, if any, and shows the result. */
@@ -1132,11 +1189,16 @@ const applyStoredGraphics = (settings) => {
   state.minimizeWhilePlaying = settings.minimizeWhilePlaying ?? true;
 };
 
-/** Text of a resolution scale: "2560 × 1440 (2×)", or "1280 × 720 · original" for 1. */
+/**
+ * Text of a resolution scale: "2560 × 1440 (2×)", "1920 × 1080 (1,5×)" with the decimal separator of
+ * the launcher's language, or "1280 × 720 · original" for 1.
+ */
 const resolutionLabel = (scale) => {
   const { width, height } = renderSize(scale);
   const size = `${width} × ${height}`;
-  return scale === 1 ? `${size} · ${t("graphics.original")}` : `${size} (${scale}×)`;
+  return scale === 1
+    ? `${size} · ${t("graphics.original")}`
+    : `${size} (${scale.toLocaleString(getLocale())}×)`;
 };
 
 /** Writes the current graphics state into the controls. */
@@ -1144,8 +1206,11 @@ const renderGraphics = () => {
   const select = document.getElementById("resolution-scale");
   select.replaceChildren();
   select.add(new Option(t("graphics.resolutionAuto", { size: resolutionLabel(resolveAutoScale()) }), "auto"));
-  for (const scale of RESOLUTION_SCALES) select.add(new Option(resolutionLabel(scale), resolutionValue(scale)));
-  select.value = state.renderResolution;
+  const scales = resolutionScalesFor(state.system?.os);
+  for (const scale of scales) select.add(new Option(resolutionLabel(scale), resolutionValue(scale)));
+  // A resolution this platform does not offer shows as Automatic.
+  const offered = scales.some((scale) => resolutionValue(scale) === state.renderResolution);
+  select.value = offered ? state.renderResolution : "auto";
   document.getElementById("display-mode").value = state.fullscreen ? "fullscreen" : "windowed";
   document.getElementById("while-playing").value = state.minimizeWhilePlaying ? "minimize" : "keepOpen";
   renderGpuChoice();
@@ -1546,6 +1611,7 @@ const setupAchievements = () => {
 const renderAll = () => {
   renderPlay();
   renderInstall();
+  renderDlc();
   renderGameLanguages();
   renderGraphics();
   renderLanguageOptions();
@@ -1553,6 +1619,7 @@ const renderAll = () => {
   renderSaves();
   renderAchievements();
   renderCompiler();
+  account.render();
 };
 
 /**
@@ -1596,6 +1663,8 @@ const loadSavedSettings = async () => {
 };
 
 createSpores();
+// The welcome screen and the Account section; renderPlay reads its player line, so it comes first.
+const account = setupAccount({ state, persist, renderPlay, toast, t, getLocale });
 setupNavigation();
 // The controller belongs to the game while it runs.
 setupGamepad({ showView, blocked: () => state.game !== "idle", t, onLocaleChange, onInput: onGamepadInput });
@@ -1636,9 +1705,12 @@ state.gameLanguage = settings.gameLanguage ?? null;
 state.gameLanguageChosen = Boolean(settings.gameLanguageChosen);
 state.achievementsView = achievementView(settings.achievementsView);
 state.seenReleaseNotes = settings.seenReleaseNotes ?? null;
+state.account = settings.account ?? null;
 onLocaleChange(renderAll);
 await initI18n(settings.uiLanguage);
 document.getElementById("ui-language").value = getPreference();
+// Before anything else the player sees: the welcome screen when they have not chosen an account.
+account.start();
 await restoreGameFolder(settings.gameFolder);
 // Without a valid folder restoreGameFolder reads nothing; the section still needs its locked page.
 if (!state.achievements) refreshAchievements();

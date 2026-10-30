@@ -344,8 +344,9 @@ Gears 3 always draws at 1280x720: with the guest video mode at 1080p (`resolutio
 front buffer, the scene and its effects keep their 720p sizes (measured by logging every resolve
 and swap), as the Xbox 360's scaler did the rest. So more detail only comes from
 `draw_resolution_scale`, which before this the Metal backend ignored (it ran at 1x and said so in
-its log), and the scale is a whole number: 2x is 2560x1440, which is also the way to a true 1080p
-or better on a 1080p display.
+its log). Whole scales give 2560x1440 and 3840x2160; 1920x1080 is the rational scale 3/2, drawn
+with gfx = hle only (docs/hle-graphics/05-rational-scale-map.md has how each part of the backend
+takes a ratio).
 
 - **Render targets, transfers, resolves.** Host render targets are the scale times larger, the
   EDRAM buffer has the scale squared times the samples, and the transfer rectangles, resolve

@@ -1,4 +1,4 @@
-# Gears3-Azura runtime: the recompiled game plus our own hooks, built as a native macOS executable.
+# Azura runtime: the recompiled game plus our own hooks, built as a native macOS executable.
 #
 # The recompiled game code in generated/ is produced from your own default.xex by `rexglue codegen`
 # and is not part of this repository. scripts/build.sh runs the whole sequence.
@@ -22,6 +22,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # build without any game files.
 set(AZURA_REXGLUE_CMAKE ${CMAKE_CURRENT_SOURCE_DIR}/generated/rexglue.cmake)
 option(AZURA_KIT_PROBE "Configure the probes the player kit records its build commands from (scripts/build-kit.sh)" OFF)
+option(AZURA_PM4_TRACE "Trace which guest functions write PM4 commands (src/hle_gfx/pm4_trace.h); debug builds only" OFF)
 if(AZURA_KIT_PROBE)
     # The player kit is built against the patched SDK as installed, the form it ships in, and
     # never with generated code, even where codegen has run.
@@ -43,19 +44,33 @@ endif()
 set(AZURA_SOURCES
     src/main.cpp
     src/achievement_export.cpp
-    src/ambient_occlusion.cpp
     src/achievement_toast.cpp
     src/hooks.cpp
     src/script_hooks.cpp
     src/class_dump.cpp
+    src/dlc/bytecode.cpp
+    src/dlc/class_fixups.cpp
+    src/dlc/content_install.cpp
+    src/dlc/dlc_achievements.cpp
+    src/dlc/lzx.cpp
+    src/dlc/missing_super.cpp
+    src/dlc/raams_shadow_patch.cpp
+    src/dlc/ue3.cpp
     src/render_queue.cpp
+    src/hle_gfx/frame_capture.cpp
+    src/hle_gfx/hooks.cpp
+    src/hle_gfx/planner.cpp
     src/gpu_list.cpp
     src/relaunch.cpp
     src/perf_marker.cpp
     src/perf_overlay.cpp
     src/perf_stats.cpp
     src/shader_compile_overlay.cpp
+    src/online_room_overlay.cpp
+    src/join_by_code_menu.cpp
+    src/connection_menu.cpp
     src/shader_precompile.cpp
+    src/system_settings.cpp
     src/local_coop_menu.cpp
     src/controls_menu.cpp
     src/coop_ui.cpp
@@ -64,6 +79,7 @@ set(AZURA_SOURCES
     src/input/install_player_assignment.cpp
     src/input/mouse_look.cpp
     src/input/player_assignment.cpp
+    src/input/scripted_pad.cpp
     src/menu/menu_patches.cpp
     src/menu/pc_options.cpp
     src/prompts/button_prompts.cpp
@@ -82,6 +98,14 @@ if(WIN32)
     # Keeps overlay programs' Vulkan layers that close the game out of it, and tells which guest
     # memory is committed (the button prompts scan it).
     list(APPEND AZURA_SOURCES src/platform_win.cpp)
+endif()
+if(AZURA_PM4_TRACE)
+    # The PM4 writer trace (src/hle_gfx/pm4_trace.h): debug builds only. Its pass-through hooks
+    # are generated from the player's game by scripts/hle/gen_pm4_trace_hooks.py.
+    if(NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/src/hle_gfx/pm4_trace_hooks.gen.cpp)
+        message(FATAL_ERROR "AZURA_PM4_TRACE needs src/hle_gfx/pm4_trace_hooks.gen.cpp: run scripts/hle/gen_pm4_trace_hooks.py first.")
+    endif()
+    list(APPEND AZURA_SOURCES src/hle_gfx/pm4_trace.cpp src/hle_gfx/pm4_trace_hooks.gen.cpp)
 endif()
 
 # Keep the build machine's folder names out of the binary (they would otherwise end up in the
@@ -132,6 +156,11 @@ target_compile_definitions(azura_glyph_sheet PRIVATE
 if(TARGET imgui)
     target_include_directories(azura_glyph_sheet PRIVATE $<TARGET_PROPERTY:imgui,INTERFACE_INCLUDE_DIRECTORIES>)
 endif()
+
+# Inspection tool for Xbox 360 STFS packages (title updates, DLC): lists and extracts them with the
+# SDK's reader. Not part of the normal build: cmake --build --preset <preset> --target azura_stfs_extract
+add_executable(azura_stfs_extract EXCLUDE_FROM_ALL tools/stfs_extract.cpp)
+target_link_libraries(azura_stfs_extract PRIVATE rex::runtime)
 
 # Unit tests for the button prompt engine and the controller assignment (synthetic data only). Catch2 comes with the SDK source
 # tree; it is added here on its own so the SDK's much larger test suite is not built.

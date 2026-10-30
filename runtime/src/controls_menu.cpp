@@ -96,9 +96,46 @@ struct Texts {
   const char* wheel_down;
 };
 
-// Fonts carry Latin-1 only, so the languages written in other scripts use the English texts.
+// The Xbox 360 language IDs; the fonts draw Cyrillic and, for those languages, Japanese, Korean and
+// traditional Chinese behind Barlow (OnConfigureFonts in azura_app.h).
 Texts LocalizedTexts(uint32_t language) {
   switch (language) {
+    case 2:  // Japanese
+      return {"キーボードとマウス", "操作設定", "アクションを選んで、キーまたはマウスボタンを押してください。",
+              "ゲームの操作タイプ、または自分で設定したもの。", "割り当て", "設定", "移動", "武器", "戦闘",
+              "アクション", "前進", "後退", "左", "右", "武器 %d", "ダッシュ（専用キー）",
+              "キーまたはマウスボタンを押してください…", "このアクションに使うボタンを押してください…",
+              "固定: Esc、Enter、Backspace、矢印キー", "カスタム", "視点", "マウス感度", "エイム時の感度",
+              "ズーム時の感度", "Y軸反転", "マウス加速", "エイム", "ズーム", "ダッシュ", "長押し", "押す", "オフ",
+              "いいえ", "はい", "変更", "解除", "初期設定", "タブ", "戻る", "操作タイプ", "使用不可", "Space", "Shift",
+              "Caps Lock", "左クリック", "右クリック", "中クリック", "サイド1", "サイド2", "ホイール上", "ホイール下"};
+    case 7:  // Korean
+      return {"키보드 및 마우스", "조작", "동작을 선택하고 키나 마우스 버튼을 누르세요.",
+              "게임의 조작 방식 또는 직접 설정한 방식.", "할당", "설정", "이동", "무기", "전투", "동작", "앞으로",
+              "뒤로", "왼쪽", "오른쪽", "무기 %d", "질주 (전용 키)", "키나 마우스 버튼을 누르세요...",
+              "이 동작에 사용할 버튼을 누르세요...", "고정: Esc, Enter, Backspace, 방향키", "사용자 지정", "시점",
+              "마우스 감도", "조준 시 감도", "줌 감도", "Y축 반전", "마우스 가속", "조준", "줌", "질주", "누르고 있기",
+              "누르기", "끔", "아니요", "예", "변경", "지우기", "기본값", "탭", "뒤로", "조작 방식", "사용 불가",
+              "Space", "Shift", "Caps Lock", "왼쪽 클릭", "오른쪽 클릭", "가운데 클릭", "측면 1", "측면 2", "휠 위로",
+              "휠 아래로"};
+    case 8:  // Traditional Chinese
+      return {"鍵盤與滑鼠", "控制", "選擇一個動作，然後按下按鍵或滑鼠按鈕。", "遊戲的配置，或你自己的配置。",
+              "指派", "設定", "移動", "武器", "戰鬥", "動作", "前進", "後退", "左", "右", "武器 %d",
+              "衝刺（獨立按鍵）", "請按下按鍵或滑鼠按鈕…", "請按下要用於此動作的按鈕…",
+              "固定：Esc、Enter、Backspace 與方向鍵。", "自訂", "視角", "滑鼠靈敏度", "瞄準時靈敏度", "縮放靈敏度",
+              "反轉 Y 軸", "滑鼠加速", "瞄準", "縮放", "衝刺", "按住", "按一下", "關閉", "否", "是", "變更", "清除",
+              "預設值", "分頁", "返回", "配置", "無法使用", "空白鍵", "Shift", "Caps Lock", "左鍵", "右鍵", "中鍵",
+              "側鍵 1", "側鍵 2", "滾輪向上", "滾輪向下"};
+    case 12:  // Russian
+      return {"КЛАВИАТУРА И МЫШЬ", "УПРАВЛЕНИЕ", "Выберите действие и нажмите клавишу или кнопку мыши.",
+              "Схема игры или ваша собственная.", "НАЗНАЧЕНИЕ", "НАСТРОЙКИ", "ДВИЖЕНИЕ", "ОРУЖИЕ", "БОЙ",
+              "ДЕЙСТВИЯ", "Вперёд", "Назад", "Влево", "Вправо", "Оружие %d", "Бег пригнувшись (отдельная клавиша)",
+              "Нажмите клавишу или кнопку мыши...", "Нажмите нужную кнопку для этого действия...",
+              "Фиксированные: Esc, Enter, Backspace и стрелки.", "СВОЯ", "Обзор", "Чувствительность мыши",
+              "Чувствительность при прицеливании", "Чувствительность зума", "Инверсия оси Y", "Ускорение мыши",
+              "Прицеливание", "Зум", "Бег пригнувшись", "Удержание", "Нажатие", "Выкл.", "Нет", "Да", "Изменить",
+              "Очистить", "По умолчанию", "Вкладка", "Назад", "Схема", "Недоступно", "Пробел", "Shift", "Caps Lock",
+              "Левый клик", "Правый клик", "Средний клик", "Боковая 1", "Боковая 2", "Колесо вверх", "Колесо вниз"};
     case 3:  // German
       return {"TASTATUR UND MAUS", "STEUERUNG", "W\xC3\xA4hle eine Aktion und dr\xC3\xBC""cke die Taste oder Maustaste.",
               "Das Schema des Spiels oder dein eigenes.", "BELEGUNG", "EINSTELLUNGEN", "BEWEGUNG", "WAFFEN", "KAMPF",
@@ -140,15 +177,15 @@ Texts LocalizedTexts(uint32_t language) {
               "Lo schema del gioco, o il tuo.", "ASSEGNAZIONE", "IMPOSTAZIONI", "MOVIMENTO", "ARMI", "COMBATTIMENTO",
               "AZIONI", "Avanti", "Indietro", "Sinistra", "Destra", "Arma %d", "Corsa (tasto a parte)",
               "Premi un tasto o un pulsante del mouse...", "Premi il pulsante che vuoi per questa azione...",
-              "Fissi: Esc, Invio, Backspace e le frecce.", "PERSONALIZZATO", "Guardare", "Sensibilit\xC3\xA0 del mouse",
+              "Fissi: Esc, Invio, Backspace e le frecce.", "PERSONALIZZATO", "Visuale", "Sensibilit\xC3\xA0 del mouse",
               "Sensibilit\xC3\xA0 in mira", "Sensibilit\xC3\xA0 dello zoom", "Inverti asse Y", "Accelerazione del mouse",
-              "Mirare", "Zoom", "Corsa", "Tieni premuto", "Premi", "Disattivata", "No", "S\xC3\xAC", "Cambia", "Togli",
+              "Mira", "Zoom", "Corsa", "Tieni premuto", "Premi", "Disattivata", "No", "S\xC3\xAC", "Cambia", "Togli",
               "Predefiniti", "Scheda", "Indietro", "Schema", "Non disponibile", "Spazio", "Maiusc", "Bloc Maiusc",
               "Clic sinistro", "Clic destro", "Clic centrale", "Laterale 1", "Laterale 2", "Rotella su", "Rotella gi\xC3\xB9"};
     case 9:  // Portuguese
       return {"TECLADO E MOUSE", "CONTROLES", "Escolha uma a\xC3\xA7\xC3\xA3o e pressione a tecla ou o bot\xC3\xA3o do mouse.",
               "O esquema do jogo, ou o seu.", "ATRIBUI\xC3\x87\xC3\x83O", "AJUSTES", "MOVIMENTO", "ARMAS", "COMBATE",
-              "A\xC3\x87\xC3\x95""ES", "Frente", "Tr\xC3\xA1s", "Esquerda", "Direita", "Arma %d", "Corrida (tecla pr\xC3\xB3pria)",
+              "A\xC3\x87\xC3\x95""ES", "Para frente", "Para tr\xC3\xA1s", "Esquerda", "Direita", "Arma %d", "Corrida (tecla pr\xC3\xB3pria)",
               "Pressione uma tecla ou um bot\xC3\xA3o do mouse...", "Pressione o bot\xC3\xA3o que quiser para esta a\xC3\xA7\xC3\xA3o...",
               "Fixas: Esc, Enter, Backspace e as setas.", "PERSONALIZADO", "Olhar", "Sensibilidade do mouse",
               "Sensibilidade ao mirar", "Sensibilidade do zoom", "Inverter eixo Y", "Acelera\xC3\xA7\xC3\xA3o do mouse",
@@ -543,89 +580,6 @@ float DrawKeyCap(ImDrawList* draw_list, ImFont* font, ImVec2 at, float height, f
   draw_list->AddRect(at, ImVec2(at.x + width, at.y + height), line, 3.0f * unit, 0, 1.0f * unit);
   AddTextCentered(draw_list, font, size, ImVec2(at.x + width * 0.5f, at.y + height * 0.5f), text_color, label.c_str());
   return width;
-}
-
-// The shoulder, trigger, stick and menu buttons' names on each family.
-const char* ControlName(PadControl control, PadLook look) {
-  const bool playstation = look == PadLook::kDualSense || look == PadLook::kDualShock4;
-  const bool nintendo = look == PadLook::kSwitchPro;
-  switch (control) {
-    case PadControl::kLeftShoulder: return playstation ? "L1" : nintendo ? "L" : "LB";
-    case PadControl::kRightShoulder: return playstation ? "R1" : nintendo ? "R" : "RB";
-    case PadControl::kLeftTrigger: return playstation ? "L2" : nintendo ? "ZL" : "LT";
-    case PadControl::kRightTrigger: return playstation ? "R2" : nintendo ? "ZR" : "RT";
-    case PadControl::kLeftThumb: return playstation ? "L3" : "LS";
-    case PadControl::kRightThumb: return playstation ? "R3" : "RS";
-    case PadControl::kBack:
-      return look == PadLook::kDualSense ? "Create" : look == PadLook::kDualShock4 ? "Share" : nintendo ? "-" : look == PadLook::kXbox ? "View" : "Select";
-    case PadControl::kStart:
-      return playstation ? "Options" : nintendo ? "+" : look == PadLook::kXbox ? "Menu" : "Start";
-    default: return "";
-  }
-}
-
-// A control's glyph as the player's controller shows it, centred on `center`, `height` tall.
-// Returns its width.
-float DrawPadGlyph(ImDrawList* draw_list, ImFont* font, ImVec2 center, float height, PadLook look, PadControl control,
-                   int alpha, float unit) {
-  auto col = [&](int r, int g, int b) { return IM_COL32(r, g, b, alpha); };
-  const float radius = height * 0.5f;
-  const bool face = control == PadControl::kA || control == PadControl::kB || control == PadControl::kX ||
-                    control == PadControl::kY;
-  if (!face) {
-    const std::string name = ControlName(control, look);
-    const float size = height * 0.52f;
-    const float text_width = font->CalcTextSizeA(size, FLT_MAX, 0.0f, name.c_str()).x;
-    const float width = std::max(height * 1.3f, text_width + 10.0f * unit);
-    const ImVec2 min(center.x - width * 0.5f, center.y - radius);
-    draw_list->AddRectFilled(min, ImVec2(min.x + width, center.y + radius), col(58, 63, 70), 5.0f * unit);
-    AddTextCentered(draw_list, font, size, center, Text(alpha), name.c_str());
-    return width;
-  }
-  // The face buttons by position: A at the bottom, B on the right, X on the left, Y at the top.
-  const int position = control == PadControl::kY ? 0 : control == PadControl::kB ? 1 : control == PadControl::kA ? 2 : 3;
-  switch (look) {
-    case PadLook::kDualSense:
-    case PadLook::kDualShock4: {
-      // The PlayStation shapes: triangle, circle, cross, square; coloured on the DualShock 4.
-      const ImU32 colours[4] = {col(63, 191, 154), col(228, 90, 98), col(122, 167, 230), col(217, 138, 201)};
-      const ImU32 shape = look == PadLook::kDualShock4 ? colours[position] : col(217, 219, 224);
-      draw_list->AddCircleFilled(center, radius, col(42, 44, 49), 24);
-      const float s = radius * 0.5f;
-      const float t = 1.6f * unit;
-      switch (position) {
-        case 0:
-          draw_list->AddTriangle(ImVec2(center.x, center.y - s * 1.05f), ImVec2(center.x + s, center.y + s * 0.7f),
-                                 ImVec2(center.x - s, center.y + s * 0.7f), shape, t);
-          break;
-        case 1: draw_list->AddCircle(center, s, shape, 20, t); break;
-        case 2:
-          draw_list->AddLine(ImVec2(center.x - s, center.y - s), ImVec2(center.x + s, center.y + s), shape, t);
-          draw_list->AddLine(ImVec2(center.x - s, center.y + s), ImVec2(center.x + s, center.y - s), shape, t);
-          break;
-        default: draw_list->AddRect(ImVec2(center.x - s * 0.85f, center.y - s * 0.85f), ImVec2(center.x + s * 0.85f, center.y + s * 0.85f), shape, 0, 0, t); break;
-      }
-      return height;
-    }
-    case PadLook::kXbox: {
-      const char* letters[4] = {"Y", "B", "A", "X"};
-      const ImU32 colours[4] = {col(232, 181, 44), col(216, 64, 58), col(95, 179, 60), col(59, 119, 216)};
-      draw_list->AddCircleFilled(center, radius, colours[position], 24);
-      const float size = height * 0.6f;
-      AddTextCentered(draw_list, font, size, center, col(17, 17, 17), letters[position]);
-      return height;
-    }
-    default: {
-      // Switch Pro: X at the top, A on the right, B at the bottom, Y on the left. Others: 4, 2, 1, 3.
-      const char* switch_letters[4] = {"X", "A", "B", "Y"};
-      const char* numbers[4] = {"4", "2", "1", "3"};
-      const char* label = look == PadLook::kSwitchPro ? switch_letters[position] : numbers[position];
-      draw_list->AddCircleFilled(center, radius, col(70, 74, 81), 24);
-      const float size = height * 0.6f;
-      AddTextCentered(draw_list, font, size, center, Text(alpha), label);
-      return height;
-    }
-  }
 }
 
 }  // namespace

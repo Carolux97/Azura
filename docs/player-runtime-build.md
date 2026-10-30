@@ -275,7 +275,7 @@ code's own symbols stubbed, and the staged files are copied.
 ## 11. Implementation
 
 Card 72 built phases 1 to 6 in one pull request
-([#49](https://github.com/Carolux97/Gears3-Azura/pull/49)), each phase in its own commits:
+([#49](https://github.com/Carolux97/Azura/pull/49)), each phase in its own commits:
 
 1. **Our code without generated headers.** `azura_app.h` declares `PPCImageConfig`, and our code
    is the `azura_host` object library.

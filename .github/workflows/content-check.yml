@@ -1,0 +1,27 @@
+# Checks that no game-derived content is tracked (scripts/check-content.sh): the game's files, the
+# code generated from default.xex, disc images and GPU captures. Runs on every push and pull
+# request, whatever they change, since any of them could add such a file.
+
+name: Content check
+
+on:
+  push:
+  pull_request:
+
+# The workflow only reads the repository.
+permissions:
+  contents: read
+
+# A new push to the same branch or pull request cancels the run still in progress for it.
+concurrency:
+  group: content-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: content-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: No game-derived files are tracked
+        run: scripts/check-content.sh

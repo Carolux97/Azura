@@ -1,8 +1,8 @@
 [package]
 name = "azura-launcher"
-version = "0.4.5"
-description = "Launcher for the Gears3-Azura native macOS port"
-authors = ["Gears3-Azura contributors"]
+version = "0.5.0"
+description = "Launcher for the Azura native port"
+authors = ["Azura contributors"]
 license = "PolyForm-Strict-1.0.0"
 edition = "2024"
 rust-version = "1.90"
@@ -28,6 +28,16 @@ libc = "0.2"
 toml = "1.1.8"
 toml_edit = "0.25.17"
 tauri-plugin-updater = "2.13.1"
+# Opening alboria.org in the system browser (lib.rs, open_alboria_site): only from Rust, with the
+# address fixed there, so the interface cannot open any other address.
+tauri-plugin-opener = "=2.7.1"
+# Alboria accounts (alboria.rs): HTTPS requests and Ed25519 signatures with the rustls and ring
+# stack the updater already brings, so no other TLS or crypto library comes in.
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls-no-provider"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring"] }
+ring = "0.17.14"
+# Downloadable content shared as a .zip around the package (dlc.rs): reading deflate entries only.
+zip = { version = "4.6.1", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 # Controllers, to navigate the launcher (gamepad.rs): Apple's GameController framework on macOS,
 # gilrs elsewhere.
