@@ -1,0 +1,3 @@
+// Windows resources of azura.exe: the Azura icon, which Explorer, the taskbar and shortcuts show.
+// The first icon resource is the executable's icon.
+1 ICON "../assets/azura-icon.ico"
