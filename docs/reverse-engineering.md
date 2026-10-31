@@ -611,11 +611,20 @@ with `script_trace_args`, 29 October 2026), so the game always started in Local.
 
 With `network_mode = "online"` the runtime makes that first party the one `startup_party` names
 (`CreateStartupParty` in `script_hooks.cpp`): the type the player last chose in the party options,
-Joinable the first time. For Joinable or Invite only, when Alboria answered the start-up check, it
-runs `CreateSystemLinkParty` in `LocalPartyCreated`'s place after hosting a room of that type, as
-choosing them in the party options does; when Alboria did not answer, the game starts in Local and
-`startup_party` stays as it was. For System Link it runs `CreateSystemLinkParty` with no room; for
-Local, `LocalPartyCreated` as the game does. Outside a room `GetPartyType` answers the type the
+Joinable the first time. There the runtime answers `CanAllPlayersPlayOnline` with yes, so the
+function tries an Xbox Live party, `GearMenuGame.CreateParty(ControllerIndex, bIsLAN=false)`,
+which fails without Live: its `OnCreatePartyComplete('Party', false)` runs `CreateLocalParty` and
+`LocalPartyCreated` (**verified** with `script_trace_args`, 31 October 2026). `CreateSystemLinkParty`
+run there, in `LocalPartyCreated`'s place, only sets the party type (`SetPartyType`,
+`UpdatePartyType`) and never reaches `CreateParty`, so the party had no session: a room hosted at
+start-up answered no System Link search and nobody could join it (0.5.0). So the game keeps its
+Local party there, and on the first player input frame in the main menu the runtime runs
+`CreateSystemLinkParty` on the front end's scene, after hosting a room of that type for Joinable or
+Invite only, as choosing them in the party options does: it runs `ConditionalCreatePartySession`,
+`CreateParty(bIsLAN=true)` and `CreateOnlineGame`, which hosts the session (**verified** in the
+same trace, from the party options). When Alboria did not answer, the game starts in Local and
+`startup_party` stays as it was. For Local, `LocalPartyCreated` runs as the game does.
+Outside a room `GetPartyType` answers the type the
 game started with until the player chooses one; the game copies it into `CurrPartyType` once the
 party exists (`PartySuccessfullyCreatedNotify`). A room's party stays System Link (3) in
 `CurrPartyType`: with Joinable (1) there the game treated it as an Xbox Live party and private
