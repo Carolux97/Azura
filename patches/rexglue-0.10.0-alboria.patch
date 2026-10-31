@@ -377,10 +377,10 @@ index 0000000..c7fc5de
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria.cpp b/src/system/xam/alboria.cpp
 new file mode 100644
-index 0000000..cd563ba
+index 0000000..44d59a1
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,1703 @@
+@@ -0,0 +1,1705 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -1014,6 +1014,8 @@ index 0000000..cd563ba
 +    g_session_renew_at =
 +        Clock::now() + lifetime -
 +        std::min<Clock::duration>(lifetime / 2, std::chrono::duration_cast<Clock::duration>(kSessionRenewMargin));
++    REXSYS_INFO("Alboria: signed in as {}#{} (session for {} minutes)", Text(session.json, "gamertag"),
++                Number<int64_t>(session.json, "tag", 0), lifetime.count() / 60);
 +  }
 +  return session;
 +}
