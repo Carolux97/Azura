@@ -1,9 +1,9 @@
 diff --git a/include/rex/system/xam/alboria.h b/include/rex/system/xam/alboria.h
 new file mode 100644
-index 0000000..3477d5a
+index 0000000..caed09b
 --- /dev/null
 +++ b/include/rex/system/xam/alboria.h
-@@ -0,0 +1,331 @@
+@@ -0,0 +1,333 @@
 +/**
 + * @file        system/xam/alboria.h
 + * @brief       Alboria: System Link over the internet through our relay
@@ -193,8 +193,10 @@ index 0000000..3477d5a
 +  int tag = 0;
 +};
 +Identity GetIdentity();
-+// Signs in, in the background, to learn the account's tag (GetIdentity). Does nothing while an
-+// earlier one is still running. Hosting and joining sign in too.
++// Signs in, in the background, to learn the account's tag (GetIdentity), unless the session of an
++// earlier sign-in is still good (an hour, renewed shortly before it expires): the identity is then
++// the one that sign-in gave. Does nothing while an earlier one is still running. Hosting and joining
++// sign in too when there is no session.
 +void RefreshIdentity();
 +
 +// Whether the player is signed in to Xbox Live as far as the title can tell, with Alboria behind it
@@ -204,9 +206,9 @@ index 0000000..3477d5a
 +// 0x0009) with the offline one's low 48 bits.
 +uint64_t OnlineXuid(uint64_t xuid);
 +
-+// Asks Alboria's API whether it is up and, when it is, signs in with the installation's key, in the
-+// background; ServiceReachable and SignInRefusal then tell the answers, both at once. Does nothing
-+// while an earlier check is still running.
++// Asks Alboria's API whether it is up and, when it is, signs in with the installation's key unless
++// a session is still good, in the background; ServiceReachable and SignInRefusal then tell the
++// answers, both at once. Does nothing while an earlier check is still running.
 +void CheckService();
 +// Whether the last check reached Alboria (false before the first one ends).
 +bool ServiceReachable();
@@ -375,10 +377,10 @@ index 0000000..c7fc5de
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria.cpp b/src/system/xam/alboria.cpp
 new file mode 100644
-index 0000000..7ef17ca
+index 0000000..44d59a1
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,1674 @@
+@@ -0,0 +1,1705 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -986,6 +988,51 @@ index 0000000..7ef17ca
 +  return session;
 +}
 +
++// The token of the last accepted sign-in, kept until shortly before it expires so that rooms, party
++// types and service checks reuse it: one sign-in an hour while playing, instead of one for each of
++// them, which went over the server's limit of sign-ins a minute for each address. Held while signing
++// in, g_session_mutex makes threads that ask at once sign in once.
++std::mutex g_session_mutex;
++std::string g_session_token;
++Clock::time_point g_session_renew_at;
++// How long before the token expires a new one is asked for (at most half its lifetime).
++constexpr auto kSessionRenewMargin = std::chrono::minutes(5);
++
++// A session for the API: the kept token while it is good (in json["token"]), otherwise a new
++// sign-in's answer, which also updates the identity and the sign-in refusal; or the sign-in's error.
++// `renew` signs in again even with a kept token, for one the server no longer knows.
++ApiResult Session(bool renew = false) {
++  std::lock_guard lock(g_session_mutex);
++  if (!renew && !g_session_token.empty() && Clock::now() < g_session_renew_at) {
++    return {{{"token", g_session_token}}, {}};
++  }
++  g_session_token.clear();
++  auto session = SignIn();
++  if (session.error.empty()) {
++    const std::chrono::seconds lifetime(Number<int64_t>(session.json, "expires_in", 3600));
++    g_session_token = Text(session.json, "token");
++    g_session_renew_at =
++        Clock::now() + lifetime -
++        std::min<Clock::duration>(lifetime / 2, std::chrono::duration_cast<Clock::duration>(kSessionRenewMargin));
++    REXSYS_INFO("Alboria: signed in as {}#{} (session for {} minutes)", Text(session.json, "gamertag"),
++                Number<int64_t>(session.json, "tag", 0), lifetime.count() / 60);
++  }
++  return session;
++}
++
++// CallApi with the session's token. A token the server no longer knows (not_signed_in: it restarted,
++// or this key was banned or unlinked, which signs out its sessions) is renewed once and the request
++// made again: the new sign-in then tells a refusal of the account.
++ApiResult CallSignedIn(std::string_view path, const nlohmann::json& request) {
++  auto session = Session();
++  if (!session.error.empty()) return session;
++  auto answer = CallApi(path, request, Text(session.json, "token"));
++  if (answer.error != "not_signed_in") return answer;
++  session = Session(true);
++  if (!session.error.empty()) return session;
++  return CallApi(path, request, Text(session.json, "token"));
++}
++
 +// Resolves "host:port" to an IPv4 address.
 +std::optional<sockaddr_in> ResolveRelay(const std::string& relay) {
 +  const size_t colon = relay.rfind(':');
@@ -1274,39 +1321,27 @@ index 0000000..7ef17ca
 +
 +// Sends the session of the Live party this installation hosts to Alboria, for the room `code`.
 +void PublishHostedSession(std::string code, SessionInfo session) {
-+  const auto signed_in = SignIn();
-+  if (!signed_in.error.empty()) return;
-+  const auto published = CallApi("/v1/rooms/session", {{"code", code}, {"session", EncodeBase64(session)}},
-+                                 Text(signed_in.json, "token"));
++  const auto published = CallSignedIn("/v1/rooms/session", {{"code", code}, {"session", EncodeBase64(session)}});
 +  if (published.error.empty()) REXSYS_INFO("Alboria: the room has the Live party's session");
 +}
 +
 +// Sends the QoS data of the Live party this installation hosts to Alboria, for the room `code`.
 +void PublishHostedQos(std::string code, std::vector<uint8_t> data) {
-+  const auto signed_in = SignIn();
-+  if (!signed_in.error.empty()) return;
-+  const auto published = CallApi("/v1/rooms/qos", {{"code", code}, {"qos", EncodeBase64(data)}},
-+                                 Text(signed_in.json, "token"));
++  const auto published = CallSignedIn("/v1/rooms/qos", {{"code", code}, {"qos", EncodeBase64(data)}});
 +  if (published.error.empty()) REXSYS_INFO("Alboria: the room has the Live party's QoS data ({} bytes)", data.size());
 +}
 +
-+// Signs in, creates or joins a room, then runs the tunnel. `join_code` empty hosts.
++// Creates or joins a room with the session (signing in when there is none), then runs the tunnel.
++// `join_code` empty hosts.
 +void Work(uint32_t title_id, int max_members, std::string join_code) {
-+  auto session = SignIn();
-+  if (!session.error.empty()) {
-+    SetStatus(State::kFailed, session.error);
-+    return;
-+  }
-+  const std::string token = Text(session.json, "token");
 +  const std::string title = fmt::format("{:08X}", title_id);
 +  auto room = join_code.empty()
-+                  ? CallApi("/v1/rooms",
-+                            {{"title_id", title},
-+                             {"max_members", max_members},
-+                             {"party_type", g_host_party_type.load() == PartyType::kInviteOnly ? "invite_only"
-+                                                                                                 : "joinable"}},
-+                            token)
-+                  : CallApi("/v1/rooms/join", {{"code", join_code}, {"title_id", title}}, token);
++                  ? CallSignedIn("/v1/rooms",
++                                 {{"title_id", title},
++                                  {"max_members", max_members},
++                                  {"party_type", g_host_party_type.load() == PartyType::kInviteOnly ? "invite_only"
++                                                                                                      : "joinable"}})
++                  : CallSignedIn("/v1/rooms/join", {{"code", join_code}, {"title_id", title}});
 +  if (!room.error.empty()) {
 +    SetStatus(State::kFailed, room.error);
 +    return;
@@ -1779,9 +1814,10 @@ index 0000000..7ef17ca
 +  std::thread([] {
 +    const HttpResponse response = PostJson(REXCVAR_GET(alboria_api_url) + "/v1/status", "{}", {});
 +    const bool reachable = response.status == 200;
-+    // Signing in before the answer is told, so that a refusal is known as soon as Alboria is.
++    // Signing in (when there is no session yet) before the answer is told, so that a refusal is
++    // known as soon as Alboria is.
 +    if (reachable) {
-+      const auto session = SignIn();
++      const auto session = Session();
 +      if (IsAccountRefusal(session.error)) {
 +        REXSYS_WARN("Alboria: the sign-in was refused ({})", session.error);
 +      }
@@ -1821,7 +1857,7 @@ index 0000000..7ef17ca
 +    struct Done {
 +      ~Done() { g_refreshing.store(false); }
 +    } done;
-+    SignIn();
++    Session();
 +  });
 +}
 +
@@ -1841,12 +1877,9 @@ index 0000000..7ef17ca
 +  }
 +  g_host_party_type.store(party_type);
 +  RunDetached("changing the party type", [code, party_type] {
-+    const auto session = SignIn();
-+    if (!session.error.empty()) return;
-+    const auto changed = CallApi(
++    const auto changed = CallSignedIn(
 +        "/v1/rooms/type",
-+        {{"code", code}, {"party_type", party_type == PartyType::kInviteOnly ? "invite_only" : "joinable"}},
-+        Text(session.json, "token"));
++        {{"code", code}, {"party_type", party_type == PartyType::kInviteOnly ? "invite_only" : "joinable"}});
 +    if (!changed.error.empty()) REXSYS_WARN("Alboria: the room's party type did not change ({})", changed.error);
 +  });
 +}
