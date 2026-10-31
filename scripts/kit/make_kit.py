@@ -15,7 +15,7 @@ and so do the commands that build it, which CMake computes here, on a machine th
   being compiled, {objects} every object to link, {output} the executable.
 - The commands after the link, which stage the runtime folder (the SDK's libraries and GPU
   plugin, MoltenVK, our settings and assets), become a list of files to copy.
-- Our code ships compiled: the objects of azura_host.
+- Our code ships compiled: the objects of azura_host (with its compiled resources on Windows).
 
 Of the installed SDK the kit keeps its headers, the code generator, and the libraries and files
 the commands use. Any path the templates still hold that is not one of the placeholders stops the
@@ -42,6 +42,9 @@ WINDOWS = platform.system() == "Windows"
 
 # File names of objects and executables on this platform.
 OBJECT_SUFFIX = ".obj" if WINDOWS else ".o"
+# What our code compiles to and the link takes as objects: on Windows also the compiled resources
+# (.res) of its .rc files, such as the executable's icon.
+HOST_OBJECT_SUFFIXES = (OBJECT_SUFFIX, ".res") if WINDOWS else (OBJECT_SUFFIX,)
 EXECUTABLE_SUFFIX = ".exe" if WINDOWS else ""
 
 # Version of the layout of kit.json; the launcher refuses a kit with a format it does not know.
@@ -304,7 +307,7 @@ def link_template(command: str, paths: Paths, output: Path) -> tuple[list[str], 
                 out += ["-Xlinker", "/pdb:{output}.pdb"]
                 skip = 1
                 continue
-        if token.endswith(OBJECT_SUFFIX):
+        if token.endswith(HOST_OBJECT_SUFFIXES):
             if objects_at is None:
                 objects_at = len(out)
                 out.append("{objects}")
@@ -430,7 +433,7 @@ def main() -> int:
 
     # Our code, compiled.
     host_dir = build / "CMakeFiles/azura_host.dir" / args.config
-    host_objects = sorted(host_dir.rglob(f"*{OBJECT_SUFFIX}"))
+    host_objects = sorted(obj for suffix in HOST_OBJECT_SUFFIXES for obj in host_dir.rglob(f"*{suffix}"))
     if not host_objects:
         raise KitError(f"no objects of azura_host in {host_dir}: build the azura_host target first")
     for obj in host_objects:
