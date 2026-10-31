@@ -6,6 +6,21 @@ it as the update's notes (`scripts/release-common.sh`). Bumping the version adds
 release without one fails. One list item (`- `) per change, in English; an item may continue on
 indented lines.
 
+## 0.5.1
+
+- Friends can join your room on Alboria as soon as the game starts. In 0.5.0 the room the game
+  opened at start-up could not be joined: whoever used its code was sent back after a few seconds,
+  until the party was switched to Local and back.
+- The party panel in the main menu names your room's type, Joinable or Invite only, and follows it
+  when you change it, also for the friends in your room.
+- The game signs in to Alboria about once an hour instead of each time you open the party options
+  or change the party's type, so changing it several times in a row no longer runs into Alboria's
+  limit of sign-ins.
+- macOS at 1920 × 1080: glass, water and smoke no longer look distorted from some angles, and
+  textures no longer turn into a pixelated green one.
+- Linux and Windows: the game's window shows the Azura icon in the taskbar, and on Windows
+  azura.exe has it too.
+
 ## 0.5.0
 
 - macOS: a new, faster way to draw the game, now the default. The launcher no longer replays the
