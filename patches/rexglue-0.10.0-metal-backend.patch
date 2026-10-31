@@ -9837,10 +9837,10 @@ index 0000000..d717bea
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_render_target_cache.h b/src/graphics/metal/metal_render_target_cache.h
 new file mode 100644
-index 0000000..cbb3964
+index 0000000..6205970
 --- /dev/null
 +++ b/src/graphics/metal/metal_render_target_cache.h
-@@ -0,0 +1,677 @@
+@@ -0,0 +1,681 @@
 +/**
 + * @file        graphics/metal/metal_render_target_cache.h
 + * @brief       EDRAM emulation with sample-space host render targets for the Metal backend
@@ -10450,18 +10450,22 @@ index 0000000..cbb3964
 +  // At a rational draw resolution scale (rational_mode), the destination is either the guest
 +  // memory at the guest resolution (each guest pixel reads the host pixel at its centre) or a
 +  // scaled surface of the texture cache (MetalTextureCache::RequestRationalScaledSurface, bound at
-+  // its start with dest_base 0, surface_pitch texels per row) at the host resolution.
++  // its start with dest_base 0, surface_pitch texels per row) at the host resolution, with the
++  // resolve's rectangle at surface_x, surface_y guest pixels in it (a part of a bigger image, see
++  // MetalTextureCache::FindEnclosingRationalScaledSurface).
 +  void ResolveFromRenderTarget(const draw_util::ResolveInfo& resolve_info,
 +                               const RangeOwner& owner, id<MTLBuffer> dest,
 +                               NSUInteger dest_offset, uint32_t dest_base, bool verify,
 +                               RationalResolveMode rational_mode = RationalResolveMode::kNone,
 +                               uint32_t surface_pitch = 0, id<MTLTexture> dest_texture = nil,
-+                               uint32_t texture_endian = 0, uint32_t texture_conversion = 0);
++                               uint32_t texture_endian = 0, uint32_t texture_conversion = 0,
++                               uint32_t surface_x = 0, uint32_t surface_y = 0);
 +  // The copy of a resolve at a rational draw resolution scale, where there is no scaled resolve
 +  // buffer and no scaled copy shader: written straight from the render targets (the native path)
 +  // to the guest memory at the guest resolution, and, for a resolve textures may sample at the
 +  // scale (not data, see kDataTargetMaxSize, and from the start of its destination), to a scaled
-+  // surface too. A resolve the native path does not handle is dumped at the guest resolution to
++  // surface too. A resolve of a part of an image that has a surface (moved into it by its base or
++  // offset) is written into that surface, whatever its size. A resolve the native path does not handle is dumped at the guest resolution to
 +  // edram_buffer_guest_ and copied from there as at 1x.
 +  bool ResolveCopyAtRationalScale(const draw_util::ResolveInfo& resolve_info,
 +                                  MetalSharedMemory& shared_memory,
@@ -10520,10 +10524,10 @@ index 0000000..cbb3964
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_render_target_cache.mm b/src/graphics/metal/metal_render_target_cache.mm
 new file mode 100644
-index 0000000..8d14689
+index 0000000..c543ff1
 --- /dev/null
 +++ b/src/graphics/metal/metal_render_target_cache.mm
-@@ -0,0 +1,5430 @@
+@@ -0,0 +1,5444 @@
 +/**
 + * @file        graphics/metal/metal_render_target_cache.mm
 + * @brief       EDRAM emulation with sample-space host render targets for the Metal backend
@@ -12000,7 +12004,8 @@ index 0000000..8d14689
 +                                                     uint32_t surface_pitch,
 +                                                     id<MTLTexture> dest_texture,
 +                                                     uint32_t texture_endian,
-+                                                     uint32_t texture_conversion) {
++                                                     uint32_t texture_conversion,
++                                                     uint32_t surface_x, uint32_t surface_y) {
 +  MetalRenderTarget& source = *static_cast<MetalRenderTarget*>(owner.render_target);
 +  id<MTLTexture> source_view = source.transfer_view();
 +  ResolveFromRenderTargetConstants constants;
@@ -12088,8 +12093,9 @@ index 0000000..8d14689
 +          REXCVAR_GET(half_pixel_offset) &&
 +          register_file().Get<reg::PA_SU_VTX_CNTL>().pix_center == xenos::PixelCenter::kD3DZero;
 +      constants.fill_x = constants.fill_y = fill_half_pixel_offset ? 1 : 0;
-+      constants.dest_x = 0;
-+      constants.dest_y = 0;
++      // The rectangle's origin in the surface, in host pixels (whole: multiples of 8 guest pixels).
++      constants.dest_x = scale.ScaleX(surface_x);
++      constants.dest_y = scale.ScaleY(surface_y);
 +      constants.dest_pitch = surface_pitch;
 +    }
 +  }
@@ -12636,7 +12642,8 @@ index 0000000..8d14689
 +    [compute dispatchThreadgroups:MTLSizeMake(copy_group_count_x, copy_group_count_y, 1)
 +            threadsPerThreadgroup:pipeline.threads_per_threadgroup];
 +    PERF_counter_inc(kHostDispatches);
-+    texture_cache.DropRationalScaledSurface(dest_base);
++    texture_cache.DropRationalScaledSurfacesOverlapping(
++        written_start, written_length, MetalTextureCache::kNoRationalScaledSurface);
 +    texture_cache.MarkRangeAsResolvedUnscaled(written_start, written_length);
 +    written_address_out = written_start;
 +    written_length_out = written_length;
@@ -12655,25 +12662,37 @@ index 0000000..8d14689
 +  }
 +  PERF_counter_inc(kResolvesFromRenderTargets);
 +
-+  // Textures sample the resolve at the scale from a surface of its own, except for data (computed
-+  // at the guest pixel centres, see kDataTargetMaxSize) and a resolve to an offset in its
-+  // destination (a part of a texture, whose rest is only in the guest memory).
++  // Textures sample the resolve at the scale from a surface: the one of the image it is a part of
++  // (moved into it by its base or offset), or one of its own, except for data (computed at the
++  // guest pixel centres, see kDataTargetMaxSize) and a resolve to an offset in its destination (a
++  // part of a texture without a surface, whose rest is only in the guest memory).
 +  uint32_t width = resolve_info.coordinate_info.width_div_8 << 3;
 +  uint32_t height = resolve_info.height_div_8 << 3;
-+  id<MTLBuffer> surface = nil;
-+  uint32_t surface_pitch = 0;
-+  if (width > kDataTargetMaxSize && height > kDataTargetMaxSize &&
-+      !resolve_info.copy_dest_coordinate_info.offset_x_div_8 &&
-+      !resolve_info.copy_dest_coordinate_info.offset_y_div_8) {
-+    const FormatInfo* dest_format_info =
-+        FormatInfo::Get(xenos::TextureFormat(resolve_info.copy_dest_info.copy_dest_format));
-+    surface = texture_cache.RequestRationalScaledSurface(
-+        dest_base, width, height, dest_format_info->bytes_per_block(), surface_pitch);
++  uint32_t offset_x = resolve_info.copy_dest_coordinate_info.offset_x_div_8 << 3;
++  uint32_t offset_y = resolve_info.copy_dest_coordinate_info.offset_y_div_8 << 3;
++  uint32_t guest_pitch = resolve_info.copy_dest_coordinate_info.pitch_aligned_div_32 << 5;
++  uint32_t bytes_per_texel =
++      FormatInfo::Get(xenos::TextureFormat(resolve_info.copy_dest_info.copy_dest_format))
++          ->bytes_per_block();
++  uint32_t surface_base = dest_base, surface_x = 0, surface_y = 0, surface_pitch = 0;
++  id<MTLBuffer> surface = texture_cache.FindEnclosingRationalScaledSurface(
++      dest_base, offset_x, offset_y, width, height, bytes_per_texel, guest_pitch, surface_base,
++      surface_x, surface_y, surface_pitch);
++  if (!surface && width > kDataTargetMaxSize && height > kDataTargetMaxSize && !offset_x &&
++      !offset_y) {
++    surface = texture_cache.RequestRationalScaledSurface(dest_base, width, height, bytes_per_texel,
++                                                         guest_pitch, written_start,
++                                                         written_length, surface_pitch);
 +  }
++  // Other surfaces with memory this resolve overwrote no longer have its latest data.
++  texture_cache.DropRationalScaledSurfacesOverlapping(
++      written_start, written_length,
++      surface ? surface_base : MetalTextureCache::kNoRationalScaledSurface);
 +  if (surface) {
 +    for (const RangeOwner& owner : owners) {
 +      ResolveFromRenderTarget(resolve_info, owner, surface, 0, 0, false,
-+                              RationalResolveMode::kScaledSurface, surface_pitch);
++                              RationalResolveMode::kScaledSurface, surface_pitch, nil, 0, 0,
++                              surface_x, surface_y);
 +    }
 +    texture_cache.MarkRangeAsResolved(written_start, written_length);
 +    // The textures at the scale with exactly this destination are written too, so they are not
@@ -12681,7 +12700,6 @@ index 0000000..8d14689
 +    UpdateResolvedTextures(resolve_info, owners, texture_cache,
 +                           RationalResolveMode::kScaledSurface, true);
 +  } else {
-+    texture_cache.DropRationalScaledSurface(dest_base);
 +    texture_cache.MarkRangeAsResolvedUnscaled(written_start, written_length);
 +  }
 +  written_address_out = written_start;
@@ -16416,10 +16434,10 @@ index 0000000..c2d1f96
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_texture_cache.h b/src/graphics/metal/metal_texture_cache.h
 new file mode 100644
-index 0000000..030fb39
+index 0000000..d68960b
 --- /dev/null
 +++ b/src/graphics/metal/metal_texture_cache.h
-@@ -0,0 +1,309 @@
+@@ -0,0 +1,336 @@
 +/**
 + * @file        graphics/metal/metal_texture_cache.h
 + * @brief       Guest textures as Metal textures, loaded from the shared memory with compute shaders
@@ -16521,11 +16539,34 @@ index 0000000..030fb39
 +  // read it as such a texture. One surface per destination address, the latest resolve's.
 +  // Returns the surface buffer for a resolve of width x height guest pixels (multiples of 8), made
 +  // or resized as needed, and its row pitch in host texels (aligned to 32 for the tiling).
++  // guest_pitch is the destination's row pitch in guest texels, and [guest_start, guest_start +
++  // guest_length) the guest memory the resolve writes: the part of the guest memory the surface
++  // stands for. The older surface at the address standing for other memory, that memory is marked
++  // as resolved at the guest resolution (only the guest memory has its latest data).
 +  id<MTLBuffer> RequestRationalScaledSurface(uint32_t dest_base, uint32_t width, uint32_t height,
-+                                             uint32_t bytes_per_texel, uint32_t& pitch_out);
-+  // A resolve to the address that will not have a scaled surface (one textures load at the guest
-+  // resolution): the older surface there is dropped.
-+  void DropRationalScaledSurface(uint32_t dest_base) { rational_scaled_surfaces_.erase(dest_base); }
++                                             uint32_t bytes_per_texel, uint32_t guest_pitch,
++                                             uint32_t guest_start, uint32_t guest_length,
++                                             uint32_t& pitch_out);
++  // A resolve of a rectangle of a bigger image: the surface of that image, of the same row pitch
++  // and bytes per texel, that the rectangle of width x height guest pixels lies in, with the
++  // rectangle's origin in it (offset_x and offset_y from the destination's base) in guest pixels,
++  // or nil. Games write a part of an image by moving the destination's base by whole 32x32 tiles
++  // into it (or with the offset), so the rectangle is in the surface at the tiles the base moved
++  // by. A surface at dest_base itself only takes a rectangle at an offset (one at its start is a
++  // new image, see RequestRationalScaledSurface).
++  id<MTLBuffer> FindEnclosingRationalScaledSurface(uint32_t dest_base, uint32_t offset_x,
++                                                   uint32_t offset_y, uint32_t width,
++                                                   uint32_t height, uint32_t bytes_per_texel,
++                                                   uint32_t guest_pitch, uint32_t& base_out,
++                                                   uint32_t& x_out, uint32_t& y_out,
++                                                   uint32_t& pitch_out) const;
++  // A resolve wrote [start, start + length) of the guest memory, and to the surface at keep_base
++  // (kNoRationalScaledSurface for none) at the scale: every other surface standing for memory in
++  // that range is dropped, and its memory marked as resolved at the guest resolution, so the
++  // textures there load the guest memory (which has every resolve) instead of a surface without
++  // this one.
++  static constexpr uint32_t kNoRationalScaledSurface = UINT32_MAX;
++  void DropRationalScaledSurfacesOverlapping(uint32_t start, uint32_t length, uint32_t keep_base);
 +
 +  // gfx = hle: right after a resolve invalidated its destination, for each texture the cache holds
 +  // whose base level is exactly the resolve's destination (2D, tiled, one level not in a packed
@@ -16697,6 +16738,10 @@ index 0000000..030fb39
 +    uint32_t height = 0;
 +    uint32_t bytes_per_texel = 0;
 +    uint32_t pitch = 0;
++    // The destination's row pitch in guest texels, and the guest memory the resolve wrote.
++    uint32_t guest_pitch = 0;
++    uint32_t guest_start = 0;
++    uint32_t guest_length = 0;
 +  };
 +  std::unordered_map<uint32_t, RationalScaledSurface> rational_scaled_surfaces_;
 +  // The surface a texture resolved at a rational scale is loaded from, or nullptr: a 2D tiled
@@ -16731,10 +16776,10 @@ index 0000000..030fb39
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_texture_cache.mm b/src/graphics/metal/metal_texture_cache.mm
 new file mode 100644
-index 0000000..052f1c9
+index 0000000..fd1b37e
 --- /dev/null
 +++ b/src/graphics/metal/metal_texture_cache.mm
-@@ -0,0 +1,2290 @@
+@@ -0,0 +1,2352 @@
 +/**
 + * @file        graphics/metal/metal_texture_cache.mm
 + * @brief       Guest textures as Metal textures, loaded from the shared memory with compute shaders
@@ -17506,12 +17551,21 @@ index 0000000..052f1c9
 +id<MTLBuffer> MetalTextureCache::RequestRationalScaledSurface(uint32_t dest_base, uint32_t width,
 +                                                              uint32_t height,
 +                                                              uint32_t bytes_per_texel,
++                                                              uint32_t guest_pitch,
++                                                              uint32_t guest_start,
++                                                              uint32_t guest_length,
 +                                                              uint32_t& pitch_out) {
 +  // Tiled textures are stored in 32x32 texel tiles, so the pitch and the rows are whole tiles.
 +  uint32_t pitch = rex::align(draw_resolution_scale().ScaleXCeil(width), UINT32_C(32));
 +  uint32_t rows = rex::align(draw_resolution_scale().ScaleYCeil(height), UINT32_C(32));
 +  NSUInteger size = NSUInteger(pitch) * rows * bytes_per_texel;
 +  RationalScaledSurface& surface = rational_scaled_surfaces_[dest_base];
++  // The older image at the address may have covered more memory than this resolve writes: that
++  // memory no longer has a surface, so its textures load the guest memory.
++  if (surface.buffer &&
++      (surface.guest_start != guest_start || surface.guest_length != guest_length)) {
++    MarkRangeAsResolvedUnscaled(surface.guest_start, surface.guest_length);
++  }
 +  if (!surface.buffer || surface.buffer.length < size) {
 +    surface.buffer = [command_processor_.device() newBufferWithLength:size
 +                                                              options:MTLResourceStorageModePrivate];
@@ -17525,8 +17579,61 @@ index 0000000..052f1c9
 +  surface.height = height;
 +  surface.bytes_per_texel = bytes_per_texel;
 +  surface.pitch = pitch;
++  surface.guest_pitch = guest_pitch;
++  surface.guest_start = guest_start;
++  surface.guest_length = guest_length;
 +  pitch_out = pitch;
 +  return surface.buffer;
++}
++
++id<MTLBuffer> MetalTextureCache::FindEnclosingRationalScaledSurface(
++    uint32_t dest_base, uint32_t offset_x, uint32_t offset_y, uint32_t width, uint32_t height,
++    uint32_t bytes_per_texel, uint32_t guest_pitch, uint32_t& base_out, uint32_t& x_out,
++    uint32_t& y_out, uint32_t& pitch_out) const {
++  if (!guest_pitch || !bytes_per_texel) {
++    return nil;
++  }
++  // A 32x32 tile of the tiled layout (texture_util::GetTiledOffset2D), whose tiles follow each
++  // other along the rows.
++  const uint32_t tile_bytes = 32 * 32 * bytes_per_texel;
++  const uint32_t tiles_per_row = guest_pitch / 32;
++  for (const auto& [surface_base, surface] : rational_scaled_surfaces_) {
++    if (dest_base < surface_base || surface.guest_pitch != guest_pitch ||
++        surface.bytes_per_texel != bytes_per_texel ||
++        (surface_base == dest_base && !offset_x && !offset_y)) {
++      continue;
++    }
++    uint32_t delta = dest_base - surface_base;
++    if (delta % tile_bytes) {
++      continue;
++    }
++    uint32_t tile = delta / tile_bytes;
++    uint32_t x = (tile % tiles_per_row) * 32 + offset_x;
++    uint32_t y = (tile / tiles_per_row) * 32 + offset_y;
++    if (x + width > surface.width || y + height > surface.height) {
++      continue;
++    }
++    base_out = surface_base;
++    x_out = x;
++    y_out = y;
++    pitch_out = surface.pitch;
++    return surface.buffer;
++  }
++  return nil;
++}
++
++void MetalTextureCache::DropRationalScaledSurfacesOverlapping(uint32_t start, uint32_t length,
++                                                              uint32_t keep_base) {
++  for (auto it = rational_scaled_surfaces_.begin(); it != rational_scaled_surfaces_.end();) {
++    const RationalScaledSurface& surface = it->second;
++    if (it->first != keep_base && start < surface.guest_start + surface.guest_length &&
++        surface.guest_start < start + length) {
++      MarkRangeAsResolvedUnscaled(surface.guest_start, surface.guest_length);
++      it = rational_scaled_surfaces_.erase(it);
++    } else {
++      ++it;
++    }
++  }
 +}
 +
 +const MetalTextureCache::RationalScaledSurface* MetalTextureCache::GetRationalScaledSurface(

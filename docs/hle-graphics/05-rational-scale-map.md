@@ -4,7 +4,12 @@ Status: implemented on the Metal backend (card 101), with 1920x1080 in the Video
 launcher on macOS. It needs gfx = hle (a rational scale falls back to its whole part with pm4).
 Differences from the proposals below: a resolve textures sample at the scale writes a scaled
 surface of its own (laid out as a guest texture of the host size, which the unscaled load shaders
-read) instead of copying into the textures; resolves the native path does not handle are dumped
+read) instead of copying into the textures; a resolve of a part of an image that has a surface
+(games move the destination's base by whole 32x32 tiles into the image, or use the offset) is
+written into that surface at its place, so the image's textures see it (Gears of War 3 writes parts of
+a 1280x720 screen buffer this way); a resolve that overwrites memory of a surface without
+being written to it drops that surface, and its textures load the guest memory, which every resolve
+writes; resolves the native path does not handle are dumped
 at the guest resolution (each guest sample from the host pixel at its center) to an EDRAM buffer
 of that size and copied by the unscaled shaders, and their textures load at the guest resolution.
 
