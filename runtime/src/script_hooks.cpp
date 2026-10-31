@@ -3023,14 +3023,51 @@ void CreateStartupParty(PPCContext& ctx, uint8_t* base) {
   g_boot_party.store(kBootNone);
 }
 
+// The party startup_party names, when it is not Local, still to be created in the main menu
+// (kBootOnline or kBootSystemLink; kBootNone when there is none), and whether it is being created.
+std::atomic<int> g_pending_startup_party{kBootNone};
+std::atomic<bool> g_creating_startup_party{false};
+
 // LocalPartyCreated (`ctx`, about to run) at start-up, when the party startup_party names is not
-// Local: a room's System Link party or a plain System Link one instead, as choosing them does.
-// Returns whether it ran in LocalPartyCreated's place.
+// Local: the Local party is created as the game does, and the one startup_party names is created
+// over it in the main menu (CreatePendingStartupParty). Here, at the end of the failed Xbox LIVE
+// party's OnCreatePartyComplete, CreateSystemLinkParty sets the party type but never reaches
+// CreateParty, so the party would have no session and nobody could join its room. Never runs in
+// LocalPartyCreated's place: returns false.
 bool ReplaceStartupLocalParty(PPCContext& ctx, uint8_t* base, uint32_t local_party_created) {
   const int boot = g_boot_party.load();
-  if (boot != kBootOnline && boot != kBootSystemLink) return false;
-  if (boot == kBootOnline && rex::system::xam::alboria::InRoom()) return false;
-  return RunSystemLinkParty(ctx, base, local_party_created, boot == kBootOnline);
+  if (boot == kBootOnline || boot == kBootSystemLink) g_pending_startup_party.store(boot);
+  return false;
+}
+
+// On a player input frame (`ctx`, about to run PlayerInput) in the front end's main menu: creates
+// the party startup_party names over the Local one the game started with, as choosing it in the
+// party options does: a room on Alboria and its System Link party (kBootOnline), or a plain System
+// Link party (kBootSystemLink), with UIScene_FrontEnd.CreateSystemLinkParty on the front end's
+// scene. Its ConditionalCreatePartySession then goes to the game, not to CreateStartupParty.
+void CreatePendingStartupParty(PPCContext& ctx, uint8_t* base) {
+  const int boot = g_pending_startup_party.load(std::memory_order_relaxed);
+  if (boot == kBootNone || !InMainMenu(base)) return;
+  g_pending_startup_party.store(kBootNone);
+  const uint32_t scene = g_front_end_scene.load(std::memory_order_relaxed);
+  const uint32_t front_end_class = g_front_end_class.load(std::memory_order_relaxed);
+  const uint32_t create_system_link_party =
+      front_end_class ? FindClassFunction(base, front_end_class, "CreateSystemLinkParty") : 0;
+  if (!create_system_link_party) {
+    REXLOG_WARN("[Azura online] CreateSystemLinkParty not found; the party stays Local");
+    return;
+  }
+  REXLOG_INFO("[Azura online] Creating the start-up party in the main menu");
+  const uint32_t frame = ctx.r4.u32;
+  const uint32_t own_object = LoadU32(base, frame + kFrameObject);
+  const uint64_t own_r3 = ctx.r3.u64;
+  StoreU32(base, frame + kFrameObject, scene);
+  ctx.r3.u64 = scene;
+  g_creating_startup_party.store(true);
+  RunSystemLinkParty(ctx, base, create_system_link_party, boot == kBootOnline);
+  g_creating_startup_party.store(false);
+  StoreU32(base, frame + kFrameObject, own_object);
+  ctx.r3.u64 = own_r3;
 }
 
 // GearProfileSettings.GetPartyType (`ctx`, about to run), with online play on: the party the game
@@ -3057,6 +3094,7 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   if (function && IsEnginePlayerInput(base, function)) {
     if (g_open_browser.load(std::memory_order_relaxed)) OpenSystemLinkBrowserForJoin(ctx, base);
     ReturnToMainMenuWhenRoomLost(ctx, base);
+    CreatePendingStartupParty(ctx, base);
     ShowRoomMessage(ctx, base);
     const uint32_t player_input = ctx.r3.u32;
     const int32_t delta_time_at = ParamOffset(base, function, "DeltaTime");
@@ -3148,7 +3186,7 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   }
   if (Is(base, function, kConditionalCreateParty) && OnlineMode() &&
       ObjectName(base, LoadU32(base, function + kObjectOuter)) == "UIScene_FrontEnd" &&
-      !rex::system::xam::alboria::InRoom()) {
+      !rex::system::xam::alboria::InRoom() && !g_creating_startup_party.load()) {
     CreateStartupParty(ctx, base);
     return;
   }
