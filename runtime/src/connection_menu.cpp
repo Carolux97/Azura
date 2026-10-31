@@ -169,7 +169,8 @@ ConnectionMenu::ConnectionMenu(rex::ui::ImGuiDrawer* drawer, rex::input::InputSy
       opened_(Clock::now()),
       last_input_(input) {
   if (assignment_) assignment_->SetBlocked(true);
-  // The tag only comes from a sign-in: ask now, so the menu shows it once Alboria answers.
+  // The tag only comes from a sign-in: ask now (or reuse the session's), so the menu shows it once
+  // Alboria answers.
   alboria::RefreshIdentity();
 }
 
