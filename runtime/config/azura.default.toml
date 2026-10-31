@@ -102,7 +102,7 @@ network_mode = "online"
 # Alboria's control API, and the name and version this build gives it when signing in (the
 # service refuses versions it no longer supports).
 alboria_api_url = "https://api.alboria.org"
-alboria_client = "azura/0.5.0"
+alboria_client = "azura/0.5.1"
 # The party the game starts with, which the game keeps as the player chooses in the party options:
 # joinable (the first time), invite_only, system_link or local. Joinable and Invite only host a
 # room on Alboria; when Alboria does not answer the game starts in Local and this stays as it was.

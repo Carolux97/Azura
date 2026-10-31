@@ -48,6 +48,7 @@
 #include "script_hooks.h"
 #include "perf_overlay.h"
 #include "shader_compile_overlay.h"
+#include "window_icon.h"
 #include "online_room_overlay.h"
 #include "join_by_code_menu.h"
 
@@ -83,6 +84,10 @@ class AzuraApp : public rex::ReXApp {
 #if defined(_WIN32)
     // Before any Vulkan instance, including the one --list_gpus creates.
     azura::DisableCrashingVulkanLayers();
+#endif
+#if !defined(__APPLE__)
+    // Before the window exists: its application ID is read when it is created.
+    azura::SetAppIdentity();
 #endif
 #if defined(__APPLE__)
     AutoConfigureMacAppIcon();
@@ -207,6 +212,8 @@ class AzuraApp : public rex::ReXApp {
 #if defined(__APPLE__)
     // Again now that the window exists, so it gets the icon too (see platform_mac.mm).
     AutoConfigureMacAppIcon();
+#else
+    azura::SetWindowIcon();
 #endif
     // The upscaling row lists the effects the presenter draws on this GPU and backend.
     azura::menu::SetUpscalingSupport([this](const std::string& name) {
