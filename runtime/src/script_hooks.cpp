@@ -2432,14 +2432,27 @@ bool ChooseOnlinePartyType(PPCContext& ctx, uint8_t* base, uint32_t dialog_item_
 // PartyGRI.CurrPartyType with a byte constant for each type (docs/reverse-engineering.md, "Party
 // options"): for this call the System Link one can never match and the chosen type's one is
 // System Link's. Returns whether it ran.
-bool RunWithOnlinePartyType(PPCContext& ctx, uint8_t* base, uint32_t function) {
+// The online party type a room's party shows (kFriendsOnlyType or kInviteRequiredType), or -1 out
+// of a room or before one is chosen: the host's chosen type, and for a member the room's type as
+// Alboria last told it, which follows the host's changes.
+int ShownOnlinePartyType() {
   namespace alboria = rex::system::xam::alboria;
-  int chosen = g_online_party_type.load();
-  if (chosen < 0 || !alboria::InRoom()) return false;
-  // A member shows the room's type as Alboria last told it, which follows the host's changes.
+  const int chosen = g_online_party_type.load();
+  if (chosen < 0 || !alboria::InRoom()) return -1;
   if (const auto status = alboria::GetStatus(); !status.host && status.state == alboria::State::kConnected) {
-    chosen = status.party_type == alboria::PartyType::kInviteOnly ? kInviteRequiredType : kFriendsOnlyType;
+    return status.party_type == alboria::PartyType::kInviteOnly ? kInviteRequiredType : kFriendsOnlyType;
   }
+  return chosen;
+}
+
+// The party panel (UIWidget_SmallPartyPanel) whose UpdatePanelTitle ran last, and the online party
+// type its title names (-1 when it named no room's type).
+std::atomic<uint32_t> g_party_panel{0};
+std::atomic<int> g_party_panel_title_type{-1};
+
+bool RunWithOnlinePartyType(PPCContext& ctx, uint8_t* base, uint32_t function) {
+  const int chosen = ShownOnlinePartyType();
+  if (chosen < 0) return false;
   const uint32_t code = LoadU32(base, function + kStructScript);
   const uint32_t size = LoadU32(base, function + kStructScript + 4);
   // Each `CurrPartyType == <byte>`, compared as integers: the property's 8-byte reference, the
@@ -2470,6 +2483,7 @@ bool RunWithOnlinePartyType(PPCContext& ctx, uint8_t* base, uint32_t function) {
   }
   __imp__sub_822DF9E0(ctx, base);
   for (const auto& [at, value] : changed) base[at] = value;
+  if (Is(base, function, kUpdatePanelTitle)) g_party_panel_title_type.store(chosen);
   return true;
 }
 
@@ -2840,6 +2854,51 @@ void ShowRoomMessage(PPCContext& ctx, uint8_t* base) {
   ctx.r3.u64 = own_r3;
 }
 
+// Guest memory for the locals of UIWidget_SmallPartyPanel.UpdatePanelTitle, larger than they are.
+constexpr uint32_t kPanelTitleLocalsSize = 256;
+uint32_t g_panel_title_locals = 0;
+
+// On a player input frame (`ctx`, about to run PlayerInput) in the front end's main menu: names the
+// room's type again in the party panel when it changed since its title last named it. A room's
+// party stays System Link in the game (CurrPartyType 3), so switching between Joinable and Invite
+// only, or the host doing so for a member, changes nothing the panel follows: the runtime runs its
+// UpdatePanelTitle, seeing the type the room has now (RunWithOnlinePartyType).
+void RefreshPartyPanelTitle(PPCContext& ctx, uint8_t* base) {
+  const int shown = ShownOnlinePartyType();
+  if (shown < 0 || shown == g_party_panel_title_type.load() || !InMainMenu(base)) return;
+  const uint32_t panel = g_party_panel.load();
+  if (!panel) return;
+  const uint32_t panel_class = LoadU32(base, panel + kObjectClass);
+  if (ObjectName(base, panel_class) != "UIWidget_SmallPartyPanel") {
+    g_party_panel.store(0);
+    return;
+  }
+  const uint32_t update_panel_title = FindClassFunction(base, panel_class, "UpdatePanelTitle");
+  if (!update_panel_title) return;
+  if (!g_panel_title_locals) {
+    g_panel_title_locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kPanelTitleLocalsSize);
+    if (!g_panel_title_locals) return;
+  }
+  std::memset(base + g_panel_title_locals, 0, kPanelTitleLocalsSize);
+  const uint32_t frame = ctx.r4.u32;
+  const uint32_t node = LoadU32(base, frame + kFrameNode);
+  const uint32_t code = LoadU32(base, frame + kFrameCode);
+  const uint32_t locals = LoadU32(base, frame + kFrameLocals);
+  const uint32_t own_object = LoadU32(base, frame + kFrameObject);
+  const uint64_t own_r3 = ctx.r3.u64;
+  StoreU32(base, frame + kFrameObject, panel);
+  StoreU32(base, frame + kFrameNode, update_panel_title);
+  StoreU32(base, frame + kFrameCode, LoadU32(base, update_panel_title + kStructScript));
+  StoreU32(base, frame + kFrameLocals, g_panel_title_locals);
+  ctx.r3.u64 = panel;
+  if (!RunWithOnlinePartyType(ctx, base, update_panel_title)) g_party_panel_title_type.store(shown);
+  StoreU32(base, frame + kFrameObject, own_object);
+  StoreU32(base, frame + kFrameNode, node);
+  StoreU32(base, frame + kFrameCode, code);
+  StoreU32(base, frame + kFrameLocals, locals);
+  ctx.r3.u64 = own_r3;
+}
+
 // On a player input frame (`ctx`, about to run PlayerInput) in the front end's main menu: runs
 // UIScene_FrontEnd.DestroyPartyForLocal and then CreateLocalParty on its scene, with
 // g_return_to_menu_locals (zeroed) as their locals. Returns whether it did; not in the front end, or
@@ -3096,6 +3155,7 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     ReturnToMainMenuWhenRoomLost(ctx, base);
     CreatePendingStartupParty(ctx, base);
     ShowRoomMessage(ctx, base);
+    RefreshPartyPanelTitle(ctx, base);
     const uint32_t player_input = ctx.r3.u32;
     const int32_t delta_time_at = ParamOffset(base, function, "DeltaTime");
     const float delta_time =
@@ -3207,6 +3267,10 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     return;
   }
   if (Is(base, function, kOpenPartyOptions) && OnlineMode()) rex::system::xam::alboria::CheckService();
+  if (Is(base, function, kUpdatePanelTitle)) {
+    g_party_panel.store(LoadU32(base, ctx.r4.u32 + kFrameObject));
+    g_party_panel_title_type.store(-1);
+  }
   if ((Is(base, function, kBuildPartyOptions) || Is(base, function, kUpdatePanelTitle)) && OnlineMode() &&
       RunWithOnlinePartyType(ctx, base, function)) {
     return;
