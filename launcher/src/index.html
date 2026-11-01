@@ -105,6 +105,14 @@
       <div class="rail-foot">
         <!-- Shown when a newer launcher version is published; see setupUpdates() in main.js. -->
         <button class="update-chip" id="update-button" hidden></button>
+        <!-- Updating restarts the launcher, so the button asks first (renderUpdate). -->
+        <div class="update-confirm" id="update-confirm" hidden>
+          <p id="update-confirm-text"></p>
+          <div class="update-confirm-actions">
+            <button class="btn btn-small" id="update-confirm-yes" data-i18n="update.confirmYes"></button>
+            <button class="btn btn-small" id="update-confirm-no" data-pad-back data-i18n="update.cancel"></button>
+          </div>
+        </div>
         <label class="field rail-language">
           <span data-i18n="rail.language"></span>
           <select id="ui-language"></select>

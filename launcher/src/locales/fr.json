@@ -259,7 +259,11 @@
   "update": {
     "available": "Mettre à jour vers {version}",
     "downloading": "Téléchargement de la mise à jour… {percent}",
-    "failed": "Impossible d'installer la mise à jour. Réessayez plus tard."
+    "failed": "Impossible d'installer la mise à jour. Réessayez plus tard.",
+    "confirm": "Le launcher télécharge la version {version} et redémarre. Votre jeu, vos sauvegardes et vos réglages restent tels quels.",
+    "confirmYes": "Mettre à jour et redémarrer",
+    "cancel": "Annuler",
+    "closeGame": "Fermez le jeu pour mettre à jour le launcher"
   },
   "saves": {
     "title": "Sauvegardes",

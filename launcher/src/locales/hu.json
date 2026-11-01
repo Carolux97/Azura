@@ -259,7 +259,11 @@
   "update": {
     "available": "Frissítés erre: {version}",
     "downloading": "Frissítés letöltése… {percent}",
-    "failed": "A frissítést nem sikerült telepíteni. Próbáld újra később."
+    "failed": "A frissítést nem sikerült telepíteni. Próbáld újra később.",
+    "confirm": "A launcher letölti a(z) {version} verziót, és újraindul. A játék, a mentések és a beállítások változatlanok maradnak.",
+    "confirmYes": "Frissítés és újraindítás",
+    "cancel": "Mégse",
+    "closeGame": "Zárd be a játékot a launcher frissítéséhez"
   },
   "saves": {
     "title": "Mentések",
