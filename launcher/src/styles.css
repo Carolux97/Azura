@@ -1278,3 +1278,51 @@ input[type="range"] { width: 100%; accent-color: var(--imulsion); }
 .play-verify { margin: 0 0 20px; }
 .verify-notice .dot { margin-top: 0; background: var(--imulsion); box-shadow: 0 0 8px var(--imulsion-glow); }
 .verify-notice p { flex: 1; margin: 0; font-size: 13px; line-height: 1.45; color: var(--text); }
+
+/* Alboria's state under its chip (renderService): a dot and a short line. */
+.alboria-state { display: flex; align-items: center; gap: 6px; margin: 4px 0 0 12px; font-size: 11px; letter-spacing: 0.04em; color: var(--text-faint); }
+.alboria-state[hidden] { display: none; }
+.alboria-state .dot { width: 7px; height: 7px; margin: 0; border-radius: 50%; background: var(--text-faint); }
+.alboria-state[data-state="ok"] .dot { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+.alboria-state[data-state="warn"] { color: #ffc93c; }
+.alboria-state[data-state="warn"] .dot { background: #ffc93c; box-shadow: 0 0 6px rgba(255, 201, 60, 0.6); }
+@media (max-width: 760px) { .alboria-state { display: none; } }
+
+/* Alboria's notices above every page: in Alboria's light colours, as its screens in the launcher. */
+.alboria-notices { display: grid; gap: 8px; margin-bottom: 18px; }
+.alboria-notices[hidden] { display: none; }
+.alboria-notice {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 10px 14px;
+  background: linear-gradient(180deg, #e3f2ff, #c9e5ff); color: #1e2a4f;
+  border: 1px solid rgba(90, 169, 240, 0.7); border-radius: 12px;
+}
+.alboria-notice-label { display: block; font-family: var(--font-ui); font-size: 11px; font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase; color: #3d84cf; }
+.alboria-notice-body { margin-top: 2px; font-size: 14px; line-height: 1.4; overflow-wrap: anywhere; }
+.alboria-notice-body :is(p, ul, ol, blockquote, pre, h1, h2, h3, h4, h5, h6) { margin: 4px 0 0; }
+.alboria-notice-body > :first-child { margin-top: 0; }
+.alboria-notice-body :is(h1, h2, h3, h4, h5, h6) { font-size: 15px; font-weight: 700; }
+.alboria-notice-body :is(ul, ol) { padding-left: 20px; }
+.alboria-notice-body blockquote { padding-left: 10px; border-left: 3px solid #5aa9f0; color: #4a5a85; }
+.alboria-notice-body :is(code, kbd, pre) { font-family: ui-monospace, Menlo, monospace; font-size: 12px; background: rgba(30, 42, 79, 0.08); border-radius: 4px; padding: 1px 4px; }
+.alboria-notice-body mark { background: #ffc93c; color: #1e2a4f; }
+.alboria-notice-body hr { border: 0; border-top: 1px solid #b8daf8; margin: 6px 0; }
+.alboria-notice-body a { color: #2f7fd0; font-weight: 600; cursor: pointer; }
+.alboria-notice-close {
+  flex: none; width: 26px; height: 26px; border-radius: 50%; cursor: pointer;
+  background: none; border: 1px solid #1e2a4f; color: #1e2a4f; font: inherit; font-size: 16px; line-height: 1;
+}
+.alboria-notice-close:hover, .alboria-notice-close:focus-visible { background: rgba(30, 42, 79, 0.1); }
+/* A countdown before a scheduled action: urgent, in the launcher's own colours, and not closable. */
+.alboria-notice.is-warning { display: block; background: rgba(255, 201, 60, 0.1); color: var(--text); border-color: rgba(255, 201, 60, 0.7); }
+.alboria-notice.is-warning strong { font-size: 14px; }
+.alboria-notice-when { color: #ffc93c; }
+.alboria-notice.is-warning small { display: block; margin-top: 2px; font-size: 12px; color: var(--text-dim); }
+
+/* The Play page's panel when new online rooms cannot be made (renderService). */
+.service-panel {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  margin: 0 0 20px; padding: 14px 16px; border: 1px solid rgba(255, 201, 60, 0.7); background: rgba(255, 201, 60, 0.06);
+}
+.service-panel[hidden] { display: none; }
+.service-panel .panel-title { margin: 0; }
+.service-panel .help { margin: 4px 0 0; }
