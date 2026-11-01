@@ -25,7 +25,6 @@
     "lede": "Sua cópia do jogo, recompilada para {target}.",
     "launch": "Jogar",
     "launching": "Iniciando",
-    "mode": "Campanha",
     "install": "Instalar",
     "installSub": "Configure os arquivos do jogo",
     "running": "Jogando",
@@ -143,7 +142,8 @@
     "dlcOthers": "Outro conteúdo instalado",
     "dlcOthersCount": "{count} pacotes",
     "dlcInstalled": "{name} instalado.",
-    "dlcFailed": "Não foi possível instalar o pacote: {detail}"
+    "dlcFailed": "Não foi possível instalar o pacote: {detail}",
+    "eyebrow": "A tua cópia, o teu computador"
   },
   "graphics": {
     "title": "Gráficos",
@@ -159,7 +159,13 @@
     "gpuIntegrated": "integrada",
     "whilePlaying": "Launcher durante o jogo",
     "whilePlayingMinimize": "Minimizar",
-    "whilePlayingKeepOpen": "Deixar aberto"
+    "whilePlayingKeepOpen": "Deixar aberto",
+    "eyebrow": "Como o jogo aparece e funciona",
+    "displayTitle": "Ecrã",
+    "modeHelp": "Como abre a janela do jogo.",
+    "gpuHelp": "Que placa gráfica corre o jogo.",
+    "whilePlayingHelp": "O que o launcher faz quando o jogo começa.",
+    "renderResolutionHelp": "O tamanho a que o jogo desenha. Mais alto é mais nítido e exige mais da placa gráfica."
   },
   "achievements": {
     "title": "Conquistas",
@@ -312,7 +318,8 @@
     "folderHelp": "Onde ficam seus checkpoints, seu perfil e o conteúdo para download. Ao mudá-la, eles são movidos para lá, depois de um backup.",
     "folderCloseGame": "Feche o jogo para mover seus saves",
     "kindBeforeMove": "Antes de mover",
-    "kindBeforeReplace": "Antes de substituir"
+    "kindBeforeReplace": "Antes de substituir",
+    "eyebrow": "Pontos de controlo e perfil"
   },
   "gamepad": {
     "select": "Selecionar",
@@ -372,7 +379,13 @@
     "codesOffCreate": "No momento não estamos enviando códigos. Sua conta será criada sem verificar o e-mail. Quando voltarmos a enviá-los, você terá 48 horas para verificá-lo, ou a conta será apagada.",
     "codesOffSignIn": "No momento não estamos enviando códigos, então ainda não é possível entrar em uma conta de outro computador. Tente novamente mais tarde.",
     "createNow": "Criar conta",
-    "createdUnverified": "Seu e-mail não está verificado: quando voltarmos a enviar códigos, verifique-o em Conta em até 48 horas, ou a conta será apagada."
+    "createdUnverified": "Seu e-mail não está verificado: quando voltarmos a enviar códigos, verifique-o em Conta em até 48 horas, ou a conta será apagada.",
+    "title": "Prepara o teu {player}",
+    "titlePlayer": "jogador",
+    "chooseTitle": "Como queres jogar?",
+    "bubbleGreet": "Olá! Vamos arranjar-te uma tag.",
+    "bubbleCode": "Vê o teu e-mail, acabei de o enviar!",
+    "bubbleDone": "Boas-vindas à Alboria!"
   },
   "account": {
     "title": "Conta",
@@ -475,7 +488,9 @@
     "thenMaintenance": "As salas abertas continuam; as novas esperam até o fim.",
     "thenRestart": "Novas salas pausam até voltar. As abertas têm até 30 minutos para terminar.",
     "thenGameOff": "Então as salas fecham.",
-    "thenCloseRooms": "Termine sua partida antes."
+    "thenCloseRooms": "Termine sua partida antes.",
+    "downTitle": "A Alboria está a fazer uma sesta",
+    "downText": "Agora não conseguimos chegar à Alboria, por isso as salas online estão em pausa. O Mocho noturno está de vigia."
   },
   "friends": {
     "title": "Amigos",

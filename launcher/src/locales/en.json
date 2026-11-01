@@ -25,7 +25,6 @@
     "lede": "Your copy of the game, recompiled for {target}.",
     "launch": "Play",
     "launching": "Starting",
-    "mode": "Campaign",
     "install": "Install",
     "installSub": "Set up the game files",
     "running": "Playing",
@@ -143,7 +142,8 @@
     "dlcOthers": "Other installed content",
     "dlcOthersCount": "{count} packages",
     "dlcInstalled": "{name} installed.",
-    "dlcFailed": "The package could not be installed: {detail}"
+    "dlcFailed": "The package could not be installed: {detail}",
+    "eyebrow": "Your copy, your computer"
   },
   "graphics": {
     "title": "Graphics",
@@ -159,7 +159,13 @@
     "gpuIntegrated": "integrated",
     "whilePlaying": "Launcher while playing",
     "whilePlayingMinimize": "Minimize it",
-    "whilePlayingKeepOpen": "Keep it open"
+    "whilePlayingKeepOpen": "Keep it open",
+    "eyebrow": "How the game looks and runs",
+    "displayTitle": "Display",
+    "modeHelp": "How the game's window opens.",
+    "gpuHelp": "Which graphics card runs the game.",
+    "whilePlayingHelp": "What the launcher does once the game starts.",
+    "renderResolutionHelp": "The size the game draws at. Higher is sharper and asks more of the graphics card."
   },
   "achievements": {
     "title": "Achievements",
@@ -312,7 +318,8 @@
     "folderHelp": "Where your campaign checkpoints, profile and downloadable content live. Changing it moves them there, after a backup.",
     "folderCloseGame": "Close the game to move your saves",
     "kindBeforeMove": "Before moving",
-    "kindBeforeReplace": "Before replacing"
+    "kindBeforeReplace": "Before replacing",
+    "eyebrow": "Checkpoints and profile"
   },
   "gamepad": {
     "select": "Select",
@@ -372,7 +379,13 @@
     "codesOffCreate": "We are not sending codes right now. Your account will be made without verifying your email. Once we send codes again, you will have 48 hours to verify it, or the account will be deleted.",
     "codesOffSignIn": "We are not sending codes right now, so signing in to an account from another computer is not possible yet. Try again later.",
     "createNow": "Create account",
-    "createdUnverified": "Your email is not verified: once we send codes again, verify it in Account within 48 hours, or the account will be deleted."
+    "createdUnverified": "Your email is not verified: once we send codes again, verify it in Account within 48 hours, or the account will be deleted.",
+    "title": "Set up your {player}",
+    "titlePlayer": "player",
+    "chooseTitle": "How do you want to play?",
+    "bubbleGreet": "Hi! Let's get you a tag.",
+    "bubbleCode": "Check your email, I just sent it!",
+    "bubbleDone": "Welcome to Alboria!"
   },
   "account": {
     "title": "Account",
@@ -475,7 +488,9 @@
     "thenMaintenance": "Rooms already open go on; new rooms wait until it ends.",
     "thenRestart": "New rooms pause until it is back. Open rooms get up to 30 minutes to finish.",
     "thenGameOff": "Its rooms close then.",
-    "thenCloseRooms": "Finish your match before then."
+    "thenCloseRooms": "Finish your match before then.",
+    "downTitle": "Alboria is taking a nap",
+    "downText": "We can't reach Alboria right now, so online rooms are paused. The Night owl is keeping watch."
   },
   "friends": {
     "title": "Friends",
