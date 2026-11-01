@@ -693,6 +693,12 @@ Opened from the party panel (`UIWidget_SmallPartyPanel.OpenWhatsUpScene`).
   (`ToggleMutePlayer`). `FilterButtonInput` only handles B.
 - Join and Invite work on Xbox LIVE friends and parties (`CanJoinPlayer` asks
   `CanAllPlayersPlayOnline` and the friend's presence).
+- The friends list comes from `OnlineSubsystemLive`'s friends read (`OnReadFriendsComplete`, then
+  `SortFriendsListAndUpdate`, `CreateFriendsLists`, `PopulateFriendsLists`); the scene shows the
+  friends playing Gears of War 3 (`ActionScript_SetFriendsPlayingGears`) and the ones online
+  (`ActionScript_SetFriendsOnline`). Invite (X) runs `InvitePlayer`, which calls
+  `OnlineSubsystemLive.SendGameInviteToFriend(ControllerId, InviteeId, "")` and marks the friend as
+  invited (**verified** with `script_trace` and `script_dump_code`, 1 November 2026).
 
 ## Keyboard in menus
 

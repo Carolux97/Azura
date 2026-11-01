@@ -593,6 +593,30 @@ The game's TCP connections to other members go through the server's stream port 
 - **Changing the party type.** The host's game changes Joinable to Invite only and back with
   `XSessionModify`, whose flags the runtime reads as when the session was created; the room's type
   follows (section 4.2), so friends see whether they can join.
+- **Friends.** The SDK reads the account's friends from Alboria (`POST /v1/friends`, section 4.7)
+  every 10 seconds while player 1 is signed in to Live. `XFriendsCreateEnumerator` (XLIVEBASE
+  `0x58020`) answers with an `XONLINE_FRIEND` for each (196 bytes: an Xbox Live XUID made from the
+  account ID, `0x0009A1B0` and the ID; the gamertag without the tag; the state flags online
+  `0x1`, playing `0x2` and joinable `0x10`; the title ID while playing), and
+  `XPresenceCreateEnumerator` (`0x58019`) with an `XONLINE_PRESENCE` for each XUID asked (164
+  bytes, the same flags and title); `XPresenceSubscribe` (`0x5801E`) succeeds. The five and seven
+  parameters are the message's parameter list, as for `0x58023` (**verified** in Gears of War 3's
+  wrappers at 0x82B0B5D8, 0x82B0BB58 and 0x82B0BE10). Gears of War 3 reads the list every 30
+  seconds and shows the friends playing it in Manage/Invite, under "friends playing Gears of War
+  3", as it did on Xbox Live (**verified** on 1 November 2026). The full friends list is Alboria's
+  overlay's.
+- **Joining a friend.** A friend in a Joinable room carries a stand-in session ID in their presence
+  (`0x80`, `AB`, `0x00` and the account ID). The title looks it up with `XSessionSearchByID`
+  (Gears of War 3's Join in Manage/Invite); the runtime then joins the friend's room
+  (`/v1/friends/room`, then the room's code), waits for the relay's welcome and answers with the
+  room host's session, without an accepted invite: the title joins it as it found it (**verified**
+  up to the host's session with a test account, whose made-up session the game then drops).
+- **Inviting a friend.** Gears of War 3's Invite runs Unreal Engine 3's `SendGameInviteToFriend`,
+  which sends XLIVEBASE `0x50002` (`XInviteSend`) with a 40-byte message that only names the
+  request; the wrapper (0x82B0C748) builds its parameter list 48 bytes above it in the same frame,
+  the second parameter the count and the third the XUIDs. Each invitee who is an Alboria friend
+  gets an Alboria invitation to the room (`POST /v1/invitations`), which shows in their launcher
+  (**verified** on 1 November 2026).
 - **Other Live messages.** As it creates a Live party, Gears of War 3 also sends two XLIVEBASE
   messages. `0x58009`, through `XMsgStartIORequest` (wrapper at 0x82B0E0F0), needs player 1
   signed in to Live and an 8-byte result it zeroes; its shape matches

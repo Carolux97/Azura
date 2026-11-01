@@ -1,9 +1,9 @@
 diff --git a/include/rex/system/xam/alboria.h b/include/rex/system/xam/alboria.h
 new file mode 100644
-index 0000000..4b0bba2
+index 0000000..3138e43
 --- /dev/null
 +++ b/include/rex/system/xam/alboria.h
-@@ -0,0 +1,336 @@
+@@ -0,0 +1,372 @@
 +/**
 + * @file        system/xam/alboria.h
 + * @brief       Alboria: System Link over the internet through our relay
@@ -259,6 +259,42 @@ index 0000000..4b0bba2
 +
 +// Whether this installation is connected to a room.
 +bool Connected();
++// --- Friends (alboria_live) ----------------------------------------------------------------------
++
++// A friend of the account, with their presence, as Alboria's friends list gives them.
++struct Friend {
++  uint32_t id = 0;        // the account's ID
++  std::string gamertag;   // without the tag
++  bool online = false;    // online or playing
++  bool playing = false;   // in a room
++  uint32_t title_id = 0;  // the room's title while playing
++  bool joinable = false;  // the room is Joinable
++};
++
++// The account's friends as Alboria last listed them: read in the background every few seconds
++// while the player is signed in to Live (LiveSignedIn), so a title asking never waits. Empty before
++// the first read.
++std::vector<Friend> Friends();
++// The Xbox Live XUID that stands for the friend with the account ID `id`: top bits 0x0009, then
++// 0xA1B0 and the ID, so it never matches a local player's online XUID (OnlineXuid).
++uint64_t FriendXuid(uint32_t id);
++// The session ID a friend's presence carries while their room is Joinable: an Xbox Live peer
++// session ID (top bits 0x8) with "AB" and the friend's account ID, which stands for the friend's
++// room until the title looks it up (JoinFriendSession).
++std::array<uint8_t, 8> FriendSessionKid(uint32_t id);
++// The friend's account ID in a session ID made by FriendSessionKid, if it is one.
++std::optional<uint32_t> FriendOfSessionKid(std::span<const uint8_t, 8> kid);
++// Joins the room of the friend with the account ID `id` (POST /v1/friends/room, then JoinGame),
++// waits until it is connected, at most a few seconds, and gives the session of its host's Live
++// party, without telling the title of an accepted invite: the title looked the friend's session up
++// itself (XSessionSearchByID), and joins it with this. Nothing when the room cannot be joined.
++std::optional<SessionInfo> JoinFriendSession(uint32_t id);
++// The friend's account ID behind an Xbox Live XUID made by FriendXuid, if it is one.
++std::optional<uint32_t> FriendOfXuid(uint64_t xuid);
++// Invites the friend with the account ID `id` to the room this installation is in (POST
++// /v1/invitations), in the background: Alboria shows it in the friend's launcher and overlay.
++void InviteFriend(uint32_t id);
++
 +// Whether it is connected to a room with other members in it (heard from in the last 30 seconds,
 +// or listed by the relay for direct connections).
 +bool HasOtherMembers();
@@ -380,10 +416,10 @@ index 0000000..c7fc5de
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria.cpp b/src/system/xam/alboria.cpp
 new file mode 100644
-index 0000000..bc97774
+index 0000000..4a79d32
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,1762 @@
+@@ -0,0 +1,1882 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -396,6 +432,7 @@ index 0000000..bc97774
 +
 +#include <atomic>
 +#include <cctype>
++#include <cstdlib>
 +#include <chrono>
 +#include <cstring>
 +#include <map>
@@ -603,6 +640,9 @@ index 0000000..bc97774
 +bool g_session_published = false;
 +std::optional<SessionInfo> g_accepted_invite;
 +std::optional<SessionInfo> g_last_invite;  // the last one, read or not
++// The room being joined is a friend's whose session the title is looking up (JoinFriendSession):
++// its host's session is kept for the search, not given as an accepted invite.
++std::atomic<bool> g_join_for_search{false};
 +// The QoS data this installation's title listens with (published with the room it hosts), and the
 +// one of the host of the room it joined.
 +std::optional<std::vector<uint8_t>> g_hosted_qos;
@@ -631,6 +671,13 @@ index 0000000..bc97774
 +// service check (CheckService) finds Alboria answering and the account accepted, off when a check
 +// finds otherwise or a room fails to come up. Off until the first check ends.
 +std::atomic<bool> g_live_signed_in{false};
++// The account's friends (Friends), the last list Alboria gave; and the reader that refreshes it
++// while the player is signed in to Live. Guarded by g_friends_mutex.
++std::mutex g_friends_mutex;
++std::vector<Friend> g_friends;
++std::atomic<bool> g_friends_reader{false};
++// How often the friends list is read again while signed in to Live.
++constexpr auto kFriendsInterval = std::chrono::seconds(10);
 +
 +// The account as the last sign-in answered (GetIdentity), and a background sign-in running.
 +std::mutex g_identity_mutex;
@@ -695,8 +742,11 @@ index 0000000..bc97774
 +// (XN_LIVE_CONNECTIONCHANGED), then the sign-in (XN_SYS_SIGNINCHANGED). Signed in, the title reads
 +// the sign-in again and creates its Live party; signed out, it says the connection was lost and
 +// leaves its Live party.
++void StartFriendsReader();
++
 +void SetLiveSignedIn(bool signed_in) {
 +  if (!LiveEnabled() || signed_in == g_live_signed_in.exchange(signed_in)) return;
++  if (signed_in) StartFriendsReader();
 +  REXSYS_INFO("Alboria: player 1 is {} Xbox Live", signed_in ? "signed in to" : "signed out of");
 +  if (auto* kernel_state = REX_KERNEL_STATE()) {
 +    kernel_state->BroadcastNotification(kNotifyLiveConnectionChanged,
@@ -1295,10 +1345,14 @@ index 0000000..bc97774
 +        if (!g_status.host && LiveSignedIn() && invite && invite->size() == kSessionInfoSize) {
 +          SessionInfo session;
 +          std::memcpy(session.data(), invite->data(), session.size());
-+          g_accepted_invite = session;
 +          g_last_invite = session;
-+          REXSYS_INFO("Alboria: joining the host's Live party, as an accepted invite");
-+          REX_KERNEL_STATE()->BroadcastNotification(kNotifyLiveInviteAccepted, 0);
++          if (g_join_for_search.exchange(false)) {
++            REXSYS_INFO("Alboria: in the friend's room, with its host's Live party for the title's search");
++          } else {
++            g_accepted_invite = session;
++            REXSYS_INFO("Alboria: joining the host's Live party, as an accepted invite");
++            REX_KERNEL_STATE()->BroadcastNotification(kNotifyLiveInviteAccepted, 0);
++          }
 +        }
 +        break;
 +      }
@@ -1900,6 +1954,108 @@ index 0000000..bc97774
 +
 +bool LiveSignedIn() {
 +  return LiveEnabled() && g_live_signed_in.load();
++}
++
++namespace {
++
++// Reads the account's friends from Alboria (POST /v1/friends) into g_friends; on failure the last
++// list stays.
++void ReadFriends() {
++  const auto answer = CallSignedIn("/v1/friends", nlohmann::json::object());
++  if (!answer.error.empty() || !answer.json.contains("friends") || !answer.json["friends"].is_array()) return;
++  std::vector<Friend> friends;
++  for (const auto& entry : answer.json["friends"]) {
++    Friend f;
++    f.id = Number<uint32_t>(entry, "id", 0);
++    // "Gamertag#tag": the title shows the gamertag, as Xbox Live did.
++    const std::string name = Text(entry, "name");
++    f.gamertag = name.substr(0, name.rfind('#'));
++    const auto presence = entry.contains("presence") ? entry["presence"] : nlohmann::json::object();
++    const std::string status = Text(presence, "status", "offline");
++    f.online = status == "online" || status == "playing";
++    f.playing = status == "playing";
++    f.title_id = f.playing ? static_cast<uint32_t>(std::strtoul(Text(presence, "title_id").c_str(), nullptr, 16)) : 0;
++    f.joinable = f.playing && Text(presence, "party") == "joinable";
++    if (f.id) friends.push_back(std::move(f));
++  }
++  std::lock_guard lock(g_friends_mutex);
++  g_friends = std::move(friends);
++}
++
++// Starts the friends reader once: it reads the list every kFriendsInterval while the player is
++// signed in to Live, for as long as the title runs.
++void StartFriendsReader() {
++  if (g_friends_reader.exchange(true)) return;
++  std::thread([] {
++    for (;;) {
++      if (LiveSignedIn()) ReadFriends();
++      std::this_thread::sleep_for(kFriendsInterval);
++    }
++  }).detach();
++}
++
++}  // namespace
++
++std::vector<Friend> Friends() {
++  std::lock_guard lock(g_friends_mutex);
++  return g_friends;
++}
++
++uint64_t FriendXuid(uint32_t id) {
++  return uint64_t(0x0009) << 48 | uint64_t(0xA1B0) << 32 | id;
++}
++
++std::optional<uint32_t> FriendOfXuid(uint64_t xuid) {
++  if (xuid >> 32 != (uint64_t(0x0009) << 16 | 0xA1B0)) return std::nullopt;
++  return uint32_t(xuid);
++}
++
++void InviteFriend(uint32_t id) {
++  RunDetached("inviting a friend", [id] {
++    const auto sent = CallSignedIn("/v1/invitations", {{"friend", id}});
++    if (sent.error.empty()) {
++      REXSYS_INFO("Alboria: invited friend {} to the room", id);
++    } else {
++      REXSYS_WARN("Alboria: the invitation to friend {} was not sent ({})", id, sent.error);
++    }
++  });
++}
++
++std::array<uint8_t, 8> FriendSessionKid(uint32_t id) {
++  return {0x80, 'A', 'B', 0, uint8_t(id >> 24), uint8_t(id >> 16), uint8_t(id >> 8), uint8_t(id)};
++}
++
++std::optional<uint32_t> FriendOfSessionKid(std::span<const uint8_t, 8> kid) {
++  if (kid[0] != 0x80 || kid[1] != 'A' || kid[2] != 'B' || kid[3] != 0) return std::nullopt;
++  return uint32_t(kid[4]) << 24 | uint32_t(kid[5]) << 16 | uint32_t(kid[6]) << 8 | kid[7];
++}
++
++std::optional<SessionInfo> JoinFriendSession(uint32_t id) {
++  const auto room = CallSignedIn("/v1/friends/room", {{"id", id}});
++  if (!room.error.empty()) {
++    REXSYS_WARN("Alboria: the friend's room cannot be joined ({})", room.error);
++    return std::nullopt;
++  }
++  {
++    std::lock_guard lock(g_mutex);
++    g_last_invite.reset();
++  }
++  g_join_for_search.store(true);
++  JoinGame(Text(room.json, "code"));
++  // The join and the relay's welcome take two requests and a round trip.
++  constexpr auto kJoinWait = std::chrono::seconds(8);
++  const auto deadline = Clock::now() + kJoinWait;
++  while (Clock::now() < deadline) {
++    {
++      std::lock_guard lock(g_mutex);
++      if (g_last_invite) return g_last_invite;
++      if (g_status.state == State::kFailed) break;
++    }
++    std::this_thread::sleep_for(std::chrono::milliseconds(50));
++  }
++  g_join_for_search.store(false);
++  REXSYS_WARN("Alboria: the friend's room did not bring its host's session");
++  return std::nullopt;
 +}
 +
 +uint64_t OnlineXuid(uint64_t xuid) {
