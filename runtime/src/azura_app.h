@@ -33,6 +33,7 @@
 #include "dlc/raams_shadow_patch.h"
 #include "achievement_toast.h"
 #include "alboria_notices.h"
+#include "alboria_sounds.h"
 #include "alboria_overlay.h"
 #include "input/mouse_look.h"
 #include "input/overlay_input.h"
@@ -263,6 +264,8 @@ class AzuraApp : public rex::ReXApp {
     // Back, or Shift with the overlay's key.
     if (REXCVAR_GET(network_mode) == "online") {
       auto* input = runtime() ? static_cast<rex::input::InputSystem*>(runtime()->input_system()) : nullptr;
+      // Alboria's sounds take a moment to make: on their own thread, from now.
+      azura::alboria_sounds::Prepare();
       if (dialog_drawer_ && input) {
         alboria_notices_ = new azura::AlboriaNotices(dialog_drawer_, input, azura::input::InstalledPlayerAssignment(),
                                                      REXCVAR_GET(user_language), title_font_, body_font_,
@@ -459,6 +462,7 @@ class AzuraApp : public rex::ReXApp {
     alboria_overlay_ = nullptr;
     delete alboria_notices_;
     alboria_notices_ = nullptr;
+    azura::alboria_sounds::Shutdown();
     delete local_coop_menu_;
     local_coop_menu_ = nullptr;
     delete connection_menu_;

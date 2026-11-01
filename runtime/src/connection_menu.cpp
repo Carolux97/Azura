@@ -15,6 +15,7 @@
 #include "coop_ui.h"
 #include "input/player_assignment.h"
 #include "menu/pc_options.h"
+#include "script_hooks.h"
 
 REXCVAR_DECLARE(bool, alboria_direct);
 REXCVAR_DECLARE(bool, latency_overlay);
@@ -201,6 +202,7 @@ ConnectionMenu::ConnectionMenu(rex::ui::ImGuiDrawer* drawer, rex::input::InputSy
   // The tag only comes from a sign-in: ask now (or reuse the session's), so the menu shows it once
   // Alboria answers.
   alboria::RefreshIdentity();
+  script::PlayMenuSound(script::MenuSound::kOpen);
 }
 
 void ConnectionMenu::Toggle(int row) {
@@ -246,8 +248,15 @@ bool ConnectionMenu::HandleInput() {
     toggle = true;
   }
   if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) close = true;
-  if (move) focus_ = (focus_ + move + kRows) % kRows;
-  if (toggle && !close) Toggle(focus_);
+  if (move) {
+    script::PlayMenuSound(move < 0 ? script::MenuSound::kUp : script::MenuSound::kDown);
+    focus_ = (focus_ + move + kRows) % kRows;
+  }
+  if (toggle && !close) {
+    script::PlayMenuSound(script::MenuSound::kAccept);
+    Toggle(focus_);
+  }
+  if (close) script::PlayMenuSound(script::MenuSound::kBack);
   return close;
 }
 
@@ -373,6 +382,7 @@ void ConnectionMenu::OnDraw(ImGuiIO& io) {
 }
 
 void ConnectionMenu::OnClose() {
+  script::PlayMenuSound(script::MenuSound::kClose);
   if (assignment_) assignment_->SetBlocked(false);
   if (owner_) *owner_ = nullptr;
 }

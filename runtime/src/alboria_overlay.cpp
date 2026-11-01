@@ -16,6 +16,7 @@
 
 #include "input/overlay_input.h"
 #include "input/player_assignment.h"
+#include "alboria_sounds.h"
 #include "alboria_style.h"
 #include "online_room_overlay.h"
 
@@ -25,6 +26,7 @@ namespace {
 
 using namespace coop_ui;
 using namespace alboria_style;
+using alboria_sounds::Sound;
 using rex::input::DeviceId;
 using rex::input::PadControl;
 using Slot = input::PlayerAssignment::Slot;
@@ -315,11 +317,45 @@ std::string Activity(const Texts& texts, const alboria::Friend& f) {
   return ago.empty() ? std::string(texts.offline) : Format(texts.last_seen, ago);
 }
 
-// A rounded pill button: the sun for the main action, white with a sky line for the others. Returns
-// its width; `hit` says whether the mouse clicked it this frame.
+// The control that does a button's action, shown inside it: a controller's button (`pad` set) or a
+// key (`key`).
+struct PillGlyph {
+  bool pad = false;
+  PadLook look = PadLook::kGeneric;
+  PadControl control = PadControl::kA;
+  const char* key = nullptr;
+};
+
+// "Navigate", for moving up and down through a list, in the game's languages.
+const char* NavigateText(uint32_t language) {
+  switch (language) {
+    case 2: return "移動";
+    case 7: return "이동";
+    case 8: return "移動";
+    case 12: return "Навигация";
+    case 5: return "Navegar";
+    case 3: return "Navigieren";
+    case 4: return "Naviguer";
+    case 6: return "Naviga";
+    case 9: return "Navegar";
+    case 11: return "Nawigacja";
+    default: return "Navigate";
+  }
+}
+
+// A rounded pill button: the sun for the main action, white with a sky line for the others, with
+// the glyph of the control that does it before its label when `glyph` is set (the focused row's
+// buttons). Returns its width; `hit` says whether the mouse clicked it this frame.
 float DrawPill(ImDrawList* draw_list, ImFont* font, float size, ImVec2 right_center, const char* label, bool primary,
-               float unit, int alpha, bool* hit) {
-  const float width = font->CalcTextSizeA(size, FLT_MAX, 0.0f, label).x + 28.0f * unit;
+               float unit, int alpha, bool* hit, const PillGlyph* glyph = nullptr) {
+  const float glyph_height = size * 1.1f;
+  float glyph_width = 0.0f;
+  if (glyph) {
+    glyph_width = glyph->pad ? AlboriaGlyph(draw_list, font, ImVec2(0, 0), glyph_height, glyph->look, glyph->control, 0)
+                             : AlboriaKey(draw_list, font, 0.0f, 0.0f, glyph_height, glyph->key, 0);
+  }
+  const float glyph_space = glyph ? glyph_width + 8.0f * unit : 0.0f;
+  const float width = font->CalcTextSizeA(size, FLT_MAX, 0.0f, label).x + 28.0f * unit + glyph_space;
   const float height = size + 14.0f * unit;
   const ImVec2 min(right_center.x - width, right_center.y - height * 0.5f);
   const ImVec2 max(right_center.x, right_center.y + height * 0.5f);
@@ -331,7 +367,17 @@ float DrawPill(ImDrawList* draw_list, ImFont* font, float size, ImVec2 right_cen
     draw_list->AddRectFilled(min, max, White(alpha), height * 0.5f);
     draw_list->AddRect(min, max, SkyLine(alpha), height * 0.5f, 0, 2.0f * unit);
   }
-  AddTextCentered(draw_list, font, size, ImVec2((min.x + max.x) * 0.5f, right_center.y), Navy(alpha), label);
+  if (glyph) {
+    const float left = min.x + 10.0f * unit;
+    if (glyph->pad) {
+      AlboriaGlyph(draw_list, font, ImVec2(left + glyph_width * 0.5f, right_center.y), glyph_height, glyph->look,
+                   glyph->control, alpha);
+    } else {
+      AlboriaKey(draw_list, font, left, right_center.y, glyph_height, glyph->key, alpha);
+    }
+  }
+  AddTextCentered(draw_list, font, size, ImVec2((min.x + glyph_space + max.x) * 0.5f, right_center.y), Navy(alpha),
+                  label);
   if (hit) {
     const ImVec2 mouse = ImGui::GetIO().MousePos;
     *hit = ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mouse.x >= min.x && mouse.x <= max.x && mouse.y >= min.y &&
@@ -360,9 +406,11 @@ AlboriaOverlay::AlboriaOverlay(rex::ui::ImGuiDrawer* drawer, rex::input::InputSy
   input::SetOverlayBlocking(true);
   alboria::SetOverlayShown(true);
   alboria::RefreshFriends();
+  alboria_sounds::Play(Sound::kOpen);
 }
 
 void AlboriaOverlay::SetMessage(std::string text, bool error) {
+  if (error) alboria_sounds::Play(Sound::kError);
   std::lock_guard lock(result_->mutex);
   result_->message = std::move(text);
   result_->error = error;
@@ -371,7 +419,7 @@ void AlboriaOverlay::SetMessage(std::string text, bool error) {
 
 void AlboriaOverlay::Start(const std::string& pending,
                            const std::function<void(alboria::ActionDone)>& action, const std::string& done_text,
-                           bool close_when_done) {
+                           bool close_when_done, Sound sound) {
   {
     std::lock_guard lock(result_->mutex);
     if (result_->busy) return;
@@ -380,6 +428,7 @@ void AlboriaOverlay::Start(const std::string& pending,
     result_->error = false;
     result_->since = Clock::now();
   }
+  alboria_sounds::Play(sound);
   const std::string failed = LocalizedTexts(language_).failed;
   action([result = result_, done_text, failed, close_when_done, language = language_](const std::string& error) {
     std::lock_guard lock(result->mutex);
@@ -392,6 +441,7 @@ void AlboriaOverlay::Start(const std::string& pending,
     } else {
       result->message = Format(failed.c_str(), AlboriaErrorText(language, error));
       result->error = true;
+      alboria_sounds::Play(Sound::kError);
     }
   });
 }
@@ -403,6 +453,7 @@ void AlboriaOverlay::Act(bool secondary) {
     // The first row is Add friend.
     if (focus_ == 0) {
       if (!secondary) {
+        alboria_sounds::Play(Sound::kAccept);
         adding_ = true;
         add_name_.clear();
         add_tag_.clear();
@@ -436,9 +487,10 @@ void AlboriaOverlay::Act(bool secondary) {
             texts.joining, true);
     } else {
       Start(texts.declined, [id](alboria::ActionDone done) { alboria::DeclineInvitation(id, std::move(done)); },
-            texts.declined, false);
+            texts.declined, false, Sound::kBack);
     }
   } else if (!secondary) {
+    alboria_sounds::Play(Sound::kAccept);
     open_join_by_code_ = true;
     closing_ = true;
   }
@@ -475,8 +527,9 @@ AlboriaOverlay::Actions AlboriaOverlay::ReadInput() {
   if (ImGui::IsKeyPressed(ImGuiKey_Tab, false)) actions.page = ImGui::GetIO().KeyShift ? -1 : 1;
   if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false)) actions.page = -1;
   if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, false)) actions.page = 1;
-  if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) actions.move = -1;
-  if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) actions.move = 1;
+  // Up and down with the arrows, or with W and S as in the game.
+  if (ImGui::IsKeyPressed(ImGuiKey_UpArrow) || ImGui::IsKeyPressed(ImGuiKey_W)) actions.move = -1;
+  if (ImGui::IsKeyPressed(ImGuiKey_DownArrow) || ImGui::IsKeyPressed(ImGuiKey_S)) actions.move = 1;
   if (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)) {
     actions.primary = true;
   }
@@ -486,6 +539,7 @@ AlboriaOverlay::Actions AlboriaOverlay::ReadInput() {
 }
 
 void AlboriaOverlay::AddType(char c) {
+  alboria_sounds::Play(Sound::kType);
   if (c == '#') {
     add_in_tag_ = !add_in_tag_;
     return;
@@ -498,6 +552,7 @@ void AlboriaOverlay::AddType(char c) {
 }
 
 void AlboriaOverlay::AddErase() {
+  alboria_sounds::Play(Sound::kType);
   std::string& field = add_in_tag_ ? add_tag_ : add_name_;
   if (!field.empty()) {
     field.pop_back();
@@ -514,7 +569,10 @@ void AlboriaOverlay::PressKey() {
     return;
   }
   switch (kKeyActions[key_column_]) {
-    case KeyAction::kShift: add_shift_ = !add_shift_; break;
+    case KeyAction::kShift:
+      alboria_sounds::Play(Sound::kType);
+      add_shift_ = !add_shift_;
+      break;
     case KeyAction::kSpace: AddType(' '); break;
     case KeyAction::kTag: AddType('#'); break;
     case KeyAction::kErase: AddErase(); break;
@@ -541,12 +599,14 @@ void AlboriaOverlay::SendRequest() {
     result_->since = Clock::now();
   }
   adding_ = false;
+  alboria_sounds::Play(Sound::kAccept);
   const std::string failed = LocalizedTexts(language_).failed;
   alboria::SendFriendRequest(full, [result = result_, full, texts, failed, language = language_](const std::string& error) {
     std::lock_guard lock(result->mutex);
     result->busy = false;
     result->since = Clock::now();
     result->error = !error.empty() && error != "friends";
+    if (result->error) alboria_sounds::Play(Sound::kError);
     result->message = error.empty()         ? Format(texts.sent, full)
                       : error == "friends" ? Format(texts.now_friends, full)
                                            : Format(failed.c_str(), AlboriaErrorText(language, error));
@@ -571,14 +631,20 @@ bool AlboriaOverlay::AddFriendInput() {
       const uint16_t pressed = seen ? static_cast<uint16_t>(buttons & ~found->second) : 0;
       previous_buttons_[slot.device.id] = buttons;
       if (pressed) last_input_.NotePad(slot.device.id);
+      const int key_row = key_row_;
+      const int key_column = key_column_;
       if (pressed & rex::input::X_INPUT_GAMEPAD_DPAD_UP) key_row_ = std::max(0, key_row_ - 1);
       if (pressed & rex::input::X_INPUT_GAMEPAD_DPAD_DOWN) key_row_ = std::min(kKeyRowCount - 1, key_row_ + 1);
       if (pressed & rex::input::X_INPUT_GAMEPAD_DPAD_LEFT) key_column_--;
       if (pressed & rex::input::X_INPUT_GAMEPAD_DPAD_RIGHT) key_column_++;
       key_column_ = std::clamp(key_column_, 0, KeyRowLength(key_row_) - 1);
+      if (key_row_ != key_row || key_column_ != key_column) alboria_sounds::Play(Sound::kMove);
       if (pressed & rex::input::X_INPUT_GAMEPAD_A) PressKey();
       if (pressed & rex::input::X_INPUT_GAMEPAD_X) AddErase();
-      if (pressed & rex::input::X_INPUT_GAMEPAD_Y) add_shift_ = !add_shift_;
+      if (pressed & rex::input::X_INPUT_GAMEPAD_Y) {
+        alboria_sounds::Play(Sound::kType);
+        add_shift_ = !add_shift_;
+      }
       if (pressed & rex::input::X_INPUT_GAMEPAD_START) SendRequest();
       if (pressed & (rex::input::X_INPUT_GAMEPAD_B | rex::input::X_INPUT_GAMEPAD_BACK)) back = true;
     }
@@ -598,7 +664,7 @@ bool AlboriaOverlay::AddFriendInput() {
     if (ImGui::IsKeyPressed(static_cast<ImGuiKey>(k))) AddType(static_cast<char>('0' + (k - ImGuiKey_Keypad0)));
   }
   if (ImGui::IsKeyPressed(ImGuiKey_Space)) AddType(' ');
-  if (ImGui::IsKeyPressed(ImGuiKey_Tab, false)) add_in_tag_ = !add_in_tag_;
+  if (ImGui::IsKeyPressed(ImGuiKey_Tab, false)) AddType('#');
   if (ImGui::IsKeyPressed(ImGuiKey_Backspace)) AddErase();
   if (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)) SendRequest();
   return back;
@@ -631,7 +697,10 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
   };
 
   const Actions actions = adding_ ? Actions{} : ReadInput();
-  if (adding_ && AddFriendInput()) adding_ = false;
+  if (adding_ && AddFriendInput()) {
+    alboria_sounds::Play(Sound::kBack);
+    adding_ = false;
+  }
   {
     std::lock_guard lock(result_->mutex);
     if (result_->close_after) {
@@ -641,15 +710,19 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
   }
   if (actions.close) closing_ = true;
   if (actions.page) {
+    alboria_sounds::Play(Sound::kPage);
     page_ = static_cast<Page>((static_cast<int>(page_) + actions.page + pages) % pages);
     focus_ = 0;
   }
+  const int focus = focus_;
   if (actions.move) focus_ += actions.move;
   focus_ = std::clamp(focus_, 0, std::max(0, rows_on_page() - 1));
+  if (focus_ != focus) alboria_sounds::Play(Sound::kMove);
   if (actions.primary) Act(false);
   if (actions.secondary) Act(true);
   if (actions.copy && in_room) {
     ImGui::SetClipboardText(alboria::DisplayCode(status.code).c_str());
+    alboria_sounds::Play(Sound::kAccept);
     SetMessage(texts.copied, false);
   }
 
@@ -667,6 +740,9 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
     }
   }
   const PadLook look = pad ? LookOf(*pad) : PadLook::kGeneric;
+  // The glyph a button shows: `control` on a controller, `key` on the keyboard.
+  const PillGlyph enter_glyph{pad != nullptr, look, PadControl::kA, "Enter"};
+  const PillGlyph second_glyph{pad != nullptr, look, PadControl::kX, "I"};
 
   // Sizes in pixels at 720p, over the 16:9 area the game image takes in the window.
   const float game_height = std::min(io.DisplaySize.y, io.DisplaySize.x * 9.0f / 16.0f);
@@ -811,11 +887,13 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
                     ImVec2(list_left + name_width + hash_width * 0.5f, field_top + field_height * 0.5f), Navy(a(255)), "#");
     field(list_left + name_width + hash_width, tag_width, add_tag_, add.tag, add_in_tag_);
     bool hit = false;
-    const float send_width = title_font->CalcTextSizeA(16.0f * unit, FLT_MAX, 0.0f, add.send).x + 28.0f * unit;
+    const PillGlyph send_glyph{pad != nullptr, look, PadControl::kStart, "Enter"};
+    const float send_width =
+        DrawPill(draw_list, title_font, 16.0f * unit, ImVec2(0, 0), add.send, true, unit, 0, nullptr, &send_glyph);
     DrawPill(draw_list, title_font, 16.0f * unit,
              ImVec2(std::min(list_right, list_left + name_width + hash_width + tag_width + 18.0f * unit + send_width),
                     field_top + field_height * 0.5f),
-             add.send, true, unit, a(255), &hit);
+             add.send, true, unit, a(255), &hit, &send_glyph);
     if (hit) SendRequest();
     if (pad) {
       const float key = 30.0f * unit;
@@ -863,6 +941,18 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
     if (first_row == 0) {
       const float middle = row(0, Sun(a(255)), LocalizedAddTexts(language_).add_friend, LocalizedAddTexts(language_).help);
       draw_list->AddText(title_font, 22.0f * unit, ImVec2(list_left + 15.5f * unit, middle - 13.0f * unit), Navy(a(255)), "+");
+      // Focused, the control that opens it, at the row's end where the other rows have buttons.
+      if (focus_ == 0) {
+        const float height = 17.6f * unit;
+        const float right = list_right - 14.0f * unit;
+        if (pad) {
+          const float width = AlboriaGlyph(draw_list, title_font, ImVec2(0, 0), height, look, PadControl::kA, 0);
+          AlboriaGlyph(draw_list, title_font, ImVec2(right - width * 0.5f, middle), height, look, PadControl::kA, a(255));
+        } else {
+          const float width = AlboriaKey(draw_list, title_font, 0.0f, 0.0f, height, "Enter", 0);
+          AlboriaKey(draw_list, title_font, right - width, middle, height, "Enter", a(255));
+        }
+      }
       bool hit = false;
       if (clicked && inside(ImVec2(list_left, middle - row_height * 0.5f), ImVec2(list_right, middle + row_height * 0.5f))) {
         hit = true;
@@ -887,7 +977,8 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
       float right = list_right - 14.0f * unit;
       bool hit = false;
       if (f.joinable) {
-        right -= DrawPill(draw_list, title_font, 16.0f * unit, ImVec2(right, middle), texts.join, true, unit, a(255), &hit) +
+        right -= DrawPill(draw_list, title_font, 16.0f * unit, ImVec2(right, middle), texts.join, true, unit, a(255), &hit,
+                          i == focus_ ? &enter_glyph : nullptr) +
                  10.0f * unit;
         if (hit && !busy) {
           focus_ = i;
@@ -895,7 +986,8 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
         }
       }
       if (in_room && f.online) {
-        DrawPill(draw_list, title_font, 16.0f * unit, ImVec2(right, middle), texts.invite, false, unit, a(255), &hit);
+        DrawPill(draw_list, title_font, 16.0f * unit, ImVec2(right, middle), texts.invite, false, unit, a(255), &hit,
+                 i == focus_ ? &second_glyph : nullptr);
         if (hit && !busy) {
           focus_ = i;
           Act(true);
@@ -908,13 +1000,15 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
       const float middle = row(i, Sun(a(255)), invitations[i].from_name, Format(texts.invites_you, invitations[i].from_name));
       float right = list_right - 14.0f * unit;
       bool hit = false;
-      right -= DrawPill(draw_list, title_font, 16.0f * unit, ImVec2(right, middle), texts.join, true, unit, a(255), &hit) +
+      right -= DrawPill(draw_list, title_font, 16.0f * unit, ImVec2(right, middle), texts.join, true, unit, a(255), &hit,
+                        i == focus_ ? &enter_glyph : nullptr) +
                10.0f * unit;
       if (hit && !busy) {
         focus_ = i;
         Act(false);
       }
-      DrawPill(draw_list, title_font, 16.0f * unit, ImVec2(right, middle), texts.not_now, false, unit, a(255), &hit);
+      DrawPill(draw_list, title_font, 16.0f * unit, ImVec2(right, middle), texts.not_now, false, unit, a(255), &hit,
+               i == focus_ ? &second_glyph : nullptr);
       if (hit && !busy) {
         focus_ = i;
         Act(true);
@@ -929,10 +1023,12 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
       draw_list->AddText(title_font, 48.0f * unit, ImVec2(list_left, list_top + 30.0f * unit), Navy(a(255)), code.c_str());
       const float code_width = title_font->CalcTextSizeA(48.0f * unit, FLT_MAX, 0.0f, code.c_str()).x;
       bool hit = false;
-      const float pill_width = title_font->CalcTextSizeA(16.0f * unit, FLT_MAX, 0.0f, texts.copy).x + 28.0f * unit;
+      const PillGlyph copy_glyph{pad != nullptr, look, PadControl::kY, "Ctrl+C"};
+      const float pill_width = DrawPill(draw_list, title_font, 16.0f * unit, ImVec2(0, 0), texts.copy, false, unit, 0,
+                                        nullptr, &copy_glyph);
       DrawPill(draw_list, title_font, 16.0f * unit, ImVec2(list_left + code_width + 24.0f * unit + pill_width,
                                                            list_top + 58.0f * unit),
-               texts.copy, false, unit, a(255), &hit);
+               texts.copy, false, unit, a(255), &hit, &copy_glyph);
       if (hit) {
         ImGui::SetClipboardText(code.c_str());
         SetMessage(texts.copied, false);
@@ -941,9 +1037,10 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
       empty_text(texts.no_room);
     }
     bool hit = false;
-    const float join_width = title_font->CalcTextSizeA(18.0f * unit, FLT_MAX, 0.0f, texts.join_by_code).x + 28.0f * unit;
+    const float join_width = DrawPill(draw_list, title_font, 18.0f * unit, ImVec2(0, 0), texts.join_by_code, true, unit,
+                                      0, nullptr, &enter_glyph);
     DrawPill(draw_list, title_font, 18.0f * unit, ImVec2(list_left + join_width, list_top + 130.0f * unit),
-             texts.join_by_code, true, unit, a(255), &hit);
+             texts.join_by_code, true, unit, a(255), &hit, &enter_glyph);
     if (hit) Act(false);
   }
 
@@ -978,10 +1075,8 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
     if (pad) {
       hint(PadControl::kX, nullptr, add.erase);
       hint(PadControl::kY, nullptr, add.shift);
-      hint(PadControl::kStart, nullptr, add.send);
     } else {
       hint(PadControl::kA, "Tab", "#");
-      hint(PadControl::kA, "Enter", add.send);
     }
     hint(PadControl::kB, "Esc", add.back);
     return;
@@ -995,13 +1090,20 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
   } else {
     hint(PadControl::kA, "Tab", texts.change_page);
   }
-  if (page_ == Page::kFriends && signed_in && in_room) hint(PadControl::kX, "I", texts.invite);
-  if (page_ == Page::kInvitations && !invitations.empty()) hint(PadControl::kX, "I", texts.not_now);
-  if (page_ == Page::kRoom && in_room) hint(PadControl::kY, pad ? nullptr : "Ctrl+C", texts.copy);
+  // Up and down through a list; what each button does shows on the focused row's buttons.
+  if (page_ != Page::kRoom && signed_in && rows_on_page() > 1) {
+    const float width = AlboriaUpDownGlyph(draw_list, ImVec2(0, 0), glyph, pad != nullptr, 0);
+    x += AlboriaUpDownGlyph(draw_list, ImVec2(x + width * 0.5f, hints_y + 9.0f * unit), glyph, pad != nullptr, a(255)) +
+         6.0f * unit;
+    const char* navigate = NavigateText(language_);
+    draw_list->AddText(body_font, 15.0f * unit, ImVec2(x, hints_y), Navy(a(255)), navigate);
+    x += body_font->CalcTextSizeA(15.0f * unit, FLT_MAX, 0.0f, navigate).x + 20.0f * unit;
+  }
   hint(PadControl::kB, "Esc", texts.close);
 }
 
 void AlboriaOverlay::OnClose() {
+  alboria_sounds::Play(Sound::kClose);
   input::SetOverlayBlocking(false);
   alboria::SetOverlayShown(false);
   if (owner_) *owner_ = nullptr;
