@@ -436,7 +436,10 @@
     "verifyBy": "{date} までにメールアドレスを確認してください。確認しないとアカウントは削除されます。",
     "verifyEmail": "メールを確認",
     "emailVerified": "メールアドレスを確認しました。",
-    "playVerifyBy": "Alboria アカウントが確認されていません。{date} までにメールアドレスを確認しないと、削除されます。"
+    "playVerifyBy": "Alboria アカウントが確認されていません。{date} までにメールアドレスを確認しないと、削除されます。",
+    "overlayTitle": "Alboria オーバーレイ",
+    "overlayHelp": "ゲーム内でフレンド、招待、ルームを表示します。このキー、またはコントローラーで Back を押したまま RB を押すと開きます。",
+    "overlayKey": "Alboria オーバーレイのキー"
   },
   "accountErrors": {
     "network": "Alboria に接続できません。接続を確認してもう一度お試しください。",

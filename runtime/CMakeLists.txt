@@ -68,6 +68,7 @@ set(AZURA_SOURCES
     src/shader_compile_overlay.cpp
     src/online_room_overlay.cpp
     src/join_by_code_menu.cpp
+    src/alboria_overlay.cpp
     src/connection_menu.cpp
     src/shader_precompile.cpp
     src/system_settings.cpp
@@ -79,6 +80,7 @@ set(AZURA_SOURCES
     src/menu/coalesced.cpp
     src/input/install_player_assignment.cpp
     src/input/mouse_look.cpp
+    src/input/overlay_input.cpp
     src/input/player_assignment.cpp
     src/input/scripted_pad.cpp
     src/menu/menu_patches.cpp

@@ -23,6 +23,8 @@
 #include <rex/runtime.h>
 #include <rex/system/flags.h>
 #include <rex/system/gpu_plugin.h>
+#include <rex/system/xam/alboria.h>
+#include <rex/ui/keybinds.h>
 #include <rex/ui/presenter.h>
 
 #include "achievement_export.h"
@@ -30,7 +32,9 @@
 #include "dlc/dlc_achievements.h"
 #include "dlc/raams_shadow_patch.h"
 #include "achievement_toast.h"
+#include "alboria_overlay.h"
 #include "input/mouse_look.h"
+#include "input/overlay_input.h"
 #include "input/player_assignment.h"
 #include "input/scripted_pad.h"
 #include "controls_menu.h"
@@ -251,16 +255,25 @@ class AzuraApp : public rex::ReXApp {
           dialog_drawer_, REXCVAR_GET(user_language), title_font_, body_font_, &online_room_overlay_);
     }
     // Manage/Invite's RB, with online play on, opens the Join by code screen, on the UI thread.
-    azura::script::SetJoinByCodeHandler([this] {
-      app_context().CallInUIThread([this] {
-        auto* input = runtime() ? static_cast<rex::input::InputSystem*>(runtime()->input_system()) : nullptr;
-        if (!shutting_down_ && dialog_drawer_ && input && !join_by_code_menu_) {
-          join_by_code_menu_ = new azura::JoinByCodeMenu(dialog_drawer_, input, azura::input::InstalledPlayerAssignment(),
-                                                         REXCVAR_GET(user_language), title_font_, body_font_,
-                                                         &join_by_code_menu_);
+    azura::script::SetJoinByCodeHandler([this] { app_context().CallInUIThread([this] { OpenJoinByCode(); }); });
+    // The Alboria overlay, with online play on: the bound key (F1 unless the launcher set another),
+    // RB while holding Back on a controller, and the game opening the Guide's friends or invite screens.
+    if (REXCVAR_GET(network_mode) == "online") {
+      auto* input = runtime() ? static_cast<rex::input::InputSystem*>(runtime()->input_system()) : nullptr;
+      azura::input::InstallOverlayInput(input, [this] {
+        app_context().CallInUIThread([this] { OpenAlboriaOverlay(azura::AlboriaOverlay::Page::kFriends); });
+      });
+      rex::system::xam::alboria::SetOverlayHandler([this](azura::AlboriaOverlay::Page page) {
+        app_context().CallInUIThread([this, page] { OpenAlboriaOverlay(page); });
+      });
+      rex::ui::RegisterBind("bind_alboria_overlay", "F1", "Open or close the Alboria overlay", [this] {
+        if (alboria_overlay_) {
+          alboria_overlay_->RequestClose();
+        } else {
+          OpenAlboriaOverlay(azura::AlboriaOverlay::Page::kFriends);
         }
       });
-    });
+    }
     // Choosing Local co-op in the Options opens the Local co-op menu, on the UI thread.
     azura::script::SetLocalCoopHandler([this] {
       app_context().CallInUIThread([this] {
@@ -414,6 +427,10 @@ class AzuraApp : public rex::ReXApp {
     azura::script::SetConnectionHandler(nullptr);
     azura::script::SetControlsMenuHandler(nullptr);
     azura::script::SetJoinByCodeHandler(nullptr);
+    rex::ui::UnregisterBind("bind_alboria_overlay");
+    rex::system::xam::alboria::SetOverlayHandler(nullptr);
+    azura::input::InstallOverlayInput(runtime() ? static_cast<rex::input::InputSystem*>(runtime()->input_system()) : nullptr,
+                                      nullptr);
     rex::input::mnk::SetMenuKeysQuery(nullptr);
     rex::input::SetPadLayoutQuery(nullptr);
     azura::input::InstallMouseLook(nullptr);
@@ -426,6 +443,8 @@ class AzuraApp : public rex::ReXApp {
     online_room_overlay_ = nullptr;
     delete join_by_code_menu_;
     join_by_code_menu_ = nullptr;
+    delete alboria_overlay_;
+    alboria_overlay_ = nullptr;
     delete local_coop_menu_;
     local_coop_menu_ = nullptr;
     delete connection_menu_;
@@ -469,6 +488,31 @@ class AzuraApp : public rex::ReXApp {
   }
 
  private:
+  // Opens the Join by code screen, unless one of our screens is open. On the UI thread.
+  void OpenJoinByCode() {
+    auto* input = runtime() ? static_cast<rex::input::InputSystem*>(runtime()->input_system()) : nullptr;
+    if (!shutting_down_ && dialog_drawer_ && input && !join_by_code_menu_ && !alboria_overlay_) {
+      join_by_code_menu_ = new azura::JoinByCodeMenu(dialog_drawer_, input, azura::input::InstalledPlayerAssignment(),
+                                                     REXCVAR_GET(user_language), title_font_, body_font_,
+                                                     &join_by_code_menu_);
+    }
+  }
+
+  // Opens the Alboria overlay on `page`, unless it or another of our screens is open. In a match
+  // the game's pause menu opens under it first. On the UI thread.
+  void OpenAlboriaOverlay(azura::AlboriaOverlay::Page page) {
+    auto* input = runtime() ? static_cast<rex::input::InputSystem*>(runtime()->input_system()) : nullptr;
+    if (shutting_down_ || !dialog_drawer_ || !input || alboria_overlay_ || join_by_code_menu_ || local_coop_menu_ ||
+        connection_menu_ || controls_menu_) {
+      return;
+    }
+    if (azura::script::WhereInMenus() == azura::script::Menus::kPlaying) azura::input::PressStartForGame();
+    alboria_overlay_ = new azura::AlboriaOverlay(
+        dialog_drawer_, input, azura::input::InstalledPlayerAssignment(), REXCVAR_GET(user_language), page,
+        title_font_, body_font_, [this] { app_context().CallInUIThread([this] { OpenJoinByCode(); }); },
+        &alboria_overlay_);
+  }
+
   std::unique_ptr<azura::prompts::ButtonPrompts> button_prompts_;
   std::filesystem::path exe_dir_;
   rex::ui::ImGuiDrawer* dialog_drawer_ = nullptr;
@@ -479,6 +523,9 @@ class AzuraApp : public rex::ReXApp {
   azura::ShaderCompileOverlay* shader_compile_overlay_ = nullptr;
   azura::OnlineRoomOverlay* online_room_overlay_ = nullptr;
   azura::JoinByCodeMenu* join_by_code_menu_ = nullptr;
+  // The Alboria overlay while it is open; deletes itself when it closes, clearing this pointer.
+  // Accessed on the UI thread only.
+  azura::AlboriaOverlay* alboria_overlay_ = nullptr;
   // The Local co-op menu while it is open; deletes itself when it closes, clearing this pointer.
   // Accessed on the UI thread only.
   azura::LocalCoopMenu* local_coop_menu_ = nullptr;
