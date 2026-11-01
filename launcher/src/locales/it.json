@@ -25,7 +25,6 @@
     "lede": "La tua copia del gioco, ricompilata per {target}.",
     "launch": "Gioca",
     "launching": "Avvio",
-    "mode": "Campagna",
     "install": "Installa",
     "installSub": "Configura i file di gioco",
     "running": "In gioco",
@@ -85,6 +84,10 @@
     "invalidXex": "default.xex non è un eseguibile Xbox 360 valido.",
     "ok": "Gears of War 3 · Edizione {versionName} · Media ID {mediaId}",
     "unsupportedVersion": "Questa edizione di Gears of War 3 (Media ID {mediaId}) non è ancora supportata.",
+    "editionReportHelp": "Per aggiungerla, copia questi dati e incollali in una nuova issue su GitHub. Identificano solo l'eseguibile; nient'altro dei tuoi file viene condiviso.",
+    "editionReportCopy": "Copia i dati",
+    "editionReportCopied": "Copiato",
+    "editionReportOpen": "Segnala su GitHub",
     "wrongGame": "Questo non è Gears of War 3 (Title ID {titleId}).",
     "chooseFolderFirst": "Scegli prima il gioco",
     "defaultUserName": "User",
@@ -133,13 +136,14 @@
       "notInstalled": "Non installato",
       "needsRuntime": "Installato · pronto dopo l'aggiornamento del runtime",
       "unsupported": "Installato, ma non è stato possibile prepararlo con questi file del gioco",
-      "installed": "Installato",
+      "installed": "Installato · le sue mappe arrivano con il multigiocatore",
       "installing": "Installazione… (richiede un minuto)"
     },
     "dlcOthers": "Altri contenuti installati",
     "dlcOthersCount": "{count} pacchetti",
     "dlcInstalled": "{name} installato.",
     "dlcFailed": "Impossibile installare il pacchetto: {detail}",
+    "eyebrow": "La tua copia, il tuo computer",
     "dlcRemove": "Rimuovi",
     "dlcRemoved": "{name} rimosso.",
     "dlcRemoveFailed": "Impossibile rimuovere il contenuto: {detail}"
@@ -158,7 +162,13 @@
     "gpuIntegrated": "integrata",
     "whilePlaying": "Launcher durante il gioco",
     "whilePlayingMinimize": "Ridurlo a icona",
-    "whilePlayingKeepOpen": "Lasciarlo aperto"
+    "whilePlayingKeepOpen": "Lasciarlo aperto",
+    "eyebrow": "Come si vede e gira il gioco",
+    "displayTitle": "Schermo",
+    "modeHelp": "Come si apre la finestra del gioco.",
+    "gpuHelp": "Quale scheda grafica fa girare il gioco.",
+    "whilePlayingHelp": "Cosa fa il launcher quando parte il gioco.",
+    "renderResolutionHelp": "La dimensione a cui disegna il gioco. Più alta è più nitida e chiede di più alla scheda grafica."
   },
   "achievements": {
     "title": "Obiettivi",
@@ -311,7 +321,8 @@
     "folderHelp": "Dove si trovano i checkpoint, il profilo e i contenuti scaricabili. Cambiandola vengono spostati lì, dopo un backup.",
     "folderCloseGame": "Chiudi il gioco per spostare i salvataggi",
     "kindBeforeMove": "Prima dello spostamento",
-    "kindBeforeReplace": "Prima della sostituzione"
+    "kindBeforeReplace": "Prima della sostituzione",
+    "eyebrow": "Checkpoint e profilo"
   },
   "gamepad": {
     "select": "Seleziona",
@@ -371,7 +382,13 @@
     "codesOffCreate": "Al momento non inviamo codici. Il tuo account verrà creato senza verificare l'email. Quando torneremo a inviarli, avrai 48 ore per verificarla, altrimenti l'account verrà eliminato.",
     "codesOffSignIn": "Al momento non inviamo codici, quindi per ora non è possibile accedere a un account da un altro computer. Riprova più tardi.",
     "createNow": "Crea account",
-    "createdUnverified": "La tua email non è verificata: quando torneremo a inviare codici, verificala in Account entro 48 ore, altrimenti l'account verrà eliminato."
+    "createdUnverified": "La tua email non è verificata: quando torneremo a inviare codici, verificala in Account entro 48 ore, altrimenti l'account verrà eliminato.",
+    "title": "Prepara il tuo {player}",
+    "titlePlayer": "giocatore",
+    "chooseTitle": "Come vuoi giocare?",
+    "bubbleGreet": "Ciao! Troviamoti un tag.",
+    "bubbleCode": "Controlla la posta, te l'ho appena mandata!",
+    "bubbleDone": "Ti diamo il benvenuto su Alboria!"
   },
   "account": {
     "title": "Account",
@@ -474,7 +491,9 @@
     "thenMaintenance": "Le stanze aperte continuano; le nuove attendono la fine.",
     "thenRestart": "Le nuove stanze si fermano fino al ritorno. Quelle aperte hanno fino a 30 minuti per finire.",
     "thenGameOff": "Allora le sue stanze chiudono.",
-    "thenCloseRooms": "Finisci la partita prima."
+    "thenCloseRooms": "Finisci la partita prima.",
+    "downTitle": "Alboria sta facendo un pisolino",
+    "downText": "Al momento non riusciamo a raggiungere Alboria, quindi le stanze online sono in pausa. Il Gufo notturno fa la guardia."
   },
   "friends": {
     "title": "Amici",

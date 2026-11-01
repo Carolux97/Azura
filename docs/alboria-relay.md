@@ -35,6 +35,12 @@ There are two channels:
 
 Everything happens inside the game, with `network_mode = "online"` (the default).
 
+With `alboria_live` (the default) Joinable and Invite only are the game's own Xbox Live parties,
+signed in to Live through Alboria, and joining a room brings the host's party to the game as an
+accepted invite (section 6.1). The steps below are how the runtime's System Link parties in a room
+play, with `alboria_live = false`; the room's code (step 2) and Join by code (step 3) work the same
+way in both.
+
 1. The host opens the party options and chooses **Joinable** or **Invite only**. The runtime signs
    in (section 3), creates a room and receives a ticket with the room's code, such as `K7QM-2XPA`;
    underneath, the game creates a System Link party. **System Link** stays the real local network
@@ -230,11 +236,11 @@ another game; the request then has to carry `title_id` too).
 
 The runtime keeps the ticket in memory only.
 
-### 4.5 Xbox Live parties (work in progress)
+### 4.5 Xbox Live parties
 
-With `alboria_live` (off by default while it is being built) the game believes the player is
-signed in to Xbox Live, and its own Joinable and Invite only parties are Alboria's: no System Link
-party underneath (section 6.1).
+With `alboria_live` (the default) the game believes the player is signed in to Xbox Live while
+Alboria answers, and its own Joinable and Invite only parties are Alboria's: no System Link party
+underneath (section 6.1).
 
 `POST /v1/rooms/session` with `{ "code": "K7QM-2XPA", "session": "<60 bytes>" }` stores the
 session of the Live party the player hosts in the room: its XSESSION_INFO, that is the session ID
@@ -533,16 +539,34 @@ it is in a room the game sees:
 
 The game's TCP connections to other members go through the server's stream port (section 5.5).
 
-### 6.1 Xbox Live parties (work in progress, `alboria_live`)
+### 6.1 Xbox Live parties (`alboria_live`)
 
 - **Sign-in.** Player 1 is signed in to Live (`XamUserGetSigninState` 2, the Live enabled flag in
   `XamUserGetSigninInfo`, an online XUID with the top bits `0x0009` and the offline XUID's low 48
   bits when the title asks for it) and every privilege `XamUserCheckPrivilege` is asked for is
   granted. The game then offers and creates Joinable and Invite only parties by itself, and private
   Horde and Versus matches start (**verified** on 29 October 2026, one player).
+- **The sign-in follows the service.** Player 1 is signed in to Live only while Alboria answers
+  and accepts the account. The service check (section 4.1), at start-up and each time the party
+  options open, signs the player in when Alboria answers and has not refused the account, and out
+  otherwise; a room the player hosts that fails, or any room that fails because Alboria cannot be
+  reached or refuses the account, signs them out too. A join refused for the room itself (a wrong
+  code, a full room) does not. Each change reaches the title as `XN_LIVE_CONNECTIONCHANGED`
+  (`XONLINE_S_LOGON_CONNECTION_ESTABLISHED` or `XONLINE_S_LOGON_DISCONNECTED`) and
+  `XN_SYS_SIGNINCHANGED`, as when a console's connection to Xbox Live came or went. Signed out, the
+  game starts in Local; signed in again, Gears of War 3 creates its Live party by itself
+  (**verified** on 1 November 2026). Gears of War 3 ignores the lost connection in the main menu
+  (docs/reverse-engineering.md, "Party types, System Link and Manage/Invite"), so a room that fails
+  there has its party replaced by a Local one with the message of a failed room, as the System Link
+  parties do (step 6 of section 2); in a match it goes back to the main menu with that message. The party
+  options still offer Joinable and Invite only: choosing one while signed out gets the game's
+  message, which says online play on Alboria is not possible, the party stays as it was, and
+  Alboria is checked again for the next choice; the room overlay names a refusal of the account.
 - **Hosting.** When the title creates a hosted Live session that uses the peer network
   (`XSessionCreate` with the host, peer network and Live service flags), the runtime hosts a room
-  (Joinable when the session has public slots, Invite only when it only has private ones), fills
+  (Invite only when the session disables joining through presence, flag `0x200`, Joinable
+  otherwise; Gears of War 3 creates Joinable parties with the flags `0x82B` and Invite only ones
+  with `0x22B`), or changes the type of the one it hosts already, fills
   the session's XSESSION_INFO (an online peer XNKID, a key, and an XNADDR with the virtual address
   10.77.0.1) and publishes it (section 4.5). The session's traffic goes through the room as System
   Link's does.
@@ -561,6 +585,21 @@ The game's TCP connections to other members go through the server's stream port 
 - **Joining.** The member asks the host's party beacon for a place over TCP (section 5.5), then
   travels to the host's session. Verified on 29 October 2026 with two installations on one
   computer, one with RAAM's Shadow and one without (section 6.2).
+- **A join that fails.** When the game cannot follow the session the room brought (the host's
+  game does not answer), it runs `GearPC.NotifyInviteFailed`, whose message says the room failed
+  and the party stays in Local. The runtime then leaves the room it joined and makes the party in the
+  main menu Local, so that the player is not left in the other player's room with a party of their
+  own (**verified** on 1 November 2026 with a test account hosting a room with a made-up session).
+- **Changing the party type.** The host's game changes Joinable to Invite only and back with
+  `XSessionModify`, whose flags the runtime reads as when the session was created; the room's type
+  follows (section 4.2), so friends see whether they can join.
+- **Other Live messages.** As it creates a Live party, Gears of War 3 also sends two XLIVEBASE
+  messages. `0x58009`, through `XMsgStartIORequest` (wrapper at 0x82B0E0F0), needs player 1
+  signed in to Live and an 8-byte result it zeroes; its shape matches
+  `XContentGetMarketplaceCounts` (not verified), and it is answered with success and no offers.
+  `0x58035`, through `XMsgInProcessCall` (wrappers at 0x82B0DCD0 and 0x82B0DD68), passes a
+  privilege (254) or 0 and a 64-bit value, probably a XUID; what it asks is not known, and it fails
+  as before, which changes nothing the game shows.
 
 ### 6.2 Players with different content (DLC)
 

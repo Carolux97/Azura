@@ -25,7 +25,6 @@
     "lede": "お持ちのゲームを {target} 向けに再コンパイル。",
     "launch": "プレイ",
     "launching": "起動中",
-    "mode": "キャンペーン",
     "install": "インストール",
     "installSub": "ゲームファイルを設定",
     "running": "プレイ中",
@@ -85,6 +84,10 @@
     "invalidXex": "default.xex は有効な Xbox 360 実行ファイルではありません。",
     "ok": "Gears of War 3 · {versionName} 版 · Media ID {mediaId}",
     "unsupportedVersion": "この Gears of War 3 のエディション（Media ID {mediaId}）はまだサポートされていません。",
+    "editionReportHelp": "追加するには、これらの情報をコピーして GitHub の新しい issue に貼り付けてください。実行ファイルを識別するだけで、ほかのファイルは共有されません。",
+    "editionReportCopy": "情報をコピー",
+    "editionReportCopied": "コピーしました",
+    "editionReportOpen": "GitHub で報告",
     "wrongGame": "これは Gears of War 3 ではありません（Title ID {titleId}）。",
     "chooseFolderFirst": "先にゲームを選択してください",
     "defaultUserName": "User",
@@ -133,13 +136,14 @@
       "notInstalled": "未インストール",
       "needsRuntime": "インストール済み · ランタイム更新後に準備されます",
       "unsupported": "インストール済みですが、このゲームファイルでは準備できませんでした",
-      "installed": "インストール済み",
+      "installed": "インストール済み · マップはマルチプレイヤー対応時に追加",
       "installing": "インストール中… (1分ほどかかります)"
     },
     "dlcOthers": "その他のインストール済みコンテンツ",
     "dlcOthersCount": "{count} 個のパッケージ",
     "dlcInstalled": "{name} をインストールしました。",
     "dlcFailed": "パッケージをインストールできませんでした: {detail}",
+    "eyebrow": "あなたのコピー、あなたのコンピューター",
     "dlcRemove": "削除",
     "dlcRemoved": "{name}を削除しました。",
     "dlcRemoveFailed": "コンテンツを削除できませんでした: {detail}"
@@ -158,7 +162,13 @@
     "gpuIntegrated": "内蔵",
     "whilePlaying": "プレイ中のランチャー",
     "whilePlayingMinimize": "最小化する",
-    "whilePlayingKeepOpen": "開いたままにする"
+    "whilePlayingKeepOpen": "開いたままにする",
+    "eyebrow": "ゲームの見た目と動作",
+    "displayTitle": "ディスプレイ",
+    "modeHelp": "ゲームのウィンドウの開き方。",
+    "gpuHelp": "ゲームを動かすグラフィックカード。",
+    "whilePlayingHelp": "ゲーム開始時にランチャーがすること。",
+    "renderResolutionHelp": "ゲームが描画するサイズ。高いほど鮮明になり、グラフィックカードの負荷も上がります。"
   },
   "achievements": {
     "title": "実績",
@@ -311,7 +321,8 @@
     "folderHelp": "チェックポイント、プロフィール、ダウンロードコンテンツの保存先です。変更すると、バックアップを作成してから移動します。",
     "folderCloseGame": "セーブデータを移動するにはゲームを終了してください",
     "kindBeforeMove": "移動前",
-    "kindBeforeReplace": "置き換え前"
+    "kindBeforeReplace": "置き換え前",
+    "eyebrow": "チェックポイントとプロフィール"
   },
   "gamepad": {
     "select": "決定",
@@ -371,7 +382,13 @@
     "codesOffCreate": "現在コードを送信していません。アカウントはメールアドレスを確認しないまま作成されます。コードの送信を再開したら、48 時間以内に確認しないとアカウントは削除されます。",
     "codesOffSignIn": "現在コードを送信していないため、別のコンピューターからアカウントにサインインすることはまだできません。後でもう一度お試しください。",
     "createNow": "アカウントを作成",
-    "createdUnverified": "メールアドレスが確認されていません。コードの送信を再開したら、48 時間以内に「アカウント」で確認してください。確認しないとアカウントは削除されます。"
+    "createdUnverified": "メールアドレスが確認されていません。コードの送信を再開したら、48 時間以内に「アカウント」で確認してください。確認しないとアカウントは削除されます。",
+    "title": "あなたの{player}を準備しよう",
+    "titlePlayer": "プレイヤー",
+    "chooseTitle": "どうやって遊びますか？",
+    "bubbleGreet": "こんにちは！タグを作りましょう。",
+    "bubbleCode": "メールを見てね、今送ったよ！",
+    "bubbleDone": "Alboria へようこそ！"
   },
   "account": {
     "title": "アカウント",
@@ -474,7 +491,9 @@
     "thenMaintenance": "開いているルームは続きます。新しいルームは終了まで待機します。",
     "thenRestart": "新しいルームは復帰まで一時停止します。開いているルームは最大 30 分で終了します。",
     "thenGameOff": "そのときルームが閉じます。",
-    "thenCloseRooms": "それまでに試合を終えてください。"
+    "thenCloseRooms": "それまでに試合を終えてください。",
+    "downTitle": "Alboria はお昼寝中",
+    "downText": "現在 Alboria に接続できないため、オンラインのルームは一時停止中です。ナイトオウルが見張っています。"
   },
   "friends": {
     "title": "フレンド",

@@ -25,7 +25,6 @@
     "lede": "Twoja kopia gry, przekompilowana dla {target}.",
     "launch": "Graj",
     "launching": "Uruchamianie",
-    "mode": "Kampania",
     "install": "Zainstaluj",
     "installSub": "Skonfiguruj pliki gry",
     "running": "W grze",
@@ -85,6 +84,10 @@
     "invalidXex": "default.xex nie jest prawidłowym plikiem wykonywalnym Xbox 360.",
     "ok": "Gears of War 3 · Edycja {versionName} · Media ID {mediaId}",
     "unsupportedVersion": "Ta edycja Gears of War 3 (Media ID {mediaId}) nie jest jeszcze obsługiwana.",
+    "editionReportHelp": "Aby ją dodać, skopiuj te dane i wklej je w nowym issue na GitHubie. Identyfikują tylko plik wykonywalny; nic więcej z twoich plików nie jest udostępniane.",
+    "editionReportCopy": "Kopiuj dane",
+    "editionReportCopied": "Skopiowano",
+    "editionReportOpen": "Zgłoś na GitHubie",
     "wrongGame": "To nie jest Gears of War 3 (Title ID {titleId}).",
     "chooseFolderFirst": "Najpierw wybierz grę",
     "defaultUserName": "User",
@@ -133,13 +136,14 @@
       "notInstalled": "Nie zainstalowano",
       "needsRuntime": "Zainstalowano · zostanie przygotowane po aktualizacji runtime",
       "unsupported": "Zainstalowano, ale nie udało się przygotować z tymi plikami gry",
-      "installed": "Zainstalowano",
+      "installed": "Zainstalowano · jego mapy pojawią się z trybem wieloosobowym",
       "installing": "Instalowanie… (trwa minutę)"
     },
     "dlcOthers": "Inna zainstalowana zawartość",
     "dlcOthersCount": "Pakiety: {count}",
     "dlcInstalled": "Zainstalowano {name}.",
     "dlcFailed": "Nie udało się zainstalować pakietu: {detail}",
+    "eyebrow": "Twoja kopia, twój komputer",
     "dlcRemove": "Usuń",
     "dlcRemoved": "Usunięto: {name}.",
     "dlcRemoveFailed": "Nie udało się usunąć zawartości: {detail}"
@@ -158,7 +162,13 @@
     "gpuIntegrated": "zintegrowana",
     "whilePlaying": "Launcher podczas gry",
     "whilePlayingMinimize": "Minimalizuj",
-    "whilePlayingKeepOpen": "Zostaw otwarty"
+    "whilePlayingKeepOpen": "Zostaw otwarty",
+    "eyebrow": "Jak gra wygląda i działa",
+    "displayTitle": "Ekran",
+    "modeHelp": "Jak otwiera się okno gry.",
+    "gpuHelp": "Która karta graficzna napędza grę.",
+    "whilePlayingHelp": "Co robi launcher, gdy gra się uruchomi.",
+    "renderResolutionHelp": "Rozmiar, w jakim gra rysuje. Wyższy jest ostrzejszy i bardziej obciąża kartę graficzną."
   },
   "achievements": {
     "title": "Osiągnięcia",
@@ -311,7 +321,8 @@
     "folderHelp": "Tu są punkty kontrolne, profil i zawartość do pobrania. Po zmianie zostaną tam przeniesione, po wykonaniu kopii zapasowej.",
     "folderCloseGame": "Zamknij grę, aby przenieść zapisy",
     "kindBeforeMove": "Przed przeniesieniem",
-    "kindBeforeReplace": "Przed zastąpieniem"
+    "kindBeforeReplace": "Przed zastąpieniem",
+    "eyebrow": "Punkty kontrolne i profil"
   },
   "gamepad": {
     "select": "Wybierz",
@@ -371,7 +382,13 @@
     "codesOffCreate": "Obecnie nie wysyłamy kodów. Twoje konto zostanie utworzone bez weryfikacji adresu e-mail. Gdy znów zaczniemy je wysyłać, będziesz mieć 48 godzin na weryfikację, inaczej konto zostanie usunięte.",
     "codesOffSignIn": "Obecnie nie wysyłamy kodów, więc logowanie do konta z innego komputera nie jest jeszcze możliwe. Spróbuj ponownie później.",
     "createNow": "Utwórz konto",
-    "createdUnverified": "Twój adres e-mail nie jest zweryfikowany: gdy znów zaczniemy wysyłać kody, zweryfikuj go w sekcji Konto w ciągu 48 godzin, inaczej konto zostanie usunięte."
+    "createdUnverified": "Twój adres e-mail nie jest zweryfikowany: gdy znów zaczniemy wysyłać kody, zweryfikuj go w sekcji Konto w ciągu 48 godzin, inaczej konto zostanie usunięte.",
+    "title": "Przygotuj swojego {player}",
+    "titlePlayer": "gracza",
+    "chooseTitle": "Jak chcesz grać?",
+    "bubbleGreet": "Cześć! Zdobądźmy ci tag.",
+    "bubbleCode": "Sprawdź pocztę, właśnie go wysłałem!",
+    "bubbleDone": "Witaj w Alborii!"
   },
   "account": {
     "title": "Konto",
@@ -474,7 +491,9 @@
     "thenMaintenance": "Otwarte pokoje działają dalej; nowe czekają do końca.",
     "thenRestart": "Nowe pokoje są wstrzymane do powrotu. Otwarte mają do 30 minut na zakończenie.",
     "thenGameOff": "Wtedy jej pokoje zostaną zamknięte.",
-    "thenCloseRooms": "Dokończ mecz wcześniej."
+    "thenCloseRooms": "Dokończ mecz wcześniej.",
+    "downTitle": "Alboria ucina sobie drzemkę",
+    "downText": "Nie możemy teraz połączyć się z Alborią, więc pokoje online są wstrzymane. Nocna sowa czuwa."
   },
   "friends": {
     "title": "Znajomi",

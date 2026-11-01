@@ -126,6 +126,8 @@ export const setupAccount = ({ state, persist, renderPlay, toast, t, getLocale }
   /** Shows `step` in the dialog (opening it), and focuses its first field or button. */
   const showStep = (step) => {
     flow.step = step;
+    // The page's header and its Alborian follow the step (styles.css).
+    welcome.dataset.atStep = step;
     welcome.hidden = false;
     for (const section of welcome.querySelectorAll("[data-step]")) section.hidden = section.dataset.step !== step;
     showError(null);

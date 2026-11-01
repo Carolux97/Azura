@@ -25,7 +25,6 @@
     "lede": "Deine Kopie des Spiels, neu kompiliert für {target}.",
     "launch": "Spielen",
     "launching": "Startet",
-    "mode": "Kampagne",
     "install": "Installieren",
     "installSub": "Spieldateien einrichten",
     "running": "Läuft",
@@ -85,6 +84,10 @@
     "invalidXex": "default.xex ist keine gültige Xbox 360-Programmdatei.",
     "ok": "Gears of War 3 · Edition {versionName} · Media ID {mediaId}",
     "unsupportedVersion": "Diese Edition von Gears of War 3 (Media ID {mediaId}) wird noch nicht unterstützt.",
+    "editionReportHelp": "Um sie hinzuzufügen, kopiere diese Angaben und füge sie in ein neues Issue auf GitHub ein. Sie identifizieren nur die Programmdatei; nichts weiter von deinen Dateien wird geteilt.",
+    "editionReportCopy": "Angaben kopieren",
+    "editionReportCopied": "Kopiert",
+    "editionReportOpen": "Auf GitHub melden",
     "wrongGame": "Das ist nicht Gears of War 3 (Title ID {titleId}).",
     "chooseFolderFirst": "Wähle zuerst das Spiel",
     "defaultUserName": "User",
@@ -133,13 +136,14 @@
       "notInstalled": "Nicht installiert",
       "needsRuntime": "Installiert · wird nach dem Runtime-Update vorbereitet",
       "unsupported": "Installiert, konnte aber mit diesen Spieldateien nicht vorbereitet werden",
-      "installed": "Installiert",
+      "installed": "Installiert · seine Karten kommen mit dem Mehrspielermodus",
       "installing": "Wird installiert … (dauert eine Minute)"
     },
     "dlcOthers": "Weitere installierte Inhalte",
     "dlcOthersCount": "{count} Pakete",
     "dlcInstalled": "{name} installiert.",
     "dlcFailed": "Das Paket konnte nicht installiert werden: {detail}",
+    "eyebrow": "Deine Kopie, dein Computer",
     "dlcRemove": "Entfernen",
     "dlcRemoved": "{name} entfernt.",
     "dlcRemoveFailed": "Der Inhalt konnte nicht entfernt werden: {detail}"
@@ -158,7 +162,13 @@
     "gpuIntegrated": "integriert",
     "whilePlaying": "Launcher beim Spielen",
     "whilePlayingMinimize": "Minimieren",
-    "whilePlayingKeepOpen": "Geöffnet lassen"
+    "whilePlayingKeepOpen": "Geöffnet lassen",
+    "eyebrow": "Wie das Spiel aussieht und läuft",
+    "displayTitle": "Anzeige",
+    "modeHelp": "Wie sich das Spielfenster öffnet.",
+    "gpuHelp": "Welche Grafikkarte das Spiel antreibt.",
+    "whilePlayingHelp": "Was der Launcher tut, sobald das Spiel startet.",
+    "renderResolutionHelp": "Die Größe, in der das Spiel zeichnet. Höher ist schärfer und fordert die Grafikkarte mehr."
   },
   "achievements": {
     "title": "Erfolge",
@@ -311,7 +321,8 @@
     "folderHelp": "Hier liegen deine Kontrollpunkte, dein Profil und die Zusatzinhalte. Wenn du ihn änderst, werden sie nach einer Sicherung dorthin verschoben.",
     "folderCloseGame": "Schließe das Spiel, um deine Spielstände zu verschieben",
     "kindBeforeMove": "Vor dem Verschieben",
-    "kindBeforeReplace": "Vor dem Ersetzen"
+    "kindBeforeReplace": "Vor dem Ersetzen",
+    "eyebrow": "Checkpoints und Profil"
   },
   "gamepad": {
     "select": "Auswählen",
@@ -371,7 +382,13 @@
     "codesOffCreate": "Wir senden gerade keine Codes. Dein Konto wird ohne bestätigte E-Mail-Adresse erstellt. Sobald wir wieder Codes senden, hast du 48 Stunden Zeit, sie zu bestätigen, sonst wird das Konto gelöscht.",
     "codesOffSignIn": "Wir senden gerade keine Codes, daher ist die Anmeldung bei einem Konto von einem anderen Computer noch nicht möglich. Versuche es später erneut.",
     "createNow": "Konto erstellen",
-    "createdUnverified": "Deine E-Mail-Adresse ist nicht bestätigt: Sobald wir wieder Codes senden, bestätige sie innerhalb von 48 Stunden unter Konto, sonst wird das Konto gelöscht."
+    "createdUnverified": "Deine E-Mail-Adresse ist nicht bestätigt: Sobald wir wieder Codes senden, bestätige sie innerhalb von 48 Stunden unter Konto, sonst wird das Konto gelöscht.",
+    "title": "Richte deinen {player} ein",
+    "titlePlayer": "Spieler",
+    "chooseTitle": "Wie möchtest du spielen?",
+    "bubbleGreet": "Hallo! Holen wir dir einen Tag.",
+    "bubbleCode": "Schau in deine E-Mails, ich habe sie gerade geschickt!",
+    "bubbleDone": "Willkommen bei Alboria!"
   },
   "account": {
     "title": "Konto",
@@ -474,7 +491,9 @@
     "thenMaintenance": "Offene Räume laufen weiter; neue warten bis zum Ende.",
     "thenRestart": "Neue Räume pausieren bis zur Rückkehr. Offene Räume haben bis zu 30 Minuten zum Beenden.",
     "thenGameOff": "Dann schließen seine Räume.",
-    "thenCloseRooms": "Beende deine Partie vorher."
+    "thenCloseRooms": "Beende deine Partie vorher.",
+    "downTitle": "Alboria hält ein Nickerchen",
+    "downText": "Wir erreichen Alboria gerade nicht, deshalb sind Online-Räume pausiert. Die Nachteule hält Wache."
   },
   "friends": {
     "title": "Freunde",
