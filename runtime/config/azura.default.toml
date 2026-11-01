@@ -103,9 +103,15 @@ network_mode = "online"
 # service refuses versions it no longer supports).
 alboria_api_url = "https://api.alboria.org"
 alboria_client = "azura/0.5.1"
-# The party the game starts with, which the game keeps as the player chooses in the party options:
-# joinable (the first time), invite_only, system_link or local. Joinable and Invite only host a
-# room on Alboria; when Alboria does not answer the game starts in Local and this stays as it was.
+# With online play, the game's own Xbox Live parties are Alboria's: the player is signed in to Xbox
+# Live as far as the game can tell while Alboria answers and accepts the account, and Joinable and
+# Invite only are the game's Live parties, each in a room. Joining a room brings the host's party as
+# an accepted invite. Off, Joinable and Invite only are System Link parties in a room instead.
+alboria_live = true
+# Only with alboria_live off: the party the game starts with, which the game keeps as the player
+# chooses in the party options: joinable (the first time), invite_only, system_link or local.
+# Joinable and Invite only host a room on Alboria; when Alboria does not answer the game starts in
+# Local and this stays as it was. With alboria_live the game keeps its party type in the profile.
 startup_party = "joinable"
 # Options > Connection's Direct connection: reach the other players of an Alboria room directly
 # when the network allows it, with the relay as fallback. Lower latency, but they can learn this

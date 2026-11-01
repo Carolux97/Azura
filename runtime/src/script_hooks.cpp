@@ -342,6 +342,7 @@ enum WatchedName {
   kApplySensitivityScaling,  // GearPC: scales the look input by the profile's look sensitivity
   kViewAdhesion,             // GearPlayerInput: turns the view towards the target (aim assist)
   kGetAdjustedAimFor,        // GearPC: bends a shot towards the target (aim assist)
+  kNotifyInviteFailed,       // GearPC: an accepted invite could not be followed
   kWatchedNameCount,
 };
 constexpr const char* kWatchedNames[kWatchedNameCount] = {
@@ -365,7 +366,7 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "Callback_Credits",      "Callback_ClientMenuOptionWasSelected", "ConditionalCreatePartySession",
     "GetPartyType",          "LocalPartyCreated",      "ClientSetHUD",       "OnCustomMapChanged",
     "ApplySensitivityScaling", "ViewAdhesion",
-    "GetAdjustedAimFor"};
+    "GetAdjustedAimFor",     "NotifyInviteFailed"};
 
 // FName index of each watched name, -1 until found (0 is a valid index: None).
 std::atomic<int32_t> g_names[kWatchedNameCount];
@@ -2318,6 +2319,17 @@ bool OnlineMode() {
   return REXCVAR_GET(network_mode) == "online" && !REXCVAR_GET(alboria_live);
 }
 
+// Online play through the game's own Xbox Live parties on Alboria (alboria_live, the default). The
+// SDK signs player 1 in to Live while Alboria answers and accepts the account
+// (alboria::LiveSignedIn), and the game then creates, changes and joins its Live parties by itself.
+// The runtime only offers Joinable and Invite only whatever the sign-in (AnswerCanPlayOnline), so
+// that choosing one tries Alboria again: the service is checked as the party options open, and a
+// choice made while still signed out gets the game's message, which says online play is not
+// possible on Alboria (menu_patches.cpp), and stays in the party the player had.
+bool LiveMode() {
+  return REXCVAR_GET(network_mode) == "online" && REXCVAR_GET(alboria_live);
+}
+
 // Answers CanAllPlayersPlayOnline with yes when online. The frame is about to run it; returns
 // whether it was answered.
 // The party the game creates when it leaves the title screen (UIScene_FrontEnd.
@@ -2357,7 +2369,7 @@ std::string TakeRefusalNotice() {
 std::atomic<bool> g_room_failed{false};
 
 bool AnswerCanPlayOnline(PPCContext& ctx, uint8_t* base) {
-  if (!OnlineMode()) return false;
+  if (!OnlineMode() && !LiveMode()) return false;
   if (ctx.r5.u32) StoreU32(base, ctx.r5.u32, 1);  // ReturnValue
   return true;
 }
@@ -2365,8 +2377,28 @@ bool AnswerCanPlayOnline(PPCContext& ctx, uint8_t* base) {
 // A party type chosen in the party options, about to be handled by Callback_DialogItemPress on the
 // front end scene in `ctx`. Returns whether it was handled here instead.
 bool ChooseOnlinePartyType(PPCContext& ctx, uint8_t* base, uint32_t dialog_item_press) {
-  if (!OnlineMode()) return false;
   namespace alboria = rex::system::xam::alboria;
+  if (LiveMode()) {
+    const int32_t item = SmallParam(base, dialog_item_press, ctx.r4.u32, "Idx");
+    if (item != kJoinableItem && item != kInviteOnlyItem) {
+      // System Link or Local: the game deletes its Live party, and the party leaves Alboria.
+      if (alboria::InRoom()) {
+        REXLOG_INFO("[Azura online] Leaving the Alboria room for another party type");
+        alboria::Leave();
+      }
+    } else if (!alboria::LiveSignedIn()) {
+      // Signed out of Live (Alboria did not answer, refused the account or a room failed): the
+      // script's message, and Alboria is checked again for the next choice. The room overlay names
+      // a refusal.
+      const std::string refusal = alboria::SignInRefusal();
+      REXLOG_INFO("[Azura online] Not signed in to Live on Alboria{}: no Live party",
+                  refusal.empty() ? std::string() : " (" + refusal + ")");
+      if (!refusal.empty()) NoticeRefusal(refusal);
+      alboria::CheckService();
+    }
+    return false;
+  }
+  if (!OnlineMode()) return false;
   const int32_t item = SmallParam(base, dialog_item_press, ctx.r4.u32, "Idx");
   // The player's choice is the party the game starts with next time (startup_party). A Local the
   // runtime forced at start-up ends here too.
@@ -2819,6 +2851,11 @@ constexpr uint32_t kReturnToMainMenuLocalsSize = 64;  // bReturnToStartScreen, b
 uint32_t g_return_to_menu_locals = 0;
 // The message box of a room that failed or ended is still to be shown in the main menu.
 std::atomic<bool> g_room_message_pending{false};
+// With Live parties, the game could not join the host's party of the room it joined (the session
+// Alboria brought as an accepted invite): GearPC.NotifyInviteFailed ran while this installation was
+// a member of that room. The runtime has left it, and the party in the main menu becomes Local, as
+// the game's message (the one of a failed room) says.
+std::atomic<bool> g_live_join_failed{false};
 
 // The function `name` of the player controller's class or one it extends; 0 when none has it.
 uint32_t FindControllerFunction(uint8_t* base, uint32_t controller, const char* name) {
@@ -2939,6 +2976,21 @@ bool DestroyPartyInFrontEnd(PPCContext& ctx, uint8_t* base, bool failed) {
 // when the room it was a member of ended, or when a room failed.
 void ReturnToMainMenuWhenRoomLost(PPCContext& ctx, uint8_t* base) {
   namespace alboria = rex::system::xam::alboria;
+  // With Live parties, a host that left is lost as on Xbox Live: the game's own party handles it. A
+  // room that failed signed the player out of Live, which Gears of War 3 ignores in the menus
+  // (GearPC.OnConnectionStatusChange only acts away from them, docs/reverse-engineering.md): its
+  // party is replaced by a Local one as for a System Link party in a room.
+  if (LiveMode()) alboria::TakeLostRoom();
+  if (g_live_join_failed.load() && InMainMenu(base)) {
+    g_live_join_failed.store(false);
+    if (!g_return_to_menu_locals) {
+      g_return_to_menu_locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kReturnToMainMenuLocalsSize);
+      if (!g_return_to_menu_locals) return;
+    }
+    std::memset(base + g_return_to_menu_locals, 0, kReturnToMainMenuLocalsSize);
+    DestroyPartyInFrontEnd(ctx, base, true);  // the game has shown its message already
+    return;
+  }
   const bool failed = alboria::TakeFailedRoom();
   if (failed) {
     g_room_failed.store(true);
@@ -3351,7 +3403,17 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     JoinFoundParty(ctx, base, function);
     return;
   }
-  if (Is(base, function, kOpenPartyOptions) && OnlineMode()) rex::system::xam::alboria::CheckService();
+  if (Is(base, function, kOpenPartyOptions) && (OnlineMode() || LiveMode())) rex::system::xam::alboria::CheckService();
+  // With Live parties, the game could not follow the host's session a joined room brought: the room
+  // is left (the player's own party no longer has one), and the party becomes Local (g_live_join_failed).
+  if (Is(base, function, kNotifyInviteFailed) && LiveMode()) {
+    namespace alboria = rex::system::xam::alboria;
+    if (alboria::InRoom() && !alboria::GetStatus().host) {
+      REXLOG_INFO("[Azura online] The host's Live party could not be joined: leaving its room");
+      alboria::Leave();
+      g_live_join_failed.store(true);
+    }
+  }
   if (Is(base, function, kUpdatePanelTitle)) {
     g_party_panel.store(LoadU32(base, ctx.r4.u32 + kFrameObject));
     g_party_panel_title_type.store(-1);
