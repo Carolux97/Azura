@@ -526,5 +526,15 @@
       "impersonation": "Suplantación",
       "other": "Otra cosa"
     }
+  },
+  "devServer": {
+    "title": "Desarrollo",
+    "help": "Solo en Azura (DEV): el servidor de Alboria con el que habla. Local es el que arranca `npm run local` en alboria-server, así las cuentas de prueba no llegan a la base de datos real. Al cambiarlo vuelve a iniciar sesión: cada servidor tiene sus propias cuentas. El juego usa el mismo servidor la próxima vez que arranque.",
+    "local": "Local (127.0.0.1:8080)",
+    "production": "Producción (api.alboria.org)",
+    "other": "Otra dirección",
+    "apply": "Usar este servidor",
+    "now": "Ahora: {url}",
+    "badUrl": "Escribe una dirección http o https, como http://192.168.1.20:8080"
   }
 }

@@ -526,5 +526,15 @@
       "impersonation": "なりすまし",
       "other": "その他"
     }
+  },
+  "devServer": {
+    "title": "開発",
+    "help": "Azura (DEV) のみ：通信する Alboria サーバー。ローカルは alboria-server の `npm run local` で起動するもので、テスト用アカウントが本番のデータベースに入りません。変更すると再ログインします（サーバーごとにアカウントは別）。ゲームは次回起動時に同じサーバーを使います。",
+    "local": "ローカル (127.0.0.1:8080)",
+    "production": "本番 (api.alboria.org)",
+    "other": "別のアドレス",
+    "apply": "このサーバーを使う",
+    "now": "現在: {url}",
+    "badUrl": "http または https のアドレスを入力してください（例: http://192.168.1.20:8080）"
   }
 }

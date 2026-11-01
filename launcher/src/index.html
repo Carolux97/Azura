@@ -262,6 +262,22 @@
           </div>
           <ul class="release-notes-list" id="release-notes-list"></ul>
         </div>
+        <!-- Azura (DEV) only: which Alboria server it talks to, so test accounts stay off the real
+             one (setupDevServer in main.js). The published launcher never shows it. -->
+        <div class="panel" id="dev-server-panel" hidden>
+          <h2 class="panel-title" data-i18n="devServer.title"></h2>
+          <p class="help" data-i18n="devServer.help"></p>
+          <div class="path-row">
+            <select id="dev-server-choice">
+              <option value="local" data-i18n="devServer.local"></option>
+              <option value="production" data-i18n="devServer.production"></option>
+              <option value="other" data-i18n="devServer.other"></option>
+            </select>
+            <input class="path" id="dev-server-url" type="text" maxlength="200" spellcheck="false" placeholder="http://192.168.1.20:8080" hidden>
+            <button class="btn btn-primary" id="dev-server-apply" data-i18n="devServer.apply"></button>
+          </div>
+          <p class="help" id="dev-server-now"></p>
+        </div>
       </section>
 
       <!-- INSTALL -->

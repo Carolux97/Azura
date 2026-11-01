@@ -526,5 +526,15 @@
       "impersonation": "Furto d'identità",
       "other": "Altro"
     }
+  },
+  "devServer": {
+    "title": "Sviluppo",
+    "help": "Solo Azura (DEV): il server Alboria con cui parla. Locale è quello avviato da `npm run local` in alboria-server, così gli account di prova non arrivano al database reale. Cambiarlo rifà l'accesso: ogni server ha i suoi account. Il gioco usa lo stesso server al prossimo avvio.",
+    "local": "Locale (127.0.0.1:8080)",
+    "production": "Produzione (api.alboria.org)",
+    "other": "Altro indirizzo",
+    "apply": "Usa questo server",
+    "now": "Ora: {url}",
+    "badUrl": "Scrivi un indirizzo http o https, come http://192.168.1.20:8080"
   }
 }

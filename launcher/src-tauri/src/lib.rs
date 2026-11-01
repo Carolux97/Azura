@@ -322,7 +322,14 @@ async fn launch_game(
 /// that: minimized, its window is not drawn while the game runs, and it comes back when the game
 /// ends (GameEvents::exit in runtime.rs).
 fn play(app: tauri::AppHandle, process: &GameProcess, extra: &[&str]) -> Result<(), LaunchError> {
-    start_runtime(app.clone(), process, extra)?;
+    // The development launcher sends the game to the Alboria it chose (dev_server); the published
+    // one leaves the game on production, its default.
+    let api_url = format!("--alboria_api_url={}", app.state::<Alboria>().base());
+    let mut args: Vec<&str> = extra.to_vec();
+    if cfg!(feature = "dev") {
+        args.push(&api_url);
+    }
+    start_runtime(app.clone(), process, &args)?;
     let minimize = settings_paths(&app).and_then(|paths| paths.load()).is_ok_and(|settings| settings.minimize_while_playing);
     if minimize {
         if let Some(window) = app.get_webview_window("main") {
@@ -330,6 +337,80 @@ fn play(app: tauri::AppHandle, process: &GameProcess, extra: &[&str]) -> Result<
         }
     }
     Ok(())
+}
+
+// --- The development launcher's Alboria server ------------------------------------------------
+
+/// The Alboria server `npm run local` starts (alboria-server, scripts/local.ts).
+const LOCAL_API_URL: &str = "http://127.0.0.1:8080";
+/// Where the development launcher keeps its choice, in its app data folder: `local`, `production`
+/// or an address. Its own file, apart from the settings the interface saves.
+const DEV_SERVER_FILE: &str = "alboria-server.txt";
+
+/// The Alboria server the development launcher talks to: its choice and the address it means.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DevServer {
+    /// Whether this is the development launcher; the published one has no choice.
+    dev: bool,
+    /// `local`, `production` or `other`.
+    choice: String,
+    url: String,
+}
+
+/// The server `saved` (the file's contents, or nothing) chooses: Local by default.
+fn dev_server_from(saved: Option<&str>) -> DevServer {
+    let saved = saved.map(str::trim).unwrap_or_default();
+    let (choice, url) = match saved {
+        "production" => ("production", alboria::DEFAULT_API_URL.to_string()),
+        url if server_url_valid(url) => ("other", url.trim_end_matches('/').to_string()),
+        _ => ("local", LOCAL_API_URL.to_string()),
+    };
+    DevServer { dev: true, choice: choice.into(), url }
+}
+
+/// Whether `url` can be a server's address: http or https, a host, no spaces.
+fn server_url_valid(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    (lower.starts_with("http://") || lower.starts_with("https://"))
+        && url.len() <= 200
+        && url.split("://").nth(1).is_some_and(|rest| !rest.is_empty())
+        && !url.chars().any(char::is_whitespace)
+}
+
+fn dev_server_file(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    Ok(app.path().app_data_dir().map_err(|e| e.to_string())?.join(DEV_SERVER_FILE))
+}
+
+/// The Alboria server this launcher talks to (Account › Development in the development launcher).
+#[tauri::command]
+fn alboria_server(app: tauri::AppHandle, alboria: tauri::State<'_, Alboria>) -> DevServer {
+    if !cfg!(feature = "dev") {
+        return DevServer { dev: false, choice: "production".into(), url: alboria.base() };
+    }
+    let saved = dev_server_file(&app).ok().and_then(|file| std::fs::read_to_string(file).ok());
+    dev_server_from(saved.as_deref())
+}
+
+/// Development launcher only: talks to `choice` (`local`, `production` or an address) from now on,
+/// signed out, and remembers it. The game gets the same server the next time it starts.
+#[tauri::command]
+fn alboria_server_set(app: tauri::AppHandle, alboria: tauri::State<'_, Alboria>, choice: String) -> Result<DevServer, String> {
+    if !cfg!(feature = "dev") {
+        return Err("only the development launcher chooses its Alboria server".into());
+    }
+    let choice = choice.trim();
+    if !["local", "production"].contains(&choice) && !server_url_valid(choice) {
+        return Err(format!("not a server: {choice}"));
+    }
+    let file = dev_server_file(&app)?;
+    if let Some(dir) = file.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&file, choice).map_err(|e| e.to_string())?;
+    let server = dev_server_from(Some(choice));
+    alboria.set_base(server.url.clone());
+    Ok(server)
 }
 
 /// The file in the saves folder (the runtime's user data) where the launcher leaves a room code
@@ -978,9 +1059,16 @@ pub fn run() {
             join_room,
             alboria_friends,
             alboria_events_start,
-            alboria_events_stop
+            alboria_events_stop,
+            alboria_server,
+            alboria_server_set
         ])
         .setup(|app| {
+            // The development launcher talks to the Alboria server it chose (Local by default).
+            if cfg!(feature = "dev") {
+                let saved = dev_server_file(app.handle()).ok().and_then(|file| std::fs::read_to_string(file).ok());
+                app.state::<Alboria>().set_base(dev_server_from(saved.as_deref()).url);
+            }
             // Controllers navigate the interface (gamepad.rs).
             gamepad::spawn(app.handle().clone());
             // A runtime install the launcher was closed in the middle of is finished first.
@@ -1004,6 +1092,20 @@ pub fn run() {
 #[cfg(test)]
 mod notice_link_tests {
     use super::{notice_link_allowed, room_code_valid, FRIENDS_PATHS};
+
+    #[test]
+    fn the_development_launcher_chooses_its_server() {
+        use super::{dev_server_from, server_url_valid, LOCAL_API_URL};
+        assert_eq!(dev_server_from(None).url, LOCAL_API_URL);
+        assert_eq!(dev_server_from(Some("local\n")).choice, "local");
+        assert_eq!(dev_server_from(Some("production")).url, crate::alboria::DEFAULT_API_URL);
+        let other = dev_server_from(Some("http://192.168.1.20:8080/"));
+        assert_eq!((other.choice.as_str(), other.url.as_str()), ("other", "http://192.168.1.20:8080"));
+        // Anything else falls back to Local.
+        assert_eq!(dev_server_from(Some("ftp://x")).choice, "local");
+        assert!(!server_url_valid("http://"));
+        assert!(!server_url_valid("https://a b"));
+    }
 
     #[test]
     fn only_room_codes_and_friends_paths_pass() {
