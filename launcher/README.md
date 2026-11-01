@@ -209,6 +209,13 @@ its own Alboria identity: link it to an account with a code like any new device)
 updater off, so it never becomes the published launcher. It copies the runtime of the project it
 was built in, as any local build does.
 
+It talks to a local Alboria server by default, so test accounts never reach the real database:
+start one with `npm run local` in alboria-server (API on `http://127.0.0.1:8080`, relay on
+127.0.0.1, codes in that terminal). Account › Development switches it to production or another
+address; the choice is kept in `alboria-server.txt` in its app data folder, changing it signs in
+again (each server has its own accounts), and the game it starts gets the same server
+(`--alboria_api_url`). The published launcher always uses production and shows none of this.
+
 ### Windows
 
 The launcher builds for Windows (x86-64) from Linux with `../scripts/build-launcher-windows.sh`, into
