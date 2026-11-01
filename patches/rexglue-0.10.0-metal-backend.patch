@@ -2284,10 +2284,10 @@ index 0000000..1d7d7fb
 +}  // namespace rex::system::xam
 diff --git a/include/rex/system/xam/system_link.h b/include/rex/system/xam/system_link.h
 new file mode 100644
-index 0000000..eeaab48
+index 0000000..402e92a
 --- /dev/null
 +++ b/include/rex/system/xam/system_link.h
-@@ -0,0 +1,127 @@
+@@ -0,0 +1,130 @@
 +/**
 + * @file        system/xam/system_link.h
 + * @brief       System Link: the local network as XNet and the session services show it to a title
@@ -2390,11 +2390,14 @@ index 0000000..eeaab48
 +  XnKey key{};
 +  XnAddrBytes host{};
 +  bool hosting = false;  // this installation is its host
++  bool live = false;     // an Xbox Live session played in an Alboria room (alboria_live)
 +};
 +
 +// The session the title knows by `handle` (its session object), until RemoveSession.
 +void AddSession(uint32_t handle, const SystemLinkSession& session);
 +void RemoveSession(uint32_t handle);
++// The session the title knows by `handle`, if any.
++std::optional<SystemLinkSession> FindSession(uint32_t handle);
 +// Whether this installation hosts a System Link session now.
 +bool HostingSystemLinkSession();
 +// The ID of the session whose host has IP address `ip`, or of any session when none matches.
@@ -25879,7 +25882,7 @@ index 82a252c..3dcec80 100644
    if (event.gbutton.down) {
      if (xbutton == X_INPUT_GAMEPAD_GUIDE && !REXCVAR_GET(guide_button)) {
 diff --git a/src/kernel/xam/apps/xgi_app.cpp b/src/kernel/xam/apps/xgi_app.cpp
-index 2b222da..fdbee90 100644
+index 2b222da..c6d1deb 100644
 --- a/src/kernel/xam/apps/xgi_app.cpp
 +++ b/src/kernel/xam/apps/xgi_app.cpp
 @@ -10,6 +10,18 @@
@@ -25901,7 +25904,7 @@ index 2b222da..fdbee90 100644
  #include <rex/logging.h>
  #include <rex/thread.h>
  
-@@ -23,6 +35,28 @@ using namespace rex::system;
+@@ -23,6 +35,30 @@ using namespace rex::system;
  
  XgiApp::XgiApp(KernelState* kernel_state) : App(kernel_state, 0xFB) {}
  
@@ -25914,6 +25917,8 @@ index 2b222da..fdbee90 100644
 +constexpr uint32_t kXSessionCreateUsesMatchmaking = 0x00000008;
 +constexpr uint32_t kXSessionCreateUsesArbitration = 0x00000010;
 +constexpr uint32_t kXSessionCreateUsesPeerNetwork = 0x00000020;
++// Players cannot join through the host's presence, only by invite: an Invite only party.
++constexpr uint32_t kXSessionCreateJoinViaPresenceDisabled = 0x00000200;
 +// A System Link session uses the peer network and none of the Xbox Live services.
 +constexpr uint32_t kXSessionCreateLiveServices = kXSessionCreateUsesPresence |
 +                                                 kXSessionCreateUsesStats |
@@ -25930,7 +25935,7 @@ index 2b222da..fdbee90 100644
  // http://mb.mirage.org/bugzilla/xliveless/main.c
  
  X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
-@@ -83,9 +117,14 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -83,9 +119,14 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
          }
          auto* base = memory_->TranslateVirtual(achievements_ptr);
          for (uint32_t i = 0; i < achievement_count; ++i) {
@@ -25947,7 +25952,7 @@ index 2b222da..fdbee90 100644
          }
        } else {
          REXKRNL_INFO("XGIUserWriteAchievements: skipped (count={} ptr={:08X})", achievement_count,
-@@ -113,6 +152,81 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -113,6 +154,86 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
            "{:08X})",
            session_ptr, flags, num_slots_public, num_slots_private, user_xuid, session_info_ptr,
            nonce_ptr);
@@ -25956,8 +25961,9 @@ index 2b222da..fdbee90 100644
 +      const bool system_link_session = (flags & kXSessionCreateUsesPeerNetwork) &&
 +                                       !(flags & kXSessionCreateLiveServices);
 +      // An Xbox Live session while signed in to Live through Alboria (alboria_live): it is played in
-+      // an Alboria room, which a hosted one creates (Joinable with public slots, Invite only with
-+      // private ones only), and handled as a System Link session in that room. The host's
++      // an Alboria room, which a hosted one creates, and handled as a System Link session in that
++      // room. The room's party type follows the session's flags: Invite only when joining through
++      // presence is disabled, Joinable otherwise (XSessionModify changes it later). The host's
 +      // XSESSION_INFO goes to Alboria, so that who joins by code gets it as an accepted invite.
 +      const bool live_session = alboria::LiveSignedIn() && (flags & kXSessionCreateUsesPeerNetwork) &&
 +                                (flags & kXSessionCreateLiveServices);
@@ -25965,11 +25971,15 @@ index 2b222da..fdbee90 100644
 +        auto info = memory_->TranslateVirtual(session_info_ptr);
 +        SystemLinkSession session;
 +        session.hosting = flags & kXSessionCreateHost;
++        session.live = true;
 +        if (session.hosting) {
++          const auto party_type = (flags & kXSessionCreateJoinViaPresenceDisabled) ? alboria::PartyType::kInviteOnly
++                                                                                   : alboria::PartyType::kJoinable;
 +          if (!alboria::InRoom()) {
 +            alboria::HostGame(kernel_state_->title_id(), std::clamp<int>(num_slots_public + num_slots_private, 2, 10),
-+                              num_slots_public == 0 && num_slots_private > 0 ? alboria::PartyType::kInviteOnly
-+                                                                             : alboria::PartyType::kJoinable);
++                              party_type);
++          } else {
++            alboria::SetPartyType(party_type);
 +          }
 +          std::random_device random;
 +          session.kid = MakeOnlinePeerKid(random);
@@ -26029,7 +26039,7 @@ index 2b222da..fdbee90 100644
        return X_E_SUCCESS;
      }
      case 0x000B0011: {
-@@ -123,6 +237,7 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -123,6 +244,7 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
        uint64_t session_nonce = memory::load_and_swap<uint64_t>(buffer + 8);
  
        REXKRNL_DEBUG("XGISessionDelete({:08X}, {:08X}, {:016X})", obj_ptr, flags, session_nonce);
@@ -26037,7 +26047,21 @@ index 2b222da..fdbee90 100644
  
        return X_E_SUCCESS;
      }
-@@ -288,6 +403,34 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -191,6 +313,13 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+ 
+       REXKRNL_DEBUG("XSessionModify({:08X}, {:08X}, {:08X}, {:08X})", obj_ptr, flags,
+                     maxPublicSlots, maxPrivateSlots);
++      // The host of a Live party on Alboria changes who may join (Joinable or Invite only): the room
++      // follows, and Alboria tells its members and the host's friends.
++      if (const auto session = FindSession(obj_ptr); session && session->live && session->hosting) {
++        REXKRNL_INFO("Alboria: Live session {:08X} modified (flags {:08X})", obj_ptr, flags);
++        alboria::SetPartyType((flags & kXSessionCreateJoinViaPresenceDisabled) ? alboria::PartyType::kInviteOnly
++                                                                              : alboria::PartyType::kJoinable);
++      }
+ 
+       return X_E_SUCCESS;
+     }
+@@ -288,6 +417,34 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
        REXKRNL_DEBUG("XSessionSearchByID({}, {:08X}, {:08X}, {:08X}, {:08X}, {}, {}, {})",
                      user_index, num_session_ids, session_ids_ptr, results_buffer_size,
                      search_results_ptr, reserved1, reserved2, reserved3);
@@ -26073,7 +26097,7 @@ index 2b222da..fdbee90 100644
        return X_E_SUCCESS;
      }
 diff --git a/src/kernel/xam/apps/xlivebase_app.cpp b/src/kernel/xam/apps/xlivebase_app.cpp
-index 3593403..2091df0 100644
+index 3593403..f9a7976 100644
 --- a/src/kernel/xam/apps/xlivebase_app.cpp
 +++ b/src/kernel/xam/apps/xlivebase_app.cpp
 @@ -10,7 +10,12 @@
@@ -26134,6 +26158,31 @@ index 3593403..2091df0 100644
      }
      case 0x00058046: {
        // Required to be successful for 4D530910 to detect signed-in profile
+@@ -73,6 +106,24 @@ X_HRESULT XLiveBaseApp::DispatchMessageSync(uint32_t message, uint32_t buffer_pt
+       REXKRNL_DEBUG("XLiveBaseUnk58046({:08X}, {:08X}) unimplemented", buffer_ptr, buffer_length);
+       return X_E_SUCCESS;
+     }
++    case 0x00058009: {
++      // Asked by Gears of War 3 right after it creates an Xbox Live party (alboria_live), through
++      // XMsgStartIORequest: a wrapper (0x82B0E0F0) that needs player 1 signed in to Live and a
++      // result of at least 8 bytes, which it zeroes, and passes the user index, two values and the
++      // result's address. Its shape matches XContentGetMarketplaceCounts (new and total offers;
++      // not verified). There is no Marketplace behind Alboria: success, with the counts left at 0.
++      REXKRNL_DEBUG("XLiveBase 00058009({:08X}, {:08X}): no Marketplace offers", buffer_ptr, buffer_length);
++      return X_E_SUCCESS;
++    }
++    case 0x00058035: {
++      // Asked by Gears of War 3 as it creates an Xbox Live party (alboria_live), through
++      // XMsgInProcessCall with no buffer size, from two wrappers (0x82B0DCD0 and 0x82B0DD68) whose
++      // parameters start with a privilege (254, multiplayer sessions) or 0, and a 64-bit value,
++      // probably a XUID. What it asks is not known; failing it changes nothing the game shows, so
++      // it keeps failing, without the error of an unknown message.
++      REXKRNL_DEBUG("XLiveBase 00058035({:08X}, {:08X}): not known, failed", buffer_ptr, buffer_length);
++      return X_E_FAIL;
++    }
+     case 0x00058037: {
+       REXKRNL_DEBUG("XPresenceInitialize({:08X}, {:08X})", buffer_ptr, buffer_length);
+       return X_E_SUCCESS;
 diff --git a/src/kernel/xam/xam_content.cpp b/src/kernel/xam/xam_content.cpp
 index 72a50cb..2a724c5 100644
 --- a/src/kernel/xam/xam_content.cpp
@@ -27467,10 +27516,10 @@ index 0000000..1cfbf15
 +}  // namespace rex::system::xam
 diff --git a/src/system/xam/system_link.cpp b/src/system/xam/system_link.cpp
 new file mode 100644
-index 0000000..2583865
+index 0000000..d4d5e71
 --- /dev/null
 +++ b/src/system/xam/system_link.cpp
-@@ -0,0 +1,390 @@
+@@ -0,0 +1,397 @@
 +/**
 + * @file        system/xam/system_link.cpp
 + * @brief       System Link: the local network as XNet and the session services show it to a title
@@ -27828,6 +27877,13 @@ index 0000000..2583865
 +void RemoveSession(uint32_t handle) {
 +  std::lock_guard<std::mutex> lock(g_mutex);
 +  g_sessions.erase(handle);
++}
++
++std::optional<SystemLinkSession> FindSession(uint32_t handle) {
++  std::lock_guard<std::mutex> lock(g_mutex);
++  const auto it = g_sessions.find(handle);
++  if (it == g_sessions.end()) return std::nullopt;
++  return it->second;
 +}
 +
 +bool HostingSystemLinkSession() {
