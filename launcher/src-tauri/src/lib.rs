@@ -625,6 +625,13 @@ async fn install_dlc(app: tauri::AppHandle, package: String) -> Result<String, S
     dlc::install(&runtime, &game, &saves, std::path::Path::new(&package))
 }
 
+/// Removes an installed downloadable content of the catalogue (only the folder its package made).
+#[tauri::command]
+async fn remove_dlc(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let saves = settings_paths(&app)?.saves_folder()?;
+    dlc::remove(&saves, &id)
+}
+
 /// Event sent when the chosen graphics card is not in the computer any more, before the game starts
 /// with the automatic choice.
 const GPU_MISSING_EVENT: &str = "gpu-missing";
@@ -1021,6 +1028,7 @@ pub fn run() {
             list_gpus,
             dlc_state,
             install_dlc,
+            remove_dlc,
             pick_dlc_package,
             get_runtime_status,
             install_runtime,

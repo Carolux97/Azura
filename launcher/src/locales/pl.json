@@ -133,13 +133,16 @@
       "notInstalled": "Nie zainstalowano",
       "needsRuntime": "Zainstalowano · zostanie przygotowane po aktualizacji runtime",
       "unsupported": "Zainstalowano, ale nie udało się przygotować z tymi plikami gry",
-      "multiplayer": "Pojawi się z trybem wieloosobowym",
+      "installed": "Zainstalowano",
       "installing": "Instalowanie… (trwa minutę)"
     },
     "dlcOthers": "Inna zainstalowana zawartość",
     "dlcOthersCount": "Pakiety: {count}",
     "dlcInstalled": "Zainstalowano {name}.",
-    "dlcFailed": "Nie udało się zainstalować pakietu: {detail}"
+    "dlcFailed": "Nie udało się zainstalować pakietu: {detail}",
+    "dlcRemove": "Usuń",
+    "dlcRemoved": "Usunięto: {name}.",
+    "dlcRemoveFailed": "Nie udało się usunąć zawartości: {detail}"
   },
   "graphics": {
     "title": "Grafika",

@@ -561,6 +561,7 @@ code, kbd {
    names, as a store shows them: in their own case, not the status lines' capitals. */
 .dlc-list { margin: 16px 0 18px; }
 .dlc-list .status strong { font-family: var(--font-body); font-size: 16px; letter-spacing: 0; text-transform: none; }
+.dlc-list .status .btn { margin-left: auto; align-self: center; }
 
 .status { display: flex; gap: 12px; align-items: flex-start; }
 .status[hidden] { display: none; }
