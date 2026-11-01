@@ -1,9 +1,9 @@
 diff --git a/include/rex/system/xam/alboria.h b/include/rex/system/xam/alboria.h
 new file mode 100644
-index 0000000..cacf17b
+index 0000000..7dfcbda
 --- /dev/null
 +++ b/include/rex/system/xam/alboria.h
-@@ -0,0 +1,416 @@
+@@ -0,0 +1,419 @@
 +/**
 + * @file        system/xam/alboria.h
 + * @brief       Alboria: System Link over the internet through our relay
@@ -192,6 +192,9 @@ index 0000000..cacf17b
 +  bool known = false;
 +  std::string gamertag;
 +  int tag = 0;
++  // Whether the account starts the Lambency contagion: the title treats it as one of the
++  // developers whose execution spreads the Lambency achievement (docs/alboria-relay.md, 4.1).
++  bool lambency = false;
 +};
 +Identity GetIdentity();
 +// Signs in, in the background, to learn the account's tag (GetIdentity), unless the session of an
@@ -460,10 +463,10 @@ index 0000000..c7fc5de
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria.cpp b/src/system/xam/alboria.cpp
 new file mode 100644
-index 0000000..83713c5
+index 0000000..994d56c
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,1978 @@
+@@ -0,0 +1,1979 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -1137,6 +1140,7 @@ index 0000000..83713c5
 +    g_identity.known = true;
 +    g_identity.gamertag = Text(session.json, "gamertag", gamertag);
 +    g_identity.tag = Number(session.json, "tag", 0);
++    g_identity.lambency = Flag(session.json, "lambency", false);
 +  }
 +  return session;
 +}

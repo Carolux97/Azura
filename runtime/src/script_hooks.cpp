@@ -343,6 +343,7 @@ enum WatchedName {
   kViewAdhesion,             // GearPlayerInput: turns the view towards the target (aim assist)
   kGetAdjustedAimFor,        // GearPC: bends a shot towards the target (aim assist)
   kNotifyInviteFailed,       // GearPC: an accepted invite could not be followed
+  kIsEpicDev,                // GearProfileSettings.IsEpicDev: whether the player starts Lambency
   kWatchedNameCount,
 };
 constexpr const char* kWatchedNames[kWatchedNameCount] = {
@@ -366,7 +367,7 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "Callback_Credits",      "Callback_ClientMenuOptionWasSelected", "ConditionalCreatePartySession",
     "GetPartyType",          "LocalPartyCreated",      "ClientSetHUD",       "OnCustomMapChanged",
     "ApplySensitivityScaling", "ViewAdhesion",
-    "GetAdjustedAimFor",     "NotifyInviteFailed"};
+    "GetAdjustedAimFor",     "NotifyInviteFailed",     "IsEpicDev"};
 
 // FName index of each watched name, -1 until found (0 is a valid index: None).
 std::atomic<int32_t> g_names[kWatchedNameCount];
@@ -1646,6 +1647,45 @@ std::atomic<bool> g_start_taken[4];
 std::atomic<int32_t> g_custom_map_id{-1};
 constexpr uint32_t kCustomMapLocalsSize = 16;  // MapId
 uint32_t g_custom_map_locals = 0;
+
+// Sets bool property `name` of `object`. Returns whether it found it.
+bool SetBoolProperty(uint8_t* base, uint32_t object, const char* name) {
+  for (uint32_t owner = LoadU32(base, object + kObjectClass); owner; owner = LoadU32(base, owner + kStructSuper)) {
+    for (uint32_t field = LoadU32(base, owner + kStructChildren); field; field = LoadU32(base, field + kFieldNext)) {
+      if (ObjectName(base, field) != name) continue;
+      const uint32_t mask = LoadU32(base, field + kBoolPropertyBitMask);
+      // A bool's mask has exactly one bit set; anything else means the layout is not the one read.
+      if (ObjectName(base, LoadU32(base, field + kObjectClass)) != "BoolProperty" || !mask || (mask & (mask - 1))) {
+        return false;
+      }
+      const uint32_t word = object + LoadU32(base, field + kPropertyOffset);
+      StoreU32(base, word, LoadU32(base, word) | mask);
+      return true;
+    }
+  }
+  return false;
+}
+
+// --- Lambency ---
+//
+// Lambency (achievement 49) spreads by execution in Versus (docs/reverse-engineering.md,
+// "Lambency"). The game starts it from its developers: GearProfileSettings.IsEpicDev() answers yes
+// when bIsEpicDev is set, which the game never sets on Azura, or when the profile's setting 365 is,
+// and the first time bIsEpicDev is set it stores 365 in the profile. A developer's
+// GearPC.CheckViralAchievement unlocks the achievement, and their execution passes it on.
+//
+// An Alboria account that starts the contagion (alboria::Identity::lambency, which the admin tool
+// sets) gets bIsEpicDev on its profile right before IsEpicDev runs, so the game does the rest:
+// stores 365 (the profile stays a developer's, in System Link or offline too), unlocks the
+// achievement and spreads it.
+void MarkLambencySource(uint8_t* base, uint32_t profile_settings) {
+  static std::atomic<bool> logged{false};
+  if (!SetBoolProperty(base, profile_settings, "bIsEpicDev")) {
+    if (!logged.exchange(true)) REXLOG_WARN("[Azura online] GearProfileSettings.bIsEpicDev not found; no Lambency");
+    return;
+  }
+  if (!logged.exchange(true)) REXLOG_INFO("[Azura online] The Alboria account starts the Lambency contagion");
+}
 
 // Whether bool property `name` of `object` is set; false when it is not found.
 bool BoolPropertySet(const uint8_t* base, uint32_t object, const char* name) {
@@ -3386,6 +3426,11 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
       !rex::system::xam::alboria::InRoom() && !g_creating_startup_party.load()) {
     CreateStartupParty(ctx, base);
     return;
+  }
+  // Before it runs: an Alboria account that starts Lambency is a developer to the game.
+  if (Is(base, function, kIsEpicDev) && ObjectName(base, LoadU32(base, function + kObjectOuter)) == "GearProfileSettings" &&
+      rex::system::xam::alboria::GetIdentity().lambency) {
+    MarkLambencySource(base, ctx.r3.u32);
   }
   if (Is(base, function, kGetPartyType) && OnlineMode() &&
       ObjectName(base, LoadU32(base, function + kObjectOuter)) == "GearProfileSettings") {
