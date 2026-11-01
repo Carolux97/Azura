@@ -97,8 +97,6 @@
     "installRuntime": "Instalar",
     "updateRuntime": "Actualizar",
     "installingRuntime": "Instalando…",
-    "savesTitle": "Partidas guardadas",
-    "savesHelp": "Carpeta de tus puntos de control de campaña y tu perfil. Al cambiarla, tus partidas se mueven allí.",
     "savesConflict": "{folder} ya contiene partidas guardadas. ¿Quieres reemplazarlas por tus partidas actuales?",
     "savesReplace": "Reemplazar",
     "savesCancel": "Cancelar",
@@ -301,7 +299,12 @@
     "backupToast": "Copia de seguridad creada",
     "restoreToast": "Copia restaurada",
     "errorBackupMissing": "Esa copia de seguridad ya no existe.",
-    "errorFailed": "No se ha podido completar: {detail}"
+    "errorFailed": "No se ha podido completar: {detail}",
+    "folderTitle": "Carpeta de partidas",
+    "folderHelp": "Donde viven tus puntos de control, tu perfil y el contenido descargable. Al cambiarla se mueven allí, después de hacer una copia.",
+    "folderCloseGame": "Cierra el juego para mover tus partidas",
+    "kindBeforeMove": "Antes de mover",
+    "kindBeforeReplace": "Antes de reemplazar"
   },
   "gamepad": {
     "select": "Seleccionar",

@@ -266,20 +266,6 @@
           </p>
           <p class="help compiler-manual" id="compiler-manual-note" hidden></p>
         </div>
-        <div class="panel">
-          <h2 class="panel-title" data-i18n="install.savesTitle"></h2>
-          <p class="help" data-i18n="install.savesHelp"></p>
-          <div class="path-row">
-            <input class="path" id="saves-path" type="text" readonly>
-            <button class="btn" id="pick-saves" data-i18n="install.change"></button>
-          </div>
-          <!-- Shown when the chosen folder already holds saves, to confirm replacing them. -->
-          <div class="path-row" id="saves-conflict" hidden>
-            <p class="check" data-state="error" id="saves-conflict-text"></p>
-            <button class="btn" id="saves-replace" data-i18n="install.savesReplace"></button>
-            <button class="btn" id="saves-cancel" data-pad-back data-i18n="install.savesCancel"></button>
-          </div>
-        </div>
         <!-- Downloadable content: the player's own packages; renderDlc() fills it. -->
         <div class="panel" id="dlc-panel">
           <h2 class="panel-title" data-i18n="install.dlcTitle"></h2>
@@ -365,6 +351,21 @@
           </div>
         </div>
 
+        <!-- Where the saves live: moving them makes a backup first (change_saves_folder in lib.rs). -->
+        <div class="panel">
+          <h2 class="panel-title" data-i18n="saves.folderTitle"></h2>
+          <p class="help" data-i18n="saves.folderHelp"></p>
+          <div class="path-row">
+            <input class="path" id="saves-path" type="text" readonly>
+            <button class="btn" id="pick-saves" data-i18n="install.change"></button>
+          </div>
+          <!-- Shown when the chosen folder already holds saves, to confirm replacing them. -->
+          <div class="path-row" id="saves-conflict" hidden>
+            <p class="check" data-state="error" id="saves-conflict-text"></p>
+            <button class="btn" id="saves-replace" data-i18n="install.savesReplace"></button>
+            <button class="btn" id="saves-cancel" data-pad-back data-i18n="install.savesCancel"></button>
+          </div>
+        </div>
         <div class="panel">
           <h2 class="panel-title" data-i18n="saves.actionsTitle"></h2>
           <div class="save-actions-grid">

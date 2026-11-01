@@ -97,8 +97,6 @@
     "installRuntime": "Instalar",
     "updateRuntime": "Atualizar",
     "installingRuntime": "Instalando…",
-    "savesTitle": "Jogos salvos",
-    "savesHelp": "Pasta dos seus checkpoints de campanha e do seu perfil. Ao mudá-la, seus jogos salvos são movidos para lá.",
     "savesConflict": "{folder} já contém jogos salvos. Substituí-los pelos seus jogos salvos atuais?",
     "savesReplace": "Substituir",
     "savesCancel": "Cancelar",
@@ -301,7 +299,12 @@
     "backupToast": "Backup criado",
     "restoreToast": "Backup restaurado",
     "errorBackupMissing": "Esse backup não existe mais.",
-    "errorFailed": "A operação falhou: {detail}"
+    "errorFailed": "A operação falhou: {detail}",
+    "folderTitle": "Pasta de saves",
+    "folderHelp": "Onde ficam seus checkpoints, seu perfil e o conteúdo para download. Ao mudá-la, eles são movidos para lá, depois de um backup.",
+    "folderCloseGame": "Feche o jogo para mover seus saves",
+    "kindBeforeMove": "Antes de mover",
+    "kindBeforeReplace": "Antes de substituir"
   },
   "gamepad": {
     "select": "Selecionar",

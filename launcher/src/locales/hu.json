@@ -97,8 +97,6 @@
     "installRuntime": "Telepítés",
     "updateRuntime": "Frissítés",
     "installingRuntime": "Telepítés…",
-    "savesTitle": "Mentett játékok",
-    "savesHelp": "A kampány ellenőrzőpontjainak és a profilodnak a mappája. Megváltoztatásakor a mentések oda kerülnek.",
     "savesConflict": "{folder} már tartalmaz mentéseket. Lecseréled őket a jelenlegi mentéseidre?",
     "savesReplace": "Csere",
     "savesCancel": "Mégse",
@@ -301,7 +299,12 @@
     "backupToast": "Biztonsági mentés elkészült",
     "restoreToast": "Biztonsági mentés visszaállítva",
     "errorBackupMissing": "Ez a biztonsági mentés már nem létezik.",
-    "errorFailed": "A művelet nem sikerült: {detail}"
+    "errorFailed": "A művelet nem sikerült: {detail}",
+    "folderTitle": "Mentések mappája",
+    "folderHelp": "Itt vannak az ellenőrzőpontjaid, a profilod és a letölthető tartalmak. Ha megváltoztatod, biztonsági mentés után oda kerülnek.",
+    "folderCloseGame": "Zárd be a játékot a mentések áthelyezéséhez",
+    "kindBeforeMove": "Áthelyezés előtt",
+    "kindBeforeReplace": "Felülírás előtt"
   },
   "gamepad": {
     "select": "Kiválasztás",

@@ -97,8 +97,6 @@
     "installRuntime": "Installa",
     "updateRuntime": "Aggiorna",
     "installingRuntime": "Installazione…",
-    "savesTitle": "Salvataggi",
-    "savesHelp": "Cartella dei checkpoint della campagna e del profilo. Cambiandola, i salvataggi vengono spostati lì.",
     "savesConflict": "{folder} contiene già dei salvataggi. Sostituirli con i salvataggi attuali?",
     "savesReplace": "Sostituisci",
     "savesCancel": "Annulla",
@@ -301,7 +299,12 @@
     "backupToast": "Backup creato",
     "restoreToast": "Backup ripristinato",
     "errorBackupMissing": "Quel backup non esiste più.",
-    "errorFailed": "L'operazione non è riuscita: {detail}"
+    "errorFailed": "L'operazione non è riuscita: {detail}",
+    "folderTitle": "Cartella dei salvataggi",
+    "folderHelp": "Dove si trovano i checkpoint, il profilo e i contenuti scaricabili. Cambiandola vengono spostati lì, dopo un backup.",
+    "folderCloseGame": "Chiudi il gioco per spostare i salvataggi",
+    "kindBeforeMove": "Prima dello spostamento",
+    "kindBeforeReplace": "Prima della sostituzione"
   },
   "gamepad": {
     "select": "Seleziona",

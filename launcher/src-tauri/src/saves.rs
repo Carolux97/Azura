@@ -165,6 +165,27 @@ pub fn move_saves(from: &Path, to: &Path, replace: bool) -> Result<usize, SavesE
     Ok(entries.len())
 }
 
+/// Backs up the saves a move from `from` to `to` would touch, before it touches them: those in
+/// `from` always, and those already in `to` when `replace` lets the move overwrite them. A move
+/// that would do nothing or that `move_saves` refuses (same or nested folders, nothing to move, a
+/// destination with saves and no `replace`) makes no backup. A backup that fails stops the move.
+pub fn backup_before_move(app: &AppHandle, from: &Path, to: &Path, replace: bool) -> Result<Vec<BackupInfo>, SavesError> {
+    backups_before_move(&backups_dir(app)?, from, to, replace)
+}
+
+fn backups_before_move(backups: &Path, from: &Path, to: &Path, replace: bool) -> Result<Vec<BackupInfo>, SavesError> {
+    let (from_c, to_c) = (canonical(from), canonical(to));
+    let refused = from_c == to_c || to_c.starts_with(&from_c) || from_c.starts_with(&to_c);
+    if refused || !has_saves(from) || (has_saves(to) && !replace) {
+        return Ok(Vec::new());
+    }
+    let mut made = vec![create_backup(backups, &find_gears3_content_dir(from), BackupKind::BeforeMove)?];
+    if has_saves(to) {
+        made.push(create_backup(backups, &find_gears3_content_dir(to), BackupKind::BeforeReplace)?);
+    }
+    Ok(made)
+}
+
 /// Gets `saves` ready before the game starts: creates it and, the first time, brings over the
 /// saves the runtime wrote to its old folder and moves that folder's shader cache to `cache`.
 /// Nothing is replaced: when both folders hold saves, the old ones stay where they are.
@@ -195,6 +216,10 @@ pub enum BackupKind {
     Manual,
     BeforeRepair,
     BeforeReset,
+    /// The saves being moved to another folder, made before they leave.
+    BeforeMove,
+    /// The saves already in the folder a move replaces, made before they are overwritten.
+    BeforeReplace,
 }
 
 impl BackupKind {
@@ -203,11 +228,15 @@ impl BackupKind {
             BackupKind::Manual => "manual",
             BackupKind::BeforeRepair => "auto_before_repair",
             BackupKind::BeforeReset => "auto_before_reset",
+            BackupKind::BeforeMove => "auto_before_move",
+            BackupKind::BeforeReplace => "auto_before_replace",
         }
     }
 
     fn from_tag(tag: &str) -> Option<Self> {
-        [BackupKind::Manual, BackupKind::BeforeRepair, BackupKind::BeforeReset].into_iter().find(|kind| kind.tag() == tag)
+        [BackupKind::Manual, BackupKind::BeforeRepair, BackupKind::BeforeReset, BackupKind::BeforeMove, BackupKind::BeforeReplace]
+            .into_iter()
+            .find(|kind| kind.tag() == tag)
     }
 }
 
@@ -609,6 +638,60 @@ mod tests {
         // Newest first; a folder without a date goes last.
         assert_eq!(listed[0].id, made.id);
         assert_eq!(listed.last().unwrap().id, "something_else");
+    }
+
+    #[test]
+    fn moving_backs_up_the_saves_that_leave() {
+        let dir = TempFolder::new("backup-move");
+        let (backups, from, to) = (dir.join("backups"), dir.join("from"), dir.join("to"));
+        fake_user_data(&from);
+        let made = backups_before_move(&backups, &from, &to, false).unwrap();
+        assert_eq!(made.iter().map(|b| b.kind).collect::<Vec<_>>(), vec![Some(BackupKind::BeforeMove)]);
+        assert!(backups.join(&made[0].id).join("00000001/PlayerStorage.dat").is_file());
+        // The backup leaves the saves where they are: moving them is still move_saves's job.
+        assert!(has_saves(&from));
+    }
+
+    #[test]
+    fn replacing_also_backs_up_the_saves_it_overwrites() {
+        let dir = TempFolder::new("backup-replace");
+        let (backups, from, to) = (dir.join("backups"), dir.join("from"), dir.join("to"));
+        fake_user_data(&from);
+        fake_user_data(&to);
+        fs::write(to.join("B13EBABEBABEBABE/4D5308AB/00000001/PlayerStorage.dat"), b"older save").unwrap();
+        let made = backups_before_move(&backups, &from, &to, true).unwrap();
+        let kinds: Vec<_> = made.iter().map(|b| b.kind).collect();
+        assert_eq!(kinds, vec![Some(BackupKind::BeforeMove), Some(BackupKind::BeforeReplace)]);
+        let replaced = backups.join(&made[1].id).join("00000001/PlayerStorage.dat");
+        assert_eq!(fs::read(replaced).unwrap(), b"older save");
+    }
+
+    #[test]
+    fn a_move_that_does_nothing_or_is_refused_makes_no_backup() {
+        let dir = TempFolder::new("backup-none");
+        let (backups, from, to, empty) = (dir.join("backups"), dir.join("from"), dir.join("to"), dir.join("empty"));
+        fake_user_data(&from);
+        fake_user_data(&to);
+        // A destination with saves and no replace: move_saves will ask first.
+        assert!(backups_before_move(&backups, &from, &to, false).unwrap().is_empty());
+        // The same folder, nested folders and nothing to move.
+        assert!(backups_before_move(&backups, &from, &from, true).unwrap().is_empty());
+        assert!(backups_before_move(&backups, &from, &from.join("inner"), true).unwrap().is_empty());
+        assert!(backups_before_move(&backups, &empty, &to, true).unwrap().is_empty());
+        assert!(!backups.exists() || fs::read_dir(&backups).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn a_failed_backup_stops_before_anything_moves() {
+        let dir = TempFolder::new("backup-fails");
+        let (from, to) = (dir.join("from"), dir.join("to"));
+        fake_user_data(&from);
+        // A file where the backups folder should be: the backup cannot be made.
+        let backups = dir.join("backups");
+        fs::write(&backups, b"not a folder").unwrap();
+        assert!(backups_before_move(&backups, &from, &to, false).is_err());
+        assert!(has_saves(&from));
+        assert!(!to.exists());
     }
 
     #[test]
