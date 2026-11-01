@@ -1,9 +1,9 @@
 diff --git a/include/rex/system/xam/alboria.h b/include/rex/system/xam/alboria.h
 new file mode 100644
-index 0000000..3138e43
+index 0000000..cacf17b
 --- /dev/null
 +++ b/include/rex/system/xam/alboria.h
-@@ -0,0 +1,372 @@
+@@ -0,0 +1,416 @@
 +/**
 + * @file        system/xam/alboria.h
 + * @brief       Alboria: System Link over the internet through our relay
@@ -30,6 +30,7 @@ index 0000000..3138e43
 +
 +#include <array>
 +#include <cstdint>
++#include <functional>
 +#include <optional>
 +#include <span>
 +#include <string>
@@ -264,7 +265,10 @@ index 0000000..3138e43
 +// A friend of the account, with their presence, as Alboria's friends list gives them.
 +struct Friend {
 +  uint32_t id = 0;        // the account's ID
++  std::string name;       // Gamertag#tag
 +  std::string gamertag;   // without the tag
++  bool favourite = false;
++  std::string last_seen;  // ISO date while offline, when known
 +  bool online = false;    // online or playing
 +  bool playing = false;   // in a room
 +  uint32_t title_id = 0;  // the room's title while playing
@@ -275,6 +279,46 @@ index 0000000..3138e43
 +// while the player is signed in to Live (LiveSignedIn), so a title asking never waits. Empty before
 +// the first read.
 +std::vector<Friend> Friends();
++// An invitation to a friend's room that this account received.
++struct Invitation {
++  std::string id;
++  uint32_t from_id = 0;
++  std::string from_name;  // Gamertag#tag
++};
++// The open invitations as Alboria last listed them, with the friends.
++std::vector<Invitation> Invitations();
++// Reads the friends and the invitations again now, in the background (the overlay opening).
++void RefreshFriends();
++
++// What an overlay action reports when it is done: empty on success, else Alboria's error code
++// ("invite_only", "room_not_found", "not_in_room", "network"...). Called on a worker thread.
++using ActionDone = std::function<void(const std::string& error)>;
++// Joins the open room of the friend with the account ID `id` (POST /v1/friends/room, then
++// JoinGame): its host's party reaches the title as an accepted invite, as a join by code does.
++void JoinFriend(uint32_t id, ActionDone done);
++// Joins the room of the invitation `id` (POST /v1/invitations/room, which uses it up), the same way.
++void AcceptInvitation(const std::string& id, ActionDone done);
++// Declines the invitation `id` (POST /v1/invitations/decline).
++void DeclineInvitation(const std::string& id, ActionDone done);
++// Sends a friend request to `name` ("Gamertag#tag", POST /v1/friends/request). `done` gets ""
++// when it was sent, "friends" when the other had already asked (they are friends now), or the error.
++void SendFriendRequest(const std::string& name, ActionDone done);
++
++// --- The Alboria overlay ---------------------------------------------------------------------------
++
++// The page the overlay opens on.
++enum class OverlayPage { kFriends, kInvitations, kRoom };
++// Opens the host's Alboria overlay on `page` (the runtime's, set with SetOverlayHandler), as the
++// console opened the Guide: XamShowFriendsUI and XamShowGameInviteUI call it. Returns whether an
++// overlay is set.
++using OverlayHandler = std::function<void(OverlayPage page)>;
++void SetOverlayHandler(OverlayHandler handler);
++bool ShowOverlay(OverlayPage page);
++// The overlay opened or closed: the title hears it as the Guide's (XN_SYS_UI), and XamIsUIActive
++// says so while it is open.
++void SetOverlayShown(bool shown);
++bool OverlayShown();
++
 +// The Xbox Live XUID that stands for the friend with the account ID `id`: top bits 0x0009, then
 +// 0xA1B0 and the ID, so it never matches a local player's online XUID (OnlineXuid).
 +uint64_t FriendXuid(uint32_t id);
@@ -416,10 +460,10 @@ index 0000000..c7fc5de
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria.cpp b/src/system/xam/alboria.cpp
 new file mode 100644
-index 0000000..4a79d32
+index 0000000..83713c5
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,1882 @@
+@@ -0,0 +1,1978 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -675,6 +719,13 @@ index 0000000..4a79d32
 +// while the player is signed in to Live. Guarded by g_friends_mutex.
 +std::mutex g_friends_mutex;
 +std::vector<Friend> g_friends;
++std::vector<Invitation> g_invitations;
++// The host's overlay (SetOverlayHandler), and whether it is open. g_overlay_handler is guarded by
++// g_friends_mutex.
++OverlayHandler g_overlay_handler;
++std::atomic<bool> g_overlay_shown{false};
++// XN_SYS_UI: a system screen (the Guide) opened (1) or closed (0) over the title.
++constexpr uint32_t kNotifySystemUi = 0x00000009;
 +std::atomic<bool> g_friends_reader{false};
 +// How often the friends list is read again while signed in to Live.
 +constexpr auto kFriendsInterval = std::chrono::seconds(10);
@@ -1967,19 +2018,49 @@ index 0000000..4a79d32
 +  for (const auto& entry : answer.json["friends"]) {
 +    Friend f;
 +    f.id = Number<uint32_t>(entry, "id", 0);
-+    // "Gamertag#tag": the title shows the gamertag, as Xbox Live did.
-+    const std::string name = Text(entry, "name");
-+    f.gamertag = name.substr(0, name.rfind('#'));
++    // "Gamertag#tag": the title shows the gamertag, as Xbox Live did; the overlay the whole name.
++    f.name = Text(entry, "name");
++    f.gamertag = f.name.substr(0, f.name.rfind('#'));
++    f.favourite = Flag(entry, "favourite", false);
 +    const auto presence = entry.contains("presence") ? entry["presence"] : nlohmann::json::object();
 +    const std::string status = Text(presence, "status", "offline");
 +    f.online = status == "online" || status == "playing";
 +    f.playing = status == "playing";
 +    f.title_id = f.playing ? static_cast<uint32_t>(std::strtoul(Text(presence, "title_id").c_str(), nullptr, 16)) : 0;
 +    f.joinable = f.playing && Text(presence, "party") == "joinable";
++    if (!f.online) f.last_seen = Text(presence, "last_seen");
 +    if (f.id) friends.push_back(std::move(f));
++  }
++  std::vector<Invitation> invitations;
++  if (answer.json.contains("invitations") && answer.json["invitations"].is_array()) {
++    for (const auto& entry : answer.json["invitations"]) {
++      Invitation invitation;
++      invitation.id = Text(entry, "id");
++      const auto from = entry.contains("from") ? entry["from"] : nlohmann::json::object();
++      invitation.from_id = Number<uint32_t>(from, "id", 0);
++      invitation.from_name = Text(from, "name");
++      if (!invitation.id.empty()) invitations.push_back(std::move(invitation));
++    }
 +  }
 +  std::lock_guard lock(g_friends_mutex);
 +  g_friends = std::move(friends);
++  g_invitations = std::move(invitations);
++}
++
++// Joins the room whose code `path` gives for `request` (a friend's, or an invitation's), as a join
++// by code does; tells `done`.
++void JoinRoomOf(std::string path, nlohmann::json request, ActionDone done) {
++  RunDetached("joining a room", [path = std::move(path), request = std::move(request), done = std::move(done)] {
++    const auto room = CallSignedIn(path, request);
++    if (!room.error.empty()) {
++      REXSYS_WARN("Alboria: {} answered {}", path, room.error);
++      if (done) done(room.error);
++      return;
++    }
++    JoinGame(Text(room.json, "code"));
++    if (done) done({});
++    ReadFriends();
++  });
 +}
 +
 +// Starts the friends reader once: it reads the list every kFriendsInterval while the player is
@@ -1999,6 +2080,65 @@ index 0000000..4a79d32
 +std::vector<Friend> Friends() {
 +  std::lock_guard lock(g_friends_mutex);
 +  return g_friends;
++}
++
++std::vector<Invitation> Invitations() {
++  std::lock_guard lock(g_friends_mutex);
++  return g_invitations;
++}
++
++void RefreshFriends() {
++  if (!LiveSignedIn()) return;
++  RunDetached("reading the friends", [] { ReadFriends(); });
++}
++
++void JoinFriend(uint32_t id, ActionDone done) {
++  JoinRoomOf("/v1/friends/room", {{"id", id}}, std::move(done));
++}
++
++void AcceptInvitation(const std::string& id, ActionDone done) {
++  JoinRoomOf("/v1/invitations/room", {{"id", id}}, std::move(done));
++}
++
++void DeclineInvitation(const std::string& id, ActionDone done) {
++  RunDetached("declining an invitation", [id, done = std::move(done)] {
++    const auto answer = CallSignedIn("/v1/invitations/decline", {{"id", id}});
++    if (done) done(answer.error);
++    ReadFriends();
++  });
++}
++
++void SendFriendRequest(const std::string& name, ActionDone done) {
++  RunDetached("sending a friend request", [name, done = std::move(done)] {
++    const auto answer = CallSignedIn("/v1/friends/request", {{"name", name}});
++    if (done) done(answer.error.empty() && Text(answer.json, "result") == "friends" ? "friends" : answer.error);
++    ReadFriends();
++  });
++}
++
++void SetOverlayHandler(OverlayHandler handler) {
++  std::lock_guard lock(g_friends_mutex);
++  g_overlay_handler = std::move(handler);
++}
++
++bool ShowOverlay(OverlayPage page) {
++  OverlayHandler handler;
++  {
++    std::lock_guard lock(g_friends_mutex);
++    handler = g_overlay_handler;
++  }
++  if (!handler) return false;
++  handler(page);
++  return true;
++}
++
++void SetOverlayShown(bool shown) {
++  if (shown == g_overlay_shown.exchange(shown)) return;
++  if (auto* kernel_state = REX_KERNEL_STATE()) kernel_state->BroadcastNotification(kNotifySystemUi, shown ? 1 : 0);
++}
++
++bool OverlayShown() {
++  return g_overlay_shown.load();
 +}
 +
 +uint64_t FriendXuid(uint32_t id) {

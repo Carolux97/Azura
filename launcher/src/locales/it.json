@@ -436,7 +436,10 @@
     "verifyBy": "Verifica la tua email entro il {date}, altrimenti l'account verrà eliminato.",
     "verifyEmail": "Verifica email",
     "emailVerified": "Email verificata.",
-    "playVerifyBy": "Il tuo account Alboria non è verificato. Verifica la tua email entro il {date}, altrimenti verrà eliminato."
+    "playVerifyBy": "Il tuo account Alboria non è verificato. Verifica la tua email entro il {date}, altrimenti verrà eliminato.",
+    "overlayTitle": "Overlay di Alboria",
+    "overlayHelp": "I tuoi amici, inviti e stanza nel gioco. Aprilo con questo tasto o, col controller, tenendo premuto Back e premendo RB.",
+    "overlayKey": "Tasto dell'overlay di Alboria"
   },
   "accountErrors": {
     "network": "Impossibile raggiungere Alboria. Controlla la connessione e riprova.",

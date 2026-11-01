@@ -48,6 +48,18 @@ const KEY_FULLSCREEN: &str = "fullscreen";
 /// How the game plays with others: "online" (Alboria, with System Link too) for a player with an
 /// account, "system_link" (the local network only) for a local account.
 const KEY_NETWORK_MODE: &str = "network_mode";
+/// The key that opens the Alboria overlay in the game (a keybind of the runtime).
+const KEY_OVERLAY_KEY: &str = "bind_alboria_overlay";
+/// The keys the overlay can take: the function keys the game and the runtime leave free (F3, F4 and
+/// F7 open the runtime's own overlays). The first is the default.
+pub const OVERLAY_KEYS: [&str; 9] = ["F1", "F2", "F5", "F6", "F8", "F9", "F10", "F11", "F12"];
+
+/// `key` when the overlay can take it, else the default.
+fn overlay_key(key: Option<&str>) -> &'static str {
+    key.and_then(|key| OVERLAY_KEYS.iter().find(|allowed| allowed.eq_ignore_ascii_case(key)))
+        .copied()
+        .unwrap_or(OVERLAY_KEYS[0])
+}
 
 /// `account` in `launcher.toml`: the player signed in to an Alboria account, or chose to play with
 /// a local account. With neither, the welcome screen asks.
@@ -196,6 +208,14 @@ pub struct Settings {
     /// accounts. It sets the game's `network_mode`.
     #[serde(default)]
     pub account: Option<String>,
+    /// The key that opens the Alboria overlay in the game (`bind_alboria_overlay`): one of
+    /// [`OVERLAY_KEYS`].
+    #[serde(default = "default_overlay_key")]
+    pub overlay_key: String,
+}
+
+fn default_overlay_key() -> String {
+    OVERLAY_KEYS[0].to_string()
 }
 
 /// The part of [`Settings`] stored in `launcher.toml`. Every field has a default, so an old or
@@ -347,6 +367,7 @@ impl SettingsPaths {
             saves_folder,
             minimize_while_playing: launcher.minimize_while_playing,
             account: launcher.account,
+            overlay_key: overlay_key(get_string(&runtime, KEY_OVERLAY_KEY).as_deref()).to_string(),
         })
     }
 
@@ -408,6 +429,7 @@ impl SettingsPaths {
         if let Some(mode) = network_mode(settings.account.as_deref()) {
             runtime[KEY_NETWORK_MODE] = value(mode);
         }
+        runtime[KEY_OVERLAY_KEY] = value(overlay_key(Some(&settings.overlay_key)));
         for key in LEGACY_KEYS {
             runtime.remove(key);
         }
@@ -461,7 +483,22 @@ mod tests {
             saves_folder: crate::saves::default_folder().to_string_lossy().into_owned(),
             minimize_while_playing: false,
             account: Some(ACCOUNT_ALBORIA.into()),
+            overlay_key: "F2".into(),
         }
+    }
+
+    #[test]
+    fn the_overlay_key_is_written_and_only_a_free_key_is_kept() {
+        let dir = temp_folder("overlay-key");
+        let paths = SettingsPaths::new(&dir);
+        let mut settings = sample_settings();
+        paths.save(&settings).unwrap();
+        assert!(fs::read_to_string(dir.join(RUNTIME_CONFIG)).unwrap().contains("bind_alboria_overlay = \"F2\""));
+        assert_eq!(paths.load().unwrap().overlay_key, "F2");
+        // F4 opens the runtime's settings: the overlay falls back to F1.
+        settings.overlay_key = "F4".into();
+        paths.save(&settings).unwrap();
+        assert_eq!(paths.load().unwrap().overlay_key, "F1");
     }
 
     #[test]

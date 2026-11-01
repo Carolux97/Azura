@@ -436,7 +436,10 @@
     "verifyBy": "Zweryfikuj adres e-mail przed {date}, inaczej konto zostanie usunięte.",
     "verifyEmail": "Zweryfikuj e-mail",
     "emailVerified": "Adres e-mail zweryfikowany.",
-    "playVerifyBy": "Twoje konto Alboria nie jest zweryfikowane. Zweryfikuj adres e-mail przed {date}, inaczej zostanie usunięte."
+    "playVerifyBy": "Twoje konto Alboria nie jest zweryfikowane. Zweryfikuj adres e-mail przed {date}, inaczej zostanie usunięte.",
+    "overlayTitle": "Nakładka Alborii",
+    "overlayHelp": "Twoi znajomi, zaproszenia i pokój w grze. Otwórz ją tym klawiszem albo na padzie, przytrzymując Back i naciskając RB.",
+    "overlayKey": "Klawisz nakładki Alborii"
   },
   "accountErrors": {
     "network": "Brak połączenia z Alborią. Sprawdź połączenie i spróbuj ponownie.",
