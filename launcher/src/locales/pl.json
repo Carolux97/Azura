@@ -97,8 +97,6 @@
     "installRuntime": "Zainstaluj",
     "updateRuntime": "Aktualizuj",
     "installingRuntime": "Instalowanie…",
-    "savesTitle": "Zapisy gry",
-    "savesHelp": "Folder punktów kontrolnych kampanii i profilu. Po zmianie zapisy zostaną tam przeniesione.",
     "savesConflict": "{folder} zawiera już zapisy gry. Zastąpić je obecnymi zapisami?",
     "savesReplace": "Zastąp",
     "savesCancel": "Anuluj",
@@ -305,7 +303,12 @@
     "backupToast": "Kopia zapasowa utworzona",
     "restoreToast": "Kopia przywrócona",
     "errorBackupMissing": "Ta kopia zapasowa już nie istnieje.",
-    "errorFailed": "Operacja nie powiodła się: {detail}"
+    "errorFailed": "Operacja nie powiodła się: {detail}",
+    "folderTitle": "Folder zapisów",
+    "folderHelp": "Tu są punkty kontrolne, profil i zawartość do pobrania. Po zmianie zostaną tam przeniesione, po wykonaniu kopii zapasowej.",
+    "folderCloseGame": "Zamknij grę, aby przenieść zapisy",
+    "kindBeforeMove": "Przed przeniesieniem",
+    "kindBeforeReplace": "Przed zastąpieniem"
   },
   "gamepad": {
     "select": "Wybierz",

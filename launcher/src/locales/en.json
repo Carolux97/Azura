@@ -97,8 +97,6 @@
     "installRuntime": "Install",
     "updateRuntime": "Update",
     "installingRuntime": "Installing…",
-    "savesTitle": "Saved games",
-    "savesHelp": "Folder for your campaign checkpoints and profile. Changing it moves your saves there.",
     "savesConflict": "{folder} already holds saved games. Replace them with your current saves?",
     "savesReplace": "Replace",
     "savesCancel": "Cancel",
@@ -305,7 +303,12 @@
     "backupToast": "Backup created",
     "restoreToast": "Backup restored",
     "errorBackupMissing": "That backup no longer exists.",
-    "errorFailed": "The operation failed: {detail}"
+    "errorFailed": "The operation failed: {detail}",
+    "folderTitle": "Saves folder",
+    "folderHelp": "Where your campaign checkpoints, profile and downloadable content live. Changing it moves them there, after a backup.",
+    "folderCloseGame": "Close the game to move your saves",
+    "kindBeforeMove": "Before moving",
+    "kindBeforeReplace": "Before replacing"
   },
   "gamepad": {
     "select": "Select",

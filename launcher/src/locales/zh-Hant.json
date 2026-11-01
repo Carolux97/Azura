@@ -97,8 +97,6 @@
     "installRuntime": "安裝",
     "updateRuntime": "更新",
     "installingRuntime": "安裝中…",
-    "savesTitle": "遊戲存檔",
-    "savesHelp": "戰役檢查點與個人檔案的資料夾。變更後，存檔會移到該處。",
     "savesConflict": "{folder} 已有遊戲存檔。要以目前的存檔取代嗎？",
     "savesReplace": "取代",
     "savesCancel": "取消",
@@ -305,7 +303,12 @@
     "backupToast": "已建立備份",
     "restoreToast": "已還原備份",
     "errorBackupMissing": "該備份已不存在。",
-    "errorFailed": "操作失敗：{detail}"
+    "errorFailed": "操作失敗：{detail}",
+    "folderTitle": "存檔資料夾",
+    "folderHelp": "你的檢查點、設定檔和下載內容存放的位置。變更後會先備份，再移到新位置。",
+    "folderCloseGame": "請關閉遊戲以移動存檔",
+    "kindBeforeMove": "移動前",
+    "kindBeforeReplace": "取代前"
   },
   "gamepad": {
     "select": "選擇",
