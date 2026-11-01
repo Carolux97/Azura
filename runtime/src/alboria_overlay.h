@@ -9,6 +9,8 @@
 //   open room and Invite while the player is in a room.
 // - Invitations: the ones received, with Join and Not now.
 // - Room: the code of the player's room, to copy, and Join by code.
+// - Settings: the volume of Alboria's menu sounds and of its notices (alboria_sounds.h), 0 to 10
+//   each, changed with left and right.
 // The data is the SDK's (rex/system/xam/alboria.h), read again as the overlay opens. Joining goes
 // the way a join by code does: the host's party reaches the game as an accepted invite.
 //
@@ -18,10 +20,10 @@
 // in a match, the game's pause menu opens under it. While it is open the game reads its controllers with nothing
 // pressed and hears that the Guide is open (XN_SYS_UI); the keyboard and the mouse are ImGui's.
 //
-// Controls: LB/RB or Tab change page, the D-pad or the arrows move, A or Enter does the focused
-// row's main action, X its second one, Y copies the room's code, B, Escape or the opening key
-// close. The mouse clicks the tabs and the buttons. The controller's glyphs and the on-screen
-// keyboard take Alboria's colours too.
+// Controls: LB/RB or Tab change page, the D-pad, the arrows or W and S move, A or Enter does the
+// focused row's main action, X its second one, Y copies the room's code, B, Escape or the opening
+// key close. The mouse clicks the tabs and the buttons. The focused row's buttons show the control
+// that does each; the controller's glyphs and the on-screen keyboard take Alboria's colours too.
 #pragma once
 
 #include <chrono>
@@ -36,6 +38,7 @@
 #include <rex/system/xam/alboria.h>
 #include <rex/ui/imgui_dialog.h>
 
+#include "alboria_sounds.h"
 #include "coop_ui.h"
 
 struct ImFont;
@@ -75,6 +78,7 @@ class AlboriaOverlay : public rex::ui::ImGuiDialog {
   struct Actions {
     int page = 0;    // -1 previous, +1 next
     int move = 0;    // -1 up, +1 down
+    int horizontal = 0;  // -1 left, +1 right: a setting's value, or the page elsewhere
     bool primary = false;
     bool secondary = false;
     bool copy = false;
@@ -84,8 +88,10 @@ class AlboriaOverlay : public rex::ui::ImGuiDialog {
   // Does the focused row's main (`secondary` false) or second action on the current page.
   void Act(bool secondary);
   // Starts an action of the SDK, showing `pending` until it reports.
+  // Plays `sound` as it starts (the accept, unless it is Not now).
   void Start(const std::string& pending, const std::function<void(rex::system::xam::alboria::ActionDone)>& action,
-             const std::string& done_text, bool close_when_done);
+             const std::string& done_text, bool close_when_done,
+             alboria_sounds::Sound sound = alboria_sounds::Sound::kAccept);
   void SetMessage(std::string text, bool error);
   // The Add friend screen: reads its input (returns whether it asked to go back), types a
   // character, erases one, presses the focused key of the on-screen keyboard, sends the request.

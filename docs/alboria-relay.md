@@ -687,8 +687,8 @@ invitation received, a friend request, or a friend joining the player's room. Th
 reader compares each read with the last one (`alboria::TakeNotices`): a new invitation ID, a new
 requester in `incoming`, or a friend whose presence gains `with_you` while the player was already
 in that room at the last read (so joining a friend's room does not tell the player the friend
-joined them). The first read after the reader starts only reports invitations, so signing in
-does not show every request already waiting.
+joined them). The first read after the reader starts reports nothing: what was already waiting
+when the game started stays in the overlay and the launcher, without a notice.
 
 - **Look.** At the bottom middle of the game, in Alboria's look (`runtime/src/alboria_style.h`,
   shared with the overlay): the planet grows from nothing with a bounce, the panel unfolds to its

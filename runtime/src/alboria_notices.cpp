@@ -13,6 +13,7 @@
 #include <rex/input/input.h>
 #include <rex/input/input_system.h>
 
+#include "alboria_sounds.h"
 #include "alboria_style.h"
 #include "input/overlay_input.h"
 #include "online_room_overlay.h"
@@ -160,6 +161,7 @@ bool AlboriaNotices::AcceptShown() {
   accepting->busy = true;
   accepting_ = accepting;
   input::SetNoticeAccepting(false);
+  alboria_sounds::Play(alboria_sounds::Sound::kAccept);
   // The notice stays until the SDK reports, then for a moment with how it went.
   shown_->seconds = FLT_MAX;
   alboria::AcceptInvitation(shown_->notice.id, [accepting](const std::string& error) {
@@ -167,6 +169,7 @@ bool AlboriaNotices::AcceptShown() {
     accepting->busy = false;
     accepting->done = true;
     accepting->error = error;
+    if (!error.empty()) alboria_sounds::Play(alboria_sounds::Sound::kError);
   });
   return true;
 }
@@ -230,6 +233,8 @@ void AlboriaNotices::OnDraw(ImGuiIO& io) {
       if (!still_open) return;
     }
     const float seconds = notice.kind == Notice::Kind::kInvitation ? kInvitationSeconds : kOtherSeconds;
+    alboria_sounds::Play(notice.kind == Notice::Kind::kInvitation ? alboria_sounds::Sound::kInvitation
+                                                                   : alboria_sounds::Sound::kNotice);
     shown_ = Shown{std::move(notice), now, seconds, std::nullopt};
     previous_buttons_.clear();
     input::SetNoticeAccepting(shown_->notice.kind == Notice::Kind::kInvitation);
