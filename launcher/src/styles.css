@@ -929,7 +929,14 @@ input[type="range"] { width: 100%; accent-color: var(--imulsion); }
 
 /* The saves' state, large: a lit plate and its word. */
 .save-status { gap: 14px; margin: 4px 0 14px; padding: 0; border: 0; font-family: var(--font-ui); font-size: 26px; letter-spacing: 0.02em; text-transform: none; white-space: normal; }
-.save-status .dot { width: 46px; height: 46px; border-radius: 14px; box-shadow: none; background: var(--steel-hi); }
+.save-status .dot {
+  display: grid; place-items: center; width: 46px; height: 46px; border-radius: 14px; box-shadow: none; background: var(--steel-hi);
+  font-family: var(--font-body); font-weight: 600; font-size: 28px; line-height: 1; color: #16181b;
+}
+/* The plate's mark: ✓ fine, ! broken checkpoints, · nothing saved yet. */
+.save-status .dot::after { content: "·"; color: var(--text); }
+.save-status[data-state="ok"] .dot::after { content: "✓"; color: #16181b; }
+.save-status[data-state="warn"] .dot::after { content: "!"; color: #16181b; }
 .save-status[data-state="ok"] .dot { background: radial-gradient(circle at 50% 40%, #c8e6a8, var(--ok)); box-shadow: 0 0 18px rgba(143, 191, 106, 0.35); }
 .save-status[data-state="warn"] .dot { background: radial-gradient(circle at 50% 40%, var(--imulsion-hot), var(--imulsion)); box-shadow: 0 0 18px var(--imulsion-glow); }
 

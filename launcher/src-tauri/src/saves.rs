@@ -315,65 +315,62 @@ fn millis(time: std::time::SystemTime) -> Option<u64> {
     time.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_millis() as u64)
 }
 
+/// What the saves folder holds: whether there is anything at all, the checkpoint files with data,
+/// whether a save is broken, and when a checkpoint was last written.
+struct SavesScan {
+    has_saves: bool,
+    checkpoint_count: usize,
+    is_corrupted: bool,
+    latest_time: Option<std::time::SystemTime>,
+}
+
+/// Looks through the content packages and headers in `content_dir`.
+///
+/// The game makes a profile's checkpoint slots as empty (0-byte) files when the profile is first
+/// used and fills them when it saves, so an empty file is a free slot, not damage. A save is
+/// broken only when a header has no package with files behind it, which is what keeps the game
+/// from loading it and what repairing removes (see orphaned_headers).
+fn scan_saves(content_dir: &Path) -> SavesScan {
+    let headers_dir = content_dir.join("Headers").join("00000001");
+    let packages_dir = content_dir.join("00000001");
+    let mut scan = SavesScan { has_saves: false, checkpoint_count: 0, is_corrupted: false, latest_time: None };
+
+    if let Ok(entries) = fs::read_dir(&headers_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            scan.has_saves = true;
+            if let Ok(mtime) = path.metadata().and_then(|meta| meta.modified()) {
+                scan.latest_time = Some(scan.latest_time.map_or(mtime, |prev| prev.max(mtime)));
+            }
+        }
+    }
+    scan.is_corrupted = !orphaned_headers(&headers_dir, &packages_dir).is_empty();
+
+    if let Ok(entries) = fs::read_dir(&packages_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            scan.has_saves = true;
+            if let Ok(files) = fs::read_dir(&path) {
+                scan.checkpoint_count += files
+                    .flatten()
+                    .filter(|file| file.metadata().map(|meta| meta.len() > 0).unwrap_or(false))
+                    .count();
+            }
+        }
+    }
+    scan
+}
+
 /// Inspects the current state of saved games.
 pub fn inspect_saves(app: &AppHandle, saves_dir: &Path) -> SaveStatus {
     let content_dir = find_gears3_content_dir(saves_dir);
-    let mut has_saves = false;
-    let mut checkpoint_count = 0;
-    let mut is_corrupted = false;
-    let mut latest_time: Option<std::time::SystemTime> = None;
-
-    let headers_dir = content_dir.join("Headers").join("00000001");
-    let packages_dir = content_dir.join("00000001");
-
-    if headers_dir.is_dir() {
-        if let Ok(entries) = fs::read_dir(&headers_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_file() {
-                    has_saves = true;
-                    if let Ok(meta) = path.metadata() {
-                        if let Ok(mtime) = meta.modified() {
-                            latest_time = match latest_time {
-                                Some(prev) => Some(std::cmp::max(prev, mtime)),
-                                None => Some(mtime),
-                            };
-                        }
-                    }
-                    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                    let pkg_dir = packages_dir.join(stem);
-                    if !pkg_dir.exists() {
-                        is_corrupted = true;
-                    }
-                }
-            }
-        }
-    }
-
-    if packages_dir.is_dir() {
-        if let Ok(entries) = fs::read_dir(&packages_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    has_saves = true;
-                    let mut valid_package = false;
-                    if let Ok(pkg_entries) = fs::read_dir(&path) {
-                        let count = pkg_entries
-                            .flatten()
-                            .filter(|e| e.metadata().map(|m| m.len() > 0).unwrap_or(false))
-                            .count();
-                        if count > 0 {
-                            valid_package = true;
-                            checkpoint_count += count;
-                        }
-                    }
-                    if !valid_package {
-                        is_corrupted = true;
-                    }
-                }
-            }
-        }
-    }
+    let SavesScan { has_saves, checkpoint_count, is_corrupted, latest_time } = scan_saves(&content_dir);
 
     let status = if is_corrupted {
         "corrupted"
@@ -586,6 +583,33 @@ mod tests {
         fs::write(dir.join("B13EBABEBABEBABE/4D5308AB/00000001/PlayerStorage.dat"), b"save").unwrap();
         fs::create_dir_all(dir.join("4D5308AB/profile/Marcus")).unwrap();
         fs::create_dir_all(dir.join("cache/shaders")).unwrap();
+    }
+
+    #[test]
+    fn empty_checkpoint_slots_are_not_broken_saves() {
+        let dir = TempFolder::new("saves-scan");
+        let content = dir.join("content");
+        // A profile that never saved the campaign: its header, its package, and the three slots the
+        // game makes empty.
+        fs::create_dir_all(content.join("Headers/00000001")).unwrap();
+        fs::write(content.join("Headers/00000001/GearsCheckpoint.header"), b"header").unwrap();
+        fs::create_dir_all(content.join("00000001/GearsCheckpoint")).unwrap();
+        for slot in 0..3 {
+            fs::write(content.join(format!("00000001/GearsCheckpoint/GearsCheckpoint{slot}.sav")), b"").unwrap();
+        }
+        let scan = scan_saves(&content);
+        assert!(scan.has_saves && !scan.is_corrupted);
+        assert_eq!(scan.checkpoint_count, 0);
+
+        // Once the game saves, the slot counts as a checkpoint.
+        fs::write(content.join("00000001/GearsCheckpoint/GearsCheckpoint0.sav"), b"save").unwrap();
+        let scan = scan_saves(&content);
+        assert!(!scan.is_corrupted);
+        assert_eq!(scan.checkpoint_count, 1);
+
+        // A header whose package is gone is broken, as repairing sees it.
+        fs::write(content.join("Headers/00000001/PlayerStorage.dat.header"), b"header").unwrap();
+        assert!(scan_saves(&content).is_corrupted);
     }
 
     #[test]
