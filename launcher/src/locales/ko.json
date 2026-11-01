@@ -526,5 +526,15 @@
       "impersonation": "사칭",
       "other": "기타"
     }
+  },
+  "devServer": {
+    "title": "개발",
+    "help": "Azura (DEV) 전용: 통신하는 Alboria 서버입니다. 로컬은 alboria-server에서 `npm run local`로 시작하는 서버로, 테스트 계정이 실제 데이터베이스에 들어가지 않습니다. 바꾸면 다시 로그인합니다(서버마다 계정이 따로 있음). 게임은 다음 실행 때 같은 서버를 사용합니다.",
+    "local": "로컬 (127.0.0.1:8080)",
+    "production": "프로덕션 (api.alboria.org)",
+    "other": "다른 주소",
+    "apply": "이 서버 사용",
+    "now": "현재: {url}",
+    "badUrl": "http 또는 https 주소를 입력하세요(예: http://192.168.1.20:8080)"
   }
 }
