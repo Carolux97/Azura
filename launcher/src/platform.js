@@ -396,9 +396,38 @@ export const alboriaSignIn = async (gamertag) => {
 };
 
 /** Asks for a code: purpose "create" (with the gamertag) or "signin"; { expiresIn, resendIn }. */
-/** Whether the service sends codes now: `{ emailCodes }`, false while accounts are made unverified. */
-export const alboriaStatus = async () =>
-  isNativeApp ? tauri.core.invoke("alboria_status") : { emailCodes: !simulatedCodesOff };
+/**
+ * How the service is (alboria.rs, Status): `{ emailCodes, maintenance, maintenanceUntil, motd, game,
+ * warnings }`, with the game `titleId`'s own state when given. In the simulation, "?notices",
+ * "?maintenance", "?gameoff", "?outdated" and "?warn" in the address show each state.
+ */
+export const alboriaStatus = async (titleId = null) => {
+  if (isNativeApp) return tauri.core.invoke("alboria_status", { titleId });
+  const inMinutes = (minutes) => new Date(Date.now() + minutes * 60_000).toISOString();
+  const has = (flag) => simulatedQuery.has(flag);
+  return {
+    emailCodes: !simulatedCodesOff,
+    maintenance: has("maintenance"),
+    maintenanceUntil: has("maintenance") ? inMinutes(120) : null,
+    motd: has("notices") ? "<h3>Maintenance tonight</h3><p>From <b>22:00</b> to <b>22:30</b> <span style=\"color:#d9306b\">no new rooms</span>. More on <a href=\"https://alboria.org\">alboria.org</a>.</p>" : null,
+    game: titleId
+      ? {
+          online: !has("gameoff"),
+          maintenance: false,
+          maintenanceUntil: null,
+          motd: has("notices") ? "Versus playlists are coming. Until then, invite friends to your room." : null,
+          minLauncher: has("outdated") ? "9.0.0" : null,
+        }
+      : null,
+    warnings: has("warn") ? [{ action: "restart", scope: "all", at: inMinutes(12) }, { action: "close_rooms", scope: "game", at: inMinutes(2) }] : [],
+  };
+};
+
+/** Opens a link of an Alboria notice (https or mailto only) in the system's browser. */
+export const openNoticeLink = async (url) => {
+  if (isNativeApp) return tauri.core.invoke("open_notice_link", { url });
+  window.open(url, "_blank", "noopener");
+};
 
 export const alboriaRequestCode = async ({ purpose, email, gamertag = null, language }) => {
   if (isNativeApp) return tauri.core.invoke("alboria_request_code", { purpose, email, gamertag, language });
