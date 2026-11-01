@@ -198,6 +198,17 @@ npx tauri dev
 on macOS, and the packages of `tauri.conf.json` on Linux (releases use the AppImage, see Updates
 and releases).
 
+### The development launcher, Azura (DEV)
+
+`../scripts/build-launcher.sh --dev` builds `Azura (DEV).app`, a launcher that lives next to the
+published one without touching it. `src-tauri/tauri.dev.conf.json`, laid over `tauri.conf.json`,
+gives it its own name, bundle identifier (`com.gears3azura.launcher.dev`, so its settings, runtime,
+achievements and backups live in their own app data folder), icon with a DEV band and window title.
+The `dev` feature gives it its own default saves folder (`Games Saves/Gears3-Azura (DEV)`, and so
+its own Alboria identity: link it to an account with a code like any new device) and turns its
+updater off, so it never becomes the published launcher. It copies the runtime of the project it
+was built in, as any local build does.
+
 ### Windows
 
 The launcher builds for Windows (x86-64) from Linux with `../scripts/build-launcher-windows.sh`, into
@@ -306,4 +317,5 @@ platform it was built on, so Linux launchers are not offered it; the workflow is
 
 The app icon is drawn in `src-tauri/icons/app-icon.svg`; regenerate every size with
 `npx tauri icon src-tauri/icons/app-icon.svg -o src-tauri/icons` (then delete the `android` and
-`ios` folders it also creates).
+`ios` folders it also creates). The development launcher's icon is `app-icon-dev.svg`, the same
+with a DEV band, generated the same way into `src-tauri/icons/dev`.
