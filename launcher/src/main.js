@@ -67,6 +67,7 @@ import {
   openSavesFolder,
   pickGameFolder,
   pickGameImage,
+  openEditionReport,
   onPathDropped,
   pickSavesFolder,
   pickDlcPackage,
@@ -882,6 +883,24 @@ const setupBuildProgress = () => {
   document.getElementById("install-runtime-log").addEventListener("click", () => {
     if (state.runtimeInstallError?.log) showBuildLog(state.runtimeInstallError.log).catch((error) => console.error(error));
   });
+  // The details stay selectable in their box, so a failed copy still leaves a way to take them.
+  const copyReport = document.getElementById("edition-report-copy");
+  copyReport.addEventListener("click", async () => {
+    const report = editionReport(state.gameCheck);
+    if (!report) return;
+    try {
+      await navigator.clipboard.writeText(report);
+      copyReport.textContent = t("install.editionReportCopied");
+      setTimeout(() => (copyReport.textContent = t("install.editionReportCopy")), EDITION_REPORT_COPIED_MS);
+    } catch (error) {
+      // Without clipboard access the details are selected instead, ready for Cmd/Ctrl+C.
+      console.error("Could not copy the edition report:", error);
+      window.getSelection()?.selectAllChildren(document.getElementById("edition-report-details"));
+    }
+  });
+  document.getElementById("edition-report-open").addEventListener("click", () => {
+    openEditionReport().catch((error) => console.error(error));
+  });
 };
 
 /** How often the status is checked while Apple's install window is open, and for how long. */
@@ -1075,11 +1094,32 @@ const renderInstall = () => {
 
   const line = document.getElementById("game-check");
   line.hidden = !check;
+  const report = editionReport(check);
+  document.getElementById("edition-report").hidden = !report;
+  document.getElementById("edition-report-details").textContent = report ?? "";
   if (!check) return;
   line.dataset.state = check.status === "ok" ? "ok" : "error";
   // Every check field (titleId, mediaId, versionName, ...) is available to the message.
   line.textContent = t(`install.${check.status}`, check);
 };
+
+/**
+ * The details a player reports an unsupported edition with, or null for any other check. In
+ * English whatever the launcher's language, since they are pasted into the project's issues.
+ */
+const editionReport = (check) => {
+  if (check?.status !== "unsupportedVersion") return null;
+  return [
+    `Media ID: ${check.mediaId}`,
+    `default.xex SHA-256: ${check.xexSha256}`,
+    `Image SHA-256 (after the header): ${check.imageSha256}`,
+    `Languages: ${check.languages.join(", ") || "none found"}`,
+    `Launcher: ${state.launcherVersion}`,
+  ].join("\n");
+};
+
+/** How long the copy button says the details were copied. */
+const EDITION_REPORT_COPIED_MS = 2000;
 
 /**
  * Fills the game language selector with the languages found in the game folder. Without a folder

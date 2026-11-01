@@ -940,6 +940,18 @@ fn open_alboria_site(app: tauri::AppHandle) -> Result<(), String> {
     app.opener().open_url(ALBORIA_SITE, None::<&str>).map_err(|e| e.to_string())
 }
 
+/// Where players report an edition of the game the launcher does not support yet: a new issue on the
+/// project's repository.
+const EDITION_REPORT_PAGE: &str = "https://github.com/Carolux97/Azura/issues/new";
+
+/// Opens the page to report an unsupported edition in the system browser. The address is fixed
+/// here, like Alboria's site; the details to paste are copied by the interface.
+#[tauri::command]
+fn open_edition_report(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener().open_url(EDITION_REPORT_PAGE, None::<&str>).map_err(|e| e.to_string())
+}
+
 /// Opens a link of an Alboria notice in the system's browser (or mail app). Only `https:` and
 /// `mailto:` links open: a notice is written by people, and nothing else may leave the launcher.
 #[tauri::command]
@@ -1055,6 +1067,7 @@ pub fn run() {
             alboria_delete_code,
             alboria_delete,
             open_alboria_site,
+            open_edition_report,
             open_notice_link,
             join_room,
             alboria_friends,
