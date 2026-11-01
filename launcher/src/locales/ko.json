@@ -25,7 +25,6 @@
     "lede": "내 게임을 {target}용으로 다시 컴파일했습니다.",
     "launch": "플레이",
     "launching": "시작 중",
-    "mode": "캠페인",
     "install": "설치",
     "installSub": "게임 파일 설정",
     "running": "플레이 중",
@@ -143,7 +142,8 @@
     "dlcOthers": "기타 설치된 콘텐츠",
     "dlcOthersCount": "패키지 {count}개",
     "dlcInstalled": "{name} 설치됨.",
-    "dlcFailed": "패키지를 설치하지 못했습니다: {detail}"
+    "dlcFailed": "패키지를 설치하지 못했습니다: {detail}",
+    "eyebrow": "당신의 사본, 당신의 컴퓨터"
   },
   "graphics": {
     "title": "그래픽",
@@ -159,7 +159,13 @@
     "gpuIntegrated": "내장",
     "whilePlaying": "플레이 중 런처",
     "whilePlayingMinimize": "최소화",
-    "whilePlayingKeepOpen": "열어 두기"
+    "whilePlayingKeepOpen": "열어 두기",
+    "eyebrow": "게임의 모습과 실행 방식",
+    "displayTitle": "디스플레이",
+    "modeHelp": "게임 창이 열리는 방식.",
+    "gpuHelp": "게임을 실행할 그래픽 카드.",
+    "whilePlayingHelp": "게임이 시작되면 런처가 할 일.",
+    "renderResolutionHelp": "게임이 그리는 크기. 높을수록 선명하지만 그래픽 카드에 더 많은 부담을 줍니다."
   },
   "achievements": {
     "title": "도전 과제",
@@ -312,7 +318,8 @@
     "folderHelp": "체크포인트, 프로필, 다운로드 콘텐츠가 저장되는 곳입니다. 변경하면 백업을 만든 뒤 그곳으로 옮깁니다.",
     "folderCloseGame": "저장 데이터를 옮기려면 게임을 종료하세요",
     "kindBeforeMove": "이동 전",
-    "kindBeforeReplace": "교체 전"
+    "kindBeforeReplace": "교체 전",
+    "eyebrow": "체크포인트와 프로필"
   },
   "gamepad": {
     "select": "선택",
@@ -372,7 +379,13 @@
     "codesOffCreate": "지금은 코드를 보내지 않습니다. 계정은 이메일 인증 없이 만들어집니다. 코드를 다시 보내기 시작하면 48시간 안에 인증해야 하며, 그렇지 않으면 계정이 삭제됩니다.",
     "codesOffSignIn": "지금은 코드를 보내지 않아서 다른 컴퓨터에서 계정에 로그인할 수 없습니다. 나중에 다시 시도하세요.",
     "createNow": "계정 만들기",
-    "createdUnverified": "이메일이 인증되지 않았습니다. 코드를 다시 보내기 시작하면 48시간 안에 계정에서 인증하세요. 그렇지 않으면 계정이 삭제됩니다."
+    "createdUnverified": "이메일이 인증되지 않았습니다. 코드를 다시 보내기 시작하면 48시간 안에 계정에서 인증하세요. 그렇지 않으면 계정이 삭제됩니다.",
+    "title": "{player} 준비하기",
+    "titlePlayer": "플레이어",
+    "chooseTitle": "어떻게 플레이할까요?",
+    "bubbleGreet": "안녕하세요! 태그를 만들어 봐요.",
+    "bubbleCode": "메일함을 확인하세요, 방금 보냈어요!",
+    "bubbleDone": "Alboria에 오신 걸 환영해요!"
   },
   "account": {
     "title": "계정",
@@ -475,7 +488,9 @@
     "thenMaintenance": "열린 방은 계속되고 새 방은 끝날 때까지 기다립니다.",
     "thenRestart": "새 방은 돌아올 때까지 멈춥니다. 열린 방은 최대 30분 안에 끝내야 합니다.",
     "thenGameOff": "그때 방이 닫힙니다.",
-    "thenCloseRooms": "그 전에 경기를 마치세요."
+    "thenCloseRooms": "그 전에 경기를 마치세요.",
+    "downTitle": "Alboria가 낮잠 중이에요",
+    "downText": "지금은 Alboria에 연결할 수 없어 온라인 방이 일시 중지되었습니다. 밤부엉이가 지키고 있어요."
   },
   "friends": {
     "title": "친구",

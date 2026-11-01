@@ -3,11 +3,12 @@
  * for the shape of an achievement). main.js keeps the state (the data, the view and the filter) and
  * calls renderAchievementsPage again after every change and every language change.
  *
- * The section shows, top to bottom: a banner once every achievement is unlocked, the Embry Star
- * card (the badge, the gamerscore earned out of the total with its bar, and the count), the filters,
- * and the achievements in the chosen view: a list, a grid of badges, or sections by act beside the
- * Embry Star card. Without the game the page shows dimmed generic medals behind a card with a lock,
- * a message and a button to the Installation view.
+ * The section shows a banner once every achievement is unlocked, then two columns: on the left the
+ * Embry Star card (the badge, the gamerscore earned out of the total with its bar, and the count),
+ * and under it, in the view by acts, what comes next in the story; on the right the filters and the
+ * achievements in the chosen view: a list, a grid of badges, or sections by act. Without the game
+ * the page shows dimmed generic medals behind a card with a lock, a message and a button to the
+ * Installation view.
  *
  * Every text from the game goes in through textContent, never as HTML.
  */
@@ -191,7 +192,8 @@ const badgeTile = (achievement, ctx) => {
     "li",
     `tile is-${stateOf(achievement)}`,
     medal(achievement, 64),
-    el("div", "tile-name", name),
+    // The name is read by screen readers; the card over the badge shows it to everyone else.
+    el("div", "tile-name visually-hidden", name),
     el("div", "tile-g", achievement.gamerscore == null ? "? G" : `${achievement.gamerscore} G`),
   );
   tile.tabIndex = 0;
@@ -202,53 +204,33 @@ const badgeTile = (achievement, ctx) => {
   return tile;
 };
 
-/** "12 of 50 achievements · 24 %". */
-const countLine = (data, ctx) => {
-  const total = data.achievements.length;
-  const percent = new Intl.NumberFormat(ctx.locale, { style: "percent" }).format(total ? data.unlockedCount / total : 0);
-  return `${ctx.t("achievements.count", { unlocked: data.unlockedCount, total })} · ${percent}`;
-};
-
 /**
- * The Embry Star card: the badge (dimmed until every achievement is unlocked), "250 / 1000 G" and
- * the bar under it. `layout` is "wide" (list), "stats" (badges, with the three counts) or "side"
- * (beside the sections of the view by acts).
+ * The Embry Star card, beside every view: the badge (dimmed until every achievement is unlocked,
+ * with rays and a shine once it is earned), what earns it, "250 / 1000 G" with its bar, and the
+ * count.
  */
-const embryCard = (data, ctx, layout) => {
+const embryCard = (data, ctx) => {
   const earned = Boolean(data.completedAt) || (data.achievements.length > 0 && data.unlockedCount === data.achievements.length);
   const bar = el("div", "embry-bar", el("span"));
-  bar.firstElementChild.style.width = `${gamerscorePercent(data.earnedGamerscore, data.totalGamerscore)}%`;
+  bar.firstElementChild.style.width = `${earned ? 100 : gamerscorePercent(data.earnedGamerscore, data.totalGamerscore)}%`;
   const badge = el("div", `embry-badge${earned ? "" : " is-dim"}`);
   badge.append(svg(EMBRY_STAR));
-  const info = el(
+  return el(
     "div",
-    "embry-info",
-    el("p", "eyebrow", ctx.t(earned ? "achievements.embryEarned" : "achievements.embryStar")),
+    `panel embry-card${earned ? " is-earned" : ""}`,
+    badge,
+    el("h2", "embry-title", ctx.t(earned ? "achievements.embryEarned" : "achievements.embryStar")),
+    el("p", "help embry-hint", ctx.t(earned ? "achievements.embryEarnedHint" : "achievements.embryHint")),
     el("div", "embry-g", el("b", "", String(data.earnedGamerscore)), ` / ${data.totalGamerscore} `, el("small", "", "G")),
     bar,
-    el("div", "embry-count", layout === "side" ? ctx.t("achievements.count", { unlocked: data.unlockedCount, total: data.achievements.length }) : countLine(data, ctx)),
-    layout === "wide" ? el("div", "embry-hint", ctx.t(earned ? "achievements.embryEarnedHint" : "achievements.embryHint")) : null,
+    el("div", "embry-count", ctx.t("achievements.count", { unlocked: data.unlockedCount, total: data.achievements.length })),
   );
-  const card = el("div", `panel embry-card is-${layout}${earned ? " is-earned" : ""}`, badge, info);
-  if (layout === "stats") {
-    const counts = filterCounts(data.achievements);
-    const stat = (value, key) => el("div", "embry-stat", el("b", "", String(value)), el("span", "", ctx.t(key)));
-    card.append(
-      el(
-        "div",
-        "embry-stats",
-        stat(counts.unlocked, "achievements.filterUnlocked"),
-        stat(counts.locked, "achievements.filterLocked"),
-        stat(counts.hidden, "achievements.filterHidden"),
-      ),
-    );
-  }
-  return card;
 };
 
-/** The filter buttons; `onFilter(name)` runs when one is chosen. */
-const filterBar = (filter, ctx) => {
-  const bar = el("div", "ach-filters");
+/** The filter buttons, each with how many achievements it shows; `onFilter(name)` runs when one is chosen. */
+const filterBar = (data, filter, ctx) => {
+  const counts = filterCounts(data.achievements);
+  const bar = el("div", "segmented ach-filters");
   bar.setAttribute("role", "group");
   for (const [name, key] of [
     ["all", "achievements.filterAll"],
@@ -256,7 +238,7 @@ const filterBar = (filter, ctx) => {
     ["locked", "achievements.filterLocked"],
     ["hidden", "achievements.filterHidden"],
   ]) {
-    const chip = el("button", `chip${filter === name ? " is-on" : ""}`, ctx.t(key));
+    const chip = el("button", filter === name ? "is-on" : "", ctx.t(key), el("small", "", String(counts[name])));
     chip.type = "button";
     chip.setAttribute("aria-pressed", String(filter === name));
     chip.addEventListener("click", () => ctx.onFilter(name));
@@ -268,12 +250,24 @@ const filterBar = (filter, ctx) => {
 /** Text shown when a filter leaves nothing to show. */
 const emptyNote = (ctx) => el("p", "help ach-empty", ctx.t("achievements.noneHere"));
 
+/**
+ * Every view's layout: the Embry Star card (and, in the view by acts, what comes next) in a column
+ * on the left, and the filters with the view's own content in a card on the right.
+ */
+const layout = (data, filter, ctx, content, sideExtra = null) =>
+  el(
+    "div",
+    "ach-columns",
+    el("div", "ach-side", embryCard(data, ctx), sideExtra),
+    el("div", "panel ach-main", filterBar(data, filter, ctx), content),
+  );
+
 /** The list view. */
 const listView = (data, filter, ctx) => {
   const items = data.achievements.filter((achievement) => matchesFilter(achievement, filter));
   const list = el("ul", "ach-list");
   items.forEach((achievement) => list.append(listRow(achievement, ctx)));
-  return [embryCard(data, ctx, "wide"), filterBar(filter, ctx), el("div", "panel", items.length ? list : emptyNote(ctx))];
+  return [layout(data, filter, ctx, items.length ? list : emptyNote(ctx))];
 };
 
 /** The grid of badges. */
@@ -281,10 +275,10 @@ const badgesView = (data, filter, ctx) => {
   const items = data.achievements.filter((achievement) => matchesFilter(achievement, filter));
   const grid = el("ul", "ach-grid");
   items.forEach((achievement) => grid.append(badgeTile(achievement, ctx)));
-  return [embryCard(data, ctx, "stats"), filterBar(filter, ctx), items.length ? grid : emptyNote(ctx)];
+  return [layout(data, filter, ctx, items.length ? grid : emptyNote(ctx))];
 };
 
-/** The view by acts: one panel per section, with the Embry Star card and what comes next beside. */
+/** The view by acts: one card per section, and what comes next in the story under the Embry Star. */
 const actsView = (data, filter, ctx) => {
   const sections = achievementSections(data.achievements, filter);
   const main = el("div", "ach-sections");
@@ -296,7 +290,7 @@ const actsView = (data, filter, ctx) => {
     main.append(
       el(
         "div",
-        "panel ach-section",
+        "ach-section",
         el(
           "div",
           "ach-section-head",
@@ -315,14 +309,14 @@ const actsView = (data, filter, ctx) => {
   }
   if (!sections.length) main.append(emptyNote(ctx));
 
-  const side = el("div", "ach-side", embryCard(data, ctx, "side"));
   const next = nextStoryAchievements(data.achievements);
+  let nextPanel = null;
   if (next.length) {
     const list = el("ul", "ach-list is-compact");
     next.forEach((achievement) => list.append(listRow(achievement, ctx, true)));
-    side.append(el("div", "panel", el("h2", "panel-title", ctx.t("achievements.next")), el("p", "help", ctx.t("achievements.nextHelp")), list));
+    nextPanel = el("div", "panel", el("h2", "panel-title", ctx.t("achievements.next")), el("p", "help", ctx.t("achievements.nextHelp")), list);
   }
-  return [filterBar(filter, ctx), el("div", "ach-columns", main, side)];
+  return [layout(data, filter, ctx, main, nextPanel)];
 };
 
 /**

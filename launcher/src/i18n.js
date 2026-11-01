@@ -24,9 +24,12 @@ const AUTO = "auto";
 /**
  * Tags that wrap a placeholder in an element instead of plain text. Keyed by message key, then by
  * placeholder name: { file: ["code", "default.xex"] } renders {file} as <code>default.xex</code>.
+ * The content is a fixed text, or a function that returns it (a translated word, in the title's
+ * own word order).
  */
 const RICH_PLACEHOLDERS = {
   "install.gameFolderHelp": { file: ["code", "default.xex"] },
+  "welcome.title": { player: ["em", () => t("welcome.titlePlayer")] },
 };
 
 let fallbackMessages = {};
@@ -76,7 +79,7 @@ const fillRich = (el, text, placeholders) => {
     if (name && placeholders[name]) {
       const [tag, content] = placeholders[name];
       const node = document.createElement(tag);
-      node.textContent = content;
+      node.textContent = typeof content === "function" ? content() : content;
       el.appendChild(node);
     } else if (part) {
       el.appendChild(document.createTextNode(part));
