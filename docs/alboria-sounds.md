@@ -58,7 +58,12 @@ sounds like distortion.
 - `runtime/src/alboria_sounds.{h,cpp}`: makes the sounds on a thread of their own when the app
   starts (they take a moment: the bed has many voices) and plays them through SDL's audio beside
   the game's, at the game's effects volume (the Options' effects slider, profile setting 42) times
-  0.55, and not at all with `audio_mute`. A sound asked for before they are made is not played.
+  0.55, times the player's volume for its group, and not at all with `audio_mute`. A sound asked
+  for before they are made is not played.
+- Two groups have their own volume, 0 to 10, in the overlay's Settings page and in `azura.toml`:
+  the menu (`alboria_menu_volume`: moving, choosing, going back, the overlay opening and closing)
+  and the notices (`alboria_notice_volume`: an invitation and the other notices). Changing one plays
+  a sample of it at the new volume.
 - The overlay (`alboria_overlay.cpp`) plays them as it opens and closes and for each action; the
   notices (`alboria_notices.cpp`) as each notice comes in, and for accepting and failing.
 
