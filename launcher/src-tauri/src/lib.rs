@@ -579,10 +579,11 @@ async fn alboria_verify(
     alboria.verify(&identity, &purpose, &email, code, gamertag, language.as_deref().unwrap_or("en")).await
 }
 
-/// Whether the service sends codes now (false while accounts are made unverified).
+/// How the service is (alboria.rs, Status): whether it sends codes now, maintenance, notices and
+/// warnings, with the game `title_id`'s own state when given.
 #[tauri::command]
-async fn alboria_status(alboria: tauri::State<'_, Alboria>) -> Result<alboria::Status, AlboriaError> {
-    alboria.status().await
+async fn alboria_status(alboria: tauri::State<'_, Alboria>, title_id: Option<String>) -> Result<alboria::Status, AlboriaError> {
+    alboria.status(title_id.as_deref()).await
 }
 
 /// Asks for a code to verify the email of an account made while the service sent no codes.
@@ -722,6 +723,23 @@ fn open_alboria_site(app: tauri::AppHandle) -> Result<(), String> {
     app.opener().open_url(ALBORIA_SITE, None::<&str>).map_err(|e| e.to_string())
 }
 
+/// Opens a link of an Alboria notice in the system's browser (or mail app). Only `https:` and
+/// `mailto:` links open: a notice is written by people, and nothing else may leave the launcher.
+#[tauri::command]
+fn open_notice_link(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    if !notice_link_allowed(&url) {
+        return Err(format!("not an https or mailto link: {url}"));
+    }
+    app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string())
+}
+
+/// Whether a notice's link may open: `https:` or `mailto:`, in any case, with something after it.
+fn notice_link_allowed(url: &str) -> bool {
+    let lower = url.trim().to_ascii_lowercase();
+    ["https://", "mailto:"].iter().any(|scheme| lower.starts_with(scheme) && lower.len() > scheme.len())
+}
+
 /// Whether there is a working C++ compiler to build the runtime with, and how to install one
 /// otherwise (see `toolchain.rs`). `async`: it compiles a small test program.
 #[tauri::command]
@@ -818,7 +836,8 @@ pub fn run() {
             alboria_export,
             alboria_delete_code,
             alboria_delete,
-            open_alboria_site
+            open_alboria_site,
+            open_notice_link
         ])
         .setup(|app| {
             // Controllers navigate the interface (gamepad.rs).
@@ -839,4 +858,20 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running the Azura launcher");
+}
+
+#[cfg(test)]
+mod notice_link_tests {
+    use super::notice_link_allowed;
+
+    #[test]
+    fn only_https_and_mailto_links_open() {
+        assert!(notice_link_allowed("https://alboria.org/estado"));
+        assert!(notice_link_allowed("HTTPS://alboria.org"));
+        assert!(notice_link_allowed("mailto:hola@alboria.org"));
+        assert!(!notice_link_allowed("http://alboria.org"));
+        assert!(!notice_link_allowed("javascript:alert(1)"));
+        assert!(!notice_link_allowed("file:///etc/passwd"));
+        assert!(!notice_link_allowed("https://"));
+    }
 }
