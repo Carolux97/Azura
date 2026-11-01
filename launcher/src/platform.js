@@ -558,7 +558,7 @@ const simulatedFriends = {
   friends: [
     { id: 2, name: "Kabosu#117", favourite: true, presence: { status: "playing", title_id: "4D5308AB", party: "joinable" } },
     { id: 3, name: "CAPI_REX#501", favourite: false, presence: { status: "playing", title_id: "4D5308AB", party: "invite_only" } },
-    { id: 4, name: "Ortega#1", favourite: false, presence: { status: "online" } },
+    { id: 4, name: "Nimbus#4827", favourite: false, presence: { status: "online" } },
     { id: 5, name: "Bruma#733", favourite: false, presence: { status: "offline", last_seen: new Date(Date.now() - 30 * 3_600_000).toISOString() } },
   ],
   incoming: [{ id: 6, name: "Viento#58" }],

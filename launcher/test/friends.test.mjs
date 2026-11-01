@@ -45,10 +45,10 @@ test("only an open room can be joined, and not with the game's online play off",
 });
 
 test("a request names Gamertag#tag", () => {
-  assert.equal(requestName(" Ortega#1 "), "Ortega#1");
+  assert.equal(requestName(" Nimbus#4827 "), "Nimbus#4827");
   assert.equal(requestName("Kabosu#0117"), "Kabosu#117");
   assert.equal(requestName("Two Words#42"), "Two Words#42");
-  assert.equal(requestName("Ortega"), null);
+  assert.equal(requestName("Nimbus"), null);
   assert.equal(requestName("#12"), null);
   assert.equal(requestName("A name far too long#1"), null);
 });
