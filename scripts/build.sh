@@ -86,13 +86,15 @@ prepare_sdk
 # generator is built there and writes it, and the runtime is configured again.
 if [[ ! -f "${RUNTIME_DIR}/generated/rexglue.cmake" ]]; then
   echo "==> Bootstrapping the generated CMake files with the patched code generator"
-  (cd "${RUNTIME_DIR}" && cmake --preset "${PRESET}")
+  (cd "${RUNTIME_DIR}" && cmake --preset "${PRESET}" -DAZURA_DEV_KEYS=ON)
   (cd "${RUNTIME_DIR}" && cmake --build --preset "${PRESET}-${CONFIG}" --target rexglue)
   BOOTSTRAP_GENERATOR="$(ls -t $(find "${SDK_SRC}/out" -name 'rexglue*' -type f -perm -u+x) | head -n 1)"
   (cd "${RUNTIME_DIR}" && "${BOOTSTRAP_GENERATOR}" codegen azura_manifest.toml)
 fi
 echo "==> Configuring"
-(cd "${RUNTIME_DIR}" && cmake --preset "${PRESET}")
+# A development build: the SDK's developer keys (F3, F4, F7, the console) stay on. The player kit
+# (scripts/build-kit.sh) leaves them off.
+(cd "${RUNTIME_DIR}" && cmake --preset "${PRESET}" -DAZURA_DEV_KEYS=ON)
 
 # The recompiled code must come from the patched generator (it emits real memory fences for the
 # guest's sync/lwsync; the prebuilt one drops them, which breaks the game's lock-free queues on

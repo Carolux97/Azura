@@ -22,6 +22,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # build without any game files.
 set(AZURA_REXGLUE_CMAKE ${CMAKE_CURRENT_SOURCE_DIR}/generated/rexglue.cmake)
 option(AZURA_KIT_PROBE "Configure the probes the player kit records its build commands from (scripts/build-kit.sh)" OFF)
+# The SDK's developer keys (F3 debug overlay, F4 settings overlay, F7 achievements overlay, the
+# backtick console): off unless a build asks for them, so the player kit (scripts/build-kit.sh), and
+# what players run, never has them; scripts/build.sh turns them on for development builds.
+option(AZURA_DEV_KEYS "Keep the SDK's developer keys (F3, F4, F7 and the console) working; development builds only" OFF)
 option(AZURA_PM4_TRACE "Trace which guest functions write PM4 commands (src/hle_gfx/pm4_trace.h); debug builds only" OFF)
 if(AZURA_KIT_PROBE)
     # The player kit is built against the patched SDK as installed, the form it ships in, and
@@ -127,6 +131,9 @@ add_compile_options(-fmacro-prefix-map=${CMAKE_SOURCE_DIR}=. -ffile-prefix-map=$
 add_library(azura_host OBJECT ${AZURA_SOURCES})
 target_include_directories(azura_host PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(azura_host PRIVATE rex::runtime)
+if(AZURA_DEV_KEYS)
+    target_compile_definitions(azura_host PRIVATE AZURA_DEV_KEYS=1)
+endif()
 rexglue_add_host_sources(azura_host)
 
 # With the SDK built from source (preset mac-arm64-sdk-source), the SDK's public headers include
