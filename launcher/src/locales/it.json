@@ -133,13 +133,16 @@
       "notInstalled": "Non installato",
       "needsRuntime": "Installato · pronto dopo l'aggiornamento del runtime",
       "unsupported": "Installato, ma non è stato possibile prepararlo con questi file del gioco",
-      "multiplayer": "Arriverà con il multigiocatore",
+      "installed": "Installato",
       "installing": "Installazione… (richiede un minuto)"
     },
     "dlcOthers": "Altri contenuti installati",
     "dlcOthersCount": "{count} pacchetti",
     "dlcInstalled": "{name} installato.",
-    "dlcFailed": "Impossibile installare il pacchetto: {detail}"
+    "dlcFailed": "Impossibile installare il pacchetto: {detail}",
+    "dlcRemove": "Rimuovi",
+    "dlcRemoved": "{name} rimosso.",
+    "dlcRemoveFailed": "Impossibile rimuovere il contenuto: {detail}"
   },
   "graphics": {
     "title": "Grafica",

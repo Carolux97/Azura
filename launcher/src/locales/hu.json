@@ -133,13 +133,16 @@
       "notInstalled": "Nincs telepítve",
       "needsRuntime": "Telepítve · a runtime frissítése után készül el",
       "unsupported": "Telepítve, de ezekkel a játékfájlokkal nem sikerült előkészíteni",
-      "multiplayer": "A többjátékos móddal érkezik",
+      "installed": "Telepítve",
       "installing": "Telepítés… (egy percig tart)"
     },
     "dlcOthers": "Egyéb telepített tartalom",
     "dlcOthersCount": "{count} csomag",
     "dlcInstalled": "{name} telepítve.",
-    "dlcFailed": "A csomagot nem sikerült telepíteni: {detail}"
+    "dlcFailed": "A csomagot nem sikerült telepíteni: {detail}",
+    "dlcRemove": "Eltávolítás",
+    "dlcRemoved": "{name} eltávolítva.",
+    "dlcRemoveFailed": "A tartalmat nem sikerült eltávolítani: {detail}"
   },
   "graphics": {
     "title": "Grafika",

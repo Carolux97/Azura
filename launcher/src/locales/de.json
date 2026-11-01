@@ -133,13 +133,16 @@
       "notInstalled": "Nicht installiert",
       "needsRuntime": "Installiert · wird nach dem Runtime-Update vorbereitet",
       "unsupported": "Installiert, konnte aber mit diesen Spieldateien nicht vorbereitet werden",
-      "multiplayer": "Kommt mit dem Mehrspielermodus",
+      "installed": "Installiert",
       "installing": "Wird installiert … (dauert eine Minute)"
     },
     "dlcOthers": "Weitere installierte Inhalte",
     "dlcOthersCount": "{count} Pakete",
     "dlcInstalled": "{name} installiert.",
-    "dlcFailed": "Das Paket konnte nicht installiert werden: {detail}"
+    "dlcFailed": "Das Paket konnte nicht installiert werden: {detail}",
+    "dlcRemove": "Entfernen",
+    "dlcRemoved": "{name} entfernt.",
+    "dlcRemoveFailed": "Der Inhalt konnte nicht entfernt werden: {detail}"
   },
   "graphics": {
     "title": "Grafik",

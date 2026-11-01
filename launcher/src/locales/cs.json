@@ -133,13 +133,16 @@
       "notInstalled": "Nenainstalováno",
       "needsRuntime": "Nainstalováno · připraví se po aktualizaci runtime",
       "unsupported": "Nainstalováno, ale s těmito soubory hry se ho nepodařilo připravit",
-      "multiplayer": "Přijde s multiplayerem",
+      "installed": "Nainstalováno",
       "installing": "Instalace… (trvá minutu)"
     },
     "dlcOthers": "Další nainstalovaný obsah",
     "dlcOthersCount": "Balíčky: {count}",
     "dlcInstalled": "{name} nainstalován.",
-    "dlcFailed": "Balíček se nepodařilo nainstalovat: {detail}"
+    "dlcFailed": "Balíček se nepodařilo nainstalovat: {detail}",
+    "dlcRemove": "Odebrat",
+    "dlcRemoved": "{name} odebráno.",
+    "dlcRemoveFailed": "Obsah se nepodařilo odebrat: {detail}"
   },
   "graphics": {
     "title": "Grafika",

@@ -133,13 +133,16 @@
       "notInstalled": "Not installed",
       "needsRuntime": "Installed · ready once the runtime is updated",
       "unsupported": "Installed, but it could not be prepared with these game files",
-      "multiplayer": "Coming with multiplayer",
+      "installed": "Installed",
       "installing": "Installing… (it takes a minute)"
     },
     "dlcOthers": "Other installed content",
     "dlcOthersCount": "{count} packages",
     "dlcInstalled": "{name} installed.",
-    "dlcFailed": "The package could not be installed: {detail}"
+    "dlcFailed": "The package could not be installed: {detail}",
+    "dlcRemove": "Remove",
+    "dlcRemoved": "{name} removed.",
+    "dlcRemoveFailed": "The content could not be removed: {detail}"
   },
   "graphics": {
     "title": "Graphics",
