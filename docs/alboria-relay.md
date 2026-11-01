@@ -360,7 +360,10 @@ too_many_channels`). Events:
 **Presence**, as friends see it: `{ "status": "playing", "title_id": "4D5308AB", "party": "joinable" }`
 while any device of the account is in a room (`party` is `joinable` or `invite_only`),
 `{ "status": "online" }` while it has an events channel open, and otherwise
-`{ "status": "offline", "last_seen": "<ISO date or null>" }`. The room's code is never shown.
+`{ "status": "offline", "last_seen": "<ISO date or null>" }`. The room's code is never shown. In
+`POST /v1/friends`, a friend playing in the same room as the account asking also carries
+`"with_you": true`, which both already know; the game uses it to tell a player that a friend
+joined their room (section 6.4).
 Presence is worked out again every 2 seconds, and only changes are sent.
 
 | Request | Body | Answer |
@@ -676,6 +679,28 @@ belongs to the service, so it has Alboria's look (the launcher's light panels), 
   so no notice of a lost controller shows), hears that the Guide is open (`XN_SYS_UI`), and
   `XamIsUIActive` says so. The overlay reads the controllers itself, and the keyboard and the mouse
   through ImGui; the glyphs follow the input in use, in Alboria's colours.
+
+### 6.4 Alboria's notices
+
+Notices over the game, as the Guide showed Xbox Live's (`runtime/src/alboria_notices.h`): an
+invitation received, a friend request, or a friend joining the player's room. The SDK's friends
+reader compares each read with the last one (`alboria::TakeNotices`): a new invitation ID, a new
+requester in `incoming`, or a friend whose presence gains `with_you` while the player was already
+in that room at the last read (so joining a friend's room does not tell the player the friend
+joined them). The first read after the reader starts only reports invitations, so signing in
+does not show every request already waiting.
+
+- **Look.** At the bottom middle of the game, in Alboria's look (`runtime/src/alboria_style.h`,
+  shared with the overlay): the planet grows from nothing with a bounce, the panel unfolds to its
+  right with who and what; a moon travels the planet's ring, a bar runs down the time left
+  (12 seconds for an invitation, 7 for the rest) and the hint pulses; it leaves backwards. One at a
+  time; none while the overlay is open, where they wait.
+- **Answering an invitation.** Back + RT on player 1's controller (Share + R2 on PlayStation), or
+  Shift with the overlay's key, accepts it and joins the room as the overlay's Join does; the RT
+  never reaches the game (the input filter, `runtime/src/input/overlay_input.h`, only while an
+  invitation's notice is on screen). Back + RB or the overlay's key open the overlay on the
+  Invitations page. The hints show the glyphs of what player 1 plays with, keys or a controller,
+  never both. A friend request is answered in the launcher.
 
 ## 7. Limits
 
