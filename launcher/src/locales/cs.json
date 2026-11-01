@@ -259,7 +259,11 @@
   "update": {
     "available": "Aktualizovat na {version}",
     "downloading": "Stahování aktualizace… {percent}",
-    "failed": "Aktualizaci se nepodařilo nainstalovat. Zkuste to později."
+    "failed": "Aktualizaci se nepodařilo nainstalovat. Zkuste to později.",
+    "confirm": "Launcher stáhne verzi {version} a restartuje se. Hra, uložené pozice a nastavení zůstanou beze změny.",
+    "confirmYes": "Aktualizovat a restartovat",
+    "cancel": "Zrušit",
+    "closeGame": "Pro aktualizaci launcheru zavřete hru"
   },
   "saves": {
     "title": "Uložené hry",

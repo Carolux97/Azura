@@ -259,7 +259,11 @@
   "update": {
     "available": "Update to {version}",
     "downloading": "Downloading update… {percent}",
-    "failed": "The update could not be installed. Try again later."
+    "failed": "The update could not be installed. Try again later.",
+    "confirm": "The launcher downloads {version} and restarts. Your game, saves and settings stay as they are.",
+    "confirmYes": "Update and restart",
+    "cancel": "Cancel",
+    "closeGame": "Close the game to update the launcher"
   },
   "saves": {
     "title": "Saved games",
