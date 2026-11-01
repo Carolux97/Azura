@@ -37,6 +37,12 @@ float AlboriaGlyph(ImDrawList* draw_list, ImFont* font, ImVec2 center, float hei
 // the ring at that angle (radians), hidden by the planet while it passes behind.
 void DrawAlboriaPlanet(ImDrawList* draw_list, ImVec2 center, float scale, int alpha, float moon = -1.0f);
 
+// Two arrows, up and down for moving through a list (`vertical`) or left and right for changing a
+// value: a navy cap with white arrows for a controller's D-pad, or a white key cap with a sky line
+// and navy arrows for the keyboard's; centred on `center`, `height` tall. Returns its width (an
+// alpha of 0 only measures it).
+float AlboriaArrowsGlyph(ImDrawList* draw_list, ImVec2 center, float height, bool pad, bool vertical, int alpha);
+
 // A keyboard key in Alboria's colours: a white cap with a sky line and its name in navy, its left
 // edge at `left` and its middle at `middle`, `height` tall. Returns its width.
 float AlboriaKey(ImDrawList* draw_list, ImFont* font, float left, float middle, float height, const char* name,

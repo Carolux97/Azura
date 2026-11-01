@@ -1,6 +1,6 @@
 diff --git a/include/rex/system/xam/alboria.h b/include/rex/system/xam/alboria.h
 new file mode 100644
-index 0000000..809266f
+index 0000000..f9c9673
 --- /dev/null
 +++ b/include/rex/system/xam/alboria.h
 @@ -0,0 +1,438 @@
@@ -308,8 +308,8 @@ index 0000000..809266f
 +  std::string from_name;  // Gamertag#tag
 +};
 +// The notices found since the last call, oldest first. Each read compares the new lists with the
-+// last ones; the first read after the reader starts only reports invitations, so a player signing
-+// in is not shown every request already waiting.
++// last ones; the first read after the reader starts reports nothing, so a player starting the game
++// is not shown what was already waiting (the overlay and the launcher list it).
 +std::vector<Notice> TakeNotices();
 +
 +// What an overlay action reports when it is done: empty on success, else Alboria's error code
@@ -329,7 +329,7 @@ index 0000000..809266f
 +// --- The Alboria overlay ---------------------------------------------------------------------------
 +
 +// The page the overlay opens on.
-+enum class OverlayPage { kFriends, kInvitations, kRoom };
++enum class OverlayPage { kFriends, kInvitations, kRoom, kSettings };
 +// Opens the host's Alboria overlay on `page` (the runtime's, set with SetOverlayHandler), as the
 +// console opened the Guide: XamShowFriendsUI and XamShowGameInviteUI call it. Returns whether an
 +// overlay is set.
@@ -482,10 +482,10 @@ index 0000000..c7fc5de
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria.cpp b/src/system/xam/alboria.cpp
 new file mode 100644
-index 0000000..7dc6c3a
+index 0000000..b3dac97
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,2029 @@
+@@ -0,0 +1,2031 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -2089,14 +2089,16 @@ index 0000000..7dc6c3a
 +  const Status status = GetStatus();
 +  const std::string room = status.state == State::kConnected ? status.code : std::string();
 +  std::lock_guard lock(g_friends_mutex);
-+  // What is new since the last read becomes a notice. Requests and friends joining are only told
-+  // once a read has given the lists to compare with.
-+  for (const auto& invitation : invitations) {
-+    const bool known = std::any_of(g_invitations.begin(), g_invitations.end(),
-+                                   [&](const Invitation& old) { return old.id == invitation.id; });
-+    if (!known) g_notices.push_back({Notice::Kind::kInvitation, invitation.id, invitation.from_id, invitation.from_name});
-+  }
++  // What is new since the last read becomes a notice, once a read has given the lists to compare
++  // with: what was already there when the player signed in waits in the overlay and the launcher.
 +  if (g_friends_read) {
++    for (const auto& invitation : invitations) {
++      const bool known = std::any_of(g_invitations.begin(), g_invitations.end(),
++                                     [&](const Invitation& old) { return old.id == invitation.id; });
++      if (!known) {
++        g_notices.push_back({Notice::Kind::kInvitation, invitation.id, invitation.from_id, invitation.from_name});
++      }
++    }
 +    for (const auto& [id, name] : incoming) {
 +      if (!g_incoming.contains(id)) g_notices.push_back({Notice::Kind::kFriendRequest, {}, id, name});
 +    }
