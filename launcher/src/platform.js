@@ -181,6 +181,9 @@ export const pickDlcPackage = async () => (isNativeApp ? tauri.core.invoke("pick
 /** Installs a downloadable content package into the saves folder; resolves with its name. */
 export const installDlc = async (pkg) => (isNativeApp ? tauri.core.invoke("install_dlc", { package: pkg }) : "RAAM's Shadow");
 
+/** Removes an installed downloadable content by its key in the catalogue. */
+export const removeDlc = async (id) => (isNativeApp ? tauri.core.invoke("remove_dlc", { id }) : undefined);
+
 /**
  * The installed downloadable content: { packages, raamsShadow, raamsShadowPlayable }.
  */

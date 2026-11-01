@@ -636,6 +636,9 @@ code, kbd {
 .dlc-list { margin: 16px 0 18px; }
 .dlc-list .status { padding: 10px 14px; background: var(--well); border: 1px solid #2b2f34; border-radius: 12px; }
 .dlc-list .status strong { font-family: var(--font-ui); font-size: 19px; letter-spacing: 0.02em; }
+/* Remove, at the end of an installed package's row. */
+.dlc-list .status > div { flex: 1; min-width: 0; }
+.dlc-list .status .btn { align-self: center; }
 
 .dot {
   flex: none;

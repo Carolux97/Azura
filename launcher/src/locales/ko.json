@@ -136,14 +136,17 @@
       "notInstalled": "설치되지 않음",
       "needsRuntime": "설치됨 · 런타임 업데이트 후 준비됩니다",
       "unsupported": "설치되었지만 이 게임 파일로는 준비할 수 없었습니다",
-      "multiplayer": "멀티플레이어와 함께 제공 예정",
+      "installed": "설치됨 · 맵은 멀티플레이어와 함께 제공 예정",
       "installing": "설치 중… (1분 정도 걸립니다)"
     },
     "dlcOthers": "기타 설치된 콘텐츠",
     "dlcOthersCount": "패키지 {count}개",
     "dlcInstalled": "{name} 설치됨.",
     "dlcFailed": "패키지를 설치하지 못했습니다: {detail}",
-    "eyebrow": "당신의 사본, 당신의 컴퓨터"
+    "eyebrow": "당신의 사본, 당신의 컴퓨터",
+    "dlcRemove": "제거",
+    "dlcRemoved": "{name}을(를) 제거했습니다.",
+    "dlcRemoveFailed": "콘텐츠를 제거하지 못했습니다: {detail}"
   },
   "graphics": {
     "title": "그래픽",

@@ -136,14 +136,17 @@
       "notInstalled": "Nicht installiert",
       "needsRuntime": "Installiert · wird nach dem Runtime-Update vorbereitet",
       "unsupported": "Installiert, konnte aber mit diesen Spieldateien nicht vorbereitet werden",
-      "multiplayer": "Kommt mit dem Mehrspielermodus",
+      "installed": "Installiert · seine Karten kommen mit dem Mehrspielermodus",
       "installing": "Wird installiert … (dauert eine Minute)"
     },
     "dlcOthers": "Weitere installierte Inhalte",
     "dlcOthersCount": "{count} Pakete",
     "dlcInstalled": "{name} installiert.",
     "dlcFailed": "Das Paket konnte nicht installiert werden: {detail}",
-    "eyebrow": "Deine Kopie, dein Computer"
+    "eyebrow": "Deine Kopie, dein Computer",
+    "dlcRemove": "Entfernen",
+    "dlcRemoved": "{name} entfernt.",
+    "dlcRemoveFailed": "Der Inhalt konnte nicht entfernt werden: {detail}"
   },
   "graphics": {
     "title": "Grafik",
