@@ -3052,7 +3052,7 @@ void JoinFoundParty(PPCContext& ctx, uint8_t* base, uint32_t find_complete) {
 }
 
 // Removes the Xbox LIVE friends' Invite and Join from Manage/Invite's button list (scene in
-// `scene`), before the bar is built from it.
+// `scene`), before the bar is built from it: System Link parties in a room have no friends list.
 void TrimManageInviteButtons(uint8_t* base, uint32_t scene) {
   const uint32_t data = LoadU32(base, scene + kManageInviteButtonList);
   const uint32_t count = LoadU32(base, scene + kManageInviteButtonList + 4);
@@ -3428,7 +3428,8 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
       ObjectName(base, LoadU32(base, function + kObjectOuter)) == "UIScene_WhatsUp") {
     namespace alboria = rex::system::xam::alboria;
     if (Is(base, function, kWidgetInitialized)) PrepareManageInviteHeading(ctx, base, function);
-    if (Is(base, function, kRefreshManageInviteBar)) TrimManageInviteButtons(base, ctx.r3.u32);
+    // The friends' Invite and Join stay with Live parties, whose friends are Alboria's.
+    if (Is(base, function, kRefreshManageInviteBar) && OnlineMode()) TrimManageInviteButtons(base, ctx.r3.u32);
     if (Is(base, function, kCanInviteGearsPlayers)) {
       if (ctx.r5.u32) StoreU32(base, ctx.r5.u32, alboria::Connected() ? 1 : 0);
       return;
