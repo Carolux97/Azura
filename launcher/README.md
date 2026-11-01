@@ -206,8 +206,9 @@ gives it its own name, bundle identifier (`com.gears3azura.launcher.dev`, so its
 achievements and backups live in their own app data folder), icon with a DEV band and window title.
 The `dev` feature gives it its own default saves folder (`Games Saves/Gears3-Azura (DEV)`, and so
 its own Alboria identity: link it to an account with a code like any new device) and turns its
-updater off, so it never becomes the published launcher. It copies the runtime of the project it
-was built in, as any local build does.
+updater off, so it never becomes the published launcher. It installs the runtime that
+`scripts/build.sh` built in the project it was compiled in, found by the path the build recorded,
+also once the app is copied to /Applications.
 
 It talks to a local Alboria server by default, so test accounts never reach the real database:
 start one with `npm run local` in alboria-server (API on `http://127.0.0.1:8080`, relay on
