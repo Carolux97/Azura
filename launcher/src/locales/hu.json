@@ -526,5 +526,15 @@
       "impersonation": "Megszemélyesítés",
       "other": "Valami más"
     }
+  },
+  "devServer": {
+    "title": "Fejlesztés",
+    "help": "Csak Azura (DEV): az Alboria-szerver, amellyel kommunikál. A Helyi az, amelyet az `npm run local` indít az alboria-serverben, így a tesztfiókok nem kerülnek a valódi adatbázisba. A váltás újra bejelentkezik: minden szervernek saját fiókjai vannak. A játék a következő indításkor ugyanezt a szervert használja.",
+    "local": "Helyi (127.0.0.1:8080)",
+    "production": "Éles (api.alboria.org)",
+    "other": "Másik cím",
+    "apply": "Ezt a szervert használom",
+    "now": "Jelenleg: {url}",
+    "badUrl": "Írj be egy http vagy https címet, pl. http://192.168.1.20:8080"
   }
 }

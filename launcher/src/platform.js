@@ -626,3 +626,15 @@ export const onAlboriaEventsState = (listener) => {
 };
 /** Browser simulation only: sends an event as the service would, for designing the panel. */
 export const simulateAlboriaEvent = (event, data) => simulatedEvents.event.forEach((listener) => listener({ event, data }));
+
+// --- The development launcher's Alboria server ----------------------------------------------------
+
+/** Which Alboria server this launcher talks to: `{ dev, choice, url }` (dev false: the published launcher). */
+export const alboriaServer = async () =>
+  isNativeApp ? tauri.core.invoke("alboria_server") : { dev: simulatedQuery.has("dev"), choice: "local", url: "http://127.0.0.1:8080" };
+
+/** Development launcher only: talks to `choice` (`local`, `production` or an address) from now on. */
+export const setAlboriaServer = async (choice) => {
+  if (isNativeApp) return tauri.core.invoke("alboria_server_set", { choice });
+  return { dev: true, choice: choice.startsWith("http") ? "other" : choice, url: choice.startsWith("http") ? choice : "http://127.0.0.1:8080" };
+};

@@ -526,5 +526,15 @@
       "impersonation": "Identitätsbetrug",
       "other": "Etwas anderes"
     }
+  },
+  "devServer": {
+    "title": "Entwicklung",
+    "help": "Nur Azura (DEV): der Alboria-Server, mit dem es spricht. Lokal ist der, den `npm run local` in alboria-server startet, damit Testkonten nicht in die echte Datenbank gelangen. Ein Wechsel meldet neu an: Jeder Server hat eigene Konten. Das Spiel nutzt beim nächsten Start denselben Server.",
+    "local": "Lokal (127.0.0.1:8080)",
+    "production": "Produktion (api.alboria.org)",
+    "other": "Andere Adresse",
+    "apply": "Diesen Server verwenden",
+    "now": "Aktuell: {url}",
+    "badUrl": "Gib eine http- oder https-Adresse ein, z. B. http://192.168.1.20:8080"
   }
 }

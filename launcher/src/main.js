@@ -32,6 +32,7 @@ import { canStartUpdate, updateButtonState } from "./update.js";
 import { minutesUntil, noticeKey, serviceView } from "./alboriaService.js";
 import { setupFriends } from "./friendsPanel.js";
 import {
+  alboriaServer,
   alboriaStatus,
   checkForUpdate,
   checkGameFolder,
@@ -43,6 +44,7 @@ import {
   installUpdate,
   isNativeApp,
   openNoticeLink,
+  setAlboriaServer,
   launchGame,
   prepareShaders,
   shaderStorageBytes,
@@ -1591,6 +1593,43 @@ const setupService = () => {
   }, 1000);
 };
 
+/**
+ * Azura (DEV) only: Account › Development chooses the Alboria server (alboria_server in lib.rs).
+ * Changing it starts the interface again, so everything about the account (the identity, the
+ * service's state, the friends and their events channel) comes from the new server.
+ */
+const setupDevServer = async () => {
+  const server = await alboriaServer().catch(() => null);
+  if (!server?.dev) return;
+  const panel = document.getElementById("dev-server-panel");
+  const choice = document.getElementById("dev-server-choice");
+  const url = document.getElementById("dev-server-url");
+  panel.hidden = false;
+  choice.value = server.choice;
+  url.hidden = server.choice !== "other";
+  if (server.choice === "other") url.value = server.url;
+  const showNow = () => (document.getElementById("dev-server-now").textContent = t("devServer.now", { url: server.url }));
+  showNow();
+  onLocaleChange(showNow);
+  choice.addEventListener("change", () => {
+    url.hidden = choice.value !== "other";
+    if (!url.hidden) url.focus();
+  });
+  document.getElementById("dev-server-apply").addEventListener("click", async () => {
+    const wanted = choice.value === "other" ? url.value.trim() : choice.value;
+    if (choice.value === "other" && !/^https?:\/\/\S+$/i.test(wanted)) {
+      toast(t("devServer.badUrl"));
+      return;
+    }
+    try {
+      await setAlboriaServer(wanted);
+      location.reload();
+    } catch (error) {
+      toast(String(error));
+    }
+  });
+};
+
 /** "24 oct 2026, 12:05": a moment in the reader's language and time zone. */
 const formatDateTime = (ms) => new Intl.DateTimeFormat(getLocale(), { dateStyle: "medium", timeStyle: "short" }).format(new Date(ms));
 
@@ -2005,6 +2044,7 @@ friends = setupFriends({
   formatWhen: formatDateTime,
 });
 friends.sync();
+setupDevServer();
 setupReleaseNotes();
 // Running the runtime to list the cards takes a moment: the rest of the window is ready first.
 refreshGpus();

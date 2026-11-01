@@ -526,5 +526,15 @@
       "impersonation": "Vydávání se za někoho",
       "other": "Něco jiného"
     }
+  },
+  "devServer": {
+    "title": "Vývoj",
+    "help": "Jen Azura (DEV): server Alboria, se kterým komunikuje. Místní je ten, který spouští `npm run local` v alboria-server, aby se testovací účty nedostaly do skutečné databáze. Změna znovu přihlásí: každý server má vlastní účty. Hra použije stejný server při příštím spuštění.",
+    "local": "Místní (127.0.0.1:8080)",
+    "production": "Produkce (api.alboria.org)",
+    "other": "Jiná adresa",
+    "apply": "Použít tento server",
+    "now": "Nyní: {url}",
+    "badUrl": "Zadejte adresu http nebo https, např. http://192.168.1.20:8080"
   }
 }

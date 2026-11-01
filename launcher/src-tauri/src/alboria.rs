@@ -33,7 +33,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 /// The service's address.
-const DEFAULT_API_URL: &str = "https://api.alboria.org";
+pub const DEFAULT_API_URL: &str = "https://api.alboria.org";
 /// Gears of War 3's title ID: the game a device of this launcher plays.
 pub const TITLE_ID: &str = "4D5308AB";
 /// The identity's file name, in the saves folder (the SDK's `kPlayerIdentityFileName`).
@@ -401,7 +401,8 @@ pub struct Alboria {
     http: Option<reqwest::Client>,
     /// For the events channel, which stays open: no overall time limit, only for silence.
     events_http: Option<reqwest::Client>,
-    base: String,
+    /// The service's address: production, or for the development launcher the server it chose.
+    base: Mutex<String>,
     client: String,
     token: Mutex<Option<String>>,
 }
@@ -416,7 +417,7 @@ impl Default for Alboria {
         Self {
             http,
             events_http,
-            base: std::env::var("ALBORIA_API_URL").unwrap_or_else(|_| DEFAULT_API_URL.into()),
+            base: Mutex::new(std::env::var("ALBORIA_API_URL").unwrap_or_else(|_| DEFAULT_API_URL.into())),
             client: format!("azura-launcher/{}", env!("CARGO_PKG_VERSION")),
             token: Mutex::new(None),
         }
@@ -427,7 +428,7 @@ impl Alboria {
     /// POSTs `body` to `path`, with the token when `signed_in`; the answer's JSON, or why it failed.
     async fn post(&self, path: &str, body: Value, token: Option<String>) -> Result<Value, AlboriaError> {
         let http = self.http.as_ref().ok_or_else(|| AlboriaError::local("network", "No HTTPS client"))?;
-        let mut request = http.post(format!("{}{path}", self.base)).json(&body);
+        let mut request = http.post(format!("{}{path}", self.base())).json(&body);
         if let Some(token) = token {
             request = request.bearer_auth(token);
         }
@@ -571,7 +572,7 @@ impl Alboria {
             }
             let token = self.token.lock().unwrap().clone().unwrap_or_default();
             let response = http
-                .get(format!("{}/v1/events", self.base))
+                .get(format!("{}/v1/events", self.base()))
                 .bearer_auth(token)
                 .send()
                 .await
@@ -591,6 +592,17 @@ impl Alboria {
             }
         }
         Err(AlboriaError::local("events", "The events channel did not open"))
+    }
+
+    /// The service's address, such as `https://api.alboria.org`.
+    pub fn base(&self) -> String {
+        self.base.lock().unwrap().clone()
+    }
+
+    /// Talks to the service at `base` from now on, signed out: each server has its own accounts.
+    pub fn set_base(&self, base: String) {
+        *self.base.lock().unwrap() = base;
+        self.forget_token();
     }
 
     /// Forgets the token: the device signed out, or was removed from the account.

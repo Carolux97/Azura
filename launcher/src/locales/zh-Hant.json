@@ -526,5 +526,15 @@
       "impersonation": "冒充他人",
       "other": "其他"
     }
+  },
+  "devServer": {
+    "title": "開發",
+    "help": "僅限 Azura (DEV)：它所連線的 Alboria 伺服器。本機是 alboria-server 中 `npm run local` 啟動的伺服器，讓測試帳號不會進入正式資料庫。變更後會重新登入：每個伺服器有自己的帳號。遊戲下次啟動時會使用同一個伺服器。",
+    "local": "本機 (127.0.0.1:8080)",
+    "production": "正式 (api.alboria.org)",
+    "other": "其他位址",
+    "apply": "使用此伺服器",
+    "now": "目前：{url}",
+    "badUrl": "請輸入 http 或 https 位址，例如 http://192.168.1.20:8080"
   }
 }
