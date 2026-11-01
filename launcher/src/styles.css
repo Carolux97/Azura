@@ -640,6 +640,23 @@ select:hover, .path:hover { border-color: var(--steel-hi); }
 .check[data-state="warn"]::before { background: var(--imulsion); box-shadow: 0 0 8px var(--imulsion-glow); }
 /* A status line sharing a row with its button. */
 .path-row .check { flex: 1; margin: 0; }
+/* Details of an unsupported edition, selectable as one block for pasting into a report. */
+.edition-report { margin-top: 12px; }
+.edition-report[hidden] { display: none; }
+.edition-report .help { margin: 0 0 8px; }
+.edition-report-details {
+  margin: 0 0 10px;
+  padding: 9px 12px;
+  background: var(--bg-0);
+  border: 1px solid var(--steel-line);
+  border-radius: 2px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: all;
+}
 .path-row[hidden] { display: none; }
 #saves-conflict { margin-top: 12px; }
 
