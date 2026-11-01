@@ -36,6 +36,10 @@ pub struct Progress {
 /// unreachable endpoint (offline, or a repository that is still private) is an `Err`, which the
 /// interface treats as "no update" without bothering the user.
 pub async fn check(app: &AppHandle) -> Result<Option<UpdateInfo>, String> {
+    // The development launcher never updates itself: an update would turn it into the published one.
+    if cfg!(feature = "dev") {
+        return Ok(None);
+    }
     let update = app
         .updater()
         .map_err(|e| e.to_string())?
@@ -52,6 +56,9 @@ pub async fn check(app: &AppHandle) -> Result<Option<UpdateInfo>, String> {
 /// Downloads and installs the newer version, reporting progress, then restarts the launcher into
 /// it. Only returns when something failed.
 pub async fn install(app: AppHandle) -> Result<(), String> {
+    if cfg!(feature = "dev") {
+        return Err("the development launcher does not update itself".to_owned());
+    }
     let update = app
         .updater()
         .map_err(|e| e.to_string())?

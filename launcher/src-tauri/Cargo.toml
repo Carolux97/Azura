@@ -12,6 +12,11 @@ rust-version = "1.90"
 name = "azura_launcher_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+# The development launcher, "Azura (DEV)": built with tauri.dev.conf.json by
+# `scripts/build-launcher.sh --dev`. It keeps its own saves folder and never updates itself.
+dev = []
+
 [build-dependencies]
 tauri-build = { version = "2.7.1", features = [] }
 

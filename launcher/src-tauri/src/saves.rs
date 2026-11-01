@@ -16,8 +16,14 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
-/// Folder for saves when the player has not chosen one, relative to the home folder.
-const DEFAULT_SAVES: &str = "Documents/Games Saves/Gears3-Azura";
+/// Folder for saves when the player has not chosen one, relative to the home folder. The
+/// development launcher has its own, so it never touches the published launcher's saves or its
+/// Alboria identity (which lives in the saves folder).
+const DEFAULT_SAVES: &str = if cfg!(feature = "dev") {
+    "Documents/Games Saves/Gears3-Azura (DEV)"
+} else {
+    "Documents/Games Saves/Gears3-Azura"
+};
 
 /// Where the runtime kept its data before the launcher chose the folder, relative to home.
 const LEGACY_USER_DATA: &str = ".local/share/azura";
@@ -191,7 +197,8 @@ fn backups_before_move(backups: &Path, from: &Path, to: &Path, replace: bool) ->
 /// Nothing is replaced: when both folders hold saves, the old ones stay where they are.
 pub fn prepare(saves: &Path, cache: &Path) -> Result<(), SavesError> {
     let legacy = legacy_folder();
-    if has_saves(&legacy) && !has_saves(saves) {
+    // The runtime's old folder belongs to the published launcher: the development one leaves it.
+    if !cfg!(feature = "dev") && has_saves(&legacy) && !has_saves(saves) {
         move_saves(&legacy, saves, false)?;
     }
     let legacy_cache = legacy.join(CACHE_ENTRY);
