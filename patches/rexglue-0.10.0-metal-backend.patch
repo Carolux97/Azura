@@ -337,7 +337,7 @@ index 2cf24c4..0eb568b 100644
  
  #if REX_HAS_VULKAN
 diff --git a/include/rex/graphics/graphics_system.h b/include/rex/graphics/graphics_system.h
-index ac6b056..8ef1ee8 100644
+index ac6b056..1c40e89 100644
 --- a/include/rex/graphics/graphics_system.h
 +++ b/include/rex/graphics/graphics_system.h
 @@ -90,6 +90,12 @@ class GraphicsSystem : public system::IGraphicsSystem {
@@ -353,7 +353,20 @@ index ac6b056..8ef1ee8 100644
   protected:
    GraphicsSystem();
  
-@@ -130,6 +136,10 @@ class GraphicsSystem : public system::IGraphicsSystem {
+@@ -107,6 +113,12 @@ class GraphicsSystem : public system::IGraphicsSystem {
+   void WriteRegister(uint32_t addr, uint32_t value);
+ 
+   void MarkVblank();
++  // With vsync_follow_display, the host time (Clock::QueryHostTickCount ticks)
++  // of the next guest vblank on the grid of display refreshes, after the one at
++  // last_vblank (0 when there was none yet). 0 when the vblanks cannot follow
++  // the display: the presenter does not know its refreshes, or the guest
++  // vblank rate is not a whole multiple or divisor of the refresh rate.
++  uint64_t NextDisplayVblank(double vblank_rate_hz, uint64_t last_vblank) const;
+ 
+   memory::Memory* memory_ = nullptr;
+   runtime::FunctionDispatcher* function_dispatcher_ = nullptr;
+@@ -130,6 +142,10 @@ class GraphicsSystem : public system::IGraphicsSystem {
    std::unique_ptr<::rex::ui::Presenter> presenter_;
  
    std::atomic_flag host_gpu_loss_reported_;
@@ -2567,7 +2580,7 @@ index 7642601..b93550d 100644
    AchievementIconCache icon_cache_;
  };
 diff --git a/include/rex/ui/presenter.h b/include/rex/ui/presenter.h
-index afb4a30..e9be74f 100644
+index afb4a30..a8a628c 100644
 --- a/include/rex/ui/presenter.h
 +++ b/include/rex/ui/presenter.h
 @@ -22,6 +22,7 @@
@@ -2672,7 +2685,32 @@ index afb4a30..e9be74f 100644
  
    void AddUIDrawerFromUIThread(UIDrawer* drawer, size_t z_order);
    void RemoveUIDrawerFromUIThread(UIDrawer* drawer);
-@@ -427,7 +449,6 @@ class Presenter {
+@@ -374,7 +396,24 @@ class Presenter {
+   // Requests (re)painting with the UI if there's UI to draw.
+   void RequestUIPaintFromUIThread();
+ 
++  // The display refreshes as the presenter last saw them: the host time (in
++  // Clock::QueryHostTickCount ticks) of a refresh that showed a painted frame,
++  // and the refresh period in host ticks. valid is false until the backend has
++  // reported enough refreshes to know the period, and on backends that do not
++  // report them. Callable from any thread.
++  struct DisplayRefreshTiming {
++    bool valid = false;
++    uint64_t last_refresh_host_ticks = 0;
++    double period_host_ticks = 0.0;
++  };
++  DisplayRefreshTiming GetDisplayRefreshTiming() const;
++
+  protected:
++  // For the backend, from any thread: a painted frame reached the display at
++  // this host time (Clock::QueryHostTickCount ticks). The period is estimated
++  // from the gaps between these reports, which are whole refresh periods.
++  void ReportDisplayRefresh(uint64_t host_ticks);
++
+   enum class PaintResult {
+     kPresented,
+     kPresentedSuboptimal,
+@@ -427,7 +466,6 @@ class Presenter {
    enum class GuestOutputPaintEffect {
      kBilinear,
      kBilinearDither,
@@ -2680,7 +2718,7 @@ index afb4a30..e9be74f 100644
      kCasSharpen,
      kCasSharpenDither,
      kCasResample,
-@@ -435,7 +456,6 @@ class Presenter {
+@@ -435,7 +473,6 @@ class Presenter {
      kFsrEasu,
      kFsrRcas,
      kFsrRcasDither,
@@ -2688,7 +2726,7 @@ index afb4a30..e9be74f 100644
  
      kCount,
    };
-@@ -446,11 +466,9 @@ class Presenter {
+@@ -446,11 +483,9 @@ class Presenter {
        // Dithering is never performed in intermediate passes because it may be
        // interpreted as features by the subsequent passes.
        case GuestOutputPaintEffect::kBilinearDither:
@@ -2700,7 +2738,7 @@ index afb4a30..e9be74f 100644
          return false;
        default:
          // The result of any other effect can be stretched with bilinear
-@@ -461,16 +479,13 @@ class Presenter {
+@@ -461,16 +496,13 @@ class Presenter {
  
    static constexpr bool CanGuestOutputPaintEffectBeFinal(GuestOutputPaintEffect effect) {
      switch (effect) {
@@ -2717,7 +2755,7 @@ index afb4a30..e9be74f 100644
    // The longest path is kFsrMaxUpscalingPassesMax + optionally RCAS +
    // optionally bilinear, when upscaling by more than
    // 2^kFsrMaxUpscalingPassesMax along any direction.
-@@ -478,10 +493,6 @@ class Presenter {
+@@ -478,10 +510,6 @@ class Presenter {
    // more than 2 along any direction) CAS followed by bilinear.
    static constexpr size_t kMaxGuestOutputPaintEffects =
        GuestOutputPaintConfig::kFsrMaxUpscalingPassesMax + 2;
@@ -2728,7 +2766,7 @@ index afb4a30..e9be74f 100644
  
    struct GuestOutputPaintFlow {
      // Letterbox on up to 4 sides.
-@@ -548,7 +559,6 @@ class Presenter {
+@@ -548,7 +576,6 @@ class Presenter {
      }
    };
  
@@ -2736,7 +2774,7 @@ index afb4a30..e9be74f 100644
    static constexpr float CalculateCasPostSetupSharpness(float sharpness) {
      // CasSetup const1.x.
      return -1.0f / (8.0f - 3.0f * sharpness);
-@@ -615,7 +625,6 @@ class Presenter {
+@@ -615,7 +642,6 @@ class Presenter {
        sharpness_post_setup = CalculatePostSetupSharpness(config.GetFsrSharpnessReduction());
      }
    };
@@ -2744,6 +2782,21 @@ index afb4a30..e9be74f 100644
  
    explicit Presenter(HostGpuLossCallback host_gpu_loss_callback)
        : host_gpu_loss_callback_(host_gpu_loss_callback) {}
+@@ -972,6 +998,14 @@ class Presenter {
+   // happens as part of painting.
+   std::mutex guest_output_mailbox_consumer_mutex_;
+ 
++  // Written by ReportDisplayRefresh, read by GetDisplayRefreshTiming.
++  mutable std::mutex display_refresh_mutex_;
++  DisplayRefreshTiming display_refresh_timing_;
++  // Refresh gaps seen while the period is not known yet; the shortest of them
++  // is taken as the first period estimate.
++  uint32_t display_refresh_gaps_seen_ = 0;
++  uint64_t display_refresh_shortest_gap_ = 0;
++
+   std::array<GuestOutputProperties, kGuestOutputMailboxSize> guest_output_properties_;
+   // Accessible only by refreshing, whether the last refresh contained an image
+   // rather than being blank.
 diff --git a/include/rex/ui/virtual_key.h b/include/rex/ui/virtual_key.h
 index 3e1b948..5e1857b 100644
 --- a/include/rex/ui/virtual_key.h
@@ -3793,10 +3846,18 @@ index e2983a4..535e2d2 100644
                      "Use approximate compare for alpha test values to prevent "
                      "flickering on NVIDIA graphics cards");
 diff --git a/src/graphics/graphics_system.cpp b/src/graphics/graphics_system.cpp
-index 8f2fcb0..b0f3cb4 100644
+index 8f2fcb0..a254d92 100644
 --- a/src/graphics/graphics_system.cpp
 +++ b/src/graphics/graphics_system.cpp
-@@ -35,6 +35,10 @@ REXCVAR_DEFINE_STRING(swap_post_effect, "none", "GPU", "Swap post effect: none,
+@@ -13,6 +13,7 @@
+ 
+ #include <algorithm>
+ #include <cctype>
++#include <cmath>
+ #include <cstdint>
+ #include <functional>
+ #include <memory>
+@@ -35,6 +36,16 @@ REXCVAR_DEFINE_STRING(swap_post_effect, "none", "GPU", "Swap post effect: none,
      .allowed({"none", "fxaa", "fxaa_extreme"})
      .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
  
@@ -3804,10 +3865,16 @@ index 8f2fcb0..b0f3cb4 100644
 +                     "Vertical blanks per second the guest sees with vsync on; 0 uses the refresh "
 +                     "rate of the guest video mode. A game that waits for a number of vertical "
 +                     "blanks per frame runs that many times slower than this rate");
++REXCVAR_DEFINE_BOOL(vsync_follow_display, true, "GPU",
++                    "With vsync on, time the guest's vertical blanks by the display's refreshes "
++                    "when the presenter reports them and the vblank rate is a whole multiple or "
++                    "divisor of the refresh rate. A separate timer that runs a little faster or "
++                    "slower than the display makes frames show unevenly for a few seconds every "
++                    "time the two drift through each other");
  REXCVAR_DEFINE_BOOL(store_shaders, true, "GPU",
                      "Store shaders persistently and load them when loading games to avoid "
                      "runtime spikes and freezes when playing the game not for the first time.");
-@@ -76,6 +80,45 @@ GraphicsSystem::GraphicsSystem() : vsync_worker_running_(false) {}
+@@ -76,6 +87,45 @@ GraphicsSystem::GraphicsSystem() : vsync_worker_running_(false) {}
  
  GraphicsSystem::~GraphicsSystem() = default;
  
@@ -3853,7 +3920,7 @@ index 8f2fcb0..b0f3cb4 100644
  X_STATUS GraphicsSystem::SetupPresentation(ui::WindowedAppContext* app_context) {
    if (presenter_) {
      return X_STATUS_SUCCESS;
-@@ -154,12 +197,15 @@ X_STATUS GraphicsSystem::SetupGuestGpu(runtime::FunctionDispatcher* function_dis
+@@ -154,12 +204,51 @@ X_STATUS GraphicsSystem::SetupGuestGpu(runtime::FunctionDispatcher* function_dis
          kernel::xboxkrnl::VdQueryVideoMode(&video_mode);
          double refresh_rate_hz = std::max(1.0, double(float(video_mode.refresh_rate)));
          uint64_t guest_tick_frequency = chrono::Clock::guest_tick_frequency();
@@ -3861,17 +3928,53 @@ index 8f2fcb0..b0f3cb4 100644
 -            std::max(uint64_t(1), uint64_t(double(guest_tick_frequency) / refresh_rate_hz));
          uint64_t no_vsync_interval_ticks = std::max(uint64_t(1), guest_tick_frequency / 1000);
          uint64_t last_frame_time = chrono::Clock::QueryGuestTickCount();
++        // Host time of the last vblank while following the display, 0 while on
++        // the timer.
++        uint64_t last_display_vblank = 0;
          while (vsync_worker_running_) {
-           uint64_t current_time = chrono::Clock::QueryGuestTickCount();
 +          // Read every time, so a change of guest_vblank_rate applies at once.
 +          int32_t vblank_rate = REXCVAR_GET(guest_vblank_rate);
 +          double vblank_rate_hz = vblank_rate > 0 ? double(vblank_rate) : refresh_rate_hz;
++
++          uint64_t display_vblank = 0;
++          if (REXCVAR_GET(vsync)) {
++            display_vblank = NextDisplayVblank(vblank_rate_hz, last_display_vblank);
++          }
++          if (display_vblank) {
++            uint64_t now = chrono::Clock::QueryHostTickCount();
++            if (!last_display_vblank) {
++              // Starting to follow the display: the next refresh is the first
++              // vblank.
++              last_display_vblank = now;
++              continue;
++            }
++            if (now >= display_vblank) {
++              MarkVblank();
++              last_display_vblank = display_vblank;
++              continue;
++            }
++            // Sleep until the vblank, in steps short enough to notice a new
++            // refresh rate or the presenter stopping its reports.
++            uint64_t wait_ticks = display_vblank - now;
++            uint64_t max_wait_ticks = chrono::Clock::QueryHostTickFrequency() / 500;
++            rex::thread::Sleep(std::chrono::microseconds(
++                std::min(wait_ticks, max_wait_ticks) * 1000000 /
++                chrono::Clock::QueryHostTickFrequency()));
++            continue;
++          }
++          if (last_display_vblank) {
++            // Back on the timer: it counts from now.
++            last_display_vblank = 0;
++            last_frame_time = chrono::Clock::QueryGuestTickCount();
++          }
++
+           uint64_t current_time = chrono::Clock::QueryGuestTickCount();
 +          uint64_t vsync_interval_ticks =
 +              std::max(uint64_t(1), uint64_t(double(guest_tick_frequency) / vblank_rate_hz));
            uint64_t interval_ticks =
                REXCVAR_GET(vsync) ? vsync_interval_ticks : no_vsync_interval_ticks;
            while (current_time - last_frame_time >= interval_ticks) {
-@@ -217,6 +263,9 @@ void GraphicsSystem::OnHostGpuLossFromAnyThread([[maybe_unused]] bool is_respons
+@@ -217,6 +306,9 @@ void GraphicsSystem::OnHostGpuLossFromAnyThread([[maybe_unused]] bool is_respons
    if (host_gpu_loss_reported_.test_and_set(std::memory_order_relaxed)) {
      return;
    }
@@ -3881,6 +3984,66 @@ index 8f2fcb0..b0f3cb4 100644
    rex::FatalError("Graphics device lost (probably due to an internal error)");
  }
  
+@@ -316,6 +408,59 @@ void GraphicsSystem::DispatchInterruptCallback(uint32_t source, uint32_t cpu) {
+                                          rex::countof(args));
+ }
+ 
++uint64_t GraphicsSystem::NextDisplayVblank(double vblank_rate_hz, uint64_t last_vblank) const {
++  // How close the vblank rate must be to a whole multiple or divisor of the
++  // refresh rate (a 60 Hz rate on a 59.94 Hz display still follows it).
++  constexpr double kRatioTolerance = 0.02;
++
++  if (!REXCVAR_GET(vsync_follow_display) || !presenter_ ||
++      chrono::Clock::guest_time_scalar() != 1.0) {
++    return 0;
++  }
++  ::rex::ui::Presenter::DisplayRefreshTiming timing = presenter_->GetDisplayRefreshTiming();
++  if (!timing.valid) {
++    return 0;
++  }
++  uint64_t now = chrono::Clock::QueryHostTickCount();
++  double host_tick_frequency = double(chrono::Clock::QueryHostTickFrequency());
++  // Nothing painted reached the display for a while (the window is hidden or
++  // the game stopped presenting): its refreshes are no longer known.
++  if (now > timing.last_refresh_host_ticks + uint64_t(host_tick_frequency / 4)) {
++    return 0;
++  }
++
++  double period = timing.period_host_ticks;
++  double vblanks_per_refresh = vblank_rate_hz * period / host_tick_frequency;
++  // The vblank interval, and the step of the grid the vblanks fall on: each
++  // refresh, or each fraction of it when there are several vblanks per refresh.
++  double interval, grid_step;
++  if (vblanks_per_refresh >= 1.0) {
++    double vblanks = std::round(vblanks_per_refresh);
++    if (std::abs(vblanks_per_refresh - vblanks) > vblanks * kRatioTolerance) {
++      return 0;
++    }
++    interval = period / vblanks;
++    grid_step = interval;
++  } else {
++    double refreshes = std::round(1.0 / vblanks_per_refresh);
++    if (std::abs(1.0 / vblanks_per_refresh - refreshes) > refreshes * kRatioTolerance) {
++      return 0;
++    }
++    interval = period * refreshes;
++    grid_step = period;
++  }
++
++  // The first grid point at least three quarters of an interval after the last
++  // vblank. After a stall, vblanks that were missed are skipped rather than
++  // sent in a burst. The grid sits half a step after the refreshes: the
++  // presenter picks up the guest's latest frame right after a refresh frees a
++  // drawable, so a frame the guest swaps in midway between refreshes is never
++  // in a race with that pickup.
++  double earliest = std::max(double(last_vblank) + interval * 0.75, double(now) - grid_step * 0.5);
++  double anchor = double(timing.last_refresh_host_ticks) + grid_step * 0.5;
++  return uint64_t(anchor + std::ceil((earliest - anchor) / grid_step) * grid_step);
++}
++
+ void GraphicsSystem::MarkVblank() {
+   // TODO: Enable profiling once ported
+   // SCOPE_profile_cpu_f("gpu");
 diff --git a/src/graphics/metal/metal_command_processor.h b/src/graphics/metal/metal_command_processor.h
 new file mode 100644
 index 0000000..2c8c69c
@@ -8962,10 +9125,10 @@ index 0000000..ba2837c
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_presenter.h b/src/graphics/metal/metal_presenter.h
 new file mode 100644
-index 0000000..a8a50f0
+index 0000000..1740dd2
 --- /dev/null
 +++ b/src/graphics/metal/metal_presenter.h
-@@ -0,0 +1,111 @@
+@@ -0,0 +1,124 @@
 +/**
 + * @file        graphics/metal/metal_presenter.h
 + * @brief       Presents the guest output to a CAMetalLayer with Metal
@@ -8979,6 +9142,7 @@ index 0000000..a8a50f0
 +#include <array>
 +#include <cstdint>
 +#include <memory>
++#include <mutex>
 +
 +#include <rex/ui/presenter.h>
 +
@@ -9040,7 +9204,9 @@ index 0000000..a8a50f0
 + private:
 +  MetalPresenter(HostGpuLossCallback host_gpu_loss_callback, id<MTLDevice> device,
 +                 id<MTLCommandQueue> queue)
-+      : Presenter(host_gpu_loss_callback), device_(device), queue_(queue) {}
++      : Presenter(host_gpu_loss_callback), device_(device), queue_(queue) {
++    presented_handler_target_->presenter = this;
++  }
 +  bool InitializeSurfaceIndependent();
 +  // The AMD CAS pipelines (the SDK's prebuilt shaders converted to MSL), nil if unavailable.
 +  bool InitializeCas(id<MTLLibrary> paint_library);
@@ -9074,15 +9240,25 @@ index 0000000..a8a50f0
 +  CAMetalLayer* layer_ = nil;
 +  uint32_t layer_width_ = 0;
 +  uint32_t layer_height_ = 0;
++
++  // Shared with the presented handlers of the drawables, which Metal may call
++  // after the presenter is gone: the destructor clears the pointer, and the
++  // handlers report a refresh only while it is set.
++  struct PresentedHandlerTarget {
++    std::mutex mutex;
++    MetalPresenter* presenter = nullptr;
++  };
++  std::shared_ptr<PresentedHandlerTarget> presented_handler_target_ =
++      std::make_shared<PresentedHandlerTarget>();
 +};
 +
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_presenter.mm b/src/graphics/metal/metal_presenter.mm
 new file mode 100644
-index 0000000..32d3696
+index 0000000..1afddb9
 --- /dev/null
 +++ b/src/graphics/metal/metal_presenter.mm
-@@ -0,0 +1,469 @@
+@@ -0,0 +1,489 @@
 +/**
 + * @file        graphics/metal/metal_presenter.mm
 + * @brief       Presents the guest output to a CAMetalLayer with Metal
@@ -9102,6 +9278,7 @@ index 0000000..32d3696
 +#include <vector>
 +
 +#include <rex/assert.h>
++#include <rex/chrono/clock.h>
 +#include <rex/logging.h>
 +#include <rex/ui/surface_mac.h>
 +
@@ -9155,7 +9332,10 @@ index 0000000..32d3696
 +  return presenter;
 +}
 +
-+MetalPresenter::~MetalPresenter() = default;
++MetalPresenter::~MetalPresenter() {
++  std::lock_guard<std::mutex> lock(presented_handler_target_->mutex);
++  presented_handler_target_->presenter = nullptr;
++}
 +
 +bool MetalPresenter::InitializeSurfaceIndependent() {
 +  NSError* error = nil;
@@ -9545,6 +9725,22 @@ index 0000000..32d3696
 +      ExecuteUIDrawersFromUIThread(ui_draw_context);
 +    }
 +    [encoder endEncoding];
++    // When the frame reaches the display, its refresh times the guest's vblanks
++    // (vsync_follow_display). presentedTime is in CACurrentMediaTime seconds,
++    // which count mach_absolute_time like the host clock. A drawable that was
++    // never shown has 0.
++    std::shared_ptr<PresentedHandlerTarget> handler_target = presented_handler_target_;
++    [drawable addPresentedHandler:^(id<MTLDrawable> presented) {
++      CFTimeInterval presented_time = presented.presentedTime;
++      if (presented_time <= 0.0) {
++        return;
++      }
++      std::lock_guard<std::mutex> lock(handler_target->mutex);
++      if (handler_target->presenter) {
++        handler_target->presenter->ReportDisplayRefresh(uint64_t(
++            presented_time * double(chrono::Clock::QueryHostTickFrequency())));
++      }
++    }];
 +    [command_buffer presentDrawable:drawable];
 +    [command_buffer commit];
 +    return PaintResult::kPresented;
@@ -28895,10 +29091,18 @@ index 53b8c0b..33ae38c 100644
    auto now = std::chrono::steady_clock::now();
  
 diff --git a/src/ui/presenter.cpp b/src/ui/presenter.cpp
-index 7360ed9..d4fe4c3 100644
+index 7360ed9..68ce88b 100644
 --- a/src/ui/presenter.cpp
 +++ b/src/ui/presenter.cpp
-@@ -40,18 +40,28 @@ REXCVAR_DEFINE_INT32(present_safe_area_y, 90, "UI/Presenter",
+@@ -12,6 +12,7 @@
+ #include <algorithm>
+ #include <atomic>
+ #include <cctype>
++#include <cmath>
+ #include <utility>
+ 
+ #include <rex/assert.h>
+@@ -40,18 +41,28 @@ REXCVAR_DEFINE_INT32(present_safe_area_y, 90, "UI/Presenter",
                       "Vertical safe area percentage (0-100)")
      .range(0, 100);
  
@@ -28932,7 +29136,7 @@ index 7360ed9..d4fe4c3 100644
  
  REXCVAR_DEFINE_INT32(present_fsr_max_upsampling_passes,
                       rex::ui::Presenter::GuestOutputPaintConfig::kFsrMaxUpscalingPassesMax,
-@@ -63,18 +73,14 @@ REXCVAR_DEFINE_DOUBLE(present_fsr_sharpness_reduction,
+@@ -63,18 +74,14 @@ REXCVAR_DEFINE_DOUBLE(present_fsr_sharpness_reduction,
                        rex::ui::Presenter::GuestOutputPaintConfig::kFsrSharpnessReductionDefault,
                        "UI/Presenter", "FSR RCAS sharpness reduction in stops")
      .range(rex::ui::Presenter::GuestOutputPaintConfig::kFsrSharpnessReductionMin,
@@ -28953,7 +29157,7 @@ index 7360ed9..d4fe4c3 100644
  #endif
  
  REXCVAR_DEFINE_BOOL(present_dither, false, "UI/Presenter",
-@@ -85,28 +91,39 @@ REXCVAR_DEFINE_BOOL(present_allow_overscan_cutoff, false, "UI/Presenter",
+@@ -85,28 +92,39 @@ REXCVAR_DEFINE_BOOL(present_allow_overscan_cutoff, false, "UI/Presenter",
                      "Allow overscan cutoff based on safe area settings")
      .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
  
@@ -29011,7 +29215,7 @@ index 7360ed9..d4fe4c3 100644
  }
  
  #if defined(REX_HAS_FIDELITYFX_SDK)
-@@ -261,11 +278,11 @@ GuestOutputPaintConfig BuildGuestOutputPaintConfigFromCVar() {
+@@ -261,11 +279,11 @@ GuestOutputPaintConfig BuildGuestOutputPaintConfigFromCVar() {
  #endif
    config.SetAllowOverscanCutoff(REXCVAR_GET(present_allow_overscan_cutoff));
    config.SetEffect(parsed_effect);
@@ -29024,7 +29228,7 @@ index 7360ed9..d4fe4c3 100644
    config.SetFsrQualityMode(ParsePresentFsrQualityMode(REXCVAR_GET(present_fsr_quality_mode)));
  #endif
    config.SetDither(REXCVAR_GET(present_dither));
-@@ -659,27 +676,32 @@ void Presenter::SetGuestOutputPaintConfigFromUIThread(const GuestOutputPaintConf
+@@ -659,27 +677,32 @@ void Presenter::SetGuestOutputPaintConfigFromUIThread(const GuestOutputPaintConf
      modified = true;
      request_repaint = true;
    }
@@ -29065,7 +29269,7 @@ index 7360ed9..d4fe4c3 100644
    if (guest_output_paint_config_.GetDither() != new_config.GetDither()) {
      modified = true;
      request_repaint = true;
-@@ -713,6 +735,13 @@ void Presenter::SetGuestOutputPaintConfigFromUIThread(const GuestOutputPaintConf
+@@ -713,6 +736,13 @@ void Presenter::SetGuestOutputPaintConfigFromUIThread(const GuestOutputPaintConf
    }
  }
  
@@ -29079,7 +29283,69 @@ index 7360ed9..d4fe4c3 100644
  void Presenter::AddUIDrawerFromUIThread(UIDrawer* drawer, size_t z_order) {
    assert_not_null(drawer);
    // Obtain whether the iterator list was empty before erasing in case of
-@@ -789,6 +818,15 @@ bool Presenter::InitializeCommonSurfaceIndependent() {
+@@ -766,6 +796,61 @@ void Presenter::RemoveUIDrawerFromUIThread(UIDrawer* drawer) {
+   }
+ }
+ 
++Presenter::DisplayRefreshTiming Presenter::GetDisplayRefreshTiming() const {
++  std::lock_guard<std::mutex> lock(display_refresh_mutex_);
++  return display_refresh_timing_;
++}
++
++void Presenter::ReportDisplayRefresh(uint64_t host_ticks) {
++  // Reports from before the period is known that are used for the first
++  // estimate. Painting often shows a frame on every refresh, so among these
++  // gaps the shortest one is a single refresh.
++  constexpr uint32_t kGapsForFirstEstimate = 30;
++  // How far one gap may be from the estimate before the display is taken to
++  // have changed its refresh rate (another monitor, a variable refresh rate).
++  constexpr double kPeriodChangeTolerance = 0.05;
++  // How much each gap corrects the estimate. Refresh timestamps are precise,
++  // so a slow average only smooths their small jitter.
++  constexpr double kPeriodSmoothing = 1.0 / 64.0;
++
++  std::lock_guard<std::mutex> lock(display_refresh_mutex_);
++  DisplayRefreshTiming& timing = display_refresh_timing_;
++  uint64_t last_refresh = timing.last_refresh_host_ticks;
++  timing.last_refresh_host_ticks = host_ticks;
++  if (!last_refresh || host_ticks <= last_refresh) {
++    return;
++  }
++  uint64_t gap = host_ticks - last_refresh;
++
++  if (!timing.valid) {
++    if (!display_refresh_shortest_gap_ || gap < display_refresh_shortest_gap_) {
++      display_refresh_shortest_gap_ = gap;
++    }
++    if (++display_refresh_gaps_seen_ >= kGapsForFirstEstimate) {
++      timing.period_host_ticks = double(display_refresh_shortest_gap_);
++      timing.valid = true;
++    }
++    return;
++  }
++
++  // A gap spans a whole number of refreshes. A long one (nothing was painted
++  // for a while) says little about the period, and is skipped.
++  double refreshes = std::round(double(gap) / timing.period_host_ticks);
++  if (refreshes < 1.0 || refreshes > 8.0) {
++    return;
++  }
++  double measured_period = double(gap) / refreshes;
++  if (std::abs(measured_period - timing.period_host_ticks) >
++      timing.period_host_ticks * kPeriodChangeTolerance) {
++    // The refresh rate changed: learn it again from the next reports.
++    timing.valid = false;
++    display_refresh_gaps_seen_ = 0;
++    display_refresh_shortest_gap_ = 0;
++    return;
++  }
++  timing.period_host_ticks += (measured_period - timing.period_host_ticks) * kPeriodSmoothing;
++}
++
+ void Presenter::RequestUIPaintFromUIThread() {
+   if (is_in_ui_thread_paint_) {
+     // The paint request will be done once in the end of PaintFromUIThread
+@@ -789,6 +874,15 @@ bool Presenter::InitializeCommonSurfaceIndependent() {
    {
      std::lock_guard<std::mutex> config_lock(guest_output_paint_config_mutex_);
      guest_output_paint_config_ = BuildGuestOutputPaintConfigFromCVar();
@@ -29095,7 +29361,7 @@ index 7360ed9..d4fe4c3 100644
    }
  
    // Initialize UI frame rate limiting.
-@@ -1031,10 +1069,13 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
+@@ -1031,10 +1125,13 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
    uint32_t output_height_clamped = std::min(output_height, max_rt_height);
  
  #if defined(REX_HAS_FIDELITYFX_SDK)
@@ -29112,7 +29378,7 @@ index 7360ed9..d4fe4c3 100644
      // FidelityFX Super Resolution and Contrast Adaptive Sharpening only work
      // good for up to 2x2 upscaling due to the way they fetch texels.
      // CAS is primarily a sharpening filter, not an upscaling one (its upscaling
-@@ -1056,11 +1097,13 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
+@@ -1056,11 +1153,13 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
        ffx_last_size.first = properties.frontbuffer_width;
        ffx_last_size.second = properties.frontbuffer_height;
      }
@@ -29128,7 +29394,7 @@ index 7360ed9..d4fe4c3 100644
      if ((config.GetEffect() == GuestOutputPaintConfig::Effect::kFsr || is_temporal_effect) &&
          ((ffx_last_size.first < output_width_clamped ||
            ffx_last_size.second < output_height_clamped) ||
-@@ -1069,6 +1112,7 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
+@@ -1069,6 +1168,7 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
        // Using the output size clamped to the maximum render target size here as
        // EASU will always write to intermediate images, and RCAS supports only
        // 1:1.
@@ -29136,7 +29402,7 @@ index 7360ed9..d4fe4c3 100644
        if (is_temporal_effect) {
          uint32_t temporal_input_width = ffx_last_size.first;
          uint32_t temporal_input_height = ffx_last_size.second;
-@@ -1110,7 +1154,9 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
+@@ -1110,7 +1210,9 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
          assert_true(flow.effect_count < flow.effects.size());
          flow.effect_output_sizes[flow.effect_count] = ffx_last_size;
          flow.effects[flow.effect_count++] = GuestOutputPaintEffect::kFsrEasu;
@@ -29147,7 +29413,7 @@ index 7360ed9..d4fe4c3 100644
          uint32_t easu_max_passes = config.GetFsrMaxUpsamplingPasses();
          uint32_t easu_pass_count = 0;
          while (easu_pass_count < easu_max_passes &&
-@@ -1145,7 +1191,6 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
+@@ -1145,7 +1247,6 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
                                                : GuestOutputPaintEffect::kCasResample;
      }
    }
@@ -29155,7 +29421,7 @@ index 7360ed9..d4fe4c3 100644
  
    std::pair<uint32_t, uint32_t>* last_pre_bilinear_effect_size =
        flow.effect_count ? &flow.effect_output_sizes[flow.effect_count - 1] : nullptr;
-@@ -1156,12 +1201,10 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
+@@ -1156,12 +1257,10 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
      // Clamp the output size of the last effect to the maximum render target
      // size because it will go to an intermediate image now.
      if (last_pre_bilinear_effect_size) {
@@ -29168,7 +29434,7 @@ index 7360ed9..d4fe4c3 100644
        last_pre_bilinear_effect_size->first =
            std::min(last_pre_bilinear_effect_size->first, max_rt_width);
        last_pre_bilinear_effect_size->second =
-@@ -1188,7 +1231,6 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
+@@ -1188,7 +1287,6 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
            last_effect = GuestOutputPaintEffect::kBilinearDither;
          }
          break;
@@ -29176,7 +29442,7 @@ index 7360ed9..d4fe4c3 100644
        case GuestOutputPaintEffect::kCasSharpen:
          last_effect = GuestOutputPaintEffect::kCasSharpenDither;
          break;
-@@ -1198,7 +1240,6 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
+@@ -1198,7 +1296,6 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
        case GuestOutputPaintEffect::kFsrRcas:
          last_effect = GuestOutputPaintEffect::kFsrRcasDither;
          break;
