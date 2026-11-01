@@ -1,9 +1,9 @@
 diff --git a/include/rex/system/xam/alboria.h b/include/rex/system/xam/alboria.h
 new file mode 100644
-index 0000000..7dfcbda
+index 0000000..809266f
 --- /dev/null
 +++ b/include/rex/system/xam/alboria.h
-@@ -0,0 +1,419 @@
+@@ -0,0 +1,438 @@
 +/**
 + * @file        system/xam/alboria.h
 + * @brief       Alboria: System Link over the internet through our relay
@@ -276,6 +276,7 @@ index 0000000..7dfcbda
 +  bool playing = false;   // in a room
 +  uint32_t title_id = 0;  // the room's title while playing
 +  bool joinable = false;  // the room is Joinable
++  bool with_you = false;  // in the same room as the player
 +};
 +
 +// The account's friends as Alboria last listed them: read in the background every few seconds
@@ -292,6 +293,24 @@ index 0000000..7dfcbda
 +std::vector<Invitation> Invitations();
 +// Reads the friends and the invitations again now, in the background (the overlay opening).
 +void RefreshFriends();
++
++// Something new that the friends reader found, for the host to show over the title as the console's
++// Guide showed its notifications.
++struct Notice {
++  enum class Kind {
++    kInvitation,     // an invitation arrived: `id` is the invitation's
++    kFriendRequest,  // someone asked to be the player's friend
++    kFriendJoined,   // a friend joined the player's room
++  };
++  Kind kind = Kind::kInvitation;
++  std::string id;
++  uint32_t from_id = 0;
++  std::string from_name;  // Gamertag#tag
++};
++// The notices found since the last call, oldest first. Each read compares the new lists with the
++// last ones; the first read after the reader starts only reports invitations, so a player signing
++// in is not shown every request already waiting.
++std::vector<Notice> TakeNotices();
 +
 +// What an overlay action reports when it is done: empty on success, else Alboria's error code
 +// ("invite_only", "room_not_found", "not_in_room", "network"...). Called on a worker thread.
@@ -463,10 +482,10 @@ index 0000000..c7fc5de
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria.cpp b/src/system/xam/alboria.cpp
 new file mode 100644
-index 0000000..994d56c
+index 0000000..7dc6c3a
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,1979 @@
+@@ -0,0 +1,2029 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -477,6 +496,7 @@ index 0000000..994d56c
 +
 +#include <rex/system/xam/alboria.h>
 +
++#include <algorithm>
 +#include <atomic>
 +#include <cctype>
 +#include <cstdlib>
@@ -485,7 +505,9 @@ index 0000000..994d56c
 +#include <map>
 +#include <mutex>
 +#include <random>
++#include <set>
 +#include <thread>
++#include <utility>
 +
 +#include <fmt/format.h>
 +#include <inja/third_party/include/nlohmann/json.hpp>
@@ -723,6 +745,16 @@ index 0000000..994d56c
 +std::mutex g_friends_mutex;
 +std::vector<Friend> g_friends;
 +std::vector<Invitation> g_invitations;
++// The friend requests received, by the asker's account ID, as the last read found them; the notices
++// not taken yet (TakeNotices); and whether a read has filled the lists once. Guarded by
++// g_friends_mutex.
++std::set<uint32_t> g_incoming;
++std::vector<Notice> g_notices;
++bool g_friends_read = false;
++// The code of the room the player was in at the last read, empty when none: a friend who is with
++// the player now joined them only if the player was already in this room at the last read, not when
++// the player is the one who just joined the friend's.
++std::string g_notice_room;
 +// The host's overlay (SetOverlayHandler), and whether it is open. g_overlay_handler is guarded by
 +// g_friends_mutex.
 +OverlayHandler g_overlay_handler;
@@ -2032,6 +2064,7 @@ index 0000000..994d56c
 +    f.playing = status == "playing";
 +    f.title_id = f.playing ? static_cast<uint32_t>(std::strtoul(Text(presence, "title_id").c_str(), nullptr, 16)) : 0;
 +    f.joinable = f.playing && Text(presence, "party") == "joinable";
++    f.with_you = f.playing && Flag(presence, "with_you", false);
 +    if (!f.online) f.last_seen = Text(presence, "last_seen");
 +    if (f.id) friends.push_back(std::move(f));
 +  }
@@ -2046,7 +2079,38 @@ index 0000000..994d56c
 +      if (!invitation.id.empty()) invitations.push_back(std::move(invitation));
 +    }
 +  }
++  std::map<uint32_t, std::string> incoming;
++  if (answer.json.contains("incoming") && answer.json["incoming"].is_array()) {
++    for (const auto& entry : answer.json["incoming"]) {
++      const auto id = Number<uint32_t>(entry, "id", 0);
++      if (id) incoming[id] = Text(entry, "name");
++    }
++  }
++  const Status status = GetStatus();
++  const std::string room = status.state == State::kConnected ? status.code : std::string();
 +  std::lock_guard lock(g_friends_mutex);
++  // What is new since the last read becomes a notice. Requests and friends joining are only told
++  // once a read has given the lists to compare with.
++  for (const auto& invitation : invitations) {
++    const bool known = std::any_of(g_invitations.begin(), g_invitations.end(),
++                                   [&](const Invitation& old) { return old.id == invitation.id; });
++    if (!known) g_notices.push_back({Notice::Kind::kInvitation, invitation.id, invitation.from_id, invitation.from_name});
++  }
++  if (g_friends_read) {
++    for (const auto& [id, name] : incoming) {
++      if (!g_incoming.contains(id)) g_notices.push_back({Notice::Kind::kFriendRequest, {}, id, name});
++    }
++    for (const auto& f : friends) {
++      if (!f.with_you || room.empty() || room != g_notice_room) continue;
++      const bool was_with_you = std::any_of(g_friends.begin(), g_friends.end(),
++                                            [&](const Friend& old) { return old.id == f.id && old.with_you; });
++      if (!was_with_you) g_notices.push_back({Notice::Kind::kFriendJoined, {}, f.id, f.name});
++    }
++  }
++  g_friends_read = true;
++  g_notice_room = room;
++  g_incoming.clear();
++  for (const auto& [id, name] : incoming) g_incoming.insert(id);
 +  g_friends = std::move(friends);
 +  g_invitations = std::move(invitations);
 +}
@@ -2089,6 +2153,11 @@ index 0000000..994d56c
 +std::vector<Invitation> Invitations() {
 +  std::lock_guard lock(g_friends_mutex);
 +  return g_invitations;
++}
++
++std::vector<Notice> TakeNotices() {
++  std::lock_guard lock(g_friends_mutex);
++  return std::exchange(g_notices, {});
 +}
 +
 +void RefreshFriends() {
