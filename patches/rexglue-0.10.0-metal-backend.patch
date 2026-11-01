@@ -29922,7 +29922,7 @@ index 8197bb4..1bdb2fe 100644
  
  #undef XE_UI_VULKAN_FUNCTION
 diff --git a/src/ui/vulkan/vulkan_presenter.cpp b/src/ui/vulkan/vulkan_presenter.cpp
-index 8b2e79f..367e283 100644
+index 8b2e79f..aa76ff0 100644
 --- a/src/ui/vulkan/vulkan_presenter.cpp
 +++ b/src/ui/vulkan/vulkan_presenter.cpp
 @@ -15,11 +15,14 @@
@@ -30002,7 +30002,7 @@ index 8b2e79f..367e283 100644
        std::find(present_modes.cbegin(), present_modes.cend(), VK_PRESENT_MODE_IMMEDIATE_KHR) !=
            present_modes.cend()) {
      // Allowing tearing to reduce latency, and possibly variable refresh rate
-@@ -1425,7 +1441,147 @@ VkSwapchainKHR VulkanPresenter::PaintContext::CreateSwapchainForVulkanSurface(
+@@ -1425,7 +1441,153 @@ VkSwapchainKHR VulkanPresenter::PaintContext::CreateSwapchainForVulkanSurface(
    return swapchain;
  }
  
@@ -30037,7 +30037,7 @@ index 8b2e79f..367e283 100644
 +  // MoltenVK: CACurrentMediaTime in nanoseconds, which counts mach_absolute_time
 +  // like the host clock.
 +  return uint64_t(double(display_time_ns) * 1.0e-9 * host_tick_frequency);
-+#else
++#elif REX_PLATFORM_LINUX
 +  // CLOCK_MONOTONIC, which NTP may run a little faster or slower than the host
 +  // clock (CLOCK_MONOTONIC_RAW), by as much as the drift the reports are meant
 +  // to remove: the time is converted through its age, read from both clocks
@@ -30048,6 +30048,12 @@ index 8b2e79f..367e283 100644
 +  int64_t age_ns =
 +      int64_t(monotonic_now.tv_sec) * 1000000000 + monotonic_now.tv_nsec - int64_t(display_time_ns);
 +  return host_now - uint64_t(double(std::max(int64_t(0), age_ns)) * host_tick_frequency * 1.0e-9);
++#else
++  // Not used: GetDisplayRefreshSource does not pick the display timing where
++  // its time base is not known.
++  (void)display_time_ns;
++  (void)host_tick_frequency;
++  return chrono::Clock::QueryHostTickCount();
 +#endif
 +}
 +
@@ -30150,7 +30156,7 @@ index 8b2e79f..367e283 100644
    if (swapchain != VK_NULL_HANDLE) {
      submission_tracker.AwaitAllSubmissionsCompletion();
    }
-@@ -1569,9 +1725,16 @@ Presenter::PaintResult VulkanPresenter::PaintAndPresentImpl(bool execute_ui_draw
+@@ -1569,9 +1731,16 @@ Presenter::PaintResult VulkanPresenter::PaintAndPresentImpl(bool execute_ui_draw
  
    VkSemaphore acquire_semaphore = paint_submission.acquire_semaphore();
    uint32_t swapchain_image_index;
@@ -30170,7 +30176,7 @@ index 8b2e79f..367e283 100644
    switch (acquire_result) {
      case VK_SUCCESS:
      case VK_SUBOPTIMAL_KHR:
-@@ -2031,19 +2194,16 @@ Presenter::PaintResult VulkanPresenter::PaintAndPresentImpl(bool execute_ui_draw
+@@ -2031,19 +2200,16 @@ Presenter::PaintResult VulkanPresenter::PaintAndPresentImpl(bool execute_ui_draw
            uint32_t effect_constants_size = 0;
            union {
              BilinearConstants bilinear;
@@ -30190,7 +30196,7 @@ index 8b2e79f..367e283 100644
              case kGuestOutputPaintPipelineLayoutIndexCasSharpen: {
                effect_constants_size = sizeof(effect_constants.cas_sharpen);
                effect_constants.cas_sharpen.Initialize(guest_output_flow, i,
-@@ -2062,7 +2222,6 @@ Presenter::PaintResult VulkanPresenter::PaintAndPresentImpl(bool execute_ui_draw
+@@ -2062,7 +2228,6 @@ Presenter::PaintResult VulkanPresenter::PaintAndPresentImpl(bool execute_ui_draw
                effect_constants_size = sizeof(effect_constants.fsr_rcas);
                effect_constants.fsr_rcas.Initialize(guest_output_flow, i, guest_output_paint_config);
              } break;
@@ -30198,7 +30204,7 @@ index 8b2e79f..367e283 100644
              default:
                break;
            }
-@@ -2240,11 +2399,42 @@ Presenter::PaintResult VulkanPresenter::PaintAndPresentImpl(bool execute_ui_draw
+@@ -2240,11 +2405,42 @@ Presenter::PaintResult VulkanPresenter::PaintAndPresentImpl(bool execute_ui_draw
    present_info.pSwapchains = &paint_context_.swapchain;
    present_info.pImageIndices = &swapchain_image_index;
    present_info.pResults = nullptr;
@@ -30244,7 +30250,7 @@ index 8b2e79f..367e283 100644
    }
    switch (present_result) {
      case VK_SUCCESS:
-@@ -2338,7 +2528,6 @@ bool VulkanPresenter::InitializeSurfaceIndependent() {
+@@ -2338,7 +2534,6 @@ bool VulkanPresenter::InitializeSurfaceIndependent() {
        case kGuestOutputPaintPipelineLayoutIndexBilinear:
          guest_output_paint_push_constant_range_ffx.size = sizeof(BilinearConstants);
          break;
@@ -30252,7 +30258,7 @@ index 8b2e79f..367e283 100644
        case kGuestOutputPaintPipelineLayoutIndexCasSharpen:
          guest_output_paint_push_constant_range_ffx.size = sizeof(CasSharpenConstants);
          break;
-@@ -2351,7 +2540,6 @@ bool VulkanPresenter::InitializeSurfaceIndependent() {
+@@ -2351,7 +2546,6 @@ bool VulkanPresenter::InitializeSurfaceIndependent() {
        case kGuestOutputPaintPipelineLayoutIndexFsrRcas:
          guest_output_paint_push_constant_range_ffx.size = sizeof(FsrRcasConstants);
          break;
@@ -30260,7 +30266,7 @@ index 8b2e79f..367e283 100644
        default:
          assert_unhandled_case(GuestOutputPaintPipelineLayoutIndex(i));
          continue;
-@@ -2393,7 +2581,6 @@ bool VulkanPresenter::InitializeSurfaceIndependent() {
+@@ -2393,7 +2587,6 @@ bool VulkanPresenter::InitializeSurfaceIndependent() {
          shader_module_create_info.codeSize = sizeof(shaders::guest_output_bilinear_dither_ps);
          shader_module_create_info.pCode = shaders::guest_output_bilinear_dither_ps;
          break;
@@ -30268,7 +30274,7 @@ index 8b2e79f..367e283 100644
        case GuestOutputPaintEffect::kCasSharpen:
          shader_module_create_info.codeSize = sizeof(shaders::guest_output_ffx_cas_sharpen_ps);
          shader_module_create_info.pCode = shaders::guest_output_ffx_cas_sharpen_ps;
-@@ -2424,7 +2611,6 @@ bool VulkanPresenter::InitializeSurfaceIndependent() {
+@@ -2424,7 +2617,6 @@ bool VulkanPresenter::InitializeSurfaceIndependent() {
          shader_module_create_info.codeSize = sizeof(shaders::guest_output_ffx_fsr_rcas_dither_ps);
          shader_module_create_info.pCode = shaders::guest_output_ffx_fsr_rcas_dither_ps;
          break;
@@ -30276,7 +30282,7 @@ index 8b2e79f..367e283 100644
        default:
          // Not supported by this implementation.
          continue;
-@@ -2571,9 +2757,49 @@ bool VulkanPresenter::InitializeSurfaceIndependent() {
+@@ -2571,9 +2763,49 @@ bool VulkanPresenter::InitializeSurfaceIndependent() {
      return false;
    }
  
