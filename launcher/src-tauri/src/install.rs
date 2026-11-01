@@ -8,7 +8,10 @@
 //! The build is found, in order, in:
 //! - the folder named by the `AZURA_RUNTIME_BUILD` environment variable;
 //! - `runtime/out/build/mac-arm64-sdk-source/<config>/` of the project the launcher was built in,
-//!   found by walking up from the launcher executable.
+//!   found by walking up from the launcher executable;
+//! - for the development launcher, Azura (DEV), the same folders of the project it was built in,
+//!   found by the path the build recorded: once installed in /Applications, walking up from its
+//!   executable never reaches the project.
 //!
 //! A build newer than the installed copy is reported as an update, so after rebuilding the runtime
 //! the launcher offers to install it again.
@@ -86,7 +89,20 @@ pub fn find_build() -> Option<PathBuf> {
         }
         dir = current.parent();
     }
+    if cfg!(feature = "dev") {
+        return project_build(&built_in_project());
+    }
     None
+}
+
+/// The project the launcher was compiled in: two folders up from launcher/src-tauri.
+fn built_in_project() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+/// The first runtime build of `project` that holds the executable, in PROJECT_BUILDS's order.
+fn project_build(project: &Path) -> Option<PathBuf> {
+    PROJECT_BUILDS.iter().map(|build| project.join(build)).find(|candidate| executable_path(candidate).is_file())
 }
 
 fn modified(path: &Path) -> Option<SystemTime> {
@@ -223,6 +239,21 @@ mod tests {
         fs::write(dir.join("vulkan/icd.d/MoltenVK_icd.json"), b"{}").unwrap();
         fs::write(dir.join("azura.toml"), b"fullscreen = true").unwrap();
         fs::create_dir_all(dir.join("logs")).unwrap();
+    }
+
+    #[test]
+    fn finds_a_project_build_by_the_project_folder() {
+        let project = TempFolder::new("project");
+        assert_eq!(project_build(&project), None);
+        // RelWithDebInfo comes before Release when both exist.
+        for config in ["RelWithDebInfo", "Release"] {
+            let dir = project.join("runtime/out/build/mac-arm64-sdk-source").join(config);
+            fs::create_dir_all(&dir).unwrap();
+            fake_build(&dir);
+        }
+        assert_eq!(project_build(&project), Some(project.join(PROJECT_BUILDS[0])));
+        // The project the launcher was compiled in holds this crate.
+        assert!(built_in_project().join("launcher/src-tauri/Cargo.toml").is_file());
     }
 
     #[test]

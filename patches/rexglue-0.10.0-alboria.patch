@@ -1,9 +1,9 @@
 diff --git a/include/rex/system/xam/alboria.h b/include/rex/system/xam/alboria.h
 new file mode 100644
-index 0000000..caed09b
+index 0000000..4b0bba2
 --- /dev/null
 +++ b/include/rex/system/xam/alboria.h
-@@ -0,0 +1,333 @@
+@@ -0,0 +1,336 @@
 +/**
 + * @file        system/xam/alboria.h
 + * @brief       Alboria: System Link over the internet through our relay
@@ -200,7 +200,10 @@ index 0000000..caed09b
 +void RefreshIdentity();
 +
 +// Whether the player is signed in to Xbox Live as far as the title can tell, with Alboria behind it
-+// (alboria_live): the sign-in state, the online XUID and the online privileges a title checks.
++// (alboria_live): the sign-in state, the online XUID and the online privileges a title checks. Only
++// while Alboria answers and accepts the account: a service check (CheckService) that finds it so
++// signs the player in, and one that does not, or a room that fails because of the service or that
++// the player hosts, signs them out. The title hears each change (XN_SYS_SIGNINCHANGED).
 +bool LiveSignedIn();
 +// The online XUID that stands for the offline `xuid` while LiveSignedIn: an Xbox Live XUID (top bits
 +// 0x0009) with the offline one's low 48 bits.
@@ -377,10 +380,10 @@ index 0000000..c7fc5de
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria.cpp b/src/system/xam/alboria.cpp
 new file mode 100644
-index 0000000..44d59a1
+index 0000000..bc97774
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,1705 @@
+@@ -0,0 +1,1762 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -432,9 +435,10 @@ index 0000000..44d59a1
 +REXCVAR_DEFINE_STRING(alboria_client, "azura/0.0.0", "Network",
 +                      "Name and version this build gives Alboria when signing in; the service "
 +                      "refuses versions it no longer supports");
-+REXCVAR_DEFINE_BOOL(alboria_live, false, "Network",
-+                    "Work in progress: the player is signed in to Xbox Live as far as the game can "
-+                    "tell, with Alboria behind it, and the game's Xbox Live parties are Alboria's");
++REXCVAR_DEFINE_BOOL(alboria_live, true, "Network",
++                    "With online play, the player is signed in to Xbox Live as far as the game can "
++                    "tell while Alboria answers, and the game's Xbox Live parties are Alboria's; "
++                    "off, online play goes through System Link parties in Alboria's rooms instead");
 +REXCVAR_DECLARE(std::string, network_mode);
 +REXCVAR_DEFINE_BOOL(alboria_direct, true, "Network",
 +                    "Connect directly to the other players of an Alboria room when the network "
@@ -611,6 +615,22 @@ index 0000000..44d59a1
 +// XN_LIVE_INVITE_ACCEPTED (XNID(0, XNOTIFY_LIVE, 2)): the player accepted an invite; its parameter
 +// is the user's index.
 +constexpr uint32_t kNotifyLiveInviteAccepted = 0x02000002;
++// XN_SYS_SIGNINCHANGED: the sign-in of a local player changed; its parameter is the mask of the
++// players signed in.
++constexpr uint32_t kNotifySigninChanged = 0x0000000A;
++// XN_LIVE_CONNECTIONCHANGED (XNID(0, XNOTIFY_LIVE, 1)): the connection to Xbox Live changed; its
++// parameter is the logon status, XONLINE_S_LOGON_CONNECTION_ESTABLISHED or, once lost,
++// XONLINE_S_LOGON_DISCONNECTED. Unreal Engine 3 titles turn it into their connection status
++// delegates (Gears of War 3's GearPC.OnConnectionStatusChange shows the lost Xbox LIVE connection
++// message and returns to the main menu).
++constexpr uint32_t kNotifyLiveConnectionChanged = 0x02000001;
++constexpr uint32_t kLogonConnectionEstablished = 0x001510F0;
++constexpr uint32_t kLogonDisconnected = 0x001510F1;
++// Live parties (alboria_live): whether the title sees player 1 signed in to Xbox Live now
++// (LiveSignedIn). It follows the service, as the console's sign-in followed Xbox Live: on when a
++// service check (CheckService) finds Alboria answering and the account accepted, off when a check
++// finds otherwise or a room fails to come up. Off until the first check ends.
++std::atomic<bool> g_live_signed_in{false};
 +
 +// The account as the last sign-in answered (GetIdentity), and a background sign-in running.
 +std::mutex g_identity_mutex;
@@ -663,8 +683,40 @@ index 0000000..44d59a1
 +std::map<uint16_t, uint16_t> g_datagram_ports;
 +std::map<uint16_t, std::pair<uint32_t, uint16_t>> g_stream_sources;
 +
++bool IsAccountRefusal(const std::string& error);
++
++// Whether the Live parties on Alboria are on (alboria_live with online play).
++bool LiveEnabled() {
++  return REXCVAR_GET(alboria_live) && REXCVAR_GET(network_mode) == "online";
++}
++
++// Turns the title's Xbox Live sign-in on or off (g_live_signed_in) and, when that changes it, tells
++// the title as the console did when its connection to Xbox Live came or went: the connection
++// (XN_LIVE_CONNECTIONCHANGED), then the sign-in (XN_SYS_SIGNINCHANGED). Signed in, the title reads
++// the sign-in again and creates its Live party; signed out, it says the connection was lost and
++// leaves its Live party.
++void SetLiveSignedIn(bool signed_in) {
++  if (!LiveEnabled() || signed_in == g_live_signed_in.exchange(signed_in)) return;
++  REXSYS_INFO("Alboria: player 1 is {} Xbox Live", signed_in ? "signed in to" : "signed out of");
++  if (auto* kernel_state = REX_KERNEL_STATE()) {
++    kernel_state->BroadcastNotification(kNotifyLiveConnectionChanged,
++                                        signed_in ? kLogonConnectionEstablished : kLogonDisconnected);
++    kernel_state->BroadcastNotification(kNotifySigninChanged, kernel_state->signed_in_users());
++  }
++}
++
 +void SetStatus(State state, std::string error = {}) {
-+  if (state == State::kFailed) g_room_failed.store(true);
++  // A room the player hosts that does not come up, or one that fails because Alboria cannot be
++  // reached or refuses the account, would fail the same way for the title's next Live party: the
++  // player is signed out of Live until a service check finds Alboria usable again. A join refused
++  // for the room itself (a wrong code, a full room) leaves the sign-in as it is.
++  if (state == State::kFailed) {
++    g_room_failed.store(true);
++    if (g_hosting.load() || error == "network" || error == "server" || error == "relay_unreachable" ||
++        IsAccountRefusal(error)) {
++      SetLiveSignedIn(false);
++    }
++  }
 +  std::lock_guard lock(g_mutex);
 +  g_status.state = state;
 +  g_status.error = std::move(error);
@@ -1296,27 +1348,33 @@ index 0000000..44d59a1
 +    if (!end_reason.empty()) break;
 +  }
 +
-+  std::lock_guard lock(g_mutex);
-+  if (g_stop.load()) SendLocked(PacketType::kBye, {});
-+  CloseTunnelLocked();
-+  if (!end_reason.empty()) {
-+    REXSYS_INFO("Alboria: left the room ({})", end_reason);
-+    // A member of a room it had joined (it was welcomed) loses its party with the room; the host,
-+    // or a member the room ended for before it was welcomed, is left with a party and no room.
-+    if (welcomed && !g_status.host) {
-+      g_room_lost.store(true);
++  bool failed = false;
++  {
++    std::lock_guard lock(g_mutex);
++    if (g_stop.load()) SendLocked(PacketType::kBye, {});
++    CloseTunnelLocked();
++    if (!end_reason.empty()) {
++      REXSYS_INFO("Alboria: left the room ({})", end_reason);
++      // A member of a room it had joined (it was welcomed) loses its party with the room; the host,
++      // or a member the room ended for before it was welcomed, is left with a party and no room.
++      if (welcomed && !g_status.host) {
++        g_room_lost.store(true);
++      } else {
++        g_room_failed.store(true);
++        failed = true;
++      }
++      g_status.state = State::kFailed;
++      g_status.error = end_reason;
 +    } else {
-+      g_room_failed.store(true);
++      g_status.state = State::kOffline;
++      g_status.error.clear();
 +    }
-+    g_status.state = State::kFailed;
-+    g_status.error = end_reason;
-+  } else {
-+    g_status.state = State::kOffline;
-+    g_status.error.clear();
++    g_status.code.clear();
++    g_status.virtual_ip = 0;
++    g_status.host = false;
 +  }
-+  g_status.code.clear();
-+  g_status.virtual_ip = 0;
-+  g_status.host = false;
++  // The room the player hosted ended under it: signed out of Live, as when a room fails to come up.
++  if (failed) SetLiveSignedIn(false);
 +}
 +
 +// Sends the session of the Live party this installation hosts to Alboria, for the room `code`.
@@ -1825,6 +1883,8 @@ index 0000000..44d59a1
 +    if (reachable != g_reachable.exchange(reachable)) {
 +      REXSYS_INFO("Alboria: the service is {}", reachable ? "reachable" : "unreachable");
 +    }
++    // Signed in to Live while Alboria answers and has not refused the account.
++    SetLiveSignedIn(reachable && SignInRefusal().empty());
 +    g_checking.store(false);
 +  }).detach();
 +}
@@ -1839,7 +1899,7 @@ index 0000000..44d59a1
 +}
 +
 +bool LiveSignedIn() {
-+  return REXCVAR_GET(alboria_live) && REXCVAR_GET(network_mode) == "online";
++  return LiveEnabled() && g_live_signed_in.load();
 +}
 +
 +uint64_t OnlineXuid(uint64_t xuid) {

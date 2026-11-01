@@ -25,7 +25,6 @@
     "lede": "Vaše kopie hry, překompilovaná pro {target}.",
     "launch": "Hrát",
     "launching": "Spouštění",
-    "mode": "Kampaň",
     "install": "Instalovat",
     "installSub": "Nastavte herní soubory",
     "running": "Hraje se",
@@ -85,6 +84,10 @@
     "invalidXex": "default.xex není platný spustitelný soubor Xbox 360.",
     "ok": "Gears of War 3 · Edice {versionName} · Media ID {mediaId}",
     "unsupportedVersion": "Tato edice Gears of War 3 (Media ID {mediaId}) zatím není podporována.",
+    "editionReportHelp": "Chcete-li ji přidat, zkopírujte tyto údaje a vložte je do nového issue na GitHubu. Identifikují pouze spustitelný soubor; nic dalšího z vašich souborů se nesdílí.",
+    "editionReportCopy": "Kopírovat údaje",
+    "editionReportCopied": "Zkopírováno",
+    "editionReportOpen": "Nahlásit na GitHubu",
     "wrongGame": "Toto není Gears of War 3 (Title ID {titleId}).",
     "chooseFolderFirst": "Nejprve vyberte hru",
     "defaultUserName": "User",
@@ -133,13 +136,14 @@
       "notInstalled": "Nenainstalováno",
       "needsRuntime": "Nainstalováno · připraví se po aktualizaci runtime",
       "unsupported": "Nainstalováno, ale s těmito soubory hry se ho nepodařilo připravit",
-      "installed": "Nainstalováno",
+      "installed": "Nainstalováno · jeho mapy přijdou s multiplayerem",
       "installing": "Instalace… (trvá minutu)"
     },
     "dlcOthers": "Další nainstalovaný obsah",
     "dlcOthersCount": "Balíčky: {count}",
     "dlcInstalled": "{name} nainstalován.",
     "dlcFailed": "Balíček se nepodařilo nainstalovat: {detail}",
+    "eyebrow": "Tvoje kopie, tvůj počítač",
     "dlcRemove": "Odebrat",
     "dlcRemoved": "{name} odebráno.",
     "dlcRemoveFailed": "Obsah se nepodařilo odebrat: {detail}"
@@ -158,7 +162,13 @@
     "gpuIntegrated": "integrovaná",
     "whilePlaying": "Spouštěč během hraní",
     "whilePlayingMinimize": "Minimalizovat",
-    "whilePlayingKeepOpen": "Nechat otevřený"
+    "whilePlayingKeepOpen": "Nechat otevřený",
+    "eyebrow": "Jak hra vypadá a běží",
+    "displayTitle": "Zobrazení",
+    "modeHelp": "Jak se otevře okno hry.",
+    "gpuHelp": "Která grafická karta hru pohání.",
+    "whilePlayingHelp": "Co launcher udělá, když se hra spustí.",
+    "renderResolutionHelp": "Velikost, ve které hra vykresluje. Vyšší je ostřejší a víc zatíží grafickou kartu."
   },
   "achievements": {
     "title": "Úspěchy",
@@ -311,7 +321,8 @@
     "folderHelp": "Zde jsou vaše kontrolní body, profil a stahovatelný obsah. Po změně se sem přesunou, nejprve se vytvoří záloha.",
     "folderCloseGame": "Pro přesun uložených pozic zavřete hru",
     "kindBeforeMove": "Před přesunem",
-    "kindBeforeReplace": "Před nahrazením"
+    "kindBeforeReplace": "Před nahrazením",
+    "eyebrow": "Kontrolní body a profil"
   },
   "gamepad": {
     "select": "Vybrat",
@@ -371,7 +382,13 @@
     "codesOffCreate": "Momentálně neposíláme kódy. Váš účet se vytvoří bez ověření e-mailu. Až je začneme znovu posílat, budete mít 48 hodin na jeho ověření, jinak bude účet smazán.",
     "codesOffSignIn": "Momentálně neposíláme kódy, takže se zatím nelze přihlásit k účtu z jiného počítače. Zkuste to později.",
     "createNow": "Vytvořit účet",
-    "createdUnverified": "Váš e-mail není ověřený: až znovu začneme posílat kódy, ověřte ho v části Účet do 48 hodin, jinak bude účet smazán."
+    "createdUnverified": "Váš e-mail není ověřený: až znovu začneme posílat kódy, ověřte ho v části Účet do 48 hodin, jinak bude účet smazán.",
+    "title": "Připrav si svého {player}",
+    "titlePlayer": "hráče",
+    "chooseTitle": "Jak chceš hrát?",
+    "bubbleGreet": "Ahoj! Pojďme ti dát tag.",
+    "bubbleCode": "Mrkni do e-mailu, právě jsem ho poslal!",
+    "bubbleDone": "Vítej v Alboria!"
   },
   "account": {
     "title": "Účet",
@@ -474,7 +491,9 @@
     "thenMaintenance": "Otevřené místnosti pokračují; nové čekají do konce.",
     "thenRestart": "Nové místnosti se pozastaví do návratu. Otevřené mají až 30 minut na dokončení.",
     "thenGameOff": "Pak se její místnosti zavřou.",
-    "thenCloseRooms": "Dohrajte zápas předtím."
+    "thenCloseRooms": "Dohrajte zápas předtím.",
+    "downTitle": "Alboria si zdřímla",
+    "downText": "Alboria teď není dostupná, takže online místnosti jsou pozastavené. Noční sova drží hlídku."
   },
   "friends": {
     "title": "Přátelé",

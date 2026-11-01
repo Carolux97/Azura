@@ -8,8 +8,10 @@
  * A folder check is an object with a `status`:
  *   { status: "ok", folder, titleId, mediaId, versionId, versionName, languages }
  *                                                a known build of the game: playable
- *   { status: "unsupportedVersion", folder, titleId, mediaId, languages }
- *                                                the game, in a build with no manifest yet
+ *   { status: "unsupportedVersion", folder, titleId, mediaId, languages, xexSha256, imageSha256 }
+ *                                                the game, in a build with no manifest yet; the
+ *                                                hashes of default.xex (whole, and after its
+ *                                                header) are what the player reports
  *   { status: "wrongGame", folder, titleId }     an Xbox 360 executable of another game
  *   { status: "notADirectory", folder }          the path is missing, or neither a folder nor a file
  *   { status: "notADiscImage", folder }          a file that is not an Xbox 360 disc image
@@ -27,8 +29,25 @@ const tauri = globalThis.__TAURI__;
 /** True when running inside the Tauri app rather than a browser. */
 export const isNativeApp = Boolean(tauri);
 
-/** Result the browser simulation returns for any folder: the World edition (see versions.toml). */
-const simulatedCheck = (folder) => ({
+/**
+ * Result the browser simulation returns for any folder: the World edition (see versions.toml), or
+ * with "?unsupported" in the address an edition the project does not know.
+ */
+const simulatedCheck = (folder) =>
+  simulatedQuery.has("unsupported")
+    ? {
+        status: "unsupportedVersion",
+        folder,
+        titleId: "4D5308AB",
+        mediaId: "52AC485A",
+        languages: ["DEU", "INT"],
+        xexSha256: "0f".repeat(32),
+        imageSha256: "387bdfa99c137afdbf86a337754822d59743950fa703f6c52f8dcf32c12ebbb6",
+      }
+    : simulatedWorldCheck(folder);
+
+/** The World edition's check (see versions.toml). */
+const simulatedWorldCheck = (folder) => ({
   status: "ok",
   folder,
   titleId: "4D5308AB",
@@ -424,6 +443,12 @@ export const alboriaStatus = async (titleId = null) => {
       : null,
     warnings: has("warn") ? [{ action: "restart", scope: "all", at: inMinutes(12) }, { action: "close_rooms", scope: "game", at: inMinutes(2) }] : [],
   };
+};
+
+/** Opens the page to report an unsupported edition (fixed on the Rust side); a new tab in a browser. */
+export const openEditionReport = async () => {
+  if (isNativeApp) return tauri.core.invoke("open_edition_report");
+  window.open("https://github.com/Carolux97/Azura/issues/new", "_blank", "noopener");
 };
 
 /** Opens a link of an Alboria notice (https or mailto only) in the system's browser. */
