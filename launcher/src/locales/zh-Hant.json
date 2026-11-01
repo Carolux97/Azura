@@ -261,7 +261,11 @@
   "update": {
     "available": "更新至 {version}",
     "downloading": "正在下載更新… {percent}",
-    "failed": "無法安裝更新，請稍後再試。"
+    "failed": "無法安裝更新，請稍後再試。",
+    "confirm": "啟動器會下載 {version} 並重新啟動。你的遊戲、存檔和設定都會保持不變。",
+    "confirmYes": "更新並重新啟動",
+    "cancel": "取消",
+    "closeGame": "請關閉遊戲以更新啟動器"
   },
   "saves": {
     "title": "遊戲存檔",
