@@ -351,6 +351,8 @@ document.addEventListener("visibilitychange", syncMotion);
 
 const renderPlay = () => {
   syncMotion();
+  // Moving the saves waits while the game runs, so the saves folder follows the game's state too.
+  renderSavesFolder();
   const status = document.getElementById("status-game");
   status.dataset.state = isInstalled() ? "ok" : "warn";
   let detail = "status.noFolder";
@@ -1045,14 +1047,6 @@ const renderInstall = () => {
     state.installingRuntime ? "install.installingRuntime" : state.runtime.installed ? "install.updateRuntime" : "install.installRuntime",
   );
 
-  const savesField = document.getElementById("saves-path");
-  savesField.value = state.savesFolder;
-  savesField.title = state.savesFolder;
-  document.getElementById("saves-conflict").hidden = !state.savesConflict;
-  if (state.savesConflict) {
-    document.getElementById("saves-conflict-text").textContent = t("install.savesConflict", { folder: state.savesConflict });
-  }
-
   const line = document.getElementById("game-check");
   line.hidden = !check;
   if (!check) return;
@@ -1127,20 +1121,6 @@ const setupInstall = () => {
 
   document.getElementById("install-runtime").addEventListener("click", () => runRuntimeInstall());
 
-  // Moving the saves: a folder that already holds saves needs a second, explicit confirmation.
-  const moveSaves = async (folder, replace) => {
-    try {
-      state.savesFolder = await changeSavesFolder(folder, replace);
-      state.savesConflict = null;
-      toast(t("toast.savesMoved"));
-    } catch (error) {
-      state.savesConflict = null;
-      if (error?.kind === "destinationHasSaves") state.savesConflict = folder;
-      else if (error?.kind === "nestedFolders") toast(t("toast.savesNested"));
-      else toast(t("toast.savesFailed", { detail: error?.detail ?? String(error) }));
-    }
-    renderInstall();
-  };
   document.getElementById("add-dlc")?.addEventListener("click", async () => {
     const pkg = await pickDlcPackage();
     if (!pkg) return;
@@ -1157,15 +1137,6 @@ const setupInstall = () => {
     await refreshDlc();
   });
   refreshDlc();
-  document.getElementById("pick-saves").addEventListener("click", async () => {
-    const folder = await pickSavesFolder();
-    if (folder && folder !== state.savesFolder) await moveSaves(folder, false);
-  });
-  document.getElementById("saves-replace").addEventListener("click", () => moveSaves(state.savesConflict, true));
-  document.getElementById("saves-cancel").addEventListener("click", () => {
-    state.savesConflict = null;
-    renderInstall();
-  });
 };
 
 /** Checks the folder saved in an earlier session, if any, and shows the result. */
@@ -1384,6 +1355,8 @@ const BACKUP_KIND_KEYS = {
   manual: "saves.kindManual",
   beforeRepair: "saves.kindBeforeRepair",
   beforeReset: "saves.kindBeforeReset",
+  beforeMove: "saves.kindBeforeMove",
+  beforeReplace: "saves.kindBeforeReplace",
 };
 
 /** The message for a failed save operation, from its { kind, detail } (SavesError in saves.rs). */
@@ -1396,7 +1369,27 @@ const savesErrorMessage = (error) => {
  * Renders the save manager: the status, its metrics and detail, the folder, the backups and, when
  * the player asked for an action that replaces saves, the confirmation waiting for an answer.
  */
+/**
+ * Writes the saves folder panel: the folder, and the confirmation when the chosen one already
+ * holds saves. Moving the saves waits while the game starts or runs.
+ */
+const renderSavesFolder = () => {
+  const savesField = document.getElementById("saves-path");
+  savesField.value = state.savesFolder;
+  savesField.title = state.savesFolder;
+  const busy = state.game !== "idle";
+  const pick = document.getElementById("pick-saves");
+  pick.disabled = busy;
+  pick.title = busy ? t("saves.folderCloseGame") : "";
+  if (busy) state.savesConflict = null;
+  document.getElementById("saves-conflict").hidden = !state.savesConflict;
+  if (state.savesConflict) {
+    document.getElementById("saves-conflict-text").textContent = t("install.savesConflict", { folder: state.savesConflict });
+  }
+};
+
 const renderSaves = () => {
+  renderSavesFolder();
   const s = state.saveStatus;
   if (!s) return;
 
@@ -1499,6 +1492,33 @@ const setupSaves = () => {
     if (!button) return;
     const backup = state.saveStatus?.backups?.find((b) => b.id === button.dataset.id);
     ask({ action: "restore", backup: backup ?? { id: button.dataset.id } });
+  });
+
+  // Moving the saves: a folder that already holds saves needs a second, explicit confirmation.
+  // The launcher backs them up first (BeforeMove, and BeforeReplace for the ones overwritten), so
+  // the list of backups is read again afterwards.
+  const moveSaves = async (folder, replace) => {
+    try {
+      state.savesFolder = await changeSavesFolder(folder, replace);
+      state.savesConflict = null;
+      toast(t("toast.savesMoved"));
+    } catch (error) {
+      state.savesConflict = null;
+      if (error?.kind === "destinationHasSaves") state.savesConflict = folder;
+      else if (error?.kind === "nestedFolders") toast(t("toast.savesNested"));
+      else toast(t("toast.savesFailed", { detail: error?.detail ?? String(error) }));
+    }
+    renderSavesFolder();
+    await refreshAndRenderSaves();
+  };
+  document.getElementById("pick-saves").addEventListener("click", async () => {
+    const folder = await pickSavesFolder();
+    if (folder && folder !== state.savesFolder) await moveSaves(folder, false);
+  });
+  document.getElementById("saves-replace").addEventListener("click", () => moveSaves(state.savesConflict, true));
+  document.getElementById("saves-cancel").addEventListener("click", () => {
+    state.savesConflict = null;
+    renderSavesFolder();
   });
 
   document.getElementById("saves-confirm-no").addEventListener("click", () => {

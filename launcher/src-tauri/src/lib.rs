@@ -497,6 +497,8 @@ async fn change_saves_folder(
     let target = std::path::PathBuf::from(&folder);
     // Saves still in the runtime's old folder count as the current ones.
     let source = if saves::has_saves(&current) { current } else { saves::legacy_folder() };
+    // Backups first (the saves that leave, and those a replace overwrites): no backup, no move.
+    saves::backup_before_move(&app, &source, &target, replace)?;
     saves::move_saves(&source, &target, replace)?;
     std::fs::create_dir_all(&target).map_err(|e| SavesError::Io(e.to_string()))?;
     paths.set_saves_folder(&target).map_err(SavesError::Io)?;

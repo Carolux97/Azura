@@ -97,8 +97,6 @@
     "installRuntime": "インストール",
     "updateRuntime": "アップデート",
     "installingRuntime": "インストール中…",
-    "savesTitle": "セーブデータ",
-    "savesHelp": "キャンペーンのチェックポイントとプロフィールのフォルダです。変更するとセーブデータがそこへ移動します。",
     "savesConflict": "{folder} には既にセーブデータがあります。現在のセーブデータで置き換えますか？",
     "savesReplace": "置き換える",
     "savesCancel": "キャンセル",
@@ -301,7 +299,12 @@
     "backupToast": "バックアップを作成しました",
     "restoreToast": "バックアップを復元しました",
     "errorBackupMissing": "そのバックアップはもう存在しません。",
-    "errorFailed": "操作に失敗しました: {detail}"
+    "errorFailed": "操作に失敗しました: {detail}",
+    "folderTitle": "セーブデータのフォルダー",
+    "folderHelp": "チェックポイント、プロフィール、ダウンロードコンテンツの保存先です。変更すると、バックアップを作成してから移動します。",
+    "folderCloseGame": "セーブデータを移動するにはゲームを終了してください",
+    "kindBeforeMove": "移動前",
+    "kindBeforeReplace": "置き換え前"
   },
   "gamepad": {
     "select": "決定",

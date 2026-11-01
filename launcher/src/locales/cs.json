@@ -97,8 +97,6 @@
     "installRuntime": "Nainstalovat",
     "updateRuntime": "Aktualizovat",
     "installingRuntime": "Instaluje se…",
-    "savesTitle": "Uložené hry",
-    "savesHelp": "Složka pro kontrolní body kampaně a profil. Při změně se uložené hry přesunou tam.",
     "savesConflict": "{folder} už obsahuje uložené hry. Nahradit je vašimi současnými uloženými hrami?",
     "savesReplace": "Nahradit",
     "savesCancel": "Zrušit",
@@ -301,7 +299,12 @@
     "backupToast": "Záloha vytvořena",
     "restoreToast": "Záloha obnovena",
     "errorBackupMissing": "Tato záloha už neexistuje.",
-    "errorFailed": "Operace se nezdařila: {detail}"
+    "errorFailed": "Operace se nezdařila: {detail}",
+    "folderTitle": "Složka uložených pozic",
+    "folderHelp": "Zde jsou vaše kontrolní body, profil a stahovatelný obsah. Po změně se sem přesunou, nejprve se vytvoří záloha.",
+    "folderCloseGame": "Pro přesun uložených pozic zavřete hru",
+    "kindBeforeMove": "Před přesunem",
+    "kindBeforeReplace": "Před nahrazením"
   },
   "gamepad": {
     "select": "Vybrat",
