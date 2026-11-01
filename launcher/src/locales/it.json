@@ -261,7 +261,11 @@
   "update": {
     "available": "Aggiorna a {version}",
     "downloading": "Download dell'aggiornamento… {percent}",
-    "failed": "Impossibile installare l'aggiornamento. Riprova più tardi."
+    "failed": "Impossibile installare l'aggiornamento. Riprova più tardi.",
+    "confirm": "Il launcher scarica la versione {version} e si riavvia. Il gioco, i salvataggi e le impostazioni restano come sono.",
+    "confirmYes": "Aggiorna e riavvia",
+    "cancel": "Annulla",
+    "closeGame": "Chiudi il gioco per aggiornare il launcher"
   },
   "saves": {
     "title": "Salvataggi",
