@@ -326,6 +326,54 @@ deleted. Creating an account with a code for an email that an unverified account
 account first, and signing in to one with a code unlinks its earlier devices: whoever proves the
 email wins.
 
+### 4.7 Friends, presence and invitations
+
+A player's friends are other Alboria accounts that accepted a request; they see each other's
+presence and can join each other's open rooms without a code, or invite each other. Players are
+named by account ID (`id`) in every action; only a request names one by `Gamertag#tag`. All these
+requests take the token of a signed-in device whose account they act for.
+
+**The events channel.** `GET /v1/events` (with the token) answers `text/event-stream` and stays
+open: Server-Sent Events that the server pushes as things happen. An account is online while one of
+its clients keeps this channel open. The channel closes when its token's session ends (an hour, or
+the device was signed out, banned or deleted); the client signs in again and reopens it. Comment
+lines (`: ping`) keep it alive every 25 seconds. At most 8 channels per account (`429
+too_many_channels`). Events:
+
+| Event | Data | When |
+| --- | --- | --- |
+| `presence` | `{ "id", "presence" }` | A friend's presence changed |
+| `friend_request` | `{ "id", "name" }` | Someone sent this account a request |
+| `friends` | `{}` | The lists changed (a request accepted, declined or cancelled, a friend removed, a block): read them again |
+| `invitation` | an invitation, as below | A friend invited this account to their room |
+| `invitation_gone` | `{ "id" }` | An invitation was accepted, declined, ran out or its room closed |
+
+**Presence**, as friends see it: `{ "status": "playing", "title_id": "4D5308AB", "party": "joinable" }`
+while any device of the account is in a room (`party` is `joinable` or `invite_only`),
+`{ "status": "online" }` while it has an events channel open, and otherwise
+`{ "status": "offline", "last_seen": "<ISO date or null>" }`. The room's code is never shown.
+Presence is worked out again every 2 seconds, and only changes are sent.
+
+| Request | Body | Answer |
+| --- | --- | --- |
+| `POST /v1/friends` | `{}` | `friends` (each `id`, `name`, `favourite`, `presence`), `incoming` and `outgoing` requests and `blocked` (each `id`, `name`), and open `invitations` |
+| `POST /v1/friends/request` | `{ "name": "Gamertag#tag" }` | `{ "result": "sent" }` whether or not the account exists, so the form cannot tell who has one; `"friends"` when the other had already asked (they are friends now). `409 list_full` (100 friends, or 50 requests waiting); `429 too_many_requests` (20 an hour) |
+| `POST /v1/friends/accept` | `{ "id" }` | `{}`; `404 no_request` |
+| `POST /v1/friends/decline` | `{ "id" }` | `{}`; the sender is not told |
+| `POST /v1/friends/cancel` | `{ "id" }` | `{}`, for a request this account sent |
+| `POST /v1/friends/remove` | `{ "id" }` | `{}`; the friendship ends on both sides |
+| `POST /v1/friends/favourite` | `{ "id", "favourite": true }` | `{}`; each side keeps its own favourites. `404 not_friends` |
+| `POST /v1/friends/block` | `{ "id" }` | `{}`; removes the friendship and the requests between the two either way. The blocked player is not told: their requests answer `sent` and their invitations never arrive |
+| `POST /v1/friends/unblock` | `{ "id" }` | `{}` |
+| `POST /v1/friends/join` | `{ "id" }` | a ticket, as `/v1/rooms/join`, for the friend's room when it is `joinable`. `404 not_friends`, `404 room_not_found` (not in a room), `403 invite_only`, and the errors of `/v1/rooms/join`. Maintenance does not stop it: only new rooms wait |
+| `POST /v1/invitations` | `{ "friend": <id> }` | `{ "sent": true }`; invites a friend to the room this account is in. `404 not_friends`, `409 not_in_room`, `429 too_many_requests` (20 a minute) |
+| `POST /v1/invitations/accept` | `{ "id": "<invitation ID>" }` | a ticket, as `/v1/rooms/join`, also for an `invite_only` room. `404 invitation_gone` |
+| `POST /v1/invitations/decline` | `{ "id": "<invitation ID>" }` | `{}` |
+
+An invitation is `{ "id", "from": { "id", "name" }, "title_id", "expires_at" }`. It lives in the
+server's memory, like rooms: it goes away when accepted or declined, when its room closes, after 15
+minutes, or when the two stop being friends; inviting the same friend again replaces it.
+
 ## 5. Relay protocol (UDP)
 
 ### 5.1 Packets
@@ -556,6 +604,10 @@ Decided on 29 October 2026.
   account, and forgotten 30 days after the device last signed in.
 - Bans: account, public key, computer or IP address, reason, date and end date (30 days for the
   addresses of a banned account; none for the rest), until removed or ended.
+- Friends (section 4.7): friendships, with each side's favourite mark, requests waiting for an
+  answer and blocks, until removed, answered, unblocked or the account is deleted; and when each
+  account was last online. Presence and invitations live in memory only. All of it is in the
+  player's data download, and deleting the account deletes it.
 - Codes: in memory only, as a hash, for their 10 minutes.
 - For each room, for 7 days: its code, title ID, times, and the public key and `Gamertag#tag` of
   each member, so that a report about a player can be checked. No IP addresses and no game traffic.
