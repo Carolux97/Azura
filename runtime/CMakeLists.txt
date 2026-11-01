@@ -70,6 +70,8 @@ set(AZURA_SOURCES
     src/join_by_code_menu.cpp
     src/alboria_overlay.cpp
     src/alboria_notices.cpp
+    src/alboria_sound_synth.cpp
+    src/alboria_sounds.cpp
     src/alboria_style.cpp
     src/connection_menu.cpp
     src/shader_precompile.cpp

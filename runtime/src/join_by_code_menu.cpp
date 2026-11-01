@@ -135,9 +135,12 @@ JoinByCodeMenu::JoinByCodeMenu(rex::ui::ImGuiDrawer* drawer, rex::input::InputSy
       opened_(Clock::now()),
       last_input_(input) {
   if (assignment_) assignment_->SetBlocked(true);
+  script::PlayMenuSound(script::MenuSound::kOpen);
 }
 
 void JoinByCodeMenu::MoveFocus(int rows, int columns) {
+  const int row = focus_row_;
+  const int column = focus_column_;
   if (rows) {
     // Keeps about the same place across rows of other lengths.
     const float place = (focus_column_ + 0.5f) / RowLength(focus_row_);
@@ -145,9 +148,19 @@ void JoinByCodeMenu::MoveFocus(int rows, int columns) {
     focus_column_ = std::clamp(static_cast<int>(place * RowLength(focus_row_)), 0, RowLength(focus_row_) - 1);
   }
   focus_column_ = std::clamp(focus_column_ + columns, 0, RowLength(focus_row_) - 1);
+  // The game's sounds for moving: up and down between rows, left and right along one.
+  if (focus_row_ != row) {
+    script::PlayMenuSound(focus_row_ < row ? script::MenuSound::kUp : script::MenuSound::kDown);
+  } else if (focus_column_ != column) {
+    script::PlayMenuSound(focus_column_ < column ? script::MenuSound::kLeft : script::MenuSound::kRight);
+  }
 }
 
 void JoinByCodeMenu::PressFocused() {
+  // Going back sounds as it closes (OnDraw); the other keys as a choice.
+  if (focus_row_ < kCharacterRows || kActions[focus_column_] != Action::kBack) {
+    script::PlayMenuSound(script::MenuSound::kAccept);
+  }
   if (focus_row_ < kCharacterRows) {
     Type(kKeyRows[focus_row_][focus_column_]);
     return;
@@ -158,6 +171,7 @@ void JoinByCodeMenu::PressFocused() {
       error_.clear();
       break;
     case Action::kBack:
+      script::PlayMenuSound(script::MenuSound::kBack);
       going_back_ = true;
       closing_ = true;
       break;
@@ -221,10 +235,14 @@ bool JoinByCodeMenu::HandleInput() {
       if (pressed & rex::input::X_INPUT_GAMEPAD_DPAD_RIGHT) MoveFocus(0, 1);
       if (pressed & rex::input::X_INPUT_GAMEPAD_A) PressFocused();
       if ((pressed & rex::input::X_INPUT_GAMEPAD_X) && !code_.empty()) {
+        script::PlayMenuSound(script::MenuSound::kBack);
         code_.pop_back();
         error_.clear();
       }
-      if (pressed & rex::input::X_INPUT_GAMEPAD_START) Join();
+      if (pressed & rex::input::X_INPUT_GAMEPAD_START) {
+        script::PlayMenuSound(script::MenuSound::kAccept);
+        Join();
+      }
     }
   }
 
@@ -251,7 +269,10 @@ bool JoinByCodeMenu::HandleInput() {
     code_.pop_back();
     error_.clear();
   }
-  if (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)) Join();
+  if (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)) {
+    script::PlayMenuSound(script::MenuSound::kAccept);
+    Join();
+  }
   return close;
 }
 
@@ -273,6 +294,7 @@ void JoinByCodeMenu::OnDraw(ImGuiIO& io) {
     return;
   }
   if (HandleInput()) {
+    script::PlayMenuSound(script::MenuSound::kBack);
     going_back_ = true;
     closing_ = true;
     return;
@@ -445,6 +467,7 @@ void JoinByCodeMenu::OnDraw(ImGuiIO& io) {
 }
 
 void JoinByCodeMenu::OnClose() {
+  script::PlayMenuSound(script::MenuSound::kClose);
   if (assignment_) assignment_->SetBlocked(false);
   if (owner_) *owner_ = nullptr;
 }

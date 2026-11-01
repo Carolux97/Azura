@@ -344,6 +344,18 @@ enum WatchedName {
   kGetAdjustedAimFor,        // GearPC: bends a shot towards the target (aim assist)
   kNotifyInviteFailed,       // GearPC: an accepted invite could not be followed
   kIsEpicDev,                // GearProfileSettings.IsEpicDev: whether the player starts Lambency
+  kProcessSoundEvent,        // UISoundTheme: plays a menu sound by its event name (Menu sounds)
+  // The menu sound events our menus play (MenuSound), in its order.
+  kSoundStepUp,
+  kSoundStepDown,
+  kSoundValueLeft,
+  kSoundValueRight,
+  kSoundAccept,
+  kSoundBack,
+  kSoundOpen,
+  kSoundClose,
+  kSoundSliderLeft,
+  kSoundSliderRight,
   kWatchedNameCount,
 };
 constexpr const char* kWatchedNames[kWatchedNameCount] = {
@@ -367,7 +379,10 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "Callback_Credits",      "Callback_ClientMenuOptionWasSelected", "ConditionalCreatePartySession",
     "GetPartyType",          "LocalPartyCreated",      "ClientSetHUD",       "OnCustomMapChanged",
     "ApplySensitivityScaling", "ViewAdhesion",
-    "GetAdjustedAimFor",     "NotifyInviteFailed",     "IsEpicDev"};
+    "GetAdjustedAimFor",     "NotifyInviteFailed",     "IsEpicDev",
+    "ProcessSoundEvent",     "Options_StepUp",         "Options_StepDown",   "ValueChangeLeft",
+    "ValueChangeRight",      "Options_AcceptButton",   "Options_BackButton", "Options_DetailsEnter",
+    "Options_DetailsLeave",  "Options_SliderLeft",     "Options_SliderRight"};
 
 // FName index of each watched name, -1 until found (0 is a valid index: None).
 std::atomic<int32_t> g_names[kWatchedNameCount];
@@ -3319,6 +3334,98 @@ void AnswerPartyType(PPCContext& ctx, uint8_t* base) {
   if (result && startup >= 0 && !rex::system::xam::alboria::InRoom()) base[result] = static_cast<uint8_t>(startup);
 }
 
+// --- Menu sounds ---
+//
+// Every sound of the game's menus goes through UISoundTheme.ProcessSoundEvent(SoundEventName,
+// SoundOwner): Flash calls it for moving and changing values, the script through
+// GFxMoviePlayer.PlaySoundFromTheme for the rest. The theme maps the event's name to a SoundCue in
+// its SoundEventBindings and the owner (the player's controller) plays it. Our own menus over the
+// game play the same events: the theme is kept as the game uses it (the title screen already plays
+// one), and each sound a menu asks for (PlayMenuSound) runs ProcessSoundEvent on the next player
+// input frame, borrowing that frame as the System Link join does. A sound asked for before the
+// theme is known, or while no input runs, is dropped rather than played late.
+
+using azura::script::MenuSound;
+
+// The sound theme as the game last used it, and its ProcessSoundEvent.
+std::atomic<uint32_t> g_sound_theme{0};
+uint32_t g_sound_event_function = 0;  // the script thread only
+// The sounds our menus asked for since the last input frame, in order.
+std::mutex g_menu_sounds_mutex;
+std::vector<MenuSound> g_menu_sounds;
+// The most sounds kept for one frame: more than that is a held key, and the rest would only stack.
+constexpr size_t kMaxMenuSounds = 4;
+// Guest memory for ProcessSoundEvent's locals: its two parameters and its own locals, with room.
+constexpr uint32_t kSoundLocalsSize = 256;
+uint32_t g_sound_locals = 0;
+
+WatchedName SoundEventName(MenuSound sound) {
+  return static_cast<WatchedName>(kSoundStepUp + static_cast<int>(sound));
+}
+
+// Whether `object`'s class is UISoundTheme or one of its subclasses.
+bool IsSoundTheme(const uint8_t* base, uint32_t object) {
+  for (uint32_t cls = LoadU32(base, object + kObjectClass); cls; cls = LoadU32(base, cls + kStructSuper)) {
+    if (ObjectName(base, cls) == "UISoundTheme") return true;
+  }
+  return false;
+}
+
+// On player 1's input frame (`ctx`, about to run PlayerInput): plays the sounds our menus asked for
+// through the game's sound theme, with player 1's controller as their owner.
+void PlayQueuedMenuSounds(PPCContext& ctx, uint8_t* base) {
+  std::vector<MenuSound> sounds;
+  {
+    std::lock_guard lock(g_menu_sounds_mutex);
+    if (g_menu_sounds.empty()) return;
+    sounds.swap(g_menu_sounds);
+  }
+  const uint32_t theme = g_sound_theme.load(std::memory_order_relaxed);
+  const uint32_t controller = LoadU32(base, ctx.r3.u32 + kObjectOuter);
+  if (!theme || !controller || controller != g_player_controllers[0].load(std::memory_order_relaxed)) return;
+  // The theme is an object of the game's: once it is gone (its memory reused), it is forgotten
+  // until the game plays a sound again.
+  if (!IsSoundTheme(base, theme)) {
+    g_sound_theme.store(0);
+    return;
+  }
+  if (!g_sound_event_function) {
+    for (uint32_t cls = LoadU32(base, theme + kObjectClass); cls && !g_sound_event_function;
+         cls = LoadU32(base, cls + kStructSuper)) {
+      g_sound_event_function = FindClassFunction(base, cls, "ProcessSoundEvent");
+    }
+    if (!g_sound_event_function) return;
+  }
+  const int32_t name_at = ParamOffset(base, g_sound_event_function, "SoundEventName");
+  const int32_t owner_at = ParamOffset(base, g_sound_event_function, "SoundOwner");
+  if (name_at < 0 || owner_at < 0) return;
+  if (!g_sound_locals) g_sound_locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kSoundLocalsSize);
+  if (!g_sound_locals) return;
+  const uint32_t frame = ctx.r4.u32;
+  const uint32_t own_object = LoadU32(base, frame + kFrameObject);
+  const uint64_t own_r3 = ctx.r3.u64;
+  for (const MenuSound sound : sounds) {
+    const int32_t name = g_names[SoundEventName(sound)].load(std::memory_order_relaxed);
+    if (name < 0) continue;
+    std::memset(base + g_sound_locals, 0, kSoundLocalsSize);
+    // An FName: its index in GNames, then its number (0, no suffix).
+    StoreU32(base, g_sound_locals + static_cast<uint32_t>(name_at), static_cast<uint32_t>(name));
+    StoreU32(base, g_sound_locals + static_cast<uint32_t>(owner_at), controller);
+    StoreU32(base, frame + kFrameObject, theme);
+    ctx.r3.u64 = theme;
+    RunInstead(ctx, base, g_sound_event_function, g_sound_locals);
+  }
+  StoreU32(base, frame + kFrameObject, own_object);
+  ctx.r3.u64 = own_r3;
+}
+
+namespace azura::script {
+void PlayMenuSound(MenuSound sound) {
+  std::lock_guard lock(g_menu_sounds_mutex);
+  if (g_menu_sounds.size() < kMaxMenuSounds) g_menu_sounds.push_back(sound);
+}
+}  // namespace azura::script
+
 extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   if (g_names_missing.load(std::memory_order_relaxed) > 0 &&
       (g_calls.fetch_add(1, std::memory_order_relaxed) & 0x3FF) == 0) {
@@ -3327,6 +3434,7 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   const uint32_t function = LoadU32(base, ctx.r4.u32 + kFrameNode);
   // Before it runs: it reads aMouseX and aMouseY.
   if (function && IsEnginePlayerInput(base, function)) {
+    PlayQueuedMenuSounds(ctx, base);
     if (g_open_browser.load(std::memory_order_relaxed)) OpenSystemLinkBrowserForJoin(ctx, base);
     ReturnToMainMenuWhenRoomLost(ctx, base);
     CreatePendingStartupParty(ctx, base);
@@ -3426,6 +3534,10 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
       !rex::system::xam::alboria::InRoom() && !g_creating_startup_party.load()) {
     CreateStartupParty(ctx, base);
     return;
+  }
+  // The theme the game plays its menu sounds with, for ours.
+  if (Is(base, function, kProcessSoundEvent) && IsSoundTheme(base, ctx.r3.u32)) {
+    g_sound_theme.store(ctx.r3.u32, std::memory_order_relaxed);
   }
   // Before it runs: an Alboria account that starts Lambency is a developer to the game.
   if (Is(base, function, kIsEpicDev) && ObjectName(base, LoadU32(base, function + kObjectOuter)) == "GearProfileSettings" &&

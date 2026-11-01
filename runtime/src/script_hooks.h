@@ -46,6 +46,15 @@ std::string TakeRefusalNotice();
 // times while there is none). Any thread; it happens on the game's script thread soon after.
 void JoinSystemLinkPartyInRoom();
 
+// A sound of the game's menus, for our menus that stand in for the game's (Local co-op, the
+// controls menus, Join by code, Connection), so they sound as the game's own do: the events of its
+// UISoundTheme (Options_StepUp, ValueChangeLeft, Options_AcceptButton...). Left and right change a
+// list's value; the slider's move a bar one step, as the Options' volume bars do.
+enum class MenuSound { kUp, kDown, kLeft, kRight, kAccept, kBack, kOpen, kClose, kSliderLeft, kSliderRight };
+// Plays `sound` through the game on player 1's next input frame. Any thread. Dropped while the game
+// has not played a menu sound yet (before the title screen) or no input runs (a loading screen).
+void PlayMenuSound(MenuSound sound);
+
 // Where player 1 is, as of their last input: the title screen (where Return is Start), a menu (the
 // front end and what it opens, or the game paused), or playing. Any thread.
 enum class Menus { kPlaying, kTitleScreen, kMenu };
