@@ -436,7 +436,10 @@
     "verifyBy": "Ověřte svůj e-mail do {date}, jinak bude účet smazán.",
     "verifyEmail": "Ověřit e-mail",
     "emailVerified": "E-mail ověřen.",
-    "playVerifyBy": "Váš účet Alboria není ověřený. Ověřte svůj e-mail do {date}, jinak bude smazán."
+    "playVerifyBy": "Váš účet Alboria není ověřený. Ověřte svůj e-mail do {date}, jinak bude smazán.",
+    "overlayTitle": "Překryv Alborie",
+    "overlayHelp": "Tví přátelé, pozvánky a místnost přímo ve hře. Otevři ho touto klávesou, nebo na ovladači podržením Back a stiskem RB.",
+    "overlayKey": "Klávesa překryvu Alborie"
   },
   "accountErrors": {
     "network": "Nelze se připojit k Alborii. Zkontrolujte připojení a zkuste to znovu.",

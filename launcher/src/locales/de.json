@@ -436,7 +436,10 @@
     "verifyBy": "Bestätige deine E-Mail-Adresse vor dem {date}, sonst wird das Konto gelöscht.",
     "verifyEmail": "E-Mail bestätigen",
     "emailVerified": "E-Mail-Adresse bestätigt.",
-    "playVerifyBy": "Dein Alboria-Konto ist nicht bestätigt. Bestätige deine E-Mail-Adresse vor dem {date}, sonst wird es gelöscht."
+    "playVerifyBy": "Dein Alboria-Konto ist nicht bestätigt. Bestätige deine E-Mail-Adresse vor dem {date}, sonst wird es gelöscht.",
+    "overlayTitle": "Alboria-Overlay",
+    "overlayHelp": "Deine Freunde, Einladungen und dein Raum im Spiel. Öffne es mit dieser Taste oder am Controller, indem du Back hältst und RB drückst.",
+    "overlayKey": "Taste des Alboria-Overlays"
   },
   "accountErrors": {
     "network": "Alboria ist nicht erreichbar. Prüfe deine Verbindung und versuche es erneut.",

@@ -23,9 +23,11 @@ const center = (rect) => [rect.left + rect.width / 2, rect.top + rect.height / 2
  * only when it shares some of the origin's height (left and right stay in the row; a control on
  * the next row is reached with down). Among those, the one nearest along the direction wins, with
  * any offset across the direction weighing CROSS_WEIGHT times more, so the focus prefers to stay
- * in its column.
+ * in its column. With `anyRow`, left and right also take controls on other rows: the fallback
+ * when the row has nothing more that way, so a column beside it whose controls start lower down
+ * (the friends list beside the Play page's main column) is still reached.
  */
-export const nextInDirection = (origin, candidates, direction) => {
+export const nextInDirection = (origin, candidates, direction, { anyRow = false } = {}) => {
   const [dx, dy] = VECTORS[direction] ?? [0, 0];
   if (!dx && !dy) return -1;
   const [ox, oy] = center(origin);
@@ -37,7 +39,7 @@ export const nextInDirection = (origin, candidates, direction) => {
     const [cx, cy] = center(rect);
     const along = dx ? (cx - edge) * dx : (cy - edge) * dy;
     if (along <= 0) return;
-    if (dx && (rect.top >= origin.top + origin.height || rect.top + rect.height <= origin.top)) return;
+    if (dx && !anyRow && (rect.top >= origin.top + origin.height || rect.top + rect.height <= origin.top)) return;
     // How far the candidate's box is from the origin's centre line, zero when they overlap.
     const across = dx
       ? Math.max(0, rect.top - oy, oy - (rect.top + rect.height))

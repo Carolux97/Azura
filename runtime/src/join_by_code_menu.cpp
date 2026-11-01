@@ -57,9 +57,21 @@ struct Texts {
   const char* incomplete;
 };
 
-// Fonts carry Latin-1 only, so the languages written in other scripts use the English texts.
+// In the game's languages; the runtime loads the Cyrillic and CJK fonts each one needs.
 Texts LocalizedTexts(uint32_t language) {
   switch (language) {
+    case 2:  // Japanese
+      return {"コードで参加", "ホストから教えてもらったルームのコードを入力してください。", "削除", "戻る", "参加", "押す",
+              "コードを入力", "ルームに参加中…", "コードは8文字です"};
+    case 7:  // Korean
+      return {"코드로 참가", "호스트가 알려 준 방 코드를 입력하세요.", "지우기", "뒤로", "참가", "누르기", "코드 입력",
+              "방에 참가하는 중…", "코드는 8자입니다"};
+    case 8:  // Traditional Chinese
+      return {"以代碼加入", "輸入主持人給你的房間代碼。", "刪除", "返回", "加入", "按下", "輸入代碼", "正在加入房間…",
+              "代碼共 8 個字元"};
+    case 12:  // Russian
+      return {"ВОЙТИ ПО КОДУ", "Введите код комнаты, который дал вам хост.", "СТЕРЕТЬ", "НАЗАД", "ВОЙТИ", "Нажать",
+              "Введите код", "Вход в комнату…", "В коде 8 символов"};
     case 3:  // German
       return {"PER CODE BEITRETEN", "Gib den Code des Raums ein, den dir der Gastgeber gegeben hat.", "L\xC3\x96SCHEN",
               "ZUR\xC3\x9C""CK", "BEITRETEN", "Dr\xC3\xBC""cken", "Code eintippen", "Raum wird betreten\xE2\x80\xA6",

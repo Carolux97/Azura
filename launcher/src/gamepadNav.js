@@ -184,7 +184,12 @@ export const setupGamepad = ({ showView, blocked, t, onLocaleChange, onInput }) 
     // the rail's current item, and right from the rail back to where it was in the section.
     const region = regionOf(current);
     const others = list.filter((element) => element !== current && regionOf(element) === region);
-    const index = nextInDirection(rectOf(current), others.map(rectOf), direction);
+    let index = nextInDirection(rectOf(current), others.map(rectOf), direction);
+    // Nothing more in the row: left or right reach the nearest control that way on another row (a
+    // column beside this one whose controls start lower down), before leaving for the rail.
+    if (index < 0 && (direction === "left" || direction === "right")) {
+      index = nextInDirection(rectOf(current), others.map(rectOf), direction, { anyRow: true });
+    }
     if (index >= 0) {
       focus(others[index]);
     } else if (direction === "left" && region === "view") {

@@ -184,6 +184,8 @@ const state = {
   gpu: null,
   // Whether the launcher minimizes itself while the game runs (minimize_while_playing).
   minimizeWhilePlaying: true,
+  // The key that opens the Alboria overlay in the game (bind_alboria_overlay).
+  overlayKey: "F1",
   // The graphics cards the runtime lists (see src-tauri/src/gpus.rs), once asked for.
   gpus: { devices: [], automatic: null },
 };
@@ -203,6 +205,7 @@ const currentSettings = () => ({
   savesFolder: state.savesFolder,
   minimizeWhilePlaying: state.minimizeWhilePlaying,
   account: state.account,
+  overlayKey: state.overlayKey,
 });
 
 /** Pending save timer; null when everything is saved. */
@@ -1264,6 +1267,7 @@ const applyStoredGraphics = (settings) => {
   state.fullscreen = Boolean(settings.fullscreen);
   state.gpu = settings.gpu ?? null;
   state.minimizeWhilePlaying = settings.minimizeWhilePlaying ?? true;
+  state.overlayKey = settings.overlayKey ?? "F1";
 };
 
 /**
@@ -1290,6 +1294,7 @@ const renderGraphics = () => {
   select.value = offered ? state.renderResolution : "auto";
   document.getElementById("display-mode").value = state.fullscreen ? "fullscreen" : "windowed";
   document.getElementById("while-playing").value = state.minimizeWhilePlaying ? "minimize" : "keepOpen";
+  document.getElementById("overlay-key").value = state.overlayKey;
   renderGpuChoice();
   syncMirrors();
 };
@@ -1338,6 +1343,15 @@ const setupGraphics = () => {
   const displayMode = document.getElementById("display-mode");
   displayMode.addEventListener("change", () => {
     state.fullscreen = displayMode.value === "fullscreen";
+    persist();
+  });
+
+  // The keys the overlay can take (settings.rs OVERLAY_KEYS): F3, F4 and F7 are the runtime's.
+  const overlayKey = document.getElementById("overlay-key");
+  for (const key of ["F1", "F2", "F5", "F6", "F8", "F9", "F10", "F11", "F12"]) overlayKey.add(new Option(key, key));
+  overlayKey.value = state.overlayKey;
+  overlayKey.addEventListener("change", () => {
+    state.overlayKey = overlayKey.value;
     persist();
   });
 

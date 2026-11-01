@@ -436,7 +436,10 @@
     "verifyBy": "Erősítsd meg az e-mail-címed {date} előtt, különben a fiók törlődik.",
     "verifyEmail": "E-mail megerősítése",
     "emailVerified": "E-mail-cím megerősítve.",
-    "playVerifyBy": "Az Alboria-fiókod nincs megerősítve. Erősítsd meg az e-mail-címed {date} előtt, különben törlődik."
+    "playVerifyBy": "Az Alboria-fiókod nincs megerősítve. Erősítsd meg az e-mail-címed {date} előtt, különben törlődik.",
+    "overlayTitle": "Alboria overlay",
+    "overlayHelp": "A barátaid, meghívásaid és szobád a játékban. Nyisd meg ezzel a billentyűvel, vagy kontrolleren a Back nyomva tartásával és az RB megnyomásával.",
+    "overlayKey": "Az Alboria overlay billentyűje"
   },
   "accountErrors": {
     "network": "Az Alboria nem érhető el. Ellenőrizd a kapcsolatot, és próbáld újra.",
