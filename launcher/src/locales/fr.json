@@ -97,8 +97,6 @@
     "installRuntime": "Installer",
     "updateRuntime": "Mettre à jour",
     "installingRuntime": "Installation…",
-    "savesTitle": "Sauvegardes",
-    "savesHelp": "Dossier de vos points de contrôle de campagne et de votre profil. Le changer y déplace vos sauvegardes.",
     "savesConflict": "{folder} contient déjà des sauvegardes. Les remplacer par vos sauvegardes actuelles ?",
     "savesReplace": "Remplacer",
     "savesCancel": "Annuler",
@@ -305,7 +303,12 @@
     "backupToast": "Copie de sécurité créée",
     "restoreToast": "Copie restaurée",
     "errorBackupMissing": "Cette copie de sécurité n'existe plus.",
-    "errorFailed": "L'opération a échoué : {detail}"
+    "errorFailed": "L'opération a échoué : {detail}",
+    "folderTitle": "Dossier des sauvegardes",
+    "folderHelp": "Là où se trouvent vos points de contrôle, votre profil et le contenu téléchargeable. Le changer les y déplace, après une copie de sécurité.",
+    "folderCloseGame": "Fermez le jeu pour déplacer vos sauvegardes",
+    "kindBeforeMove": "Avant le déplacement",
+    "kindBeforeReplace": "Avant le remplacement"
   },
   "gamepad": {
     "select": "Sélectionner",

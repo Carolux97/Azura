@@ -97,8 +97,6 @@
     "installRuntime": "설치",
     "updateRuntime": "업데이트",
     "installingRuntime": "설치 중…",
-    "savesTitle": "저장된 게임",
-    "savesHelp": "캠페인 체크포인트와 프로필이 저장되는 폴더입니다. 변경하면 저장된 게임이 그곳으로 이동합니다.",
     "savesConflict": "{folder}에 이미 저장된 게임이 있습니다. 현재 저장된 게임으로 바꾸시겠습니까?",
     "savesReplace": "바꾸기",
     "savesCancel": "취소",
@@ -305,7 +303,12 @@
     "backupToast": "백업을 만들었습니다",
     "restoreToast": "백업을 복원했습니다",
     "errorBackupMissing": "그 백업은 더 이상 존재하지 않습니다.",
-    "errorFailed": "작업에 실패했습니다: {detail}"
+    "errorFailed": "작업에 실패했습니다: {detail}",
+    "folderTitle": "저장 데이터 폴더",
+    "folderHelp": "체크포인트, 프로필, 다운로드 콘텐츠가 저장되는 곳입니다. 변경하면 백업을 만든 뒤 그곳으로 옮깁니다.",
+    "folderCloseGame": "저장 데이터를 옮기려면 게임을 종료하세요",
+    "kindBeforeMove": "이동 전",
+    "kindBeforeReplace": "교체 전"
   },
   "gamepad": {
     "select": "선택",

@@ -97,8 +97,6 @@
     "installRuntime": "Installieren",
     "updateRuntime": "Aktualisieren",
     "installingRuntime": "Wird installiert…",
-    "savesTitle": "Spielstände",
-    "savesHelp": "Ordner für deine Kampagnen-Checkpoints und dein Profil. Beim Ändern werden deine Spielstände dorthin verschoben.",
     "savesConflict": "{folder} enthält bereits Spielstände. Durch deine aktuellen Spielstände ersetzen?",
     "savesReplace": "Ersetzen",
     "savesCancel": "Abbrechen",
@@ -305,7 +303,12 @@
     "backupToast": "Sicherung erstellt",
     "restoreToast": "Sicherung wiederhergestellt",
     "errorBackupMissing": "Diese Sicherung existiert nicht mehr.",
-    "errorFailed": "Der Vorgang ist fehlgeschlagen: {detail}"
+    "errorFailed": "Der Vorgang ist fehlgeschlagen: {detail}",
+    "folderTitle": "Spielstandordner",
+    "folderHelp": "Hier liegen deine Kontrollpunkte, dein Profil und die Zusatzinhalte. Wenn du ihn änderst, werden sie nach einer Sicherung dorthin verschoben.",
+    "folderCloseGame": "Schließe das Spiel, um deine Spielstände zu verschieben",
+    "kindBeforeMove": "Vor dem Verschieben",
+    "kindBeforeReplace": "Vor dem Ersetzen"
   },
   "gamepad": {
     "select": "Auswählen",
