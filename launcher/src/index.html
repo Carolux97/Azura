@@ -293,6 +293,15 @@
           </div>
           <!-- Result of checking the folder; renderInstall() fills it. -->
           <p class="check" id="game-check" hidden></p>
+          <!-- For an edition the launcher does not support yet: the details to report it with. -->
+          <div class="edition-report" id="edition-report" hidden>
+            <p class="help" data-i18n="install.editionReportHelp"></p>
+            <pre class="edition-report-details" id="edition-report-details"></pre>
+            <div class="path-row">
+              <button class="btn btn-small" id="edition-report-copy" data-i18n="install.editionReportCopy"></button>
+              <button class="btn btn-small" id="edition-report-open" data-i18n="install.editionReportOpen"></button>
+            </div>
+          </div>
         </div>
         <div class="panel">
           <h2 class="panel-title" data-i18n="install.runtimeTitle"></h2>
