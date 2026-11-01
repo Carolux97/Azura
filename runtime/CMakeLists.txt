@@ -69,6 +69,8 @@ set(AZURA_SOURCES
     src/online_room_overlay.cpp
     src/join_by_code_menu.cpp
     src/alboria_overlay.cpp
+    src/alboria_notices.cpp
+    src/alboria_style.cpp
     src/connection_menu.cpp
     src/shader_precompile.cpp
     src/system_settings.cpp
