@@ -9,6 +9,8 @@
 //   open room and Invite while the player is in a room.
 // - Invitations: the ones received, with Join and Not now.
 // - Room: the code of the player's room, to copy, and Join by code.
+// - Settings: the volume of Alboria's menu sounds and of its notices (alboria_sounds.h), 0 to 10
+//   each, changed with left and right.
 // The data is the SDK's (rex/system/xam/alboria.h), read again as the overlay opens. Joining goes
 // the way a join by code does: the host's party reaches the game as an accepted invite.
 //
@@ -76,6 +78,7 @@ class AlboriaOverlay : public rex::ui::ImGuiDialog {
   struct Actions {
     int page = 0;    // -1 previous, +1 next
     int move = 0;    // -1 up, +1 down
+    int horizontal = 0;  // -1 left, +1 right: a setting's value, or the page elsewhere
     bool primary = false;
     bool secondary = false;
     bool copy = false;

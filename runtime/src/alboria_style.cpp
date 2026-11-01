@@ -79,7 +79,7 @@ void DrawAlboriaPlanet(ImDrawList* draw_list, ImVec2 center, float scale, int al
   if (moon_in_front) draw_list->AddCircleFilled(on_ring(wrapped), moon_radius, Navy(alpha));
 }
 
-float AlboriaUpDownGlyph(ImDrawList* draw_list, ImVec2 center, float height, bool pad, int alpha) {
+float AlboriaArrowsGlyph(ImDrawList* draw_list, ImVec2 center, float height, bool pad, bool vertical, int alpha) {
   const float width = height * 1.3f;
   const ImVec2 min(center.x - width * 0.5f, center.y - height * 0.5f);
   const ImVec2 max(center.x + width * 0.5f, center.y + height * 0.5f);
@@ -93,10 +93,17 @@ float AlboriaUpDownGlyph(ImDrawList* draw_list, ImVec2 center, float height, boo
   const float w = height * 0.2f;
   const float h = height * 0.17f;
   const float gap = height * 0.07f;
-  draw_list->AddTriangleFilled(ImVec2(center.x, center.y - gap - h * 2.0f), ImVec2(center.x + w, center.y - gap),
-                               ImVec2(center.x - w, center.y - gap), arrow);
-  draw_list->AddTriangleFilled(ImVec2(center.x - w, center.y + gap), ImVec2(center.x + w, center.y + gap),
-                               ImVec2(center.x, center.y + gap + h * 2.0f), arrow);
+  if (vertical) {
+    draw_list->AddTriangleFilled(ImVec2(center.x, center.y - gap - h * 2.0f), ImVec2(center.x + w, center.y - gap),
+                                 ImVec2(center.x - w, center.y - gap), arrow);
+    draw_list->AddTriangleFilled(ImVec2(center.x - w, center.y + gap), ImVec2(center.x + w, center.y + gap),
+                                 ImVec2(center.x, center.y + gap + h * 2.0f), arrow);
+  } else {
+    draw_list->AddTriangleFilled(ImVec2(center.x - gap - h * 2.0f, center.y), ImVec2(center.x - gap, center.y - w),
+                                 ImVec2(center.x - gap, center.y + w), arrow);
+    draw_list->AddTriangleFilled(ImVec2(center.x + gap, center.y - w), ImVec2(center.x + gap + h * 2.0f, center.y),
+                                 ImVec2(center.x + gap, center.y + w), arrow);
+  }
   return width;
 }
 

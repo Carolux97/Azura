@@ -343,6 +343,53 @@ const char* NavigateText(uint32_t language) {
   }
 }
 
+// The Settings page's texts, in the game's languages.
+struct SettingsTexts {
+  const char* tab;
+  const char* menu;
+  const char* menu_help;
+  const char* notices;
+  const char* notices_help;
+  const char* adjust;
+};
+
+SettingsTexts LocalizedSettingsTexts(uint32_t language) {
+  switch (language) {
+    case 2:
+      return {"設定", "メニューの効果音", "Alboria の画面での移動・決定・戻る", "通知",
+              "ゲーム上に表示される招待やその他の通知", "調整"};
+    case 7:
+      return {"설정", "메뉴 효과음", "Alboria 화면에서 이동, 선택, 뒤로 가기", "알림",
+              "게임 위에 표시되는 초대 및 기타 알림", "조정"};
+    case 8:
+      return {"設定", "選單音效", "在 Alboria 畫面中移動、選擇和返回", "通知", "遊戲上方顯示的邀請和其他通知", "調整"};
+    case 12:
+      return {"Настройки", "Звуки меню", "Перемещение, выбор и возврат в экранах Alboria", "Уведомления",
+              "Приглашения и другие уведомления поверх игры", "Настроить"};
+    case 5:
+      return {"Ajustes", "Sonidos del menú", "Moverte, elegir y volver en las pantallas de Alboria", "Notificaciones",
+              "Invitaciones y otros avisos sobre el juego", "Ajustar"};
+    case 3:
+      return {"Einstellungen", "Menütöne", "Bewegen, Auswählen und Zurück in Alborias Bildschirmen",
+              "Benachrichtigungen", "Einladungen und andere Hinweise über dem Spiel", "Anpassen"};
+    case 4:
+      return {"Réglages", "Sons du menu", "Se déplacer, choisir et revenir dans les écrans d'Alboria", "Notifications",
+              "Invitations et autres avis par-dessus le jeu", "Régler"};
+    case 6:
+      return {"Impostazioni", "Suoni del menu", "Muoversi, scegliere e tornare nelle schermate di Alboria", "Notifiche",
+              "Inviti e altri avvisi sopra il gioco", "Regola"};
+    case 9:
+      return {"Configurações", "Sons do menu", "Mover, escolher e voltar nas telas da Alboria", "Notificações",
+              "Convites e outros avisos sobre o jogo", "Ajustar"};
+    case 11:
+      return {"Ustawienia", "Dźwięki menu", "Poruszanie się, wybór i powrót na ekranach Alborii", "Powiadomienia",
+              "Zaproszenia i inne powiadomienia nad grą", "Dostosuj"};
+    default:
+      return {"Settings", "Menu sounds", "Moving, choosing and going back in Alboria's screens", "Notifications",
+              "Invitations and other notices over the game", "Adjust"};
+  }
+}
+
 // A rounded pill button: the sun for the main action, white with a sky line for the others, with
 // the glyph of the control that does it before its label when `glyph` is set (the focused row's
 // buttons). Returns its width; `hit` says whether the mouse clicked it this frame.
@@ -489,7 +536,7 @@ void AlboriaOverlay::Act(bool secondary) {
       Start(texts.declined, [id](alboria::ActionDone done) { alboria::DeclineInvitation(id, std::move(done)); },
             texts.declined, false, Sound::kBack);
     }
-  } else if (!secondary) {
+  } else if (page_ == Page::kRoom && !secondary) {
     alboria_sounds::Play(Sound::kAccept);
     open_join_by_code_ = true;
     closing_ = true;
@@ -507,6 +554,8 @@ AlboriaOverlay::Actions AlboriaOverlay::ReadInput() {
       uint16_t buttons = state.gamepad.buttons;
       if (state.gamepad.thumb_ly >= kStickPress) buttons |= rex::input::X_INPUT_GAMEPAD_DPAD_UP;
       if (state.gamepad.thumb_ly <= -kStickPress) buttons |= rex::input::X_INPUT_GAMEPAD_DPAD_DOWN;
+      if (state.gamepad.thumb_lx <= -kStickPress) buttons |= rex::input::X_INPUT_GAMEPAD_DPAD_LEFT;
+      if (state.gamepad.thumb_lx >= kStickPress) buttons |= rex::input::X_INPUT_GAMEPAD_DPAD_RIGHT;
       auto found = previous_buttons_.find(slot.device.id);
       const bool seen = found != previous_buttons_.end();
       const uint16_t pressed = seen ? static_cast<uint16_t>(buttons & ~found->second) : 0;
@@ -516,6 +565,8 @@ AlboriaOverlay::Actions AlboriaOverlay::ReadInput() {
       if (pressed & rex::input::X_INPUT_GAMEPAD_RIGHT_SHOULDER) actions.page = 1;
       if (pressed & rex::input::X_INPUT_GAMEPAD_DPAD_UP) actions.move = -1;
       if (pressed & rex::input::X_INPUT_GAMEPAD_DPAD_DOWN) actions.move = 1;
+      if (pressed & rex::input::X_INPUT_GAMEPAD_DPAD_LEFT) actions.horizontal = -1;
+      if (pressed & rex::input::X_INPUT_GAMEPAD_DPAD_RIGHT) actions.horizontal = 1;
       if (pressed & rex::input::X_INPUT_GAMEPAD_A) actions.primary = true;
       if (pressed & rex::input::X_INPUT_GAMEPAD_X) actions.secondary = true;
       if (pressed & rex::input::X_INPUT_GAMEPAD_Y) actions.copy = true;
@@ -525,8 +576,9 @@ AlboriaOverlay::Actions AlboriaOverlay::ReadInput() {
   last_input_.NoteKeyboard();
   if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) actions.close = true;
   if (ImGui::IsKeyPressed(ImGuiKey_Tab, false)) actions.page = ImGui::GetIO().KeyShift ? -1 : 1;
-  if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false)) actions.page = -1;
-  if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, false)) actions.page = 1;
+  // Left and right change a setting's value on the Settings page, and the page elsewhere.
+  if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow) || ImGui::IsKeyPressed(ImGuiKey_A)) actions.horizontal = -1;
+  if (ImGui::IsKeyPressed(ImGuiKey_RightArrow) || ImGui::IsKeyPressed(ImGuiKey_D)) actions.horizontal = 1;
   // Up and down with the arrows, or with W and S as in the game.
   if (ImGui::IsKeyPressed(ImGuiKey_UpArrow) || ImGui::IsKeyPressed(ImGuiKey_W)) actions.move = -1;
   if (ImGui::IsKeyPressed(ImGuiKey_DownArrow) || ImGui::IsKeyPressed(ImGuiKey_S)) actions.move = 1;
@@ -689,14 +741,25 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
   const auto invitations = alboria::Invitations();
   const alboria::Status status = alboria::GetStatus();
   const bool in_room = status.state == alboria::State::kConnected && !status.code.empty();
-  const int pages = 3;
+  const int pages = 4;
   auto rows_on_page = [&]() -> int {
     if (page_ == Page::kFriends) return static_cast<int>(friends.size()) + 1;
     if (page_ == Page::kInvitations) return static_cast<int>(invitations.size());
+    if (page_ == Page::kSettings) return 2;
     return 1;
   };
+  const SettingsTexts settings = LocalizedSettingsTexts(language_);
+  // The Settings page's rows: the group of sounds each one sets, and the sound it plays as a sample.
+  const alboria_sounds::Group setting_groups[] = {alboria_sounds::Group::kMenu, alboria_sounds::Group::kNotices};
+  auto change_volume = [&](int row, int volume) {
+    const auto group = setting_groups[row];
+    volume = std::clamp(volume, 0, alboria_sounds::kMaxVolume);
+    if (volume == alboria_sounds::Volume(group)) return;
+    alboria_sounds::SetVolume(group, volume);
+    alboria_sounds::Play(group == alboria_sounds::Group::kMenu ? Sound::kAccept : Sound::kNotice);
+  };
 
-  const Actions actions = adding_ ? Actions{} : ReadInput();
+  Actions actions = adding_ ? Actions{} : ReadInput();
   if (adding_ && AddFriendInput()) {
     alboria_sounds::Play(Sound::kBack);
     adding_ = false;
@@ -709,6 +772,11 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
     }
   }
   if (actions.close) closing_ = true;
+  if (page_ == Page::kSettings && actions.horizontal) {
+    change_volume(focus_, alboria_sounds::Volume(setting_groups[std::clamp(focus_, 0, 1)]) + actions.horizontal);
+  } else if (actions.horizontal && !actions.page) {
+    actions.page = actions.horizontal;
+  }
   if (actions.page) {
     alboria_sounds::Play(Sound::kPage);
     page_ = static_cast<Page>((static_cast<int>(page_) + actions.page + pages) % pages);
@@ -794,7 +862,7 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
   }
 
   // The tabs.
-  const char* tab_names[] = {texts.friends, texts.invitations, texts.room};
+  const char* tab_names[] = {texts.friends, texts.invitations, texts.room, settings.tab};
   float tab_x = panel_min.x + margin;
   const float tab_y = panel_min.y + 74.0f * unit;
   for (int i = 0; i < pages; ++i) {
@@ -857,7 +925,8 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
     busy = result_->busy;
   }
 
-  if (!signed_in) {
+  // Settings work without Alboria; the other pages need it.
+  if (!signed_in && page_ != Page::kSettings) {
     empty_text(texts.unavailable, texts.unavailable_help);
   } else if (adding_) {
     // The Add friend screen: the two fields, then the on-screen keyboard with a controller.
@@ -1014,6 +1083,35 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
         Act(true);
       }
     }
+  } else if (page_ == Page::kSettings) {
+    // Two volumes, each a bar of ten steps at the row's end; the mouse sets one by clicking a step.
+    const char* labels[] = {settings.menu, settings.notices};
+    const char* helps[] = {settings.menu_help, settings.notices_help};
+    for (int i = 0; i < 2; ++i) {
+      const float middle = row(i, SkyDeep(a(255)), labels[i], helps[i]);
+      const int volume = alboria_sounds::Volume(setting_groups[i]);
+      const float step = 16.0f * unit;
+      const float gap = 4.0f * unit;
+      const float number_width = title_font->CalcTextSizeA(18.0f * unit, FLT_MAX, 0.0f, "10").x;
+      const float bar_right = list_right - 22.0f * unit - number_width - 12.0f * unit;
+      const float bar_left = bar_right - alboria_sounds::kMaxVolume * (step + gap) + gap;
+      for (int v = 0; v < alboria_sounds::kMaxVolume; ++v) {
+        const ImVec2 min(bar_left + v * (step + gap), middle - 9.0f * unit);
+        const ImVec2 max(min.x + step, middle + 9.0f * unit);
+        draw_list->AddRectFilled(min, max, v < volume ? Sun(a(255)) : PaperDeep(a(255)), 4.0f * unit);
+        if (v < volume) draw_list->AddRect(min, max, SunShadow(a(255)), 4.0f * unit, 0, 1.0f * unit);
+        if (clicked && inside(ImVec2(min.x, min.y - 6.0f * unit), ImVec2(max.x + gap, max.y + 6.0f * unit))) {
+          focus_ = i;
+          change_volume(i, v + 1 == volume ? v : v + 1);
+        }
+      }
+      const std::string number = std::to_string(volume);
+      draw_list->AddText(title_font, 18.0f * unit,
+                         ImVec2(list_right - 22.0f * unit - title_font->CalcTextSizeA(18.0f * unit, FLT_MAX, 0.0f,
+                                                                                        number.c_str()).x,
+                                middle - 11.0f * unit),
+                         Navy(a(255)), number.c_str());
+    }
   } else {
     // The room: its code in big letters, to copy, and Join by code.
     if (in_room) {
@@ -1091,14 +1189,18 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
     hint(PadControl::kA, "Tab", texts.change_page);
   }
   // Up and down through a list; what each button does shows on the focused row's buttons.
-  if (page_ != Page::kRoom && signed_in && rows_on_page() > 1) {
-    const float width = AlboriaUpDownGlyph(draw_list, ImVec2(0, 0), glyph, pad != nullptr, 0);
-    x += AlboriaUpDownGlyph(draw_list, ImVec2(x + width * 0.5f, hints_y + 9.0f * unit), glyph, pad != nullptr, a(255)) +
+  auto arrows_hint = [&](bool vertical, const char* text) {
+    const float width = AlboriaArrowsGlyph(draw_list, ImVec2(0, 0), glyph, pad != nullptr, vertical, 0);
+    x += AlboriaArrowsGlyph(draw_list, ImVec2(x + width * 0.5f, hints_y + 9.0f * unit), glyph, pad != nullptr, vertical,
+                            a(255)) +
          6.0f * unit;
-    const char* navigate = NavigateText(language_);
-    draw_list->AddText(body_font, 15.0f * unit, ImVec2(x, hints_y), Navy(a(255)), navigate);
-    x += body_font->CalcTextSizeA(15.0f * unit, FLT_MAX, 0.0f, navigate).x + 20.0f * unit;
+    draw_list->AddText(body_font, 15.0f * unit, ImVec2(x, hints_y), Navy(a(255)), text);
+    x += body_font->CalcTextSizeA(15.0f * unit, FLT_MAX, 0.0f, text).x + 20.0f * unit;
+  };
+  if (page_ != Page::kRoom && (signed_in || page_ == Page::kSettings) && rows_on_page() > 1) {
+    arrows_hint(true, NavigateText(language_));
   }
+  if (page_ == Page::kSettings) arrows_hint(false, settings.adjust);
   hint(PadControl::kB, "Esc", texts.close);
 }
 

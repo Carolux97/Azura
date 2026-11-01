@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstring>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -16,9 +17,18 @@
 #include <rex/cvar.h>
 #include <rex/logging.h>
 
+#include "menu/pc_options.h"
 #include "script_hooks.h"
 
 REXCVAR_DECLARE(bool, audio_mute);
+REXCVAR_DEFINE_INT32(alboria_menu_volume, 10, "Audio",
+                     "Volume of Alboria's menu sounds over the game (moving, choosing, the overlay opening "
+                     "and closing), 0 to 10 of the game's effects volume")
+    .range(0, 10);
+REXCVAR_DEFINE_INT32(alboria_notice_volume, 10, "Audio",
+                     "Volume of Alboria's notices over the game (an invitation, a friend request), 0 to 10 "
+                     "of the game's effects volume")
+    .range(0, 10);
 
 namespace azura::alboria_sounds {
 
@@ -105,6 +115,21 @@ float EffectsVolume() {
 
 }  // namespace
 
+Group GroupOf(Sound sound) {
+  return sound == Sound::kInvitation || sound == Sound::kNotice ? Group::kNotices : Group::kMenu;
+}
+
+int Volume(Group group) {
+  const int volume = group == Group::kMenu ? REXCVAR_GET(alboria_menu_volume) : REXCVAR_GET(alboria_notice_volume);
+  return std::clamp(volume, 0, kMaxVolume);
+}
+
+void SetVolume(Group group, int volume) {
+  volume = std::clamp(volume, 0, kMaxVolume);
+  azura::menu::StoreControlsSetting(group == Group::kMenu ? "alboria_menu_volume" : "alboria_notice_volume",
+                                    std::to_string(volume), false);
+}
+
 void Prepare() {
   if (g_preparing.exchange(true)) return;
   std::thread([] {
@@ -115,7 +140,7 @@ void Prepare() {
 
 void Play(Sound sound) {
   if (REXCVAR_GET(audio_mute) || !g_made.load() || sound == Sound::kCount) return;
-  const float gain = kLoudness * EffectsVolume();
+  const float gain = kLoudness * EffectsVolume() * static_cast<float>(Volume(GroupOf(sound))) / kMaxVolume;
   if (gain <= 0.0f) return;
   if (g_stream) SDL_LockAudioStream(g_stream);
   {

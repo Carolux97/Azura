@@ -1,6 +1,6 @@
 diff --git a/include/rex/system/xam/alboria.h b/include/rex/system/xam/alboria.h
 new file mode 100644
-index 0000000..fc91097
+index 0000000..f9c9673
 --- /dev/null
 +++ b/include/rex/system/xam/alboria.h
 @@ -0,0 +1,438 @@
@@ -329,7 +329,7 @@ index 0000000..fc91097
 +// --- The Alboria overlay ---------------------------------------------------------------------------
 +
 +// The page the overlay opens on.
-+enum class OverlayPage { kFriends, kInvitations, kRoom };
++enum class OverlayPage { kFriends, kInvitations, kRoom, kSettings };
 +// Opens the host's Alboria overlay on `page` (the runtime's, set with SetOverlayHandler), as the
 +// console opened the Guide: XamShowFriendsUI and XamShowGameInviteUI call it. Returns whether an
 +// overlay is set.
