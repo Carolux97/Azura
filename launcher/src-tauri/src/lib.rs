@@ -753,9 +753,13 @@ async fn check_for_update(app: tauri::AppHandle) -> Result<Option<UpdateInfo>, S
     updater::check(&app).await
 }
 
-/// Installs the newer launcher version and restarts into it.
+/// Installs the newer launcher version and restarts into it. Restarting would leave the game
+/// without its launcher, so it waits until the game is closed.
 #[tauri::command]
-async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+async fn install_update(app: tauri::AppHandle, process: tauri::State<'_, GameProcess>) -> Result<(), String> {
+    if process.is_running() {
+        return Err("the game is running: close it to update the launcher".into());
+    }
     updater::install(app).await
 }
 

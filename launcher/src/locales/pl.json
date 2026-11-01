@@ -261,7 +261,11 @@
   "update": {
     "available": "Aktualizuj do {version}",
     "downloading": "Pobieranie aktualizacji… {percent}",
-    "failed": "Nie udało się zainstalować aktualizacji. Spróbuj ponownie później."
+    "failed": "Nie udało się zainstalować aktualizacji. Spróbuj ponownie później.",
+    "confirm": "Launcher pobierze wersję {version} i uruchomi się ponownie. Gra, zapisy i ustawienia pozostaną bez zmian.",
+    "confirmYes": "Aktualizuj i uruchom ponownie",
+    "cancel": "Anuluj",
+    "closeGame": "Zamknij grę, aby zaktualizować launcher"
   },
   "saves": {
     "title": "Zapisy gry",

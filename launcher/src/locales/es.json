@@ -261,7 +261,11 @@
   "update": {
     "available": "Actualizar a {version}",
     "downloading": "Descargando actualización… {percent}",
-    "failed": "No se pudo instalar la actualización. Inténtalo más tarde."
+    "failed": "No se pudo instalar la actualización. Inténtalo más tarde.",
+    "confirm": "El launcher descarga la {version} y se reinicia. Tu juego, tus partidas y tus ajustes se quedan como están.",
+    "confirmYes": "Actualizar y reiniciar",
+    "cancel": "Cancelar",
+    "closeGame": "Cierra el juego para actualizar el launcher"
   },
   "saves": {
     "title": "Partidas guardadas",
