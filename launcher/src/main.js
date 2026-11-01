@@ -28,6 +28,7 @@ import {
   selectedGpu,
   setDetectedSystem,
 } from "./graphics.js";
+import { canStartUpdate, updateButtonState } from "./update.js";
 import {
   checkForUpdate,
   checkGameFolder,
@@ -131,6 +132,8 @@ const state = {
   // null (not installing) or a percentage, -1 while the size is unknown.
   update: null,
   updateProgress: null,
+  // Whether the confirmation under the update button is showing.
+  updateConfirming: false,
   // This Mac ({ chip, memoryGb, arch }), or null when unknown (always in a browser).
   system: null,
   launcherVersion: BROWSER_LAUNCHER_VERSION,
@@ -351,6 +354,8 @@ document.addEventListener("visibilitychange", syncMotion);
 
 const renderPlay = () => {
   syncMotion();
+  // The update button waits while the game runs, so it follows the game's state too.
+  renderUpdate();
   const status = document.getElementById("status-game");
   status.dataset.state = isInstalled() ? "ok" : "warn";
   let detail = "status.noFolder";
@@ -1315,19 +1320,51 @@ const renderLanguageOptions = () => {
   });
 };
 
-/** Writes the update button: hidden, "Update to X", or the download progress. */
+/**
+ * Writes the update button (hidden, "Update to X", disabled while the game runs, or the download
+ * progress) and the confirmation under it.
+ */
 const renderUpdate = () => {
   const button = document.getElementById("update-button");
-  button.hidden = !state.update;
-  if (!state.update) return;
-  button.disabled = state.updateProgress !== null;
-  if (state.updateProgress === null) {
-    button.textContent = t("update.available", { version: state.update.version });
-  } else if (state.updateProgress < 0) {
-    button.textContent = t("update.downloading", { percent: "…" });
+  const view = updateButtonState(state.update, state.updateProgress, state.game);
+  button.hidden = view.hidden;
+  button.disabled = view.disabled;
+  button.title = view.hint ? t(view.hint) : "";
+  if (view.hidden) {
+    state.updateConfirming = false;
+  } else if (view.key === "update.downloading") {
+    const percent =
+      view.vars.percent < 0 ? "…" : new Intl.NumberFormat(getLocale(), { style: "percent" }).format(view.vars.percent / 100);
+    button.textContent = t(view.key, { percent });
   } else {
-    const percent = new Intl.NumberFormat(getLocale(), { style: "percent" }).format(state.updateProgress / 100);
-    button.textContent = t("update.downloading", { percent });
+    button.textContent = t(view.key, view.vars);
+  }
+  // The confirmation only stands while the update can still start.
+  if (!canStartUpdate(state.update, state.updateProgress, state.game)) state.updateConfirming = false;
+  const confirm = document.getElementById("update-confirm");
+  confirm.hidden = !state.updateConfirming;
+  if (state.updateConfirming) {
+    document.getElementById("update-confirm-text").textContent = t("update.confirm", { version: state.update.version });
+  }
+};
+
+/**
+ * Downloads and installs the newer launcher, then restarts into it. It asks first, in the
+ * confirmation under the button; the "launcher too old" panel calls it too. Only a failure
+ * comes back here.
+ */
+const startLauncherUpdate = async () => {
+  if (!canStartUpdate(state.update, state.updateProgress, state.game)) return;
+  state.updateConfirming = false;
+  state.updateProgress = -1;
+  renderUpdate();
+  try {
+    await installUpdate();
+  } catch (error) {
+    console.error("Installing the update failed:", error);
+    state.updateProgress = null;
+    renderUpdate();
+    toast(t("update.failed"));
   }
 };
 
@@ -1342,17 +1379,17 @@ const setupUpdates = () => {
     renderUpdate();
   });
 
-  document.getElementById("update-button").addEventListener("click", async () => {
-    state.updateProgress = -1;
+  // The button asks first: updating restarts the launcher.
+  document.getElementById("update-button").addEventListener("click", () => {
+    if (!canStartUpdate(state.update, state.updateProgress, state.game)) return;
+    state.updateConfirming = true;
     renderUpdate();
-    try {
-      await installUpdate();
-    } catch (error) {
-      console.error("Installing the update failed:", error);
-      state.updateProgress = null;
-      renderUpdate();
-      toast(t("update.failed"));
-    }
+    document.getElementById("update-confirm-no").focus();
+  });
+  document.getElementById("update-confirm-yes").addEventListener("click", () => startLauncherUpdate());
+  document.getElementById("update-confirm-no").addEventListener("click", () => {
+    state.updateConfirming = false;
+    renderUpdate();
   });
 
   checkForUpdate()
