@@ -53,6 +53,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -95,6 +97,10 @@ REXCVAR_DEFINE_STRING(script_dump_classes, "", "Azura/Debug",
                       "Comma-separated script classes whose functions and properties are logged once loaded");
 REXCVAR_DEFINE_BOOL(script_dump_code, false, "Azura/Debug",
                     "With script_dump_classes: also log a rough listing of each function's bytecode");
+REXCVAR_DEFINE_STRING(alboria_join_code, "", "Azura/Online",
+                      "A room code to join once the main menu is up: the launcher passes it when the "
+                      "player joins a friend's room or accepts an invitation with the game closed");
+REXCVAR_DECLARE(std::string, user_data_root);
 REXCVAR_DECLARE(double, field_of_view);
 REXCVAR_DECLARE(bool, film_grain);
 REXCVAR_DECLARE(std::string, network_mode);
@@ -3129,6 +3135,65 @@ void CreatePendingStartupParty(PPCContext& ctx, uint8_t* base) {
   ctx.r3.u64 = own_r3;
 }
 
+// Joining a room the launcher asked for (a friend's room, or an invitation's). Its code comes with
+// the game's start (alboria_join_code) or, with the game already running, in a file the launcher
+// writes in the user data folder (kJoinRequestFile), read about once a second and then deleted.
+// The join waits for the main menu and the start-up party, then goes as Join by code does: once
+// the room is joined, the System Link browser opens and the game joins the host's party.
+constexpr const char* kJoinRequestFile = "alboria-join-request.txt";
+// Player input frames between two looks for the launcher's file: about a second.
+constexpr uint32_t kJoinRequestPollFrames = 60;
+std::mutex g_launcher_join_mutex;
+std::string g_launcher_join_code;
+std::atomic<bool> g_launcher_join_cvar_read{false};
+std::atomic<uint32_t> g_launcher_join_polls{0};
+
+// Takes a room code the launcher left: the start option once, then its request file.
+void ReadLauncherJoinRequest() {
+  namespace alboria = rex::system::xam::alboria;
+  std::string code;
+  if (!g_launcher_join_cvar_read.exchange(true)) code = REXCVAR_GET(alboria_join_code);
+  if (code.empty() && g_launcher_join_polls.fetch_add(1, std::memory_order_relaxed) % kJoinRequestPollFrames == 0) {
+    const std::string root = REXCVAR_GET(user_data_root);
+    std::error_code error;
+    const std::filesystem::path path = std::filesystem::path(root) / kJoinRequestFile;
+    if (!root.empty() && std::filesystem::exists(path, error)) {
+      std::ifstream file(path);
+      std::getline(file, code);
+      file.close();
+      std::filesystem::remove(path, error);
+    }
+  }
+  if (code.empty()) return;
+  code = alboria::NormalizeCode(code);
+  if (!alboria::IsValidCode(code)) {
+    REXLOG_WARN("[Azura online] The launcher's room code is not a valid code; nothing to join");
+    return;
+  }
+  std::lock_guard lock(g_launcher_join_mutex);
+  g_launcher_join_code = code;
+}
+
+// On a player input frame (`ctx`): joins the room the launcher asked for, once the main menu is up,
+// the start-up party exists and Alboria answers.
+void JoinRoomFromLauncher(uint8_t* base) {
+  namespace alboria = rex::system::xam::alboria;
+  ReadLauncherJoinRequest();
+  std::string code;
+  {
+    std::lock_guard lock(g_launcher_join_mutex);
+    if (g_launcher_join_code.empty()) return;
+    if (!InMainMenu(base) || g_pending_startup_party.load(std::memory_order_relaxed) != kBootNone ||
+        !alboria::ServiceReachable()) {
+      return;
+    }
+    code = std::move(g_launcher_join_code);
+    g_launcher_join_code.clear();
+  }
+  REXLOG_INFO("[Azura online] Joining the room the launcher asked for");
+  alboria::JoinGame(code);
+}
+
 // GearProfileSettings.GetPartyType (`ctx`, about to run), with online play on: the party the game
 // started with when it is not the profile's (g_startup_party_type: System Link, or Local), until
 // the player chooses one; otherwise the profile's. The game copies it into the party's
@@ -3154,6 +3219,7 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     if (g_open_browser.load(std::memory_order_relaxed)) OpenSystemLinkBrowserForJoin(ctx, base);
     ReturnToMainMenuWhenRoomLost(ctx, base);
     CreatePendingStartupParty(ctx, base);
+    JoinRoomFromLauncher(base);
     ShowRoomMessage(ctx, base);
     RefreshPartyPanelTitle(ctx, base);
     const uint32_t player_input = ctx.r3.u32;

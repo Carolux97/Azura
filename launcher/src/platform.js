@@ -183,8 +183,8 @@ const SIMULATED_OUTPUT = [
  * "runtimeMissing", "alreadyRunning", "startFailed"). Its output, restarts and end arrive
  * through onGameOutput, onGameRestart and onGameExit.
  */
-export const launchGame = async () => {
-  if (isNativeApp) return tauri.core.invoke("launch_game");
+export const launchGame = async (joinCode = null) => {
+  if (isNativeApp) return tauri.core.invoke("launch_game", { joinCode });
   SIMULATED_OUTPUT.forEach(([stream, line], index) => {
     setTimeout(() => simulated.output.forEach((listener) => listener({ stream, line })), 300 * (index + 1));
   });
@@ -520,3 +520,109 @@ export const openAlboriaSite = async () => {
   if (isNativeApp) return tauri.core.invoke("open_alboria_site");
   window.open("https://alboria.org", "_blank", "noopener");
 };
+
+// --- Friends (docs/alboria-relay.md, section 4.7) ------------------------------------------------
+// In a browser a small simulation answers, with a few friends whose state changes now and then, so
+// the panel can be designed without the service.
+
+const simulatedEvents = { event: new Set(), state: new Set() };
+const simulatedFriends = {
+  friends: [
+    { id: 2, name: "Kabosu#117", favourite: true, presence: { status: "playing", title_id: "4D5308AB", party: "joinable" } },
+    { id: 3, name: "CAPI_REX#501", favourite: false, presence: { status: "playing", title_id: "4D5308AB", party: "invite_only" } },
+    { id: 4, name: "Ortega#1", favourite: false, presence: { status: "online" } },
+    { id: 5, name: "Bruma#733", favourite: false, presence: { status: "offline", last_seen: new Date(Date.now() - 30 * 3_600_000).toISOString() } },
+  ],
+  incoming: [{ id: 6, name: "Viento#58" }],
+  outgoing: [{ id: 7, name: "Gale#902" }],
+  blocked: [],
+  invitations: simulatedQuery.has("invite")
+    ? [{ id: "inv1", from: { id: 3, name: "CAPI_REX#501" }, title_id: "4D5308AB", expires_at: new Date(Date.now() + 900_000).toISOString() }]
+    : [],
+};
+const simulatedFriendsAnswer = (path, body) => {
+  const f = simulatedFriends;
+  const named = (list) => list.find((entry) => entry.id === body.id);
+  const drop = (key) => (f[key] = f[key].filter((entry) => entry.id !== body.id));
+  switch (path) {
+    case "/v1/friends":
+      return structuredClone(f);
+    case "/v1/friends/request":
+      if (!f.outgoing.some((entry) => entry.name === body.name)) f.outgoing.push({ id: 100 + f.outgoing.length, name: body.name });
+      return { result: "sent" };
+    case "/v1/friends/accept": {
+      const from = named(f.incoming);
+      drop("incoming");
+      if (from) f.friends.push({ ...from, favourite: false, presence: { status: "online" } });
+      return {};
+    }
+    case "/v1/friends/decline":
+      drop("incoming");
+      return {};
+    case "/v1/friends/cancel":
+      drop("outgoing");
+      return {};
+    case "/v1/friends/remove":
+      drop("friends");
+      return {};
+    case "/v1/friends/favourite": {
+      const friend = named(f.friends);
+      if (friend) friend.favourite = body.favourite;
+      return {};
+    }
+    case "/v1/friends/block": {
+      const friend = named(f.friends);
+      drop("friends");
+      if (friend) f.blocked.push({ id: friend.id, name: friend.name });
+      return {};
+    }
+    case "/v1/friends/unblock":
+      drop("blocked");
+      return {};
+    case "/v1/friends/room":
+      if (named(f.friends)?.presence.party !== "joinable") throw simulatedError("invite_only");
+      return { code: "K7QM-2XPA", title_id: "4D5308AB" };
+    case "/v1/invitations/room":
+      f.invitations = f.invitations.filter((entry) => entry.id !== body.id);
+      return { code: "B3RT-9PLQ", title_id: "4D5308AB" };
+    case "/v1/invitations/decline":
+      f.invitations = f.invitations.filter((entry) => entry.id !== body.id);
+      return {};
+    case "/v1/invitations":
+    case "/v1/reports":
+      return { sent: true };
+    default:
+      throw simulatedError("bad_request");
+  }
+};
+
+/** A friends' request (section 4.7): `path` such as "/v1/friends/accept", with its body; the answer. */
+export const alboriaFriends = async (path, body = {}) =>
+  isNativeApp ? tauri.core.invoke("alboria_friends", { path, body }) : simulatedFriendsAnswer(path, body);
+
+/** Asks the running game to join the room `code`; with the game closed, launchGame(code) does. */
+export const joinRoom = async (code) => {
+  if (isNativeApp) return tauri.core.invoke("join_room", { code });
+};
+
+/** Opens Alboria's events channel and keeps it open; stopAlboriaEvents closes it. */
+export const startAlboriaEvents = async () => {
+  if (isNativeApp) return tauri.core.invoke("alboria_events_start");
+  simulatedEvents.state.forEach((listener) => listener({ connected: true }));
+};
+export const stopAlboriaEvents = async () => {
+  if (isNativeApp) return tauri.core.invoke("alboria_events_stop");
+};
+
+/** Calls `listener` with { event, data } for each event of the channel. */
+export const onAlboriaEvent = (listener) => {
+  if (isNativeApp) return tauri.event.listen("alboria-event", (event) => listener(event.payload));
+  simulatedEvents.event.add(listener);
+};
+/** Calls `listener` with { connected } when the channel opens or closes. */
+export const onAlboriaEventsState = (listener) => {
+  if (isNativeApp) return tauri.event.listen("alboria-events-state", (event) => listener(event.payload));
+  simulatedEvents.state.add(listener);
+};
+/** Browser simulation only: sends an event as the service would, for designing the panel. */
+export const simulateAlboriaEvent = (event, data) => simulatedEvents.event.forEach((listener) => listener({ event, data }));
