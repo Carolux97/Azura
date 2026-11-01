@@ -436,7 +436,10 @@
     "verifyBy": "請在 {date} 前驗證電子郵件，否則帳號將被刪除。",
     "verifyEmail": "驗證電子郵件",
     "emailVerified": "電子郵件已驗證。",
-    "playVerifyBy": "你的 Alboria 帳號尚未驗證。請在 {date} 前驗證電子郵件，否則帳號將被刪除。"
+    "playVerifyBy": "你的 Alboria 帳號尚未驗證。請在 {date} 前驗證電子郵件，否則帳號將被刪除。",
+    "overlayTitle": "Alboria 覆蓋介面",
+    "overlayHelp": "在遊戲中查看好友、邀請和房間。用這個鍵開啟，或在手把上按住 Back 再按 RB。",
+    "overlayKey": "Alboria 覆蓋介面的按鍵"
   },
   "accountErrors": {
     "network": "無法連線至 Alboria。請檢查連線後再試一次。",

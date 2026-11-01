@@ -33,6 +33,15 @@ test("left and right stay in the row", () => {
   assert.equal(nextInDirection(origin, [nextRow, sameRow], "right"), 1);
 });
 
+test("with anyRow, left and right reach a column whose controls start lower down", () => {
+  const origin = box(0, 0);
+  const lowerColumn = box(200, 300);
+  const behind = box(-200, 300);
+  assert.equal(nextInDirection(origin, [lowerColumn, behind], "right"), -1);
+  assert.equal(nextInDirection(origin, [lowerColumn, behind], "right", { anyRow: true }), 0);
+  assert.equal(nextInDirection(origin, [lowerColumn, behind], "left", { anyRow: true }), 1);
+});
+
 test("the focus prefers to stay in its column", () => {
   // Below the origin: one far down in the same column, one nearer but well to the side.
   const origin = box(0, 0);

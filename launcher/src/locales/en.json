@@ -436,7 +436,10 @@
     "verifyBy": "Verify your email before {date}, or the account will be deleted.",
     "verifyEmail": "Verify email",
     "emailVerified": "Email verified.",
-    "playVerifyBy": "Your Alboria account is not verified. Verify your email before {date}, or it will be deleted."
+    "playVerifyBy": "Your Alboria account is not verified. Verify your email before {date}, or it will be deleted.",
+    "overlayTitle": "Alboria overlay",
+    "overlayHelp": "Your friends, invitations and room inside the game. Open it with this key, or on a controller by holding Back and pressing RB.",
+    "overlayKey": "Key of the Alboria overlay"
   },
   "accountErrors": {
     "network": "Alboria cannot be reached. Check your connection and try again.",

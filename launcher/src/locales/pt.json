@@ -436,7 +436,10 @@
     "verifyBy": "Verifique seu e-mail antes de {date}, ou a conta será apagada.",
     "verifyEmail": "Verificar e-mail",
     "emailVerified": "E-mail verificado.",
-    "playVerifyBy": "Sua conta Alboria não está verificada. Verifique seu e-mail antes de {date}, ou ela será apagada."
+    "playVerifyBy": "Sua conta Alboria não está verificada. Verifique seu e-mail antes de {date}, ou ela será apagada.",
+    "overlayTitle": "Overlay da Alboria",
+    "overlayHelp": "Seus amigos, convites e sala dentro do jogo. Abra com esta tecla ou, no controle, segurando Back e apertando RB.",
+    "overlayKey": "Tecla do overlay da Alboria"
   },
   "accountErrors": {
     "network": "Não foi possível conectar ao Alboria. Verifique sua conexão e tente de novo.",

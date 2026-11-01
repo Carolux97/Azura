@@ -1690,11 +1690,28 @@ index 52116f1..6113066 100644
      is_active_callback_ = is_active_callback;
    }
 diff --git a/include/rex/input/input_system.h b/include/rex/input/input_system.h
-index d48df09..208dbf4 100644
+index d48df09..0f8479c 100644
 --- a/include/rex/input/input_system.h
 +++ b/include/rex/input/input_system.h
-@@ -46,6 +46,13 @@ class InputSystem : public system::IInputSystem {
+@@ -12,6 +12,7 @@
  
+ #include <array>
+ #include <atomic>
++#include <functional>
+ #include <memory>
+ #include <vector>
+ 
+@@ -44,8 +45,22 @@ class InputSystem : public system::IInputSystem {
+   /// Replaces any previous assignment. Call before the guest starts polling.
+   void SetDeviceAssignment(std::unique_ptr<DeviceAssignment> assignment);
+ 
++  /// Changes the state the guest reads for a user once its devices are merged, for host UI that
++  /// takes buttons for itself (an overlay opened by holding one) or keeps the guest from playing
++  /// while it is open, without the guest seeing the controller disconnected. It runs on the
++  /// guest's thread with the input lock held, so it must not call back into the input system.
++  using StateFilter = std::function<void(uint32_t user_index, X_INPUT_STATE& state)>;
++  void SetStateFilter(StateFilter filter);
++
    X_RESULT GetCapabilities(uint32_t user_index, uint32_t flags, X_INPUT_CAPABILITIES* out_caps);
    X_RESULT GetState(uint32_t user_index, X_INPUT_STATE* out_state);
 +  /// The state of one device, whichever user it feeds: for host UI that reads each device on its
@@ -1706,6 +1723,14 @@ index d48df09..208dbf4 100644
 +  bool TakeMouseLook(uint32_t user_index, InputDriver::MouseLook& look);
    X_RESULT SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration);
    X_RESULT GetKeystroke(uint32_t user_index, uint32_t flags, X_INPUT_KEYSTROKE* out_keystroke);
+ 
+@@ -71,6 +86,7 @@ class InputSystem : public system::IInputSystem {
+   std::vector<std::unique_ptr<InputDriver>> drivers_;
+ 
+   std::unique_ptr<DeviceAssignment> assignment_;
++  StateFilter state_filter_;
+   ActiveDeviceTracker active_devices_;
+   std::array<std::atomic<uint8_t>, kMaxGuestUsers> active_kind_ = {};
  
 diff --git a/include/rex/input/mnk/mnk_input_driver.h b/include/rex/input/mnk/mnk_input_driver.h
 index c8751b7..7620729 100644
@@ -25185,7 +25210,7 @@ index 3ea3535..edb6ec4 100644
      nop/nop_input_driver.cpp
  )
 diff --git a/src/input/input_system.cpp b/src/input/input_system.cpp
-index c9f7ed6..6431a26 100644
+index c9f7ed6..3147845 100644
 --- a/src/input/input_system.cpp
 +++ b/src/input/input_system.cpp
 @@ -20,6 +20,7 @@
@@ -25216,7 +25241,7 @@ index c9f7ed6..6431a26 100644
      active_devices_.Observe(user_index, id, state.gamepad);
      if (!any) {
        merged = state;
-@@ -255,6 +262,7 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
+@@ -255,17 +262,52 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
    if (user_index < kMaxGuestUsers) {
      active_kind_[user_index].store(static_cast<uint8_t>(KindOf(active_devices_.Active(user_index))),
                                     std::memory_order_relaxed);
@@ -25224,10 +25249,22 @@ index c9f7ed6..6431a26 100644
    }
  
    if (!any) {
-@@ -266,6 +274,32 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
+     return X_ERROR_DEVICE_NOT_CONNECTED;
+   }
++  if (state_filter_) {
++    state_filter_(user_index, merged);
++  }
+   if (out_state) {
+     *out_state = merged;
+   }
    return X_ERROR_SUCCESS;
  }
  
++void InputSystem::SetStateFilter(StateFilter filter) {
++  std::lock_guard<std::mutex> lock(g_devices_mutex);
++  state_filter_ = std::move(filter);
++}
++
 +bool InputSystem::TakeMouseLook(uint32_t user_index, InputDriver::MouseLook& look) {
 +  std::lock_guard<std::mutex> lock(g_devices_mutex);
 +  if (!assignment_) {
@@ -25257,7 +25294,7 @@ index c9f7ed6..6431a26 100644
  ActiveDeviceKind InputSystem::KindOf(DeviceId id) const {
    const DeviceInfo* info = DeviceInfoFor(id);
    if (!info) {
-@@ -298,6 +332,14 @@ X_RESULT InputSystem::SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration
+@@ -298,6 +340,14 @@ X_RESULT InputSystem::SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration
    std::vector<DeviceId> ids;
    assignment_->DevicesForUser(user_index, ids);
  
@@ -27034,6 +27071,72 @@ index a1a3758..2407293 100644
  REX_EXPORT_STUB(__imp__NetDll_getpeername);
 -REX_EXPORT_STUB(__imp__NetDll_getsockname);
 -REX_EXPORT_STUB(__imp__NetDll_getsockopt);
+diff --git a/src/kernel/xam/xam_ui.cpp b/src/kernel/xam/xam_ui.cpp
+index 5a572ce..605107e 100644
+--- a/src/kernel/xam/xam_ui.cpp
++++ b/src/kernel/xam/xam_ui.cpp
+@@ -14,6 +14,7 @@
+ #include <rex/string.h>
+ #include <rex/system/flags.h>
+ #include <rex/system/kernel_state.h>
++#include <rex/system/xam/alboria.h>
+ 
+ #include <imgui.h>
+ 
+@@ -205,7 +206,7 @@ X_RESULT xeXamDispatchHeadlessEx(std::function<X_RESULT(uint32_t&, uint32_t&)> r
+ }
+ 
+ u32 XamIsUIActive_entry() {
+-  return xeXamIsUIActive();
++  return xeXamIsUIActive() || rex::system::xam::alboria::OverlayShown();
+ }
+ 
+ class MessageBoxDialog : public XamDialog {
+@@ -542,6 +543,25 @@ void XamShowDirtyDiscErrorUI_entry(u32 user_index) {
+   exit(1);
+ }
+ 
++// The Guide's friends list and game invite screens: with Xbox Live on Alboria (alboria_live), the
++// host's Alboria overlay opens on its Friends page, as the Guide opened over the title. It answers
++// at once; the overlay tells the title it is open with XN_SYS_UI.
++u32 XamShowFriendsUI_entry(u32 user_index) {
++  namespace alboria = rex::system::xam::alboria;
++  if (!alboria::LiveSignedIn() || !alboria::ShowOverlay(alboria::OverlayPage::kFriends)) {
++    return X_ERROR_FUNCTION_FAILED;
++  }
++  return X_ERROR_SUCCESS;
++}
++
++u32 XamShowGameInviteUI_entry(u32 user_index, u32 recipients_ptr, u32 recipient_count, u32 text_ptr) {
++  namespace alboria = rex::system::xam::alboria;
++  if (!alboria::LiveSignedIn() || !alboria::ShowOverlay(alboria::OverlayPage::kFriends)) {
++    return X_ERROR_FUNCTION_FAILED;
++  }
++  return X_ERROR_SUCCESS;
++}
++
+ u32 XamShowPartyUI_entry(u32 r3, u32 r4) {
+   return X_ERROR_FUNCTION_FAILED;
+ }
+@@ -570,6 +590,8 @@ REX_EXPORT(__imp__XamShowKeyboardUI, rex::kernel::xam::XamShowKeyboardUI_entry)
+ REX_EXPORT(__imp__XamShowDeviceSelectorUI, rex::kernel::xam::XamShowDeviceSelectorUI_entry)
+ REX_EXPORT(__imp__XamShowDirtyDiscErrorUI, rex::kernel::xam::XamShowDirtyDiscErrorUI_entry)
+ REX_EXPORT(__imp__XamShowPartyUI, rex::kernel::xam::XamShowPartyUI_entry)
++REX_EXPORT(__imp__XamShowFriendsUI, rex::kernel::xam::XamShowFriendsUI_entry)
++REX_EXPORT(__imp__XamShowGameInviteUI, rex::kernel::xam::XamShowGameInviteUI_entry)
+ REX_EXPORT(__imp__XamShowCommunitySessionsUI, rex::kernel::xam::XamShowCommunitySessionsUI_entry)
+ REX_EXPORT(__imp__XamShowMessageBoxUIEx, rex::kernel::xam::XamShowMessageBoxUIEx_entry)
+ 
+@@ -609,9 +631,7 @@ REX_EXPORT_STUB(__imp__XamShowFitnessWarnAboutTimeUI);
+ REX_EXPORT_STUB(__imp__XamShowFofUI);
+ REX_EXPORT_STUB(__imp__XamShowForcedNameChangeUI);
+ REX_EXPORT_STUB(__imp__XamShowFriendRequestUI);
+-REX_EXPORT_STUB(__imp__XamShowFriendsUI);
+ REX_EXPORT_STUB(__imp__XamShowFriendsUIp);
+-REX_EXPORT_STUB(__imp__XamShowGameInviteUI);
+ REX_EXPORT_STUB(__imp__XamShowGameVoiceChannelUI);
+ REX_EXPORT_STUB(__imp__XamShowGamerCardUI);
+ REX_EXPORT_STUB(__imp__XamShowGamerCardUIForXUID);
 diff --git a/src/kernel/xam/xam_user.cpp b/src/kernel/xam/xam_user.cpp
 index 94468e6..0a194b1 100644
 --- a/src/kernel/xam/xam_user.cpp

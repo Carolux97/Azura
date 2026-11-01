@@ -651,6 +651,29 @@ Decided on 29 October 2026.
   DLC come after. The room will carry each member's content so that the service and the game know
   what the party shares.
 
+### 6.3 The Alboria overlay
+
+Alboria's screen over the game, as the Guide was Xbox Live's (`runtime/src/alboria_overlay.h`). It
+belongs to the service, so it has Alboria's look (the launcher's light panels), not the game's.
+
+- **Pages.** Friends: Add friend first (a Gamertag and its number, typed with the keys or with an
+  on-screen keyboard on a controller, sent with `POST /v1/friends/request`), then every friend
+  with their presence, favourites first, with Join for an open room and Invite while in a room.
+  Invitations: the ones received, with Join and Not now. Room: the room's code to copy, and Join
+  by code. The data is the friends list the SDK reads every 10 seconds (section 6.1), read again as
+  the overlay opens; joining goes the way a join by code does (an accepted invite).
+- **Opening it.** Anywhere in the game: with the key of `bind_alboria_overlay` (F1 by default,
+  chosen in the launcher's Account page among the function keys the runtime leaves free), with RB
+  pressed while Back is held on player 1's controller, and when the title calls
+  `XamShowFriendsUI` or `XamShowGameInviteUI`. Back still reaches the game at once; the RB that
+  opens the overlay never does (`runtime/src/input/overlay_input.h`, through the SDK input
+  system's state filter). Opened in a match, the runtime presses Start for the game first, so its
+  pause menu is under the overlay.
+- **While it is open.** The game reads its controllers with nothing pressed (they stay connected,
+  so no notice of a lost controller shows), hears that the Guide is open (`XN_SYS_UI`), and
+  `XamIsUIActive` says so. The overlay reads the controllers itself, and the keyboard and the mouse
+  through ImGui; the glyphs follow the input in use, in Alboria's colours.
+
 ## 7. Limits
 
 - Up to 10 members per room.
