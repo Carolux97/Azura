@@ -44,6 +44,9 @@ const AUTH_CONTEXT: &[u8] = b"alboria-auth-v1";
 const MACHINE_CONTEXT: &[u8] = b"alboria-machine-v1";
 /// How long a request may take before the service counts as unreachable.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long the events channel may stay silent: the service sends a ping every 25 seconds, so a
+/// longer silence means the connection is gone.
+const EVENTS_SILENCE: Duration = Duration::from_secs(60);
 
 // --- identity.toml ---------------------------------------------------------------------------
 
@@ -396,6 +399,8 @@ fn status_from(answer: &Value) -> Status {
 /// The connection to the service, and the token of this device while it is signed in.
 pub struct Alboria {
     http: Option<reqwest::Client>,
+    /// For the events channel, which stays open: no overall time limit, only for silence.
+    events_http: Option<reqwest::Client>,
     base: String,
     client: String,
     token: Mutex<Option<String>>,
@@ -406,8 +411,11 @@ impl Default for Alboria {
         // The updater installs the same provider; whichever comes first wins, which is fine.
         let _ = rustls::crypto::ring::default_provider().install_default();
         let http = reqwest::Client::builder().timeout(REQUEST_TIMEOUT).build().ok();
+        let events_http =
+            reqwest::Client::builder().connect_timeout(REQUEST_TIMEOUT).read_timeout(EVENTS_SILENCE).build().ok();
         Self {
             http,
+            events_http,
             base: std::env::var("ALBORIA_API_URL").unwrap_or_else(|_| DEFAULT_API_URL.into()),
             client: format!("azura-launcher/{}", env!("CARGO_PKG_VERSION")),
             token: Mutex::new(None),
@@ -553,9 +561,84 @@ impl Alboria {
         self.post(path, body, token).await
     }
 
+    /// Opens the events channel (`GET /v1/events`, section 4.7), signing in first when there is no
+    /// token or it ran out. The answer's body is the stream of events (read it with `EventStream`).
+    pub async fn open_events(&self, identity: &Identity, gamertag: &str) -> Result<reqwest::Response, AlboriaError> {
+        let http = self.events_http.as_ref().ok_or_else(|| AlboriaError::local("network", "No HTTPS client"))?;
+        for attempt in 0..2 {
+            if attempt == 1 || self.token.lock().unwrap().is_none() {
+                self.sign_in(identity, gamertag).await?;
+            }
+            let token = self.token.lock().unwrap().clone().unwrap_or_default();
+            let response = http
+                .get(format!("{}/v1/events", self.base))
+                .bearer_auth(token)
+                .send()
+                .await
+                .map_err(|e| AlboriaError::local("network", e.to_string()))?;
+            match response.status().as_u16() {
+                200 => return Ok(response),
+                401 if attempt == 0 => continue,
+                status => {
+                    return Err(AlboriaError {
+                        status,
+                        error: "events".into(),
+                        message: response.text().await.unwrap_or_default(),
+                        retry_in: None,
+                        attempts_left: None,
+                    })
+                }
+            }
+        }
+        Err(AlboriaError::local("events", "The events channel did not open"))
+    }
+
     /// Forgets the token: the device signed out, or was removed from the account.
     pub fn forget_token(&self) {
         *self.token.lock().unwrap() = None;
+    }
+}
+
+/// An event from the events channel: its name and its data, parsed as JSON (Null when it is not).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ServiceEvent {
+    pub event: String,
+    pub data: Value,
+}
+
+/// Reads Server-Sent Events from chunks of the channel as they arrive: an event is its `event:`
+/// and `data:` lines, ended by a blank line. Comment lines (`: ping`) only keep the channel alive.
+#[derive(Default)]
+pub struct EventStream {
+    buffer: String,
+}
+
+impl EventStream {
+    /// Adds a chunk and returns the events it completed.
+    pub fn push(&mut self, chunk: &[u8]) -> Vec<ServiceEvent> {
+        self.buffer.push_str(&String::from_utf8_lossy(chunk));
+        // Lines may end in \r\n or \n; one form is enough to find the blank lines between events.
+        if self.buffer.contains('\r') {
+            self.buffer = self.buffer.replace("\r\n", "\n");
+        }
+        let mut events = Vec::new();
+        while let Some(end) = self.buffer.find("\n\n") {
+            let block: String = self.buffer.drain(..end + 2).collect();
+            let mut name = String::from("message");
+            let mut data = Vec::new();
+            for line in block.lines() {
+                if let Some(value) = line.strip_prefix("event:") {
+                    name = value.trim().to_string();
+                } else if let Some(value) = line.strip_prefix("data:") {
+                    data.push(value.strip_prefix(' ').unwrap_or(value).to_string());
+                }
+            }
+            if !data.is_empty() {
+                let text = data.join("\n");
+                events.push(ServiceEvent { event: name, data: serde_json::from_str(&text).unwrap_or(Value::Null) });
+            }
+        }
+        events
     }
 }
 
@@ -599,6 +682,23 @@ mod tests {
         xuid = \"E0007A75AC144039\"\n\
         machine_id = \"e22c2af621f6\"\n\
         key_seed = \"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\"\n";
+
+    #[test]
+    fn reads_events_split_anyhow_across_chunks() {
+        let mut stream = EventStream::default();
+        assert!(stream.push(b": open\n\n").is_empty());
+        assert!(stream.push(b"event: presence\ndata: {\"id\":7,").is_empty());
+        let events = stream.push(b"\"presence\":{\"status\":\"online\"}}\n\n: ping\n\nevent: friends\r\ndata: {}\r\n\r\n");
+        assert_eq!(
+            events,
+            vec![
+                ServiceEvent { event: "presence".into(), data: json!({ "id": 7, "presence": { "status": "online" } }) },
+                ServiceEvent { event: "friends".into(), data: json!({}) },
+            ]
+        );
+        // Data that is not JSON still arrives, as Null.
+        assert_eq!(stream.push(b"event: odd\ndata: not json\n\n")[0].data, Value::Null);
+    }
 
     #[test]
     fn reads_the_service_state_notices_and_warnings() {
