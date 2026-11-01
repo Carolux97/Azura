@@ -36,9 +36,26 @@ struct Texts {
   const char* other;
 };
 
-// Fonts carry Latin-1 only, so the languages written in other scripts use the English texts.
+// In the game's languages; the runtime loads the Cyrillic and CJK fonts each one needs.
 Texts LocalizedTexts(uint32_t language) {
   switch (language) {
+    case 2:  // Japanese
+      return {"オンラインルーム", "ルームを作成中…", "ルームに参加中…", "オンライン", "Alboria に接続できません",
+              "そのコードのゲームはありません", "ゲームは満員です", "ルームは閉じられました", "Alboria から利用を禁止されています",
+              "オンラインで遊ぶには Azura を更新してください", "ランチャーから Alboria にサインインしてください",
+              "Alboria から応答がありません"};
+    case 7:  // Korean
+      return {"온라인 방", "방을 만드는 중…", "방에 참가하는 중…", "온라인", "Alboria에 연결할 수 없습니다",
+              "그 코드의 게임이 없습니다", "게임이 꽉 찼습니다", "방이 닫혔습니다", "Alboria에서 이용이 정지되었습니다",
+              "온라인으로 플레이하려면 Azura를 업데이트하세요", "런처에서 Alboria에 로그인하세요", "Alboria가 응답하지 않았습니다"};
+    case 8:  // Traditional Chinese
+      return {"線上房間", "正在建立房間…", "正在加入房間…", "線上", "無法連線到 Alboria", "沒有使用這個代碼的遊戲",
+              "遊戲已滿", "房間已關閉", "你已被 Alboria 停權", "請更新 Azura 才能線上遊玩", "請從啟動器登入 Alboria",
+              "Alboria 沒有回應"};
+    case 12:  // Russian
+      return {"ОНЛАЙН-КОМНАТА", "Создание комнаты…", "Вход в комнату…", "ОНЛАЙН", "Нет связи с Alboria",
+              "Нет игры с таким кодом", "Игра заполнена", "Комната закрыта", "Alboria заблокировала вас",
+              "Обновите Azura, чтобы играть онлайн", "Войдите в Alboria в лаунчере", "Alboria не ответила"};
     case 3:  // German
       return {"ONLINE-RAUM", "Raum wird erstellt\xE2\x80\xA6", "Raum wird betreten\xE2\x80\xA6", "ONLINE",
               "Keine Verbindung zu Alboria", "Kein Spiel hat diesen Code", "Das Spiel ist voll",
