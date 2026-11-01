@@ -136,6 +136,15 @@ under the same terms, and that Carolina Molina Elvira and Juan Llorca Martínez,
 project's copyright, may use, change and share it as part of the project under any license.
 Changes to the ReXGlue SDK and MoltenVK (`patches/`) stay under those projects' licenses.
 
+## Developer keys
+
+The SDK's developer keys open its debug overlay (F3), its settings overlay (F4), its achievements
+overlay (F7) and its console (the backtick key). They work only in builds configured with the CMake
+option `AZURA_DEV_KEYS`, which `scripts/build.sh` turns on: our development builds and Azura (DEV).
+The option is off by default, so the player kit (`scripts/build-kit.sh`), and what players run,
+never reacts to them. Everything a player sets is in the launcher or the game's Options, never
+behind those keys.
+
 ## Before opening a pull request
 
 - Launcher tests pass: `cargo test` in `launcher/src-tauri` and `npm test` in `launcher`.

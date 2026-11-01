@@ -378,6 +378,15 @@ class AzuraApp : public rex::ReXApp {
   // The ImGui drawer the game's own dialogs are added to.
   void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {
     dialog_drawer_ = drawer;
+#if !defined(AZURA_DEV_KEYS)
+    // ReXApp has just registered its developer keys. A build for players (without AZURA_DEV_KEYS,
+    // as the player kit is) switches them off, so no one opens them by accident; their settings
+    // stay registered.
+    for (const char* bind : {"bind_debug_overlay", "bind_console", "bind_settings", "bind_achievements"}) {
+      rex::ui::UnregisterBind(bind);
+    }
+    REXLOG_INFO("[Azura] Developer keys off (F3, F4, F7 and the console)");
+#endif
     // Draws nothing until the Video options turn the performance overlay on.
     perf_overlay_ = std::make_unique<azura::PerfOverlay>(drawer, &title_font_, &body_font_);
   }
