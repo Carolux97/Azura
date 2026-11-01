@@ -29,7 +29,9 @@ import {
   setDetectedSystem,
 } from "./graphics.js";
 import { canStartUpdate, updateButtonState } from "./update.js";
+import { minutesUntil, noticeKey, serviceView } from "./alboriaService.js";
 import {
+  alboriaStatus,
   checkForUpdate,
   checkGameFolder,
   getAppVersion,
@@ -39,6 +41,7 @@ import {
   installRuntime,
   installUpdate,
   isNativeApp,
+  openNoticeLink,
   launchGame,
   prepareShaders,
   shaderStorageBytes,
@@ -134,6 +137,10 @@ const state = {
   updateProgress: null,
   // Whether the confirmation under the update button is showing.
   updateConfirming: false,
+  // How Alboria is (alboria_status): undefined before the first answer, null when it could not be
+  // reached; read only with an Alboria account (renderService).
+  service: undefined,
+  serviceReadAt: 0,
   // This Mac ({ chip, memoryGb, arch }), or null when unknown (always in a browser).
   system: null,
   launcherVersion: BROWSER_LAUNCHER_VERSION,
@@ -357,6 +364,8 @@ const renderPlay = () => {
   // The update button and moving the saves wait while the game runs, so they follow its state too.
   renderUpdate();
   renderSavesFolder();
+  // Alboria's state follows the account, which account.js changes and then draws Play again.
+  renderService();
   const status = document.getElementById("status-game");
   status.dataset.state = isInstalled() ? "ok" : "warn";
   let detail = "status.noFolder";
@@ -1366,8 +1375,206 @@ const setupUpdates = () => {
     .then((update) => {
       state.update = update;
       renderUpdate();
+      // The "launcher too old" panel offers the update once the updater found it.
+      renderService();
     })
     .catch((error) => console.info("No update information:", error));
+};
+
+// --- Alboria's notices and the state of the service --------------------------------------------
+
+/** Gears of War 3's title ID: the game whose own notice and state the launcher asks for. */
+const SERVICE_TITLE_ID = "4D5308AB";
+/** How often the service's state is read again while the launcher is in front. */
+const SERVICE_REFRESH_MS = 60_000;
+/** Where the notices the player closed are remembered, by scope and text (noticeKey). */
+const DISMISSED_KEY = "azura.dismissedNotices";
+
+const readDismissed = () => {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(DISMISSED_KEY) ?? "[]"));
+  } catch {
+    return new Set();
+  }
+};
+const dismissed = readDismissed();
+const saveDismissed = () => {
+  try {
+    // The last few are enough: an older notice no longer comes.
+    localStorage.setItem(DISMISSED_KEY, JSON.stringify([...dismissed].slice(-20)));
+  } catch {
+    // Without storage a closed notice simply comes back next time.
+  }
+};
+
+/** Whether the launcher is in front: the game is not starting or running, and the window is seen. */
+const launcherInFront = () => state.game === "idle" && windowFocused && !document.hidden;
+
+let serviceReading = null;
+/** Reads how Alboria is now (only with an Alboria account), then draws it. */
+const refreshService = async () => {
+  if (state.account !== "alboria" || serviceReading) return serviceReading;
+  serviceReading = (async () => {
+    try {
+      state.service = await alboriaStatus(state.gameCheck?.titleId ?? SERVICE_TITLE_ID);
+    } catch (error) {
+      console.info("Alboria's state could not be read:", error?.error ?? error);
+      state.service = null;
+    }
+    state.serviceReadAt = Date.now();
+    renderService();
+  })().finally(() => (serviceReading = null));
+  return serviceReading;
+};
+
+const formatClock = (ms) => new Intl.DateTimeFormat(getLocale(), { timeStyle: "short" }).format(new Date(ms));
+const gameName = () => t("alboriaService.gameName");
+const countdownText = (at) => {
+  const minutes = minutesUntil(at);
+  return minutes <= 1 ? t("alboriaService.inAMinute") : t("alboriaService.inMinutes", { minutes });
+};
+
+/**
+ * Draws Alboria's state: the strip of countdowns and notices above every page, the line under the
+ * Alboria chip, and the Play page's panel when new rooms cannot be made. Nothing with a local
+ * account, which plays without Alboria.
+ */
+const renderService = () => {
+  const alboria = state.account === "alboria";
+  if (alboria && state.service === undefined) refreshService();
+  const view = alboria && state.service !== undefined ? serviceView(state.service, state.launcherVersion) : null;
+  const block = view?.block ?? null;
+
+  // The line under the chip.
+  const line = document.getElementById("alboria-state");
+  line.hidden = !view;
+  if (view) {
+    const [kind, key, vars] = !block
+      ? ["ok", "alboriaService.stateOnline", {}]
+      : block.kind === "down"
+        ? ["off", "alboriaService.stateDown", {}]
+        : block.kind === "outdated"
+          ? ["warn", "alboriaService.stateOutdated", {}]
+          : block.kind === "gameOff"
+            ? ["warn", "alboriaService.stateGameOff", {}]
+            : block.until
+              ? ["warn", "alboriaService.stateMaintenanceUntil", { time: formatClock(block.until) }]
+              : ["warn", "alboriaService.stateMaintenance", {}];
+    line.dataset.state = kind;
+    document.getElementById("alboria-state-text").textContent = t(key, vars);
+  }
+
+  // The Play page's panel. Alboria unreachable is already told by the player line.
+  const panel = document.getElementById("service-panel");
+  const shown = block && block.kind !== "down";
+  panel.hidden = !shown;
+  if (shown) {
+    const game = gameName();
+    const [title, text] =
+      block.kind === "outdated"
+        ? [t("alboriaService.outdatedTitle"), t("alboriaService.outdatedText", { game, min: block.min, version: state.launcherVersion })]
+        : block.kind === "gameOff"
+          ? [t("alboriaService.gameOffTitle", { game }), t("alboriaService.gameOffText")]
+          : [
+              block.scope === "all" ? t("alboriaService.maintenanceTitle") : t("alboriaService.gameMaintenanceTitle", { game }),
+              block.until
+                ? t("alboriaService.maintenanceUntilText", { time: formatClock(block.until) })
+                : t("alboriaService.maintenanceText"),
+            ];
+    document.getElementById("service-panel-title").textContent = title;
+    document.getElementById("service-panel-text").textContent = text;
+    // An update the updater found is the way out of "too old"; without one the text says what to do.
+    document.getElementById("service-panel-update").hidden = !(block.kind === "outdated" && state.update);
+  }
+
+  // The strip: countdowns first, then the notices the player has not closed.
+  const strip = document.getElementById("alboria-notices");
+  strip.replaceChildren();
+  if (view) {
+    for (const warning of view.warnings) {
+      const item = document.createElement("div");
+      item.className = "alboria-notice is-warning";
+      const head = document.createElement("strong");
+      const when = document.createElement("span");
+      when.className = "alboria-notice-when";
+      when.dataset.at = String(warning.at);
+      when.textContent = countdownText(warning.at);
+      head.append(t(`alboriaService.${warning.key}`, { game: gameName() }), " ", when);
+      const detail = document.createElement("small");
+      detail.textContent = `${t("alboriaService.at", { time: formatClock(warning.at) })} ${t(`alboriaService.${warning.thenKey}`)}`;
+      item.append(head, detail);
+      strip.append(item);
+    }
+    for (const notice of view.notices) {
+      const key = noticeKey(notice);
+      if (dismissed.has(key)) continue;
+      const item = document.createElement("div");
+      item.className = "alboria-notice";
+      const label = document.createElement("span");
+      label.className = "alboria-notice-label";
+      label.textContent = notice.scope === "all" ? t("alboriaService.forEveryone") : t("alboriaService.forGame", { game: gameName() });
+      const body = document.createElement("div");
+      body.className = "alboria-notice-body";
+      // formatNotice() (alboriaService.js) rebuilt it from an allowlist: only formatting is left.
+      body.innerHTML = notice.html;
+      const close = document.createElement("button");
+      close.className = "alboria-notice-close";
+      close.type = "button";
+      close.title = t("alboriaService.close");
+      close.setAttribute("aria-label", t("alboriaService.close"));
+      close.textContent = "×";
+      close.addEventListener("click", () => {
+        dismissed.add(key);
+        saveDismissed();
+        renderService();
+      });
+      const text = document.createElement("div");
+      text.append(label, body);
+      item.append(text, close);
+      strip.append(item);
+    }
+  }
+  strip.hidden = strip.childElementCount === 0;
+};
+
+/**
+ * Keeps Alboria's state current: read again every minute while the launcher is in front and when
+ * it comes back after a while, and the countdowns ticking once a second; an action that is due reads
+ * the state again. Nothing runs while the game runs or the window is in the background.
+ */
+const setupService = () => {
+  const strip = document.getElementById("alboria-notices");
+  // Links in a notice open in the system's browser, never inside the launcher.
+  strip.addEventListener("click", (event) => {
+    const link = event.target.closest("a[href]");
+    if (!link) return;
+    event.preventDefault();
+    openNoticeLink(link.getAttribute("href")).catch((error) => console.warn("Opening a notice's link failed:", error));
+  });
+  document.getElementById("service-panel-update").addEventListener("click", () => {
+    if (!state.update) return;
+    state.updateConfirming = true;
+    renderUpdate();
+    document.getElementById("update-confirm-no").focus();
+  });
+  const stale = () => Date.now() - state.serviceReadAt > SERVICE_REFRESH_MS;
+  window.addEventListener("focus", () => {
+    if (stale()) refreshService();
+  });
+  setInterval(() => {
+    if (!launcherInFront() || state.account !== "alboria") return;
+    if (stale()) {
+      refreshService();
+      return;
+    }
+    let due = false;
+    for (const when of strip.querySelectorAll("[data-at]")) {
+      const at = Number(when.dataset.at);
+      if (at <= Date.now()) due = true;
+      else when.textContent = countdownText(at);
+    }
+    if (due) refreshService();
+  }, 1000);
 };
 
 /** "24 oct 2026, 12:05": a moment in the reader's language and time zone. */
@@ -1772,6 +1979,7 @@ await restoreGameFolder(settings.gameFolder);
 if (!state.achievements) refreshAchievements();
 await refreshAndRenderSaves();
 setupUpdates();
+setupService();
 setupReleaseNotes();
 // Running the runtime to list the cards takes a moment: the rest of the window is ready first.
 refreshGpus();
