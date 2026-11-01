@@ -25882,7 +25882,7 @@ index 82a252c..3dcec80 100644
    if (event.gbutton.down) {
      if (xbutton == X_INPUT_GAMEPAD_GUIDE && !REXCVAR_GET(guide_button)) {
 diff --git a/src/kernel/xam/apps/xgi_app.cpp b/src/kernel/xam/apps/xgi_app.cpp
-index 2b222da..c6d1deb 100644
+index 2b222da..e3fa349 100644
 --- a/src/kernel/xam/apps/xgi_app.cpp
 +++ b/src/kernel/xam/apps/xgi_app.cpp
 @@ -10,6 +10,18 @@
@@ -26061,7 +26061,7 @@ index 2b222da..c6d1deb 100644
  
        return X_E_SUCCESS;
      }
-@@ -288,6 +417,34 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -288,6 +417,37 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
        REXKRNL_DEBUG("XSessionSearchByID({}, {:08X}, {:08X}, {:08X}, {:08X}, {}, {}, {})",
                      user_index, num_session_ids, session_ids_ptr, results_buffer_size,
                      search_results_ptr, reserved1, reserved2, reserved3);
@@ -26074,7 +26074,10 @@ index 2b222da..c6d1deb 100644
 +      if (alboria::LiveSignedIn() && search_results_ptr) {
 +        std::array<uint8_t, 8> kid;
 +        std::memcpy(kid.data(), buffer + 4, kid.size());
-+        const auto session = alboria::KnownSession(kid);
++        // A friend's stand-in session ID (from their presence): their room is joined now, and its
++        // host's session is the result.
++        const auto friend_id = alboria::FriendOfSessionKid(kid);
++        const auto session = friend_id ? alboria::JoinFriendSession(*friend_id) : alboria::KnownSession(kid);
 +        auto* results = memory_->TranslateVirtual(search_results_ptr);
 +        constexpr uint32_t kHeaderSize = 8;
 +        constexpr uint32_t kResultSize = 92;
@@ -26097,24 +26100,137 @@ index 2b222da..c6d1deb 100644
        return X_E_SUCCESS;
      }
 diff --git a/src/kernel/xam/apps/xlivebase_app.cpp b/src/kernel/xam/apps/xlivebase_app.cpp
-index 3593403..f9a7976 100644
+index 3593403..c5786f5 100644
 --- a/src/kernel/xam/apps/xlivebase_app.cpp
 +++ b/src/kernel/xam/apps/xlivebase_app.cpp
-@@ -10,7 +10,12 @@
+@@ -10,7 +10,15 @@
   */
  
  #include <rex/kernel/xam/apps/xlivebase_app.h>
++#include <algorithm>
++#include <cstring>
 +#include <string>
 +
 +#include <fmt/format.h>
  #include <rex/logging.h>
 +#include <rex/system/kernel_state.h>
 +#include <rex/system/xam/alboria.h>
++#include <rex/system/xenumerator.h>
  #include <rex/thread.h>
  
  namespace rex {
-@@ -60,11 +65,39 @@ X_HRESULT XLiveBaseApp::DispatchMessageSync(uint32_t message, uint32_t buffer_pt
-       return X_E_FAIL;
+@@ -23,6 +31,66 @@ using namespace rex::system;
+ 
+ XLiveBaseApp::XLiveBaseApp(KernelState* kernel_state) : App(kernel_state, 0xFC) {}
+ 
++namespace {
++
++// XONLINE_FRIEND: XUID (8), gamertag (16 chars), friend state (4), session ID (8), title ID (4),
++// user time (8), invite session ID (8), invite time (8), rich presence length (4) and text (64
++// UTF-16 chars).
++constexpr uint32_t kOnlineFriendSize = 196;
++// XONLINE_FRIENDSTATE flags: online, playing a title, and in a session friends may join.
++constexpr uint32_t kFriendStateOnline = 0x00000001;
++constexpr uint32_t kFriendStatePlaying = 0x00000002;
++constexpr uint32_t kFriendStateJoinable = 0x00000010;
++
++// XONLINE_PRESENCE: XUID (8), state (4), session ID (8), title ID (4), user time (8), rich presence
++// length (4) and text (64 UTF-16 chars). The state takes the XONLINE_FRIENDSTATE flags.
++constexpr uint32_t kOnlinePresenceSize = 164;
++
++// The friend state flags of `f` (XONLINE_FRIENDSTATE).
++uint32_t FriendState(const rex::system::xam::alboria::Friend& f) {
++  uint32_t state = 0;
++  if (f.online) state |= kFriendStateOnline;
++  if (f.playing) state |= kFriendStatePlaying;
++  if (f.joinable) state |= kFriendStateJoinable;
++  return state;
++}
++
++// Writes the presence of the player with `xuid` as an XONLINE_PRESENCE (big-endian) at `item`: the
++// Alboria friend's when `xuid` is one (alboria::FriendXuid), offline otherwise.
++void WriteOnlinePresence(uint8_t* item, uint64_t xuid,
++                         const std::vector<rex::system::xam::alboria::Friend>& friends) {
++  namespace alboria = rex::system::xam::alboria;
++  std::memset(item, 0, kOnlinePresenceSize);
++  memory::store_and_swap<uint64_t>(item + 0, xuid);
++  for (const auto& f : friends) {
++    if (alboria::FriendXuid(f.id) != xuid) continue;
++    memory::store_and_swap<uint32_t>(item + 8, FriendState(f));
++    if (f.joinable) {
++      const auto kid = alboria::FriendSessionKid(f.id);
++      std::memcpy(item + 12, kid.data(), kid.size());
++    }
++    memory::store_and_swap<uint32_t>(item + 20, f.title_id);
++    break;
++  }
++}
++
++// Writes `f` as an XONLINE_FRIEND (big-endian) at `item`.
++void WriteOnlineFriend(uint8_t* item, const rex::system::xam::alboria::Friend& f) {
++  namespace alboria = rex::system::xam::alboria;
++  std::memset(item, 0, kOnlineFriendSize);
++  memory::store_and_swap<uint64_t>(item + 0, alboria::FriendXuid(f.id));
++  std::memcpy(item + 8, f.gamertag.data(), std::min<size_t>(f.gamertag.size(), 15));
++  memory::store_and_swap<uint32_t>(item + 24, FriendState(f));
++  // A Joinable room's stand-in session ID, which XSessionSearchByID turns into the room's session.
++  if (f.joinable) {
++    const auto kid = alboria::FriendSessionKid(f.id);
++    std::memcpy(item + 28, kid.data(), kid.size());
++  }
++  memory::store_and_swap<uint32_t>(item + 36, f.title_id);
++}
++
++}  // namespace
++
+ // http://mb.mirage.org/bugzilla/xliveless/main.c
+ 
+ X_HRESULT XLiveBaseApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -51,20 +119,152 @@ X_HRESULT XLiveBaseApp::DispatchMessageSync(uint32_t message, uint32_t buffer_pt
+       return 0x80151802;  // ERROR_CONNECTION_INVALID
+     }
+     case 0x00058020: {
+-      // 0x00058004 is called right before this.
+-      // We should create a XamEnumerate-able empty list here, but I'm not
+-      // sure of the format.
+-      // buffer_length seems to be the same ptr sent to 0x00058004.
+-      REXKRNL_DEBUG("CXLiveFriends::Enumerate({:08X}, {:08X}) unimplemented", buffer_ptr,
+-                    buffer_length);
+-      return X_E_FAIL;
++      // XFriendsCreateEnumerator(user index, starting index, friends to return, &buffer size,
++      // &handle). The message's second argument is its parameter list, 16 bytes per parameter
++      // ({4, padding, an 8-byte address}), each the address of the value (**verified** in Gears of
++      // War 3's wrapper at 0x82B0B5D8, which Unreal Engine 3's friends reader calls with 100).
++      // Signed in to Live through Alboria (alboria_live), the enumerator holds the account's
++      // Alboria friends as XONLINE_FRIEND items; otherwise the title has no friends.
++      namespace alboria = rex::system::xam::alboria;
++      constexpr uint32_t kParameterSize = 16;
++      const uint32_t parameters = buffer_length;
++      if (!parameters) return X_E_FAIL;
++      auto parameter = [&](uint32_t index) {
++        return uint32_t(memory::load_and_swap<uint64_t>(memory_->TranslateVirtual(parameters) +
++                                                        index * kParameterSize + 8));
++      };
++      const uint32_t user_index = memory::load_and_swap<uint32_t>(memory_->TranslateVirtual(parameter(0)));
++      const uint32_t starting_index = memory::load_and_swap<uint32_t>(memory_->TranslateVirtual(parameter(1)));
++      const uint32_t count = memory::load_and_swap<uint32_t>(memory_->TranslateVirtual(parameter(2)));
++      const uint32_t buffer_size_ptr = parameter(3);
++      const uint32_t handle_ptr = parameter(4);
++      if (!buffer_size_ptr || !handle_ptr || !count || count > 100) return X_E_INVALIDARG;
++      if (user_index != 0 || !alboria::LiveSignedIn()) return X_E_FAIL;
++
++      auto e = make_object<XStaticUntypedEnumerator>(kernel_state_, count, kOnlineFriendSize);
++      const auto result = e->Initialize(user_index, app_id(), 0x00058020, 0, 0);
++      if (XFAILED(result)) return result;
++      const auto friends = alboria::Friends();
++      for (size_t i = starting_index; i < friends.size() && i < size_t(starting_index) + count; ++i) {
++        WriteOnlineFriend(e->AppendItem(), friends[i]);
++      }
++      memory::store_and_swap<uint32_t>(memory_->TranslateVirtual(buffer_size_ptr), count * kOnlineFriendSize);
++      memory::store_and_swap<uint32_t>(memory_->TranslateVirtual(handle_ptr), e->handle());
++      REXKRNL_INFO("XFriendsCreateEnumerator(user {}, from {}, {}): {} Alboria friends", user_index,
++                   starting_index, count, e->item_count());
++      return X_E_SUCCESS;
      }
      case 0x00058023: {
 -      REXKRNL_DEBUG(
@@ -26150,6 +26266,83 @@ index 3593403..f9a7976 100644
 +      alboria::ClearAcceptedInvite();
 +      return X_E_SUCCESS;
 +    }
++    case 0x0005801E: {
++      // XPresenceSubscribe(user index, count, XUIDs), asked by Unreal Engine 3 titles for the
++      // friends they just enumerated (**verified** in Gears of War 3's wrapper at 0x82B0BE10).
++      // Alboria's friends list carries the presence, read again every few seconds: nothing to do.
++      REXKRNL_DEBUG("XPresenceSubscribe({:08X}, {:08X})", buffer_ptr, buffer_length);
++      return X_E_SUCCESS;
++    }
++    case 0x00058019: {
++      // XPresenceCreateEnumerator(user index, count, XUIDs, starting index, peers to return,
++      // &buffer size, &handle): the parameter list as for 0x58020, each the address of the value
++      // except the XUIDs', which is the array itself (**verified** in Gears of War 3's wrapper at
++      // 0x82B0BB58). Signed in to Live through Alboria, an XONLINE_PRESENCE item for each XUID asked,
++      // from the Alboria friends list.
++      namespace alboria = rex::system::xam::alboria;
++      constexpr uint32_t kParameterSize = 16;
++      const uint32_t parameters = buffer_length;
++      if (!parameters) return X_E_FAIL;
++      auto parameter = [&](uint32_t index) {
++        return uint32_t(memory::load_and_swap<uint64_t>(memory_->TranslateVirtual(parameters) +
++                                                        index * kParameterSize + 8));
++      };
++      auto value = [&](uint32_t index) { return memory::load_and_swap<uint32_t>(memory_->TranslateVirtual(parameter(index))); };
++      const uint32_t user_index = value(0);
++      const uint32_t peer_count = value(1);
++      const uint32_t xuids_ptr = parameter(2);
++      const uint32_t starting_index = value(3);
++      const uint32_t count = value(4);
++      const uint32_t buffer_size_ptr = parameter(5);
++      const uint32_t handle_ptr = parameter(6);
++      if (!buffer_size_ptr || !handle_ptr || !count || count > 100 || (peer_count && !xuids_ptr)) {
++        return X_E_INVALIDARG;
++      }
++      if (user_index != 0 || !alboria::LiveSignedIn()) return X_E_FAIL;
++
++      auto e = make_object<XStaticUntypedEnumerator>(kernel_state_, count, kOnlinePresenceSize);
++      const auto result = e->Initialize(user_index, app_id(), 0x00058019, 0, 0);
++      if (XFAILED(result)) return result;
++      const auto friends = alboria::Friends();
++      const auto* xuids = memory_->TranslateVirtual(xuids_ptr);
++      for (uint32_t i = starting_index; i < peer_count && i < starting_index + count; ++i) {
++        WriteOnlinePresence(e->AppendItem(), memory::load_and_swap<uint64_t>(xuids + i * 8), friends);
++      }
++      memory::store_and_swap<uint32_t>(memory_->TranslateVirtual(buffer_size_ptr), count * kOnlinePresenceSize);
++      memory::store_and_swap<uint32_t>(memory_->TranslateVirtual(handle_ptr), e->handle());
++      REXKRNL_INFO("XPresenceCreateEnumerator(user {}, {} players, from {}, {}): {} items", user_index,
++                   peer_count, starting_index, count, e->item_count());
++      return X_E_SUCCESS;
++    }
++    case 0x00050002: {
++      // XInviteSend(user index, invitee count, invitee XUIDs, text, ...), from Unreal Engine 3's
++      // SendGameInviteToFriend (Gears of War 3's Invite in Manage/Invite). The 40-byte message only
++      // names the request; the wrapper (0x82B0C748) builds its parameter list 48 bytes above it in
++      // the same frame, 16 bytes per parameter ({4, padding, the value's address}) (**verified** on
++      // 1 November 2026: the second points to the count, the third to the XUIDs). Signed in to Live
++      // through Alboria, each invitee who is an Alboria friend gets an Alboria invitation to the
++      // room.
++      namespace alboria = rex::system::xam::alboria;
++      constexpr uint32_t kParameterSize = 16;
++      constexpr uint32_t kParametersAbove = 0x30;
++      if (!alboria::LiveSignedIn() || !buffer_ptr) return X_E_SUCCESS;
++      const auto* list = memory_->TranslateVirtual(buffer_ptr + kParametersAbove);
++      auto address = [&](uint32_t index) {
++        return uint32_t(memory::load_and_swap<uint64_t>(list + index * kParameterSize + 8));
++      };
++      if (memory::load_and_swap<uint32_t>(list + 1 * kParameterSize) != 4 || !address(1) || !address(2)) {
++        REXKRNL_WARN("XInviteSend: no parameter list where expected");
++        return X_E_SUCCESS;
++      }
++      const uint32_t count = memory::load_and_swap<uint32_t>(memory_->TranslateVirtual(address(1)));
++      const auto* xuids = memory_->TranslateVirtual(address(2));
++      for (uint32_t i = 0; i < std::min<uint32_t>(count, 100); ++i) {
++        if (const auto id = alboria::FriendOfXuid(memory::load_and_swap<uint64_t>(xuids + i * 8))) {
++          alboria::InviteFriend(*id);
++        }
++      }
++      return X_E_SUCCESS;
++    }
 +    case 0x0005800E: {
 +      // Asked by Gears of War 3 with Xbox Live parties on Alboria, around joining a party. Believed
 +      // to be XUserMuteListQuery (not verified): success with nothing written, so nobody is muted.
@@ -26158,7 +26351,7 @@ index 3593403..f9a7976 100644
      }
      case 0x00058046: {
        // Required to be successful for 4D530910 to detect signed-in profile
-@@ -73,6 +106,24 @@ X_HRESULT XLiveBaseApp::DispatchMessageSync(uint32_t message, uint32_t buffer_pt
+@@ -73,6 +273,24 @@ X_HRESULT XLiveBaseApp::DispatchMessageSync(uint32_t message, uint32_t buffer_pt
        REXKRNL_DEBUG("XLiveBaseUnk58046({:08X}, {:08X}) unimplemented", buffer_ptr, buffer_length);
        return X_E_SUCCESS;
      }
