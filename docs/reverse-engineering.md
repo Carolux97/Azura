@@ -650,8 +650,15 @@ Read from the bytecode of `GearPC` and `UIScene_FrontEnd` (`script_dump_code`) a
   `GearUIManager.DisplayErrorMessage("InviteHandlingFailed_Message", "InviteHandlingFailed_Title",
   "GenericAccept")`, a message box with those `[MessageBoxErrorStrings]` texts and an Accept
   button. The runtime runs it, with those texts changed, for a room that failed or ended.
-- `GearPC.OnConnectionStatusChange` shows the lost Xbox LIVE connection message and runs
-  `ReturnToMainMenu(true)`; `ClientWasKicked` shows `LostLink_Title` with `AFKKicked_Desc` and
+- `GearPC.OnConnectionStatusChange(ConnectionStatus)` (an `EOnlineServerConnectionStatus`:
+  0 not connected, 1 connected, 2 connection dropped, 3 no network connection, 4 service
+  unavailable, 5 update required, 6 servers too busy, 7 duplicate login, 8 invalid user) runs for
+  the primary player only. With 7 it shows `SignedOut_Title` and `DuplicateSignin_Message` and runs
+  `ReturnToMainMenu`. With 2 to 6, outside co-op and split screen, in an online party or game and
+  away from the menus (`WorldInfo.bIsMenuLevel` false, not in Training Grounds), it shows
+  `XboxLive_Title` and `LostLiveConnection_Message` and runs `ReturnToMainMenu(true)`. In the main
+  menu it does nothing: the party stays as it was (**verified** from its bytecode with
+  `script_dump_code`, and in the game on 1 November 2026 with a Joinable Live party on Alboria); `ClientWasKicked` shows `LostLink_Title` with `AFKKicked_Desc` and
   runs `ReturnToMainMenu`.
 
 ### The System Link browser (`UIScene_SystemLink`)
