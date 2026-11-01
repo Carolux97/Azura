@@ -72,6 +72,7 @@ import {
   pickSavesFolder,
   pickDlcPackage,
   installDlc,
+  removeDlc,
   dlcState,
   repairSaves,
   resetSaves,
@@ -1015,7 +1016,7 @@ const setupCompiler = () => {
 /** Downloadable content panel: what is installed, and whether RAAM's Shadow can be played. */
 const dlc = { state: null, installing: null };
 /** One row of the downloadable content list: a light (its state), the name and a line under it. */
-const dlcRow = (name, detail, rowState) => {
+const dlcRow = (name, detail, rowState, onRemove = null) => {
   const row = document.createElement("div");
   row.className = "status";
   row.dataset.state = rowState;
@@ -1029,7 +1030,26 @@ const dlcRow = (name, detail, rowState) => {
   line.textContent = detail;
   text.append(title, line);
   row.append(dot, text);
+  if (onRemove) {
+    const remove = document.createElement("button");
+    remove.className = "btn btn-small";
+    remove.textContent = t("install.dlcRemove");
+    remove.disabled = dlc.installing;
+    remove.addEventListener("click", onRemove);
+    row.append(remove);
+  }
   return row;
+};
+
+/** Removes an installed downloadable content and shows the result. */
+const removeDlcEntry = async (id) => {
+  try {
+    await removeDlc(id);
+    toast(t("install.dlcRemoved", { name: t(`install.dlcNames.${id}`) }));
+  } catch (error) {
+    toast(t("install.dlcRemoveFailed", { detail: String(error) }));
+  }
+  await refreshDlc();
 };
 
 /**
@@ -1045,8 +1065,17 @@ const renderDlc = () => {
   const rows = [];
   if (dlc.installing) rows.push(dlcRow(dlc.installing, t("install.dlcStatus.installing"), "progress"));
   for (const entry of dlc.state?.entries ?? []) {
-    const rowState = entry.status === "ready" ? "ok" : entry.status === "needsRuntime" ? "pending" : "warn";
-    rows.push(dlcRow(t(`install.dlcNames.${entry.id}`), t(`install.dlcStatus.${entry.status}`), rowState));
+    const rowState =
+      entry.status === "ready" || entry.status === "installed" ? "ok" : entry.status === "needsRuntime" ? "pending" : "warn";
+    const installed = entry.status !== "notInstalled";
+    rows.push(
+      dlcRow(
+        t(`install.dlcNames.${entry.id}`),
+        t(`install.dlcStatus.${entry.status}`),
+        rowState,
+        installed ? () => removeDlcEntry(entry.id) : null,
+      ),
+    );
   }
   if (dlc.state?.otherPackages) {
     rows.push(dlcRow(t("install.dlcOthers"), t("install.dlcOthersCount", { count: dlc.state.otherPackages }), "ok"));

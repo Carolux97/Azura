@@ -136,14 +136,17 @@
       "notInstalled": "未インストール",
       "needsRuntime": "インストール済み · ランタイム更新後に準備されます",
       "unsupported": "インストール済みですが、このゲームファイルでは準備できませんでした",
-      "multiplayer": "マルチプレイヤー対応時に追加",
+      "installed": "インストール済み · マップはマルチプレイヤー対応時に追加",
       "installing": "インストール中… (1分ほどかかります)"
     },
     "dlcOthers": "その他のインストール済みコンテンツ",
     "dlcOthersCount": "{count} 個のパッケージ",
     "dlcInstalled": "{name} をインストールしました。",
     "dlcFailed": "パッケージをインストールできませんでした: {detail}",
-    "eyebrow": "あなたのコピー、あなたのコンピューター"
+    "eyebrow": "あなたのコピー、あなたのコンピューター",
+    "dlcRemove": "削除",
+    "dlcRemoved": "{name}を削除しました。",
+    "dlcRemoveFailed": "コンテンツを削除できませんでした: {detail}"
   },
   "graphics": {
     "title": "グラフィック",

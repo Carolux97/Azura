@@ -136,14 +136,17 @@
       "notInstalled": "Non installé",
       "needsRuntime": "Installé · prêt après la mise à jour du runtime",
       "unsupported": "Installé, mais n'a pas pu être préparé avec ces fichiers du jeu",
-      "multiplayer": "Arrivera avec le multijoueur",
+      "installed": "Installé · ses cartes arrivent avec le multijoueur",
       "installing": "Installation… (une minute)"
     },
     "dlcOthers": "Autre contenu installé",
     "dlcOthersCount": "{count} paquets",
     "dlcInstalled": "{name} installé.",
     "dlcFailed": "Impossible d'installer le paquet : {detail}",
-    "eyebrow": "Ta copie, ton ordinateur"
+    "eyebrow": "Ta copie, ton ordinateur",
+    "dlcRemove": "Retirer",
+    "dlcRemoved": "{name} retiré.",
+    "dlcRemoveFailed": "Le contenu n’a pas pu être retiré : {detail}"
   },
   "graphics": {
     "title": "Graphismes",

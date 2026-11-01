@@ -136,14 +136,17 @@
       "notInstalled": "未安裝",
       "needsRuntime": "已安裝 · 更新執行環境後即可使用",
       "unsupported": "已安裝，但無法以這些遊戲檔案準備",
-      "multiplayer": "將隨多人模式推出",
+      "installed": "已安裝 · 地圖將隨多人模式推出",
       "installing": "安裝中…（約需一分鐘）"
     },
     "dlcOthers": "其他已安裝的內容",
     "dlcOthersCount": "{count} 個套件",
     "dlcInstalled": "已安裝 {name}。",
     "dlcFailed": "無法安裝套件：{detail}",
-    "eyebrow": "你的副本，你的電腦"
+    "eyebrow": "你的副本，你的電腦",
+    "dlcRemove": "移除",
+    "dlcRemoved": "已移除 {name}。",
+    "dlcRemoveFailed": "無法移除內容：{detail}"
   },
   "graphics": {
     "title": "圖形",
