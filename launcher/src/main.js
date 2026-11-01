@@ -85,6 +85,7 @@ import { achievementView } from "./achievements.js";
 import { createBuildTracker } from "./buildProgress.js";
 import { LOCK_ICON, completedBanner, renderAchievementsPage } from "./achievementsPage.js";
 import { setupAccount } from "./account.js";
+import { mirrorSelects, syncMirrors } from "./selectMirror.js";
 
 const SPORE_COUNT = 26;
 /** Launcher version shown in a browser; the app reads its real version (see detectSystem). */
@@ -413,6 +414,12 @@ const renderPlay = () => {
   if (player) {
     document.getElementById("status-player-detail").textContent = account.playerLine();
   }
+  // The line at the top of every page: who plays, once the player chose an account. Its light
+  // follows Alboria's state (renderService); a local account has a steady grey one.
+  const playerLine = document.getElementById("player-line");
+  playerLine.hidden = !state.account;
+  document.getElementById("player-line-text").textContent = account.playerLine();
+  if (state.account !== "alboria") playerLine.dataset.state = "local";
 
   const button = document.getElementById("launch");
   button.classList.toggle("is-install", !isInstalled());
@@ -432,10 +439,14 @@ const renderPlay = () => {
     sub = state.runtime.updateKind === "link" ? "play.updateLinkSub" : "play.updateBuildSub";
   } else if (isInstalled()) {
     label = { idle: "play.launch", starting: "play.launching", running: "play.running", preparing: "play.launch" }[state.game];
-    sub = state.game === "idle" && runtimeNeedsInstall() ? "play.runtimeWillInstall" : "play.mode";
+    // The game itself offers every mode, so a button that only plays needs no line under it: the
+    // line is there only for something that happens first.
+    sub = state.game === "idle" && runtimeNeedsInstall() ? "play.runtimeWillInstall" : null;
   }
   button.querySelector(".btn-launch-label").textContent = t(label);
-  button.querySelector(".btn-launch-sub").textContent = t(sub);
+  const subLine = document.getElementById("launch-sub");
+  subLine.hidden = !sub;
+  subLine.textContent = sub ? t(sub) : "";
   renderLogState();
 
   // macOS: the chip is the GPU too, "Apple M4 · 24 GB · Metal". Linux and Windows: the processor
@@ -1251,6 +1262,7 @@ const renderGraphics = () => {
   document.getElementById("display-mode").value = state.fullscreen ? "fullscreen" : "windowed";
   document.getElementById("while-playing").value = state.minimizeWhilePlaying ? "minimize" : "keepOpen";
   renderGpuChoice();
+  syncMirrors();
 };
 
 /** The graphics card choice, shown only when the computer has two or more cards. */
@@ -1287,6 +1299,7 @@ const refreshGpus = async () => {
 
 /** Wires the graphics controls; every change is saved. */
 const setupGraphics = () => {
+  mirrorSelects(document.querySelector('.view[data-view="graphics"]'));
   const resolution = document.getElementById("resolution-scale");
   resolution.addEventListener("change", () => {
     state.renderResolution = resolution.value;
@@ -1518,16 +1531,21 @@ const renderService = () => {
               : ["warn", "alboriaService.stateMaintenance", {}];
     line.dataset.state = kind;
     document.getElementById("alboria-state-text").textContent = t(key, vars);
+    // The player line's light says the same at a glance.
+    document.getElementById("player-line").dataset.state = kind;
   }
 
-  // The Play page's panel. Alboria unreachable is already told by the player line.
+  // The Play page's panel, with the Alborian of the case (docs/alborians.md in alboria-web): the
+  // Greeter offers the update, the Night owl keeps watch while Alboria is down or in maintenance.
   const panel = document.getElementById("service-panel");
-  const shown = block && block.kind !== "down";
-  panel.hidden = !shown;
-  if (shown) {
+  panel.hidden = !block;
+  if (block) {
     const game = gameName();
+    document.getElementById("service-panel-art").src = block.kind === "outdated" ? "alborians/greeter.svg" : "alborians/night-owl.svg";
     const [title, text] =
-      block.kind === "outdated"
+      block.kind === "down"
+        ? [t("alboriaService.downTitle"), t("alboriaService.downText")]
+        : block.kind === "outdated"
         ? [t("alboriaService.outdatedTitle"), t("alboriaService.outdatedText", { game, min: block.min, version: state.launcherVersion })]
         : block.kind === "gameOff"
           ? [t("alboriaService.gameOffTitle", { game }), t("alboriaService.gameOffText")]
@@ -1541,6 +1559,7 @@ const renderService = () => {
     document.getElementById("service-panel-text").textContent = text;
     // An update the updater found is the way out of "too old"; without one the text says what to do.
     document.getElementById("service-panel-update").hidden = !(block.kind === "outdated" && state.update);
+    document.getElementById("service-panel-retry").hidden = block.kind !== "down";
   }
 
   // The strip: countdowns first, then the notices the player has not closed.
@@ -1550,6 +1569,10 @@ const renderService = () => {
     for (const warning of view.warnings) {
       const item = document.createElement("div");
       item.className = "alboria-notice is-warning";
+      // A clock instead of an Alborian: countdowns are short and urgent.
+      const clock = document.createElement("span");
+      clock.className = "alboria-notice-clock";
+      clock.setAttribute("aria-hidden", "true");
       const head = document.createElement("strong");
       const when = document.createElement("span");
       when.className = "alboria-notice-when";
@@ -1558,7 +1581,9 @@ const renderService = () => {
       head.append(t(`alboriaService.${warning.key}`, { game: gameName() }), " ", when);
       const detail = document.createElement("small");
       detail.textContent = `${t("alboriaService.at", { time: formatClock(warning.at) })} ${t(`alboriaService.${warning.thenKey}`)}`;
-      item.append(head, detail);
+      const text = document.createElement("div");
+      text.append(head, detail);
+      item.append(clock, text);
       strip.append(item);
     }
     for (const notice of view.notices) {
@@ -1584,9 +1609,15 @@ const renderService = () => {
         saveDismissed();
         renderService();
       });
+      // The Greeter brings Alboria's notices.
+      const greeter = document.createElement("img");
+      greeter.className = "alborian";
+      greeter.src = "alborians/greeter.svg";
+      greeter.alt = "";
       const text = document.createElement("div");
+      text.className = "alboria-notice-text";
       text.append(label, body);
-      item.append(text, close);
+      item.append(greeter, text, close);
       strip.append(item);
     }
   }
@@ -1607,6 +1638,7 @@ const setupService = () => {
     event.preventDefault();
     openNoticeLink(link.getAttribute("href")).catch((error) => console.warn("Opening a notice's link failed:", error));
   });
+  document.getElementById("service-panel-retry").addEventListener("click", () => refreshService());
   document.getElementById("service-panel-update").addEventListener("click", () => {
     if (!state.update) return;
     state.updateConfirming = true;

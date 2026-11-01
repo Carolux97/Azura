@@ -25,7 +25,6 @@
     "lede": "A saját játékpéldányod, {target} rendszerre újrafordítva.",
     "launch": "Játék",
     "launching": "Indítás",
-    "mode": "Kampány",
     "install": "Telepítés",
     "installSub": "Játékfájlok beállítása",
     "running": "Játékban",
@@ -143,7 +142,8 @@
     "dlcOthers": "Egyéb telepített tartalom",
     "dlcOthersCount": "{count} csomag",
     "dlcInstalled": "{name} telepítve.",
-    "dlcFailed": "A csomagot nem sikerült telepíteni: {detail}"
+    "dlcFailed": "A csomagot nem sikerült telepíteni: {detail}",
+    "eyebrow": "A te példányod, a te géped"
   },
   "graphics": {
     "title": "Grafika",
@@ -159,7 +159,13 @@
     "gpuIntegrated": "integrált",
     "whilePlaying": "Indító játék közben",
     "whilePlayingMinimize": "Kis méretre",
-    "whilePlayingKeepOpen": "Nyitva hagyás"
+    "whilePlayingKeepOpen": "Nyitva hagyás",
+    "eyebrow": "Hogyan néz ki és fut a játék",
+    "displayTitle": "Megjelenítés",
+    "modeHelp": "Hogyan nyílik meg a játék ablaka.",
+    "gpuHelp": "Melyik videokártya futtatja a játékot.",
+    "whilePlayingHelp": "Mit csinál a launcher, amikor a játék elindul.",
+    "renderResolutionHelp": "A méret, amelyben a játék rajzol. A nagyobb élesebb, és jobban terheli a videokártyát."
   },
   "achievements": {
     "title": "Teljesítmények",
@@ -312,7 +318,8 @@
     "folderHelp": "Itt vannak az ellenőrzőpontjaid, a profilod és a letölthető tartalmak. Ha megváltoztatod, biztonsági mentés után oda kerülnek.",
     "folderCloseGame": "Zárd be a játékot a mentések áthelyezéséhez",
     "kindBeforeMove": "Áthelyezés előtt",
-    "kindBeforeReplace": "Felülírás előtt"
+    "kindBeforeReplace": "Felülírás előtt",
+    "eyebrow": "Ellenőrzőpontok és profil"
   },
   "gamepad": {
     "select": "Kiválasztás",
@@ -372,7 +379,13 @@
     "codesOffCreate": "Jelenleg nem küldünk kódokat. A fiókod az e-mail-cím megerősítése nélkül jön létre. Amikor újra küldünk kódokat, 48 órád lesz megerősíteni, különben a fiók törlődik.",
     "codesOffSignIn": "Jelenleg nem küldünk kódokat, ezért egyelőre nem lehet másik számítógépről bejelentkezni egy fiókba. Próbáld újra később.",
     "createNow": "Fiók létrehozása",
-    "createdUnverified": "Az e-mail-címed nincs megerősítve: amikor újra küldünk kódokat, erősítsd meg a Fiók részben 48 órán belül, különben a fiók törlődik."
+    "createdUnverified": "Az e-mail-címed nincs megerősítve: amikor újra küldünk kódokat, erősítsd meg a Fiók részben 48 órán belül, különben a fiók törlődik.",
+    "title": "Állítsd be a {player}",
+    "titlePlayer": "játékosod",
+    "chooseTitle": "Hogyan szeretnél játszani?",
+    "bubbleGreet": "Szia! Szerezzünk neked egy taget.",
+    "bubbleCode": "Nézd meg az e-mailjeidet, most küldtem el!",
+    "bubbleDone": "Üdv az Alboriában!"
   },
   "account": {
     "title": "Fiók",
@@ -475,7 +488,9 @@
     "thenMaintenance": "A nyitott szobák folytatódnak; az újak a végéig várnak.",
     "thenRestart": "Új szobák szünetelnek a visszatérésig. A nyitottaknak legfeljebb 30 percük van befejezni.",
     "thenGameOff": "Ekkor bezárnak a szobái.",
-    "thenCloseRooms": "Fejezd be előtte a meccset."
+    "thenCloseRooms": "Fejezd be előtte a meccset.",
+    "downTitle": "Alboria szundít egyet",
+    "downText": "Most nem érjük el az Alboriát, ezért az online szobák szünetelnek. Az Éjjeli bagoly őrködik."
   },
   "friends": {
     "title": "Barátok",

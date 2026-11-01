@@ -25,7 +25,6 @@
     "lede": "Tu copia del juego, recompilada para {target}.",
     "launch": "Jugar",
     "launching": "Iniciando",
-    "mode": "Campaña",
     "install": "Instalar",
     "installSub": "Configura los archivos del juego",
     "running": "Jugando",
@@ -143,7 +142,8 @@
     "dlcOthers": "Otro contenido instalado",
     "dlcOthersCount": "{count} paquetes",
     "dlcInstalled": "{name} instalado.",
-    "dlcFailed": "No se ha podido instalar el paquete: {detail}"
+    "dlcFailed": "No se ha podido instalar el paquete: {detail}",
+    "eyebrow": "Tu copia, tu ordenador"
   },
   "graphics": {
     "title": "Gráficos",
@@ -159,7 +159,13 @@
     "gpuIntegrated": "integrada",
     "whilePlaying": "Launcher mientras juegas",
     "whilePlayingMinimize": "Minimizarlo",
-    "whilePlayingKeepOpen": "Dejarlo abierto"
+    "whilePlayingKeepOpen": "Dejarlo abierto",
+    "eyebrow": "Cómo se ve y funciona el juego",
+    "displayTitle": "Pantalla",
+    "modeHelp": "Cómo se abre la ventana del juego.",
+    "gpuHelp": "Qué tarjeta gráfica mueve el juego.",
+    "whilePlayingHelp": "Qué hace el launcher cuando empieza el juego.",
+    "renderResolutionHelp": "El tamaño al que dibuja el juego. Más alto es más nítido y exige más a la tarjeta gráfica."
   },
   "achievements": {
     "title": "Logros",
@@ -312,7 +318,8 @@
     "folderHelp": "Donde viven tus puntos de control, tu perfil y el contenido descargable. Al cambiarla se mueven allí, después de hacer una copia.",
     "folderCloseGame": "Cierra el juego para mover tus partidas",
     "kindBeforeMove": "Antes de mover",
-    "kindBeforeReplace": "Antes de reemplazar"
+    "kindBeforeReplace": "Antes de reemplazar",
+    "eyebrow": "Puntos de control y perfil"
   },
   "gamepad": {
     "select": "Seleccionar",
@@ -372,7 +379,13 @@
     "codesOffCreate": "Ahora no enviamos códigos. Tu cuenta se creará sin verificar el correo. Cuando volvamos a enviarlos, tendrás 48 horas para verificarlo o la cuenta se borrará.",
     "codesOffSignIn": "Ahora no enviamos códigos, así que de momento no se puede entrar en una cuenta desde otro equipo. Vuelve a intentarlo más adelante.",
     "createNow": "Crear cuenta",
-    "createdUnverified": "Tu correo está sin verificar: cuando volvamos a enviar códigos, verifícalo en Cuenta en 48 horas o la cuenta se borrará."
+    "createdUnverified": "Tu correo está sin verificar: cuando volvamos a enviar códigos, verifícalo en Cuenta en 48 horas o la cuenta se borrará.",
+    "title": "Prepara a tu {player}",
+    "titlePlayer": "jugador",
+    "chooseTitle": "¿Cómo quieres jugar?",
+    "bubbleGreet": "¡Hola! Vamos a por tu etiqueta.",
+    "bubbleCode": "¡Mira tu correo, te lo acabo de enviar!",
+    "bubbleDone": "¡Te damos la bienvenida a Alboria!"
   },
   "account": {
     "title": "Cuenta",
@@ -475,7 +488,9 @@
     "thenMaintenance": "Las salas abiertas siguen; las nuevas esperan hasta que acabe.",
     "thenRestart": "Las salas nuevas se pausan hasta que vuelva. Las abiertas tienen hasta 30 minutos para terminar.",
     "thenGameOff": "Entonces se cierran sus salas.",
-    "thenCloseRooms": "Termina tu partida antes."
+    "thenCloseRooms": "Termina tu partida antes.",
+    "downTitle": "Alboria se está echando una siesta",
+    "downText": "Ahora mismo no podemos conectar con Alboria, así que las salas online están en pausa. El Búho nocturno está de guardia."
   },
   "friends": {
     "title": "Amigos",

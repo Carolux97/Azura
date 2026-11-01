@@ -25,7 +25,6 @@
     "lede": "Votre copie du jeu, recompilée pour {target}.",
     "launch": "Jouer",
     "launching": "Lancement",
-    "mode": "Campagne",
     "install": "Installer",
     "installSub": "Configurez les fichiers du jeu",
     "running": "En jeu",
@@ -143,7 +142,8 @@
     "dlcOthers": "Autre contenu installé",
     "dlcOthersCount": "{count} paquets",
     "dlcInstalled": "{name} installé.",
-    "dlcFailed": "Impossible d'installer le paquet : {detail}"
+    "dlcFailed": "Impossible d'installer le paquet : {detail}",
+    "eyebrow": "Ta copie, ton ordinateur"
   },
   "graphics": {
     "title": "Graphismes",
@@ -159,7 +159,13 @@
     "gpuIntegrated": "intégrée",
     "whilePlaying": "Lanceur pendant le jeu",
     "whilePlayingMinimize": "Le réduire",
-    "whilePlayingKeepOpen": "Le laisser ouvert"
+    "whilePlayingKeepOpen": "Le laisser ouvert",
+    "eyebrow": "L'apparence et le fonctionnement du jeu",
+    "displayTitle": "Affichage",
+    "modeHelp": "Comment s'ouvre la fenêtre du jeu.",
+    "gpuHelp": "Quelle carte graphique fait tourner le jeu.",
+    "whilePlayingHelp": "Ce que fait le launcher quand le jeu démarre.",
+    "renderResolutionHelp": "La taille à laquelle le jeu dessine. Plus haut, c'est plus net et plus exigeant pour la carte graphique."
   },
   "achievements": {
     "title": "Succès",
@@ -312,7 +318,8 @@
     "folderHelp": "Là où se trouvent vos points de contrôle, votre profil et le contenu téléchargeable. Le changer les y déplace, après une copie de sécurité.",
     "folderCloseGame": "Fermez le jeu pour déplacer vos sauvegardes",
     "kindBeforeMove": "Avant le déplacement",
-    "kindBeforeReplace": "Avant le remplacement"
+    "kindBeforeReplace": "Avant le remplacement",
+    "eyebrow": "Points de contrôle et profil"
   },
   "gamepad": {
     "select": "Sélectionner",
@@ -372,7 +379,13 @@
     "codesOffCreate": "Nous n'envoyons pas de codes pour le moment. Votre compte sera créé sans vérifier votre e-mail. Quand nous en enverrons à nouveau, vous aurez 48 heures pour le vérifier, sinon le compte sera supprimé.",
     "codesOffSignIn": "Nous n'envoyons pas de codes pour le moment : impossible pour l'instant de se connecter à un compte depuis un autre ordinateur. Réessayez plus tard.",
     "createNow": "Créer le compte",
-    "createdUnverified": "Votre e-mail n'est pas vérifié : quand nous enverrons à nouveau des codes, vérifiez-le dans Compte sous 48 heures, sinon le compte sera supprimé."
+    "createdUnverified": "Votre e-mail n'est pas vérifié : quand nous enverrons à nouveau des codes, vérifiez-le dans Compte sous 48 heures, sinon le compte sera supprimé.",
+    "title": "Prépare ton {player}",
+    "titlePlayer": "joueur",
+    "chooseTitle": "Comment veux-tu jouer ?",
+    "bubbleGreet": "Salut ! On va te trouver un tag.",
+    "bubbleCode": "Regarde tes e-mails, je viens de l'envoyer !",
+    "bubbleDone": "Bienvenue sur Alboria !"
   },
   "account": {
     "title": "Compte",
@@ -475,7 +488,9 @@
     "thenMaintenance": "Les salons ouverts continuent ; les nouveaux attendent la fin.",
     "thenRestart": "Les nouveaux salons sont suspendus jusqu'au retour. Les salons ouverts ont jusqu'à 30 minutes pour finir.",
     "thenGameOff": "Ses salons ferment alors.",
-    "thenCloseRooms": "Terminez votre partie avant."
+    "thenCloseRooms": "Terminez votre partie avant.",
+    "downTitle": "Alboria fait la sieste",
+    "downText": "Nous ne pouvons pas joindre Alboria pour le moment, les salles en ligne sont donc en pause. Le Hibou de nuit monte la garde."
   },
   "friends": {
     "title": "Amis",
