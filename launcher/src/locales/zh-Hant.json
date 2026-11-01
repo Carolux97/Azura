@@ -25,7 +25,6 @@
     "lede": "你的遊戲副本，為 {target} 重新編譯。",
     "launch": "開始遊戲",
     "launching": "啟動中",
-    "mode": "戰役",
     "install": "安裝",
     "installSub": "設定遊戲檔案",
     "running": "遊玩中",
@@ -143,7 +142,8 @@
     "dlcOthers": "其他已安裝的內容",
     "dlcOthersCount": "{count} 個套件",
     "dlcInstalled": "已安裝 {name}。",
-    "dlcFailed": "無法安裝套件：{detail}"
+    "dlcFailed": "無法安裝套件：{detail}",
+    "eyebrow": "你的副本，你的電腦"
   },
   "graphics": {
     "title": "圖形",
@@ -159,7 +159,13 @@
     "gpuIntegrated": "內建",
     "whilePlaying": "遊玩時的啟動器",
     "whilePlayingMinimize": "最小化",
-    "whilePlayingKeepOpen": "保持開啟"
+    "whilePlayingKeepOpen": "保持開啟",
+    "eyebrow": "遊戲的外觀與運作",
+    "displayTitle": "顯示",
+    "modeHelp": "遊戲視窗開啟的方式。",
+    "gpuHelp": "由哪張顯示卡執行遊戲。",
+    "whilePlayingHelp": "遊戲開始後啟動器要做什麼。",
+    "renderResolutionHelp": "遊戲繪製的尺寸。越高越清晰，對顯示卡的負擔也越大。"
   },
   "achievements": {
     "title": "成就",
@@ -312,7 +318,8 @@
     "folderHelp": "你的檢查點、設定檔和下載內容存放的位置。變更後會先備份，再移到新位置。",
     "folderCloseGame": "請關閉遊戲以移動存檔",
     "kindBeforeMove": "移動前",
-    "kindBeforeReplace": "取代前"
+    "kindBeforeReplace": "取代前",
+    "eyebrow": "檢查點與設定檔"
   },
   "gamepad": {
     "select": "選擇",
@@ -372,7 +379,13 @@
     "codesOffCreate": "我們目前不寄送驗證碼。你的帳號會在未驗證電子郵件的情況下建立。恢復寄送後，你有 48 小時可以驗證，否則帳號將被刪除。",
     "codesOffSignIn": "我們目前不寄送驗證碼，所以暫時無法從其他電腦登入帳號。請稍後再試。",
     "createNow": "建立帳號",
-    "createdUnverified": "你的電子郵件尚未驗證：恢復寄送驗證碼後，請在 48 小時內到「帳號」完成驗證，否則帳號將被刪除。"
+    "createdUnverified": "你的電子郵件尚未驗證：恢復寄送驗證碼後，請在 48 小時內到「帳號」完成驗證，否則帳號將被刪除。",
+    "title": "設定你的{player}",
+    "titlePlayer": "玩家",
+    "chooseTitle": "你想怎麼玩？",
+    "bubbleGreet": "嗨！來幫你取個標籤吧。",
+    "bubbleCode": "去看看你的信箱，我剛寄出去了！",
+    "bubbleDone": "歡迎來到 Alboria！"
   },
   "account": {
     "title": "帳號",
@@ -475,7 +488,9 @@
     "thenMaintenance": "已開啟的房間會繼續；新房間需等到結束。",
     "thenRestart": "新房間暫停至恢復為止。已開啟的房間最多有 30 分鐘可完成。",
     "thenGameOff": "屆時其房間會關閉。",
-    "thenCloseRooms": "請在那之前結束對戰。"
+    "thenCloseRooms": "請在那之前結束對戰。",
+    "downTitle": "Alboria 正在打盹",
+    "downText": "目前無法連線到 Alboria，所以線上房間暫停中。夜貓子正在守著。"
   },
   "friends": {
     "title": "好友",
