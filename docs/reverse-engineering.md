@@ -661,6 +661,28 @@ Read from the bytecode of `GearPC` and `UIScene_FrontEnd` (`script_dump_code`) a
   `script_dump_code`, and in the game on 1 November 2026 with a Joinable Live party on Alboria); `ClientWasKicked` shows `LostLink_Title` with `AFKKicked_Desc` and
   runs `ReturnToMainMenu`.
 
+### Lambency
+
+Achievement 49, Lambency ("Lambentismo"), read from the bytecode of `GearProfileSettings`, `GearPC`
+and `GearPC_MP` (`script_dump_code`), and traced on entering a private Versus match, 29 October
+2026:
+
+- `GearProfileSettings.IsEpicDev()` answers yes when `bIsEpicDev` is set or the profile setting 365
+  is not 0; the first time `bIsEpicDev` is set and 365 is 0, it stores 365 = 1 in the profile.
+  No script sets `bIsEpicDev` (**inferred**: the engine did, from Xbox LIVE). `IsRiftDev()` is the
+  same with setting 366, for Rift's developers, and gives an award only.
+- `GearPC.CheckViralAchievement()`, run when the profile is read and on entering a match: with
+  `IsEpicDev()` it gives the `'EPIC'` award, sets persistent value 245 and unlocks achievement 49.
+- On entering a multiplayer match each player runs
+  `ServerSetViralSettings(IsEpicDev(), HasCompletedAchievement(49))` (`GearPC_MP`, from
+  `UpdateLocalCacheOfProfileSettings`); the host keeps it in the player's
+  `GearPRI.bHasViralAchievement`. So anyone with the achievement spreads it.
+- When a player who does not spread it executes one who does (`GearPRI.IsExecutionDamage`), the
+  killer's `GearPC` runs `ServerSetViralSettings(false, true)` and `ClientUnlockAchievement(49)`.
+
+With Alboria, the accounts that start the contagion get `bIsEpicDev` on their profile right before
+`IsEpicDev()` runs (`script_hooks.cpp`, "Lambency").
+
 ### The System Link browser (`UIScene_SystemLink`)
 
 - Opening it runs `TriggerPartySearch`: `GameInterface.FindOnlineGames` with its `SearchSettings`.

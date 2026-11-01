@@ -157,13 +157,16 @@ Answer: `{ "challenge": "<32 bytes>", "expires_in": 60 }`.
 `signature` is the Ed25519 signature of the bytes `alboria-auth-v1` (15 bytes) followed by the
 challenge. A challenge is used once and expires after 60 seconds.
 
-Answer: `{ "token": "<opaque>", "expires_in": 3600, "gamertag": "Carolina", "tag": 97 }`, with
-the account's gamertag and tag (section 3). Later requests send the token as
+Answer: `{ "token": "<opaque>", "expires_in": 3600, "gamertag": "Carolina", "tag": 97,
+"lambency": false }`, with the account's gamertag and tag (section 3). `lambency` is true for the
+few accounts that start the Lambency contagion, which only the admin tool marks: the game treats
+them as the developers whose execution spreads the Lambency achievement
+(docs/reverse-engineering.md, "Lambency"). Later requests send the token as
 `Authorization: Bearer <token>`. The runtime keeps the token and signs in again only five minutes
 before it expires, or when a request answers `401 not_signed_in` (the server restarted, or the key
 was banned or unlinked, which signs out its sessions): it then signs in once and makes the request
 again. So the service checks, rooms and party type changes of a game sign in about once an hour,
-and its identity (gamertag and tag) is the one of that sign-in.
+and its identity (gamertag, tag and Lambency) is the one of that sign-in.
 
 `client` is the game (`azura/0.5.0`) or the launcher (`azura-launcher/0.5.0`). The key must be a
 device of an account (section 3).
