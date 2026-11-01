@@ -500,7 +500,7 @@
     "onlineCount": "オンライン {count} 人",
     "addPlaceholder": "ゲーマータグ#タグ",
     "add": "追加",
-    "badName": "ゲーマータグとタグを入力してください（例: Ortega#1）",
+    "badName": "ゲーマータグとタグを入力してください（例: Nimbus#4827）",
     "requestSent": "{name} にリクエストを送信しました",
     "nowFriends": "{name} とフレンドになりました",
     "listFull": "フレンドリストか送信済みリクエストがいっぱいです",

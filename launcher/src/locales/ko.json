@@ -500,7 +500,7 @@
     "onlineCount": "{count}명 온라인",
     "addPlaceholder": "게이머태그#태그",
     "add": "추가",
-    "badName": "게이머태그와 태그를 입력하세요(예: Ortega#1)",
+    "badName": "게이머태그와 태그를 입력하세요(예: Nimbus#4827)",
     "requestSent": "{name}에게 요청을 보냈습니다",
     "nowFriends": "{name}와(과) 친구가 되었습니다",
     "listFull": "친구 목록이나 보낸 요청이 가득 찼습니다",

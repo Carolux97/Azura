@@ -500,7 +500,7 @@
     "onlineCount": "{count} 人在線",
     "addPlaceholder": "玩家代號#標籤",
     "add": "新增",
-    "badName": "請輸入玩家代號與標籤，例如 Ortega#1",
+    "badName": "請輸入玩家代號與標籤，例如 Nimbus#4827",
     "requestSent": "已向 {name} 送出請求",
     "nowFriends": "{name} 現在是你的好友",
     "listFull": "你的好友名單或已送出的請求已滿",
