@@ -200,6 +200,20 @@
           <button class="btn btn-primary" id="service-panel-update" hidden data-i18n="alboriaService.getUpdate"></button>
         </div>
 
+        <!-- Friends on Alboria: requests, invitations, and each friend with Join and their menu
+             (friendsPanel.js). Only with an Alboria account. -->
+        <div class="panel friends-panel" id="friends-panel" hidden>
+          <div class="friends-head">
+            <h2 class="panel-title" data-i18n="friends.title"></h2>
+            <span class="friends-count" id="friends-count"></span>
+          </div>
+          <form class="friends-add" id="friends-add">
+            <input class="path" id="friends-add-name" type="text" maxlength="20" autocomplete="off" spellcheck="false" data-i18n-attr="placeholder:friends.addPlaceholder">
+            <button class="btn btn-primary" type="submit" data-i18n="friends.add"></button>
+          </form>
+          <div class="friends-body" id="friends-body"></div>
+        </div>
+
         <!-- A runtime build from the kit: its step, a bar and the time left, or why it failed;
              renderBuildCard() fills it. -->
         <div class="panel build-card" id="build-card" hidden>

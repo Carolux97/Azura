@@ -366,8 +366,10 @@ Presence is worked out again every 2 seconds, and only changes are sent.
 | `POST /v1/friends/block` | `{ "id" }` | `{}`; removes the friendship and the requests between the two either way. The blocked player is not told: their requests answer `sent` and their invitations never arrive |
 | `POST /v1/friends/unblock` | `{ "id" }` | `{}` |
 | `POST /v1/friends/join` | `{ "id" }` | a ticket, as `/v1/rooms/join`, for the friend's room when it is `joinable`. `404 not_friends`, `404 room_not_found` (not in a room), `403 invite_only`, and the errors of `/v1/rooms/join`. Maintenance does not stop it: only new rooms wait |
+| `POST /v1/friends/room` | `{ "id" }` | `{ "code", "title_id" }` of the friend's room when it is `joinable`, without joining it: the launcher starts the game with it, or hands it to the running game, and the game joins with the code as its own member. Errors as `/v1/friends/join` |
 | `POST /v1/invitations` | `{ "friend": <id> }` | `{ "sent": true }`; invites a friend to the room this account is in. `404 not_friends`, `409 not_in_room`, `429 too_many_requests` (20 a minute) |
 | `POST /v1/invitations/accept` | `{ "id": "<invitation ID>" }` | a ticket, as `/v1/rooms/join`, also for an `invite_only` room. `404 invitation_gone` |
+| `POST /v1/invitations/room` | `{ "id": "<invitation ID>" }` | `{ "code", "title_id" }` of the invitation's room, which uses it up, for the launcher as `/v1/friends/room`. `404 invitation_gone` |
 | `POST /v1/invitations/decline` | `{ "id": "<invitation ID>" }` | `{}` |
 
 An invitation is `{ "id", "from": { "id", "name" }, "title_id", "expires_at" }`. It lives in the

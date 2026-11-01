@@ -30,6 +30,7 @@ import {
 } from "./graphics.js";
 import { canStartUpdate, updateButtonState } from "./update.js";
 import { minutesUntil, noticeKey, serviceView } from "./alboriaService.js";
+import { setupFriends } from "./friendsPanel.js";
 import {
   alboriaStatus,
   checkForUpdate,
@@ -364,8 +365,10 @@ const renderPlay = () => {
   // The update button and moving the saves wait while the game runs, so they follow its state too.
   renderUpdate();
   renderSavesFolder();
-  // Alboria's state follows the account, which account.js changes and then draws Play again.
+  // Alboria's state and the friends list follow the account, which account.js changes and then
+  // draws Play again.
   renderService();
+  friends?.sync();
   const status = document.getElementById("status-game");
   status.dataset.state = isInstalled() ? "ok" : "warn";
   let detail = "status.noFolder";
@@ -626,42 +629,50 @@ const launchErrorMessage = (error) => {
  * The main button either opens the Installation view (no game files yet) or starts the game. The
  * game's output fills the log panel; its end re-enables the button.
  */
+/**
+ * Starts the game as the Play button does, installing the runtime first when needed. With
+ * `joinCode` (a friend's room or an invitation's, friends.js) the game joins that room once its
+ * main menu is up; the result is whether the game started.
+ */
+const startGame = async (joinCode = null) => {
+  if (!isInstalled()) {
+    showView("install");
+    document.getElementById("pick-game").focus();
+    return false;
+  }
+  // Building from the kit takes minutes: the button then only builds, and turns to Play once the
+  // build is done, so the game does not start while the player may have stepped away. A project
+  // build installs in a second, and Play goes on to start the game.
+  if (runtimeNeedsInstall() && state.runtime.source === "kit") {
+    await runRuntimeInstall();
+    return false;
+  }
+  document.getElementById("game-log-body").replaceChildren();
+  pendingLogLines = [];
+  state.game = "starting";
+  renderPlay();
+  if (runtimeNeedsInstall() && !(await runRuntimeInstall())) {
+    state.game = "idle";
+    renderPlay();
+    return false;
+  }
+  setLogState("log.starting");
+  renderPlay();
+  try {
+    await launchGame(joinCode);
+    state.game = "running";
+    setLogState("log.running");
+  } catch (error) {
+    state.game = "idle";
+    const [key, vars] = launchErrorMessage(error);
+    setLogState(key, "error", vars);
+  }
+  renderPlay();
+  return state.game === "running";
+};
+
 const setupLaunch = () => {
-  document.getElementById("launch").addEventListener("click", async () => {
-    if (!isInstalled()) {
-      showView("install");
-      document.getElementById("pick-game").focus();
-      return;
-    }
-    // Building from the kit takes minutes: the button then only builds, and turns to Play once the
-    // build is done, so the game does not start while the player may have stepped away. A project
-    // build installs in a second, and Play goes on to start the game.
-    if (runtimeNeedsInstall() && state.runtime.source === "kit") {
-      await runRuntimeInstall();
-      return;
-    }
-    document.getElementById("game-log-body").replaceChildren();
-    pendingLogLines = [];
-    state.game = "starting";
-    renderPlay();
-    if (runtimeNeedsInstall() && !(await runRuntimeInstall())) {
-      state.game = "idle";
-      renderPlay();
-      return;
-    }
-    setLogState("log.starting");
-    renderPlay();
-    try {
-      await launchGame();
-      state.game = "running";
-      setLogState("log.running");
-    } catch (error) {
-      state.game = "idle";
-      const [key, vars] = launchErrorMessage(error);
-      setLogState(key, "error", vars);
-    }
-    renderPlay();
-  });
+  document.getElementById("launch").addEventListener("click", () => startGame());
 
   onGameOutput((output) => {
     // Prepare shaders reports its progress on the card, not in the game log.
@@ -1383,6 +1394,9 @@ const setupUpdates = () => {
 
 // --- Alboria's notices and the state of the service --------------------------------------------
 
+/** The friends list (friendsPanel.js), once wired; Play draws it with the account. */
+let friends = null;
+
 /** Gears of War 3's title ID: the game whose own notice and state the launcher asks for. */
 const SERVICE_TITLE_ID = "4D5308AB";
 /** How often the service's state is read again while the launcher is in front. */
@@ -1980,6 +1994,17 @@ if (!state.achievements) refreshAchievements();
 await refreshAndRenderSaves();
 setupUpdates();
 setupService();
+friends = setupFriends({
+  state,
+  t,
+  toast,
+  inFront: launcherInFront,
+  serviceBlock: () =>
+    state.account === "alboria" && state.service !== undefined ? serviceView(state.service, state.launcherVersion).block : null,
+  startGame,
+  formatWhen: formatDateTime,
+});
+friends.sync();
 setupReleaseNotes();
 // Running the runtime to list the cards takes a moment: the rest of the window is ready first.
 refreshGpus();

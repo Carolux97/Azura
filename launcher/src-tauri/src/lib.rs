@@ -303,14 +303,26 @@ async fn show_build_log(app: tauri::AppHandle, path: String) -> Result<(), Strin
 
 /// Starts the game with the chosen saves folder. Its output and its end arrive as `game-output`
 /// and `game-exit` events.
+/// With `join_code` (a friend's room or an invitation's), the game joins that room once its main
+/// menu is up (`alboria_join_code`, script_hooks.cpp).
 #[tauri::command]
 async fn launch_game(
     app: tauri::AppHandle,
     process: tauri::State<'_, GameProcess>,
+    join_code: Option<String>,
 ) -> Result<(), LaunchError> {
-    start_runtime(app.clone(), &process, &[])?;
-    // Minimized, the launcher's window is not drawn while the game runs; it comes back when the
-    // game ends (GameEvents::exit in runtime.rs).
+    match join_code {
+        Some(code) if !room_code_valid(&code) => Err(LaunchError::StartFailed(format!("not a room code: {code}"))),
+        Some(code) => play(app, &process, &[&format!("--alboria_join_code={code}")]),
+        None => play(app, &process, &[]),
+    }
+}
+
+/// Starts the game with `extra` arguments, then minimizes the launcher when the player asked for
+/// that: minimized, its window is not drawn while the game runs, and it comes back when the game
+/// ends (GameEvents::exit in runtime.rs).
+fn play(app: tauri::AppHandle, process: &GameProcess, extra: &[&str]) -> Result<(), LaunchError> {
+    start_runtime(app.clone(), process, extra)?;
     let minimize = settings_paths(&app).and_then(|paths| paths.load()).is_ok_and(|settings| settings.minimize_while_playing);
     if minimize {
         if let Some(window) = app.get_webview_window("main") {
@@ -318,6 +330,130 @@ async fn launch_game(
         }
     }
     Ok(())
+}
+
+/// The file in the saves folder (the runtime's user data) where the launcher leaves a room code
+/// for a running game to join; the runtime reads and deletes it (script_hooks.cpp).
+const JOIN_REQUEST_FILE: &str = "alboria-join-request.txt";
+
+/// Whether `code` looks like a room code: 8 to 16 letters, digits and dashes.
+fn room_code_valid(code: &str) -> bool {
+    (8..=16).contains(&code.len()) && code.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+/// Asks the running game to join the room `code` (a friend's room, or an invitation's, from
+/// Alboria): the code is left in the saves folder, and the game joins once it is at its main menu.
+/// Joining is the game's own: the launcher takes no place in the room. With the game closed,
+/// launch_game takes the code instead.
+#[tauri::command]
+async fn join_room(app: tauri::AppHandle, process: tauri::State<'_, GameProcess>, code: String) -> Result<(), LaunchError> {
+    if !room_code_valid(&code) {
+        return Err(LaunchError::StartFailed(format!("not a room code: {code}")));
+    }
+    if !process.is_running() {
+        return Err(LaunchError::StartFailed("the game is not running".into()));
+    }
+    let saves = settings_paths(&app).and_then(|paths| paths.saves_folder()).map_err(LaunchError::SavesUnavailable)?;
+    // Written whole and then renamed, so the game never reads half a code.
+    let partial = saves.join(format!("{JOIN_REQUEST_FILE}.part"));
+    std::fs::write(&partial, &code)
+        .and_then(|()| std::fs::rename(&partial, saves.join(JOIN_REQUEST_FILE)))
+        .map_err(|e| LaunchError::StartFailed(e.to_string()))
+}
+
+/// The friends' requests the interface may send (docs/alboria-relay.md, section 4.7), and the
+/// report one: any other path is refused, so the interface reaches nothing else of the account.
+const FRIENDS_PATHS: &[&str] = &[
+    "/v1/friends",
+    "/v1/friends/request",
+    "/v1/friends/accept",
+    "/v1/friends/decline",
+    "/v1/friends/cancel",
+    "/v1/friends/remove",
+    "/v1/friends/favourite",
+    "/v1/friends/block",
+    "/v1/friends/unblock",
+    "/v1/friends/room",
+    "/v1/invitations",
+    "/v1/invitations/room",
+    "/v1/invitations/decline",
+    "/v1/reports",
+];
+
+/// A friends' request (`path` one of FRIENDS_PATHS) of the signed-in account; the service's answer.
+#[tauri::command]
+async fn alboria_friends(
+    app: tauri::AppHandle,
+    alboria: tauri::State<'_, Alboria>,
+    path: String,
+    body: serde_json::Value,
+) -> Result<serde_json::Value, AlboriaError> {
+    if !FRIENDS_PATHS.contains(&path.as_str()) {
+        return Err(AlboriaError::local_error("bad_request", format!("not a friends request: {path}")));
+    }
+    alboria_account_request(&app, &alboria, &path, body).await
+}
+
+/// The events channel's task: which run is current, so a stopped one ends and a new one starts clean.
+#[derive(Default)]
+struct AlboriaEvents {
+    run: std::sync::atomic::AtomicU64,
+}
+
+/// The event the interface hears each service event on (`{ event, data }`), and whether the
+/// channel is open (`{ connected }`).
+const SERVICE_EVENT: &str = "alboria-event";
+const SERVICE_EVENTS_STATE: &str = "alboria-events-state";
+
+/// Opens Alboria's events channel and keeps it open (section 4.7): each event goes to the interface
+/// as `alboria-event`. When it closes (the token ran out, the network dropped, the service
+/// restarted) it opens again, waiting longer each time it fails, up to a minute. Starting again
+/// replaces the running one; alboria_events_stop ends it.
+#[tauri::command]
+fn alboria_events_start(app: tauri::AppHandle, events: tauri::State<'_, AlboriaEvents>) {
+    use std::sync::atomic::Ordering;
+    let run = events.run.fetch_add(1, Ordering::SeqCst) + 1;
+    tauri::async_runtime::spawn(async move {
+        let current = || app.state::<AlboriaEvents>().run.load(Ordering::SeqCst) == run;
+        let mut wait = std::time::Duration::from_secs(2);
+        while current() {
+            let opened = match (alboria_identity(&app), alboria_gamertag(&app)) {
+                (Ok(identity), Ok(gamertag)) => app.state::<Alboria>().open_events(&identity, &gamertag).await,
+                (Err(error), _) | (_, Err(error)) => Err(error),
+            };
+            match opened {
+                Ok(mut response) => {
+                    let _ = app.emit(SERVICE_EVENTS_STATE, serde_json::json!({ "connected": true }));
+                    wait = std::time::Duration::from_secs(2);
+                    let mut stream = alboria::EventStream::default();
+                    while current() {
+                        match response.chunk().await {
+                            Ok(Some(chunk)) => {
+                                for event in stream.push(&chunk) {
+                                    let _ = app.emit(SERVICE_EVENT, event);
+                                }
+                            }
+                            _ => break,
+                        }
+                    }
+                    let _ = app.emit(SERVICE_EVENTS_STATE, serde_json::json!({ "connected": false }));
+                }
+                Err(error) => {
+                    log::info!("Alboria's events channel did not open: {} {}", error.error, error.message);
+                    wait = (wait * 2).min(std::time::Duration::from_secs(60));
+                }
+            }
+            if current() {
+                tokio::time::sleep(wait).await;
+            }
+        }
+    });
+}
+
+/// Ends the events channel (the player signed out or chose a local account).
+#[tauri::command]
+fn alboria_events_stop(events: tauri::State<'_, AlboriaEvents>) {
+    events.run.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 }
 
 /// Prepares the stored shaders before playing: starts the runtime in a window with
@@ -792,6 +928,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(GameProcess::default())
         .manage(Alboria::default())
+        .manage(AlboriaEvents::default())
         .invoke_handler(tauri::generate_handler![
             pick_game_folder,
             pick_game_image,
@@ -837,7 +974,11 @@ pub fn run() {
             alboria_delete_code,
             alboria_delete,
             open_alboria_site,
-            open_notice_link
+            open_notice_link,
+            join_room,
+            alboria_friends,
+            alboria_events_start,
+            alboria_events_stop
         ])
         .setup(|app| {
             // Controllers navigate the interface (gamepad.rs).
@@ -862,7 +1003,18 @@ pub fn run() {
 
 #[cfg(test)]
 mod notice_link_tests {
-    use super::notice_link_allowed;
+    use super::{notice_link_allowed, room_code_valid, FRIENDS_PATHS};
+
+    #[test]
+    fn only_room_codes_and_friends_paths_pass() {
+        assert!(room_code_valid("K7QM-2XPA"));
+        assert!(room_code_valid("K7QM2XPA"));
+        assert!(!room_code_valid("K7Q"));
+        assert!(!room_code_valid("K7QM 2XPA; rm"));
+        assert!(!room_code_valid("--alboria_api_url=x"));
+        assert!(FRIENDS_PATHS.contains(&"/v1/friends/room"));
+        assert!(!FRIENDS_PATHS.contains(&"/v1/account/delete"));
+    }
 
     #[test]
     fn only_https_and_mailto_links_open() {
