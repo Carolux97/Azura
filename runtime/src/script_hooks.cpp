@@ -3145,6 +3145,8 @@ constexpr const char* kJoinRequestFile = "alboria-join-request.txt";
 constexpr uint32_t kJoinRequestPollFrames = 60;
 std::mutex g_launcher_join_mutex;
 std::string g_launcher_join_code;
+// The room the launcher's join went to, until the game is connected in it (or the join failed).
+std::string g_launcher_joining;
 std::atomic<bool> g_launcher_join_cvar_read{false};
 std::atomic<uint32_t> g_launcher_join_polls{0};
 
@@ -3174,21 +3176,38 @@ void ReadLauncherJoinRequest() {
   g_launcher_join_code = code;
 }
 
-// On a player input frame (`ctx`): joins the room the launcher asked for, once the main menu is up,
-// the start-up party exists and Alboria answers.
+// On a player input frame (`ctx`): joins the room the launcher asked for, in Join by code's two steps.
+// First, once the main menu is up and the start-up party's own room is connected, the game moves to
+// the room (joining while the start-up party is still being made leaves the game hosting that party
+// inside the room it joined). Then, once it is connected there, the System Link browser opens and
+// finds the host's party, as Join by code does when its room connects.
 void JoinRoomFromLauncher(uint8_t* base) {
   namespace alboria = rex::system::xam::alboria;
   ReadLauncherJoinRequest();
   std::string code;
   {
     std::lock_guard lock(g_launcher_join_mutex);
+    if (!g_launcher_joining.empty()) {
+      const alboria::Status status = alboria::GetStatus();
+      if (status.state == alboria::State::kConnected && alboria::NormalizeCode(status.code) == g_launcher_joining) {
+        g_launcher_joining.clear();
+        REXLOG_INFO("[Azura online] In the room the launcher asked for: looking for the host's party");
+        azura::script::JoinSystemLinkPartyInRoom();
+      } else if (status.state == alboria::State::kFailed || status.state == alboria::State::kOffline) {
+        REXLOG_WARN("[Azura online] Joining the room the launcher asked for failed ({})", status.error);
+        g_launcher_joining.clear();
+      }
+      return;
+    }
     if (g_launcher_join_code.empty()) return;
     if (!InMainMenu(base) || g_pending_startup_party.load(std::memory_order_relaxed) != kBootNone ||
-        !alboria::ServiceReachable()) {
+        g_creating_startup_party.load(std::memory_order_relaxed) || !alboria::ServiceReachable() ||
+        !alboria::Connected()) {
       return;
     }
     code = std::move(g_launcher_join_code);
     g_launcher_join_code.clear();
+    g_launcher_joining = code;
   }
   REXLOG_INFO("[Azura online] Joining the room the launcher asked for");
   alboria::JoinGame(code);
