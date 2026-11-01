@@ -32,6 +32,7 @@
 #include "dlc/dlc_achievements.h"
 #include "dlc/raams_shadow_patch.h"
 #include "achievement_toast.h"
+#include "alboria_notices.h"
 #include "alboria_overlay.h"
 #include "input/mouse_look.h"
 #include "input/overlay_input.h"
@@ -258,19 +259,30 @@ class AzuraApp : public rex::ReXApp {
     azura::script::SetJoinByCodeHandler([this] { app_context().CallInUIThread([this] { OpenJoinByCode(); }); });
     // The Alboria overlay, with online play on: the bound key (F1 unless the launcher set another),
     // RB while holding Back on a controller, and the game opening the Guide's friends or invite screens.
+    // Alboria's notices show over the game too; an invitation's is accepted with RT while holding
+    // Back, or Shift with the overlay's key.
     if (REXCVAR_GET(network_mode) == "online") {
       auto* input = runtime() ? static_cast<rex::input::InputSystem*>(runtime()->input_system()) : nullptr;
-      azura::input::InstallOverlayInput(input, [this] {
-        app_context().CallInUIThread([this] { OpenAlboriaOverlay(azura::AlboriaOverlay::Page::kFriends); });
-      });
+      if (dialog_drawer_ && input) {
+        alboria_notices_ = new azura::AlboriaNotices(dialog_drawer_, input, azura::input::InstalledPlayerAssignment(),
+                                                     REXCVAR_GET(user_language), title_font_, body_font_,
+                                                     &alboria_notices_);
+      }
+      azura::input::InstallOverlayInput(
+          input, [this] { app_context().CallInUIThread([this] { OpenAlboriaOverlay(OverlayPageForNotice()); }); },
+          [this] {
+            app_context().CallInUIThread([this] {
+              if (alboria_notices_) alboria_notices_->AcceptShown();
+            });
+          });
       rex::system::xam::alboria::SetOverlayHandler([this](azura::AlboriaOverlay::Page page) {
         app_context().CallInUIThread([this, page] { OpenAlboriaOverlay(page); });
       });
       rex::ui::RegisterBind("bind_alboria_overlay", "F1", "Open or close the Alboria overlay", [this] {
         if (alboria_overlay_) {
           alboria_overlay_->RequestClose();
-        } else {
-          OpenAlboriaOverlay(azura::AlboriaOverlay::Page::kFriends);
+        } else if (!(ImGui::GetIO().KeyShift && alboria_notices_ && alboria_notices_->AcceptShown())) {
+          OpenAlboriaOverlay(OverlayPageForNotice());
         }
       });
     }
@@ -430,7 +442,7 @@ class AzuraApp : public rex::ReXApp {
     rex::ui::UnregisterBind("bind_alboria_overlay");
     rex::system::xam::alboria::SetOverlayHandler(nullptr);
     azura::input::InstallOverlayInput(runtime() ? static_cast<rex::input::InputSystem*>(runtime()->input_system()) : nullptr,
-                                      nullptr);
+                                      nullptr, nullptr);
     rex::input::mnk::SetMenuKeysQuery(nullptr);
     rex::input::SetPadLayoutQuery(nullptr);
     azura::input::InstallMouseLook(nullptr);
@@ -445,6 +457,8 @@ class AzuraApp : public rex::ReXApp {
     join_by_code_menu_ = nullptr;
     delete alboria_overlay_;
     alboria_overlay_ = nullptr;
+    delete alboria_notices_;
+    alboria_notices_ = nullptr;
     delete local_coop_menu_;
     local_coop_menu_ = nullptr;
     delete connection_menu_;
@@ -498,6 +512,11 @@ class AzuraApp : public rex::ReXApp {
     }
   }
 
+  // The overlay's page for the notice on screen (Invitations for an invitation), else Friends.
+  azura::AlboriaOverlay::Page OverlayPageForNotice() const {
+    return alboria_notices_ ? alboria_notices_->OverlayPage() : azura::AlboriaOverlay::Page::kFriends;
+  }
+
   // Opens the Alboria overlay on `page`, unless it or another of our screens is open. In a match
   // the game's pause menu opens under it first. On the UI thread.
   void OpenAlboriaOverlay(azura::AlboriaOverlay::Page page) {
@@ -526,6 +545,9 @@ class AzuraApp : public rex::ReXApp {
   // The Alboria overlay while it is open; deletes itself when it closes, clearing this pointer.
   // Accessed on the UI thread only.
   azura::AlboriaOverlay* alboria_overlay_ = nullptr;
+  // Alboria's notices over the game, with online play on; lives as long as the app (deleted at
+  // shutdown, which clears this pointer). Accessed on the UI thread only.
+  azura::AlboriaNotices* alboria_notices_ = nullptr;
   // The Local co-op menu while it is open; deletes itself when it closes, clearing this pointer.
   // Accessed on the UI thread only.
   azura::LocalCoopMenu* local_coop_menu_ = nullptr;

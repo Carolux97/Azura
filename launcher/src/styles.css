@@ -677,13 +677,15 @@ code, kbd {
 .friends-add .path { flex: 1; padding: 7px 12px; font-size: 16px; }
 .friends-section { margin: 12px 4px 6px; font-family: var(--font-alb); font-weight: 700; font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--night-soft); }
 .friend { display: grid; gap: 6px; margin-bottom: 8px; }
-.friend-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; background: #fff; border-radius: 14px; }
+/* When the panel is too narrow for the name beside the pill and the buttons, the buttons go to a
+   second line, on the right, instead of squeezing the name into a column of single letters. */
+.friend-row { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px 12px; padding: 10px 12px; background: #fff; border-radius: 14px; }
 .friend-row::before { content: ""; flex: none; width: 12px; height: 12px; border-radius: 50%; background: #b8c4d8; }
 .friend-row[data-state="online"]::before { background: var(--ok); }
 .friend-row[data-state="playing"]::before { background: var(--sky-deep); box-shadow: 0 0 0 3px rgba(90, 169, 240, 0.25); }
 /* A request waiting for an answer. */
 .friends-body > .friend-row::before { background: var(--sun); animation: status-progress 1.6s ease-in-out infinite; }
-.friend-text { flex: 1; min-width: 0; }
+.friend-text { flex: 1 1 150px; min-width: 0; }
 .friend-text strong { display: block; font-size: 17px; overflow-wrap: anywhere; }
 .friend-text small { display: block; font-size: 14px; color: var(--night-soft); }
 .friend-pill { flex: none; padding: 3px 10px; border: 1px solid #b8c4d8; border-radius: 999px; font-size: 12px; letter-spacing: 0.04em; color: var(--night-soft); }
@@ -962,6 +964,8 @@ input[type="range"] { width: 100%; accent-color: var(--imulsion); }
 .action-card-info { flex: 1 1 220px; min-width: 0; }
 .action-card-info strong { display: block; font-family: var(--font-ui); font-weight: 600; font-size: 19px; letter-spacing: 0.02em; color: var(--text); }
 .action-card-info .help { margin: 0; font-size: 14px; }
+/* A long label (a language with long words) wraps inside the card instead of running past its edge. */
+.action-card > .btn { max-width: 100%; white-space: normal; text-align: center; }
 
 .backups-list { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
 .backups-list > .help { margin: 0; }
