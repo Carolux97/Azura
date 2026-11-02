@@ -561,5 +561,13 @@
     "apply": "Use this server",
     "now": "Now: {url}",
     "badUrl": "Type an http or https address, like http://192.168.1.20:8080"
+  },
+  "world": {
+    "arrival": "The Arrival Lookout",
+    "plaza": "The Ring Plaza",
+    "gate": "The Gate",
+    "vault": "The Vault of Rooms",
+    "observatory": "The Observatory",
+    "archive": "The Archive"
   }
 }

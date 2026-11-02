@@ -154,8 +154,9 @@
           </div>
           <!-- What this launcher version brings, once after it is installed or updated (from
                launcher/CHANGELOG.md); renderReleaseNotes() fills it. -->
-          <div class="panel is-alboria release-notes" id="release-notes" hidden>
-            <img class="alborian" src="alborians/greeter.svg" alt="" width="104" height="115">
+          <div class="panel is-alboria place-gate release-notes" id="release-notes" hidden>
+            <span class="alb-place" data-i18n="world.gate"></span>
+            <img class="alborian" src="world/greeter.webp" alt="" width="104" height="107">
             <div class="release-notes-text">
               <h2 class="tagline" id="release-notes-title"></h2>
               <ul class="release-notes-list" id="release-notes-list"></ul>
@@ -165,7 +166,7 @@
         </div>
 
         <!-- The game's parts on the left; Alboria (its state and the friends) on the right while
-             the player has an Alboria account. One column in narrow windows, Alboria first. -->
+             the player has an Alboria account. One column in narrow windows, the game's details first. -->
         <div class="play-grid">
           <div class="play-main">
             <!-- An Alboria account made while codes were off, once codes are back: verify the email
@@ -259,8 +260,9 @@
           <div class="play-side">
             <!-- Why online rooms are out of reach: Alboria unreachable, in maintenance, the game's
                  online play switched off, or a launcher too old for it (renderService). -->
-            <div class="panel is-alboria service-panel" id="service-panel" hidden>
-              <img class="alborian" id="service-panel-art" src="alborians/night-owl.svg" alt="" width="120" height="133">
+            <div class="panel is-alboria place-observatory service-panel" id="service-panel" hidden>
+              <span class="alb-place" id="service-panel-place" data-i18n="world.observatory"></span>
+              <img class="alborian" id="service-panel-art" src="world/night-owl.webp" alt="" width="120" height="124">
               <div class="service-panel-text">
                 <p class="tagline">Alboria</p>
                 <h2 class="panel-title" id="service-panel-title"></h2>
@@ -275,8 +277,9 @@
 
             <!-- Friends on Alboria: requests, invitations, and each friend with Join and their menu
                  (friendsPanel.js). Only with an Alboria account. The Keeper watches over it. -->
-            <div class="panel is-alboria friends-panel" id="friends-panel" hidden>
-              <img class="alborian keeper" src="alborians/keeper.svg" alt="" width="110" height="122">
+            <div class="panel is-alboria place-arrival friends-panel" id="friends-panel" hidden>
+              <span class="alb-place" data-i18n="world.arrival"></span>
+              <img class="alborian keeper" src="world/keeper.webp" alt="" width="110" height="128">
               <div class="friends-head">
                 <p class="tagline">Alboria</p>
                 <h2 class="panel-title"><span data-i18n="friends.title"></span> <span class="friends-count" id="friends-count"></span></h2>
@@ -533,14 +536,15 @@
             <p class="eyebrow">Alboria</p>
             <h1 id="account-title" class="page-title" data-i18n="account.title"></h1>
           </div>
-          <button class="btn alboria-open" type="button" data-alboria-site><svg viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="11" fill="#ffe07a" stroke="#1e2a4f" stroke-width="2.5"/><ellipse cx="20" cy="20" rx="18" ry="5.5" fill="none" stroke="#1e2a4f" stroke-width="3" transform="rotate(-18 20 20)"/></svg><span>alboria.org</span></button>
+          <button class="btn alboria-open" type="button" data-alboria-site><svg viewBox="0 0 40 40" aria-hidden="true"><defs><clipPath id="alboria-open-front"><rect x="-5" y="20" width="50" height="25"/></clipPath></defs><ellipse cx="20" cy="20" rx="19" ry="6" fill="none" stroke="#5aa9f0" stroke-width="3" transform="rotate(-18 20 20)"/><circle cx="20" cy="20" r="12" fill="#ffe07a" stroke="#1e2a4f" stroke-width="3"/><g transform="rotate(-18 20 20)" clip-path="url(#alboria-open-front)"><ellipse cx="20" cy="20" rx="19" ry="6" fill="none" stroke="#5aa9f0" stroke-width="3"/></g></svg><span>alboria.org</span></button>
         </header>
 
         <!-- Signed in to Alboria. -->
         <div id="account-alboria" hidden>
           <div class="columns account-grid">
-            <div class="panel is-alboria account-identity">
-              <img class="alborian greeter" src="alborians/greeter.svg" alt="" width="150" height="166">
+            <div class="panel is-alboria place-plaza account-identity">
+              <span class="alb-place" data-i18n="world.plaza"></span>
+              <img class="alborian greeter" src="world/greeter.webp" alt="" width="150" height="155">
               <div class="panel-head-row">
                 <div>
                   <h2 class="panel-title" data-i18n="account.identityTitle"></h2>
@@ -578,7 +582,8 @@
               </div>
             </div>
 
-            <div class="panel is-alboria" id="account-devices-panel">
+            <div class="panel is-alboria place-vault" id="account-devices-panel">
+              <span class="alb-place" data-i18n="world.vault"></span>
               <h2 class="panel-title" data-i18n="account.devicesTitle"></h2>
               <p class="help" data-i18n="account.devicesHelp"></p>
               <div class="device-list" id="account-devices"></div>
@@ -586,7 +591,8 @@
           </div>
 
           <!-- The key of the Alboria overlay in the game (bind_alboria_overlay, settings.rs). -->
-          <div class="panel is-alboria data-panel">
+          <div class="panel is-alboria place-plaza data-panel">
+            <span class="alb-place" data-i18n="world.plaza"></span>
             <div>
               <h2 class="panel-title" data-i18n="account.overlayTitle"></h2>
               <p class="help" data-i18n="account.overlayHelp"></p>
@@ -594,7 +600,8 @@
             <select id="overlay-key" data-i18n-attr="aria-label:account.overlayKey"></select>
           </div>
 
-          <div class="panel is-alboria data-panel">
+          <div class="panel is-alboria place-archive data-panel">
+            <span class="alb-place" data-i18n="world.archive"></span>
             <div>
               <h2 class="panel-title" data-i18n="account.dataTitle"></h2>
               <p class="help" data-i18n="account.dataHelp"></p>
@@ -609,8 +616,9 @@
 
         <!-- A local account: no Alboria. -->
         <div id="account-local" hidden>
-          <div class="panel is-alboria account-local">
-            <img class="alborian" src="alborians/greeter.svg" alt="" width="150" height="166">
+          <div class="panel is-alboria place-plaza account-local">
+            <span class="alb-place" data-i18n="world.plaza"></span>
+            <img class="alborian" src="world/greeter.webp" alt="" width="150" height="155">
             <div class="account-local-text">
               <div class="panel-head-row">
                 <div>
@@ -651,7 +659,8 @@
         <p class="lede" data-i18n="welcome.lede"></p>
       </header>
       <div class="welcome-wrap">
-      <div class="welcome-box panel is-alboria" role="dialog" aria-modal="true" aria-labelledby="welcome-heading">
+      <div class="welcome-box panel is-alboria place-gate" role="dialog" aria-modal="true" aria-labelledby="welcome-heading">
+        <span class="alb-place" data-i18n="world.gate"></span>
       <div data-step="choose">
         <p class="tagline">Alboria</p>
         <h2 class="panel-title" data-i18n="welcome.chooseTitle"></h2>
@@ -758,8 +767,8 @@
           <span data-bubble="code" data-i18n="welcome.bubbleCode"></span>
           <span data-bubble="done" data-i18n="welcome.bubbleDone"></span>
         </p>
-        <img class="alborian" data-who="greeter" src="alborians/greeter.svg" alt="" width="260" height="288">
-        <img class="alborian" data-who="courier" src="alborians/courier.svg" alt="" width="260" height="288">
+        <img class="alborian" data-who="greeter" src="world/greeter.webp" alt="" width="260" height="268">
+        <img class="alborian" data-who="courier" src="world/courier.webp" alt="" width="260" height="268">
       </div>
       </div>
     </div>
