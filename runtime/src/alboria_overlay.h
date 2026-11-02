@@ -1,6 +1,7 @@
 // The Alboria overlay: Alboria's screen over any game, as the Guide was Xbox Live's over the
-// console's games. It belongs to the service, not to the game, so it has Alboria's look (the
-// launcher's light panels: paper, navy, sky and sun) instead of the game's steel.
+// console's games. It belongs to the service, not to the game, so it has Alboria's look, as on its
+// website (alboria_style.h): pearl glass in a carved golden frame, the Ring Plaza painted in its
+// head, carved stone buttons with their seals, instead of the game's steel.
 //
 // Three pages:
 // - Friends: Add friend first, which opens a screen to type a Gamertag#tag (with an on-screen
@@ -32,6 +33,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 
 #include <rex/input/device.h>
@@ -45,6 +47,9 @@ struct ImFont;
 
 namespace rex::input {
 class InputSystem;
+}
+namespace rex::ui {
+class ImmediateTexture;
 }
 
 namespace azura {
@@ -60,9 +65,11 @@ class AlboriaOverlay : public rex::ui::ImGuiDialog {
   // `owner` is cleared when the overlay closes and deletes itself. `language` is the Xbox 360
   // language ID of the user_language setting. `join_by_code` opens the Join by code screen once the
   // overlay has closed. The fonts may be null (ImGui's default is used).
+  // `header` is the painting of Alboria's Ring Plaza its head shows (null: none).
   AlboriaOverlay(rex::ui::ImGuiDrawer* drawer, rex::input::InputSystem* input,
                  input::PlayerAssignment* assignment, uint32_t language, Page page, ImFont* title_font,
-                 ImFont* body_font, std::function<void()> join_by_code, AlboriaOverlay** owner);
+                 ImFont* body_font, rex::ui::ImmediateTexture* header, std::function<void()> join_by_code,
+                 AlboriaOverlay** owner);
 
   // Closes it, as B does (the opening key pressed again).
   void RequestClose() { closing_ = true; }
@@ -107,6 +114,7 @@ class AlboriaOverlay : public rex::ui::ImGuiDialog {
   Page page_;
   ImFont* title_font_;
   ImFont* body_font_;
+  rex::ui::ImmediateTexture* header_;
   std::function<void()> join_by_code_;
   AlboriaOverlay** owner_;
   Clock::time_point opened_;
@@ -123,6 +131,8 @@ class AlboriaOverlay : public rex::ui::ImGuiDialog {
   int key_row_ = 1;
   int key_column_ = 0;
   bool closing_ = false;
+  // When the closing animation started, once closing_ is set.
+  std::optional<Clock::time_point> closing_since_;
   // After closing: open the Join by code screen.
   bool open_join_by_code_ = false;
   // The result of the last action, written by the SDK's worker threads, which may report after the
