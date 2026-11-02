@@ -561,5 +561,13 @@
     "apply": "Ezt a szervert használom",
     "now": "Jelenleg: {url}",
     "badUrl": "Írj be egy http vagy https címet, pl. http://192.168.1.20:8080"
+  },
+  "world": {
+    "arrival": "Az Érkezés Kilátója",
+    "plaza": "A Gyűrű Tere",
+    "gate": "A Kapu",
+    "vault": "A Szobák Páncélterme",
+    "observatory": "A Csillagvizsgáló",
+    "archive": "Az Archívum"
   }
 }

@@ -561,5 +561,13 @@
     "apply": "Usa questo server",
     "now": "Ora: {url}",
     "badUrl": "Scrivi un indirizzo http o https, come http://192.168.1.20:8080"
+  },
+  "world": {
+    "arrival": "Il Belvedere dell'Arrivo",
+    "plaza": "La Piazza dell'Anello",
+    "gate": "Il Portale",
+    "vault": "La Volta delle Stanze",
+    "observatory": "L'Osservatorio",
+    "archive": "L'Archivio"
   }
 }

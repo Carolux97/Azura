@@ -561,5 +561,13 @@
     "apply": "Použít tento server",
     "now": "Nyní: {url}",
     "badUrl": "Zadejte adresu http nebo https, např. http://192.168.1.20:8080"
+  },
+  "world": {
+    "arrival": "Vyhlídka Příchodu",
+    "plaza": "Náměstí Prstence",
+    "gate": "Brána",
+    "vault": "Trezor Místností",
+    "observatory": "Observatoř",
+    "archive": "Archiv"
   }
 }

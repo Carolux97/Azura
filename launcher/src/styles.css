@@ -3,8 +3,8 @@
  *
  * Two looks share the window. The game's pages are dark steel cards lit by imulsion gold (the glow
  * of the Lambent in Gears of War 3), with crimson only for warnings and bone white for text.
- * Everything online is Alboria's: light sky-blue panels in its rounded type, often with one of its
- * Alborians (alborians/, from alboria-web). The launcher is always dark: it mirrors the game's mood,
+ * Everything online is Alboria's, as on its website: places of its planet painted behind pearl glass,
+ * carved buttons and its rounded type, often with one of its Alborians (world/, from alboria-web). The launcher is always dark: it mirrors the game's mood,
  * so it does not follow the system light theme.
  *
  * The window opens at 1200 × 760 and can shrink to 960 × 620 (tauri.conf.json): pages have two
@@ -60,6 +60,12 @@
   /* Alboria's rounded type, as on alboria.org: the system's rounded face (SF Pro Rounded on
      macOS), else the first rounded font installed, else the system's own. Nothing is bundled. */
   --font-alb: ui-rounded, "SF Pro Rounded", "Arial Rounded MT Bold", "Nunito", "Varela Round", system-ui, var(--font-cjk), sans-serif;
+  /* Alboria's ink, and its ring rune (the logo in outline, in the official logo's proportions) in the
+     colours of its seals. */
+  --ink-alb: #18223f;
+  --rune-ring-light: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22 fill=%22none%22 stroke=%22%23d9f1ff%22 stroke-width=%222.2%22 stroke-linecap=%22round%22%3E%3Cdefs%3E%3CclipPath id=%22b%22%3E%3Cpath clip-rule=%22evenodd%22 d=%22M-4 -4H36V16H-4Z M16 7.79a8.21 8.21 0 1 0 0.01 0Z%22/%3E%3C/clipPath%3E%3CclipPath id=%22f%22%3E%3Crect x=%22-4%22 y=%2216%22 width=%2240%22 height=%2220%22/%3E%3C/clipPath%3E%3C/defs%3E%3Cg transform=%22rotate(-18 16 16)%22%3E%3Cellipse cx=%2216%22 cy=%2216%22 rx=%2213%22 ry=%224.1%22 clip-path=%22url(%23b)%22/%3E%3C/g%3E%3Ccircle cx=%2216%22 cy=%2216%22 r=%228.21%22/%3E%3Cg transform=%22rotate(-18 16 16)%22%3E%3Cellipse cx=%2216%22 cy=%2216%22 rx=%2213%22 ry=%224.1%22 clip-path=%22url(%23f)%22/%3E%3C/g%3E%3C/svg%3E");
+  --rune-ring-warm: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22 fill=%22none%22 stroke=%22%23fff4c2%22 stroke-width=%222.2%22 stroke-linecap=%22round%22%3E%3Cdefs%3E%3CclipPath id=%22b%22%3E%3Cpath clip-rule=%22evenodd%22 d=%22M-4 -4H36V16H-4Z M16 7.79a8.21 8.21 0 1 0 0.01 0Z%22/%3E%3C/clipPath%3E%3CclipPath id=%22f%22%3E%3Crect x=%22-4%22 y=%2216%22 width=%2240%22 height=%2220%22/%3E%3C/clipPath%3E%3C/defs%3E%3Cg transform=%22rotate(-18 16 16)%22%3E%3Cellipse cx=%2216%22 cy=%2216%22 rx=%2213%22 ry=%224.1%22 clip-path=%22url(%23b)%22/%3E%3C/g%3E%3Ccircle cx=%2216%22 cy=%2216%22 r=%228.21%22/%3E%3Cg transform=%22rotate(-18 16 16)%22%3E%3Cellipse cx=%2216%22 cy=%2216%22 rx=%2213%22 ry=%224.1%22 clip-path=%22url(%23f)%22/%3E%3C/g%3E%3C/svg%3E");
+  --rune-ring-gold: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22 fill=%22none%22 stroke=%22%23c98a10%22 stroke-width=%222.2%22 stroke-linecap=%22round%22%3E%3Cdefs%3E%3CclipPath id=%22b%22%3E%3Cpath clip-rule=%22evenodd%22 d=%22M-4 -4H36V16H-4Z M16 7.79a8.21 8.21 0 1 0 0.01 0Z%22/%3E%3C/clipPath%3E%3CclipPath id=%22f%22%3E%3Crect x=%22-4%22 y=%2216%22 width=%2240%22 height=%2220%22/%3E%3C/clipPath%3E%3C/defs%3E%3Cg transform=%22rotate(-18 16 16)%22%3E%3Cellipse cx=%2216%22 cy=%2216%22 rx=%2213%22 ry=%224.1%22 clip-path=%22url(%23b)%22/%3E%3C/g%3E%3Ccircle cx=%2216%22 cy=%2216%22 r=%228.21%22/%3E%3Cg transform=%22rotate(-18 16 16)%22%3E%3Cellipse cx=%2216%22 cy=%2216%22 rx=%2213%22 ry=%224.1%22 clip-path=%22url(%23f)%22/%3E%3C/g%3E%3C/svg%3E");
 
   --rail-width: 232px;
 
@@ -473,7 +479,7 @@ code, kbd {
   color: var(--text);
 }
 .help { margin: 6px 0 14px; font-size: 16px; line-height: 1.4; color: var(--text-dim); }
-.tagline { font-family: var(--font-alb); font-size: 13px; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; color: var(--sky-deep); }
+.tagline { font-family: var(--font-alb); font-size: 12px; font-weight: 800; letter-spacing: 0.16em; text-transform: uppercase; color: #c98a10; }
 .is-error { color: #ff8888; }
 
 /* ---------- Panels ---------- */
@@ -502,38 +508,112 @@ code, kbd {
 
 /* ---------- Alboria's panels ---------- */
 
-/* Everything online: a light panel in Alboria's colours and type, and its own controls. */
+/* Alboria in the launcher looks as it does on its website (alboria-web, docs/design.md): each panel is
+   a place of the planet, painted behind it (--place, set by its place-* class), and its content
+   floats on pearl glass in front, framed by the painting. Buttons are carved stones in a golden
+   frame with a seal, inputs and rows are glass too, and the type is Alboria's rounded face. */
 .panel.is-alboria {
-  background: linear-gradient(180deg, var(--paper), #c9e5ff);
-  color: var(--navy);
-  border: 2px solid rgba(90, 169, 240, 0.6);
-  border-radius: 22px;
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
-  font-family: var(--font-alb);
+  position: relative; isolation: isolate; margin: 44px 16px 16px;
+  background: none; border: 0; border-radius: 26px;
+  color: var(--ink-alb); font-family: var(--font-alb);
+  box-shadow: none;
 }
-.is-alboria .panel-title { font-family: var(--font-alb); font-weight: 800; font-size: 28px; line-height: 1.15; letter-spacing: 0; text-transform: none; color: var(--navy); }
+/* The place: the painting, a little larger than the glass, so it frames it. */
+.panel.is-alboria::before {
+  content: ""; position: absolute; inset: -16px; z-index: -2; border-radius: 38px;
+  background: linear-gradient(180deg, rgba(255, 248, 236, 0.1), rgba(30, 42, 79, 0.28)), var(--place, none) center / cover;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35), 0 26px 60px -20px rgba(0, 0, 0, 0.7);
+}
+/* The glass: pearl over the blurred place, a thin white edge. */
+.panel.is-alboria::after {
+  content: ""; position: absolute; inset: 0; z-index: -1; border-radius: 26px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(247, 242, 255, 0.74) 55%, rgba(236, 243, 252, 0.78));
+  backdrop-filter: blur(18px) saturate(1.4); -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  box-shadow: inset 0 2px 0 #fff, 0 18px 40px -22px rgba(24, 34, 63, 0.55);
+}
+.place-arrival { --place: url("world/llegada-1280.webp"); }
+.place-plaza { --place: url("world/plaza-1280.webp"); }
+.place-gate { --place: url("world/portal.webp"); }
+.place-vault { --place: url("world/boveda.webp"); }
+.place-observatory { --place: url("world/observatorio.webp"); }
+.place-archive { --place: url("world/archivo-1280.webp"); }
+/* The place's name, as a tag of glass on the painting above the panel. */
+.alb-place {
+  position: absolute; left: 6px; top: -30px; z-index: 2; display: inline-flex; align-items: center; gap: 7px;
+  padding: 4px 12px 4px 6px; border-radius: 999px;
+  font-family: var(--font-alb); font-weight: 800; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--ink-alb); background: rgba(255, 255, 255, 0.78); border: 1px solid rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); box-shadow: 0 6px 18px -10px rgba(24, 34, 63, 0.5);
+}
+.alb-place::before { content: ""; width: 16px; height: 16px; background: var(--rune-ring-gold) center / contain no-repeat; }
+.is-alboria .panel-title { font-family: var(--font-alb); font-weight: 800; font-size: 28px; line-height: 1.15; letter-spacing: -0.01em; text-transform: none; color: var(--ink-alb); }
 .is-alboria .help { color: var(--night-soft); font-size: 16px; }
 .is-alboria .check { color: var(--night-soft); }
+
+/* Buttons of Alboria: a stone of light in a golden frame with an engraved groove, a leaf finial at
+   each end, and a seal with a rune on its left. Amber for the main action, mother-of-pearl for the
+   others; touched, it rises and a gleam runs across the stone. */
 .is-alboria .btn {
-  padding: 9px 20px; border: 2px solid var(--navy); border-radius: 999px; background: none; color: var(--navy);
-  font-family: var(--font-alb); font-weight: 800; font-size: 16px; letter-spacing: 0; text-transform: none;
+  --stone: linear-gradient(180deg, #fff 0%, #f6f1ff 45%, #e6eefa 100%);
+  --frame: #d8b866; --frame-hi: #fff3cc; --halo: rgba(140, 180, 255, 0.45);
+  --seal-light: #2f5ea8; --seal-dark: #1b2f63; --seal-rune: var(--rune-ring-light);
+  --groove: rgba(216, 184, 102, 0.55);
+  position: relative; isolation: isolate;
+  padding: 7px 24px 7px 44px; margin: 0 10px; border: 0; border-radius: 999px; color: var(--ink-alb);
+  font-family: var(--font-alb); font-weight: 800; font-size: 16px; letter-spacing: 0.01em; text-transform: none;
+  /* The seal and its rune share one centre: the rune's box is centred in the seal's. */
+  --seal: radial-gradient(circle closest-side, var(--seal-light) 0, var(--seal-dark) 78%, var(--frame-hi) 82%, var(--frame-hi) 92%, transparent 97%);
+  background:
+    var(--seal-rune) 10px 50% / 20px 20px no-repeat,
+    var(--seal) 5px 50% / 30px 30px no-repeat,
+    linear-gradient(110deg, transparent 35%, rgba(255, 255, 255, 0.65) 50%, transparent 65%) 160% 0 / 250% 100% no-repeat,
+    var(--stone);
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.85), inset 0 -3px 6px rgba(120, 70, 0, 0.2),
+    0 0 0 2px var(--frame-hi), 0 0 0 4px var(--frame), 0 0 0 5px rgba(80, 50, 10, 0.25), 0 10px 24px -8px var(--halo);
+  outline: 1px solid var(--groove); outline-offset: -5px;
+  transition: transform 0.2s, box-shadow 0.25s, background-position 0.7s ease;
 }
-.is-alboria .btn:hover:not([disabled]) { background: rgba(30, 42, 79, 0.06); color: var(--navy); filter: none; }
-.is-alboria .btn-primary { background: var(--sun); border-color: var(--sun); box-shadow: 0 3px 0 #d9a21f; }
-.is-alboria .btn.btn-primary:hover:not([disabled]) { background: var(--sun); filter: brightness(1.05); }
-.is-alboria .btn-danger { border-color: var(--crimson); color: var(--crimson); }
-.is-alboria .btn.btn-danger:hover:not([disabled]) { background: rgba(179, 32, 42, 0.08); color: var(--crimson); }
-.is-alboria .btn-small { padding: 5px 14px; font-size: 14px; }
+.is-alboria .btn::before, .is-alboria .btn::after {
+  content: ""; position: absolute; top: 50%; width: 9px; height: 9px; z-index: -1;
+  background: linear-gradient(135deg, var(--frame-hi), var(--frame)); border-radius: 0 60% 0 60%; box-shadow: 0 0 8px var(--halo);
+}
+.is-alboria .btn::before { left: -9px; translate: 0 -50%; rotate: -45deg; }
+.is-alboria .btn::after { right: -9px; translate: 0 -50%; rotate: 135deg; }
+.is-alboria .btn:hover:not([disabled]) {
+  transform: translateY(-2px); color: var(--ink-alb); filter: none;
+  background-position: 10px 50%, 5px 50%, -60% 0, 0 0;
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.9), inset 0 -3px 6px rgba(120, 70, 0, 0.18),
+    0 0 0 2px var(--frame-hi), 0 0 0 4px var(--frame), 0 0 0 5px rgba(80, 50, 10, 0.25), 0 14px 32px -6px var(--halo), 0 0 24px var(--halo);
+}
+.is-alboria .btn:active:not([disabled]) { transform: translateY(0) scale(0.98); }
+.is-alboria .btn-primary {
+  --stone: linear-gradient(180deg, #fff3c4 0%, #ffd866 45%, #f4b33a 100%);
+  --frame: #c99838; --frame-hi: #ffe9a8; --halo: rgba(255, 196, 70, 0.55);
+  --seal-light: #8a5a12; --seal-dark: #5a3a0a; --seal-rune: var(--rune-ring-warm); --groove: rgba(255, 255, 255, 0.55);
+  color: #2b1d04;
+}
+.is-alboria .btn.btn-primary:hover:not([disabled]) { color: #2b1d04; }
+.is-alboria .btn-danger {
+  --stone: linear-gradient(180deg, #fff 0%, #fdeff0 50%, #f6dfe2 100%);
+  --seal-light: #b3202a; --seal-dark: #7a1119;
+  color: var(--crimson);
+}
+.is-alboria .btn.btn-danger:hover:not([disabled]) { color: var(--crimson); }
+.is-alboria .btn-small { padding: 4px 16px 4px 36px; margin: 0 8px; font-size: 14px; background-position: 8px 50%, 3px 50%, 160% 0, 0 0; background-size: 16px 16px, 26px 26px, 250% 100%, auto; }
+.is-alboria .btn-small:hover:not([disabled]) { background-position: 8px 50%, 3px 50%, -60% 0, 0 0; }
 .is-alboria .btn[disabled] { opacity: 0.45; }
 .is-alboria .path,
 .is-alboria select,
 .is-alboria textarea {
-  background: #fff; border: 2px solid var(--sky-line); border-radius: 14px; color: var(--navy);
-  font-family: var(--font-alb); font-weight: 700; font-size: 17px;
+  background: rgba(255, 255, 255, 0.86); border: 1px solid rgba(216, 184, 102, 0.75); border-radius: 16px; color: var(--ink-alb);
+  font-family: var(--font-alb); font-weight: 700; font-size: 17px; box-shadow: inset 0 2px 4px rgba(24, 34, 63, 0.08);
 }
-.is-alboria .path:focus, .is-alboria .path:hover, .is-alboria select:hover { border-color: var(--sky-deep); }
+.is-alboria .path:focus, .is-alboria .path:hover, .is-alboria select:hover { border-color: #c99838; box-shadow: inset 0 2px 4px rgba(24, 34, 63, 0.08), 0 0 0 3px rgba(255, 214, 120, 0.35); }
 .is-alboria .path[readonly] { color: var(--night-soft); font-weight: 600; }
-.is-alboria .field > span { font-family: var(--font-alb); font-weight: 700; letter-spacing: 0.14em; color: var(--sky-deep); }
+.is-alboria .field > span { font-family: var(--font-alb); font-weight: 800; letter-spacing: 0.12em; color: #c98a10; }
 
 /* An Alborian floats gently over its panel. */
 .alborian { display: block; flex: none; height: auto; animation: hover 4.5s ease-in-out infinite; }
@@ -672,25 +752,35 @@ code, kbd {
 .friends-panel { padding: 22px 22px 18px; }
 .friends-panel .keeper { position: absolute; right: -10px; top: -96px; width: 104px; }
 .friends-head { padding-right: 70px; }
-.friends-count { font-size: 15px; font-weight: 700; color: var(--sky-deep); }
+.friends-count { font-size: 15px; font-weight: 800; color: #3f8fe0; }
 .friends-add { display: flex; gap: 8px; margin: 14px 0 12px; }
 .friends-add .path { flex: 1; padding: 7px 12px; font-size: 16px; }
-.friends-section { margin: 12px 4px 6px; font-family: var(--font-alb); font-weight: 700; font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--night-soft); }
+.friends-section { margin: 14px 4px 6px; font-family: var(--font-alb); font-weight: 800; font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: #c98a10; }
 .friend { display: grid; gap: 6px; margin-bottom: 8px; }
 /* When the panel is too narrow for the name beside the pill and the buttons, the buttons go to a
    second line, on the right, instead of squeezing the name into a column of single letters. */
-.friend-row { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px 12px; padding: 10px 12px; background: #fff; border-radius: 14px; }
-.friend-row::before { content: ""; flex: none; width: 12px; height: 12px; border-radius: 50%; background: #b8c4d8; }
-.friend-row[data-state="online"]::before { background: var(--ok); }
-.friend-row[data-state="playing"]::before { background: var(--sky-deep); box-shadow: 0 0 0 3px rgba(90, 169, 240, 0.25); }
-/* A request waiting for an answer. */
-.friends-body > .friend-row::before { background: var(--sun); animation: status-progress 1.6s ease-in-out infinite; }
+.friend-row {
+  display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px 12px; padding: 9px 10px;
+  background: rgba(255, 255, 255, 0.72); border: 1px solid rgba(255, 255, 255, 0.95); border-radius: 20px;
+}
+/* What each friend is doing, as a seal with Alboria's ring rune: gold playing, green online, grey
+   offline, and amber pulsing for a request waiting for an answer. */
+.friend-row::before {
+  --seal: radial-gradient(circle at 40% 35%, #8e9ab8, #4c5778 75%);
+  content: ""; flex: none; width: 32px; height: 32px; border-radius: 50%;
+  background: var(--rune-ring-light) center / 18px 18px no-repeat, var(--seal);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.35), 0 0 0 2px #fff3cc, 0 0 0 3px #d8b866;
+}
+.friend-row[data-state="online"]::before { --seal: radial-gradient(circle at 40% 35%, #46c79a, #12795a 75%); }
+.friend-row[data-state="playing"]::before { --seal: radial-gradient(circle at 40% 35%, #f6c445, #b77a0c 75%); }
+.friends-body > .friend-row::before { --seal: radial-gradient(circle at 40% 35%, #ffd866, #c98a10 75%); animation: status-progress 1.6s ease-in-out infinite; }
 .friend-text { flex: 1 1 150px; min-width: 0; }
 .friend-text strong { display: block; font-size: 17px; overflow-wrap: anywhere; }
 .friend-text small { display: block; font-size: 14px; color: var(--night-soft); }
-.friend-pill { flex: none; padding: 3px 10px; border: 1px solid #b8c4d8; border-radius: 999px; font-size: 12px; letter-spacing: 0.04em; color: var(--night-soft); }
-.is-alboria .btn.friend-more { min-width: 34px; padding: 3px 8px; border: 0; color: var(--night-soft); font-size: 18px; }
-.friend-menu, .friend-report { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 10px; background: #fff; border: 2px solid var(--navy); border-radius: 14px; }
+.friend-pill { flex: none; padding: 3px 10px; border: 1px solid rgba(124, 92, 224, 0.35); border-radius: 999px; background: rgba(124, 92, 224, 0.1); font-weight: 800; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #7c5ce0; }
+.is-alboria .btn.friend-more { min-width: 34px; padding: 3px 10px; margin: 0 6px; background: rgba(255, 255, 255, 0.6); box-shadow: 0 0 0 1px rgba(216, 184, 102, 0.6); outline: 0; color: var(--night-soft); font-size: 18px; }
+.is-alboria .btn.friend-more::before, .is-alboria .btn.friend-more::after { display: none; }
+.friend-menu, .friend-report { display: flex; flex-wrap: wrap; gap: 10px 6px; padding: 10px 12px; background: rgba(255, 255, 255, 0.85); border: 1px solid rgba(216, 184, 102, 0.7); border-radius: 18px; }
 .friend-report textarea { flex: 1 1 100%; min-height: 60px; resize: vertical; }
 .friend-report select { flex: 1 1 100%; }
 
@@ -1177,11 +1267,13 @@ input[type="range"] { width: 100%; accent-color: var(--imulsion); }
 
 .account-title-row { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px; }
 /* alboria.org: Alboria's pastel blue, so it stands out on the dark launcher. */
+/* alboria.org: a mother-of-pearl stone in a golden frame, the logo in it. */
 .btn.alboria-open {
-  font-family: var(--font-alb); font-weight: 800; letter-spacing: 0; text-transform: none;
-  background: var(--sky); color: var(--navy); border: 2px solid var(--sky-deep); border-radius: 999px; box-shadow: 0 4px 0 var(--sky-deep);
+  font-family: var(--font-alb); font-weight: 800; letter-spacing: 0; text-transform: none; color: var(--ink-alb);
+  background: linear-gradient(180deg, #fff 0%, #f6f1ff 45%, #e6eefa 100%); border: 0; border-radius: 999px;
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.85), 0 0 0 2px #fff3cc, 0 0 0 4px #d8b866, 0 10px 24px -8px rgba(140, 180, 255, 0.45);
 }
-.btn.alboria-open:hover:not([disabled]) { background: #c9e8ff; filter: none; }
+.btn.alboria-open:hover:not([disabled]) { filter: brightness(1.04); transform: translateY(-2px); }
 .alboria-open svg { width: 20px; height: 20px; }
 
 /* The Greeter stands on the identity panel's corner, so the panels leave it room above. */
@@ -1198,14 +1290,14 @@ input[type="range"] { width: 100%; accent-color: var(--imulsion); }
 .is-alboria .status-badge[data-state="error"] .dot,
 .is-alboria .status-badge[data-state="none"] .dot { background: var(--crimson); box-shadow: none; }
 
-/* The player's identity, Gamertag#tag, large; the tag in Alboria's blue, dim while unknown. */
+/* The player's identity, Gamertag#tag, large; the tag in Alboria's gold, dim while unknown. */
 .identity-card {
   display: flex; align-items: baseline; gap: 2px; margin: 4px 0 12px; padding: 12px 18px;
   background: #fff; border: 2px solid var(--sky-line); border-radius: 14px;
   font-family: var(--font-alb); font-weight: 800; font-size: 34px; line-height: 1.1; color: var(--navy);
   overflow-wrap: anywhere;
 }
-.identity-tag { color: var(--sky-deep); }
+.identity-tag { color: #c98a10; }
 .identity-tag.is-unknown { color: #a9b6cc; }
 
 .account-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
@@ -1268,15 +1360,21 @@ body:has(> .welcome:not([hidden])) .shell { visibility: hidden; }
 .welcome-box.is-busy { cursor: progress; }
 .welcome-choices { display: grid; gap: 12px; }
 .choice {
-  display: flex; align-items: center; justify-content: space-between; gap: 14px; width: 100%; padding: 16px 20px; text-align: left;
-  background: #fff; color: var(--navy); border: 2px solid var(--sky-line); border-radius: 18px; font-family: var(--font-alb);
+  display: flex; align-items: center; justify-content: space-between; gap: 14px; width: 100%; padding: 16px 20px;
+  border: 1px solid rgba(255, 255, 255, 0.95); border-radius: 22px; background: rgba(255, 255, 255, 0.72);
+  color: var(--ink-alb); font-family: var(--font-alb); text-align: left; cursor: pointer;
+  transition: transform 0.2s, box-shadow 0.25s, background 0.2s;
 }
-.choice.is-main { border-color: var(--sun); box-shadow: 0 0 0 4px rgba(255, 201, 60, 0.25); }
+/* The main choice wears the golden frame of Alboria's carved pieces. */
+.choice.is-main { background: rgba(255, 255, 255, 0.92); box-shadow: 0 0 0 2px #fff3cc, 0 0 0 3.5px #d8b866, 0 0 26px rgba(255, 214, 120, 0.5); }
 .choice-text { display: grid; gap: 2px; min-width: 0; }
 .choice strong { font-weight: 800; font-size: 21px; }
 .choice-text > span { font-size: 15px; color: var(--night-soft); }
-.choice-arrow { flex: none; font-size: 30px; line-height: 1; color: var(--sky-deep); }
-.choice:hover, .choice:focus-visible { border-color: var(--sky-deep); }
+.choice-arrow { flex: none; font-size: 30px; line-height: 1; color: #c98a10; }
+.choice:hover, .choice:focus-visible {
+  transform: translateY(-2px); background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 0 0 2px #fff3cc, 0 0 0 3.5px #d8b866, 0 0 26px rgba(255, 214, 120, 0.5);
+}
 .consent-text { margin: 0; font-size: 14px; }
 .consent { display: flex; gap: 10px; align-items: flex-start; font-size: 15px; color: var(--night-soft); }
 .consent input { margin-top: 3px; }
@@ -1319,14 +1417,17 @@ body:has(> .welcome:not([hidden])) .shell { visibility: hidden; }
    before a scheduled action with a clock. */
 .alboria-notices { display: flex; flex-direction: column; gap: 10px; max-width: 1180px; margin: 0 0 26px; padding-top: 34px; }
 .alboria-notices[hidden] { display: none; }
+/* A notice from Alboria: a beam of pearl glass in Alboria's carved golden frame, its Greeter on it. */
 .alboria-notice {
-  display: flex; align-items: center; gap: 14px; padding: 4px 14px 6px 4px;
-  background: linear-gradient(180deg, var(--paper), #c9e5ff); color: var(--navy);
-  border: 2px solid rgba(90, 169, 240, 0.6); border-radius: 16px; font-family: var(--font-alb);
+  display: flex; align-items: center; gap: 14px; padding: 4px 14px 6px 4px; margin: 0 6px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(247, 242, 255, 0.9) 55%, rgba(236, 243, 252, 0.92));
+  color: var(--ink-alb); border: 0; border-radius: 22px; font-family: var(--font-alb);
+  outline: 1px solid rgba(216, 184, 102, 0.55); outline-offset: -6px;
+  box-shadow: inset 0 2px 0 #fff, 0 0 0 2px #fff3cc, 0 0 0 4px #d8b866, 0 14px 34px -14px rgba(0, 0, 0, 0.6), 0 0 34px -12px rgba(255, 214, 120, 0.45);
 }
 .alboria-notice .alborian { width: 76px; margin: -6px 0 -8px; }
 .alboria-notice-text { flex: 1; min-width: 0; padding: 8px 0; }
-.alboria-notice-label { display: block; font-size: 12px; font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase; color: var(--sky-deep); }
+.alboria-notice-label { display: block; font-size: 12px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase; color: #c98a10; }
 .alboria-notice-body { margin-top: 2px; font-size: 16px; line-height: 1.35; overflow-wrap: anywhere; }
 .alboria-notice-body :is(p, ul, ol, blockquote, pre, h1, h2, h3, h4, h5, h6) { margin: 4px 0 0; }
 .alboria-notice-body > :first-child { margin-top: 0; }
@@ -1339,13 +1440,13 @@ body:has(> .welcome:not([hidden])) .shell { visibility: hidden; }
 .alboria-notice-body hr { border: 0; border-top: 2px solid var(--sky-line); margin: 6px 0; }
 .alboria-notice-body a { color: var(--sky-deep); font-weight: 700; cursor: pointer; }
 .alboria-notice-close {
-  flex: none; width: 32px; height: 32px; border-radius: 50%;
-  background: none; border: 2px solid var(--navy); color: var(--navy); font-size: 20px; line-height: 1;
+  flex: none; width: 32px; height: 32px; border-radius: 50%; border: 0; color: #d9f1ff; font-size: 18px; line-height: 1;
+  background: radial-gradient(circle at 40% 35%, #2f5ea8, #1b2f63 75%); box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4), 0 0 0 2px #fff3cc, 0 0 0 3px #d8b866;
 }
-.alboria-notice-close:hover, .alboria-notice-close:focus-visible { background: rgba(30, 42, 79, 0.08); }
+.alboria-notice-close:hover, .alboria-notice-close:focus-visible { filter: brightness(1.15); }
 /* A countdown before a scheduled action: urgent, in the launcher's own colours, and not closable. */
 .alboria-notice.is-warning {
-  padding: 12px 18px; color: var(--text);
+  padding: 12px 18px; color: var(--text); outline: 0; box-shadow: none; border-radius: 16px;
   background: linear-gradient(90deg, rgba(255, 201, 60, 0.2), rgba(255, 201, 60, 0.06)); border: 1px solid rgba(255, 201, 60, 0.7);
 }
 .alboria-notice.is-warning strong { font-weight: 800; font-size: 17px; }
@@ -1422,8 +1523,8 @@ body:has(> .welcome:not([hidden])) .shell { visibility: hidden; }
   .btn-launch { padding: 12px 48px; }
   .btn-launch-label { font-size: 30px; }
   .btn-launch-sub { text-align: left; }
+  /* One column: the game's details first, then Alboria (its state and the friends) below them. */
   .play-grid:has(> .play-side > .panel:not([hidden])) { grid-template-columns: 1fr; }
-  .play-side { order: -1; }
   .columns, .columns.is-wide-left, .account-grid { grid-template-columns: 1fr; }
   .ach-columns { grid-template-columns: 240px 1fr; }
   .embry-title { font-size: 30px; }
