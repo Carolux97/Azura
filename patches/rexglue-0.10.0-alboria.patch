@@ -1,9 +1,9 @@
 diff --git a/include/rex/system/xam/alboria.h b/include/rex/system/xam/alboria.h
 new file mode 100644
-index 0000000..f9c9673
+index 0000000..225eecb
 --- /dev/null
 +++ b/include/rex/system/xam/alboria.h
-@@ -0,0 +1,438 @@
+@@ -0,0 +1,471 @@
 +/**
 + * @file        system/xam/alboria.h
 + * @brief       Alboria: System Link over the internet through our relay
@@ -250,13 +250,15 @@ index 0000000..f9c9673
 +std::optional<SessionInfo> AcceptedInvite();
 +// The title read the accepted invite: it is no longer pending (KnownSession still finds it).
 +void ClearAcceptedInvite();
-+// The data the host's title answers quality of service probes with (XNetQosListen's), which
-+// Alboria keeps with the room: a member's title reads the party's settings from it when it accepts
-+// the invite. Sent now when connected and changed, or once the room is.
-+void PublishQosData(std::vector<uint8_t> data);
-+// The QoS data of the host whose room this installation joined, for XNetQosLookup; nothing when
-+// the host has not published any.
-+std::optional<std::vector<uint8_t>> HostQosData();
++// The data the host's title answers quality of service probes for the session `kid` with
++// (XNetQosListen's), which Alboria keeps with the room by session: a member's title reads the
++// settings of the party or match it joins from it. A host in a party that plays a public match
++// listens for both sessions. Sent now when connected and changed, or once the room is.
++void PublishQosData(std::span<const uint8_t, 8> kid, std::vector<uint8_t> data);
++// The QoS data of the session `kid` of the host whose room this installation joined, for
++// XNetQosLookup; without `kid`, or for a session the host has published none for, the last data it
++// published; nothing when it has published none.
++std::optional<std::vector<uint8_t>> HostQosData(std::optional<std::span<const uint8_t, 8>> kid = std::nullopt);
 +// The session with the ID `kid` among the ones Alboria brought (the last accepted invite) or this
 +// installation hosts, for XSessionSearchByID.
 +std::optional<SessionInfo> KnownSession(std::span<const uint8_t, 8> kid);
@@ -340,6 +342,37 @@ index 0000000..f9c9673
 +// says so while it is open.
 +void SetOverlayShown(bool shown);
 +bool OverlayShown();
++
++// --- Matchmaking ------------------------------------------------------------------------------------
++
++// How a matchmaking search ended: a match was found and its room joined (`session` is its host's
++// Live session), Alboria said to host one (the title then creates its own), or it was stopped.
++enum class MatchOutcome { kJoin, kHost, kStopped };
++struct MatchFound {
++  MatchOutcome outcome = MatchOutcome::kHost;
++  SessionInfo session{};
++  // The host's gamertag (kJoin), which the title shows as the match's owner.
++  std::string host_name;
++};
++// Searches for a match through Alboria (POST /v1/matchmaking/search, then /poll every second)
++// for the mode `mode` (the title's own description of what it searches for: equal modes play
++// together). Blocks the calling thread, a worker's, until Alboria decides or StopMatchmaking: it
++// may take minutes, since Alboria waits for others before it has a player host alone with bots.
++MatchFound Matchmake(const std::string& mode);
++// Stops the search running (the title cancelled it).
++void StopMatchmaking();
++// The title's search request (its XOVERLAPPED) running a matchmaking search, and its cancelling:
++// a cancelled request whose search is running stops it.
++void SetSearchRequest(uint32_t overlapped_ptr);
++void CancelSearchRequest(uint32_t overlapped_ptr);
++// The title hosts a match for the mode it last searched for, holding `capacity` players, in this
++// installation's room: Alboria sends the next searchers into it (POST /v1/matchmaking/open, again
++// every few seconds), with its `session` (given when the title creates it), which those sent in
++// join. `started` once it is being played. Called again as either changes.
++void OpenMatch(int capacity, std::optional<bool> started = std::nullopt,
++               const std::optional<SessionInfo>& session = std::nullopt);
++// The hosted match takes no more players (the title deleted its session).
++void CloseMatch();
 +
 +// The Xbox Live XUID that stands for the friend with the account ID `id`: top bits 0x0009, then
 +// 0xA1B0 and the ID, so it never matches a local player's online XUID (OnlineXuid).
@@ -482,10 +515,10 @@ index 0000000..c7fc5de
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria.cpp b/src/system/xam/alboria.cpp
 new file mode 100644
-index 0000000..b3dac97
+index 0000000..eead1f3
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,2031 @@
+@@ -0,0 +1,2254 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -680,6 +713,28 @@ index 0000000..b3dac97
 +  return out;
 +}
 +
++// --- Hex (session IDs, uppercase) ----------------------------------------------------------------
++
++std::string EncodeHex(std::span<const uint8_t> bytes) {
++  std::string out;
++  for (const uint8_t byte : bytes) out += fmt::format("{:02X}", byte);
++  return out;
++}
++
++// The `N` bytes written in `text` as 2N hex digits, or nothing when it is not.
++template <size_t N>
++std::optional<std::array<uint8_t, N>> DecodeHex(std::string_view text) {
++  if (text.size() != 2 * N) return std::nullopt;
++  std::array<uint8_t, N> out{};
++  for (size_t i = 0; i < 2 * N; ++i) {
++    const char c = text[i];
++    const int digit = c >= '0' && c <= '9' ? c - '0' : c >= 'A' && c <= 'F' ? c - 'A' + 10 : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
++    if (digit < 0) return std::nullopt;
++    out[i / 2] = uint8_t(out[i / 2] << 4 | digit);
++  }
++  return out;
++}
++
 +// --- The session ----------------------------------------------------------------------------------
 +
 +// A socket on the loopback interface standing for one remote member's port: what the member sends
@@ -712,11 +767,16 @@ index 0000000..b3dac97
 +// The room being joined is a friend's whose session the title is looking up (JoinFriendSession):
 +// its host's session is kept for the search, not given as an accepted invite.
 +std::atomic<bool> g_join_for_search{false};
-+// The QoS data this installation's title listens with (published with the room it hosts), and the
-+// one of the host of the room it joined.
-+std::optional<std::vector<uint8_t>> g_hosted_qos;
-+bool g_qos_published = false;
++// The QoS data this installation's title listens with for each session it hosts (published with
++// the room it hosts, `published` once Alboria has it), and the data of the host of the room it
++// joined: the last it published, and each session's.
++struct HostedQos {
++  std::vector<uint8_t> data;
++  bool published = false;
++};
++std::map<std::array<uint8_t, 8>, HostedQos> g_hosted_qos;
 +std::optional<std::vector<uint8_t>> g_host_qos;
++std::map<std::array<uint8_t, 8>, std::vector<uint8_t>> g_host_qos_sessions;
 +// A room this installation was a member of ended without it leaving (TakeLostRoom).
 +std::atomic<bool> g_room_lost{false};
 +// A room failed to come up, or the one this installation hosted ended (TakeFailedRoom).
@@ -884,8 +944,9 @@ index 0000000..b3dac97
 +  g_hosted_session.reset();
 +  g_session_published = false;
 +  // The title keeps listening with the same QoS data: it goes to the next room it hosts.
-+  g_qos_published = false;
++  for (auto& [kid, qos] : g_hosted_qos) qos.published = false;
 +  g_host_qos.reset();
++  g_host_qos_sessions.clear();
 +  if (g_socket != kNoSocket) CloseNativeSocket(g_socket);
 +  g_socket = kNoSocket;
 +  g_stream_server.reset();
@@ -1306,7 +1367,7 @@ index 0000000..b3dac97
 +}
 +
 +void PublishHostedSession(std::string code, SessionInfo session);
-+void PublishHostedQos(std::string code, std::vector<uint8_t> data);
++void PublishHostedQos(std::string code, std::array<uint8_t, 8> kid, std::vector<uint8_t> data);
 +void AnswerStream(std::span<const uint8_t> announcement);
 +
 +// Opens the tunnel with `ticket` and runs it until g_stop or the room ends.
@@ -1421,12 +1482,20 @@ index 0000000..b3dac97
 +          g_session_published = true;
 +          RunDetached("publishing the session", [code = g_status.code, session = *g_hosted_session] { PublishHostedSession(code, session); });
 +        }
-+        if (g_status.host && g_hosted_qos && !g_qos_published) {
-+          g_qos_published = true;
-+          RunDetached("publishing the QoS data", [code = g_status.code, data = *g_hosted_qos] { PublishHostedQos(code, data); });
++        for (auto& [kid, qos] : g_hosted_qos) {
++          if (!g_status.host || qos.published) continue;
++          qos.published = true;
++          RunDetached("publishing the QoS data", [code = g_status.code, kid, data = qos.data] { PublishHostedQos(code, kid, data); });
 +        }
 +        if (!g_status.host) {
 +          if (auto qos = DecodeBase64(Text(ticket, "qos")); qos && !qos->empty()) g_host_qos = std::move(*qos);
++          if (const auto sessions = ticket.find("qos_sessions"); sessions != ticket.end() && sessions->is_object()) {
++            for (const auto& [id, value] : sessions->items()) {
++              const auto kid = DecodeHex<8>(id);
++              const auto qos = value.is_string() ? DecodeBase64(value.get<std::string>()) : std::nullopt;
++              if (kid && qos && !qos->empty()) g_host_qos_sessions[*kid] = std::move(*qos);
++            }
++          }
 +        }
 +        const auto invite = DecodeBase64(Text(ticket, "session"));
 +        if (!g_status.host && LiveSignedIn() && invite && invite->size() == kSessionInfoSize) {
@@ -1524,10 +1593,13 @@ index 0000000..b3dac97
 +  if (published.error.empty()) REXSYS_INFO("Alboria: the room has the Live party's session");
 +}
 +
-+// Sends the QoS data of the Live party this installation hosts to Alboria, for the room `code`.
-+void PublishHostedQos(std::string code, std::vector<uint8_t> data) {
-+  const auto published = CallSignedIn("/v1/rooms/qos", {{"code", code}, {"qos", EncodeBase64(data)}});
-+  if (published.error.empty()) REXSYS_INFO("Alboria: the room has the Live party's QoS data ({} bytes)", data.size());
++// Sends the QoS data of the session `kid` this installation hosts to Alboria, for the room `code`.
++void PublishHostedQos(std::string code, std::array<uint8_t, 8> kid, std::vector<uint8_t> data) {
++  const std::string session = EncodeHex(kid);
++  const auto published = CallSignedIn("/v1/rooms/qos", {{"code", code}, {"qos", EncodeBase64(data)}, {"session", session}});
++  if (published.error.empty()) {
++    REXSYS_INFO("Alboria: the room has the QoS data of session {} ({} bytes)", session, data.size());
++  }
 +}
 +
 +// Creates or joins a room with the session (signing in when there is none), then runs the tunnel.
@@ -2245,18 +2317,17 @@ index 0000000..b3dac97
 +  return uint32_t(kid[4]) << 24 | uint32_t(kid[5]) << 16 | uint32_t(kid[6]) << 8 | kid[7];
 +}
 +
-+std::optional<SessionInfo> JoinFriendSession(uint32_t id) {
-+  const auto room = CallSignedIn("/v1/friends/room", {{"id", id}});
-+  if (!room.error.empty()) {
-+    REXSYS_WARN("Alboria: the friend's room cannot be joined ({})", room.error);
-+    return std::nullopt;
-+  }
++namespace {
++
++// Joins the room `code` and waits for its host's Live session to arrive with the welcome (the
++// accepted invite the title is looking up); none when the join fails or it does not come.
++std::optional<SessionInfo> JoinRoomForSession(const std::string& code) {
 +  {
 +    std::lock_guard lock(g_mutex);
 +    g_last_invite.reset();
 +  }
 +  g_join_for_search.store(true);
-+  JoinGame(Text(room.json, "code"));
++  JoinGame(code);
 +  // The join and the relay's welcome take two requests and a round trip.
 +  constexpr auto kJoinWait = std::chrono::seconds(8);
 +  const auto deadline = Clock::now() + kJoinWait;
@@ -2269,8 +2340,185 @@ index 0000000..b3dac97
 +    std::this_thread::sleep_for(std::chrono::milliseconds(50));
 +  }
 +  g_join_for_search.store(false);
-+  REXSYS_WARN("Alboria: the friend's room did not bring its host's session");
 +  return std::nullopt;
++}
++
++}  // namespace
++
++std::optional<SessionInfo> JoinFriendSession(uint32_t id) {
++  const auto room = CallSignedIn("/v1/friends/room", {{"id", id}});
++  if (!room.error.empty()) {
++    REXSYS_WARN("Alboria: the friend's room cannot be joined ({})", room.error);
++    return std::nullopt;
++  }
++  auto session = JoinRoomForSession(Text(room.json, "code"));
++  if (!session) REXSYS_WARN("Alboria: the friend's room did not bring its host's session");
++  return session;
++}
++
++// --- Matchmaking -----------------------------------------------------------------------------------
++
++namespace {
++
++// The search running (Matchmake), stopped by StopMatchmaking; the mode it searched for, which the
++// match this installation then hosts is open for; and when Alboria last said to host, so the
++// title's second search right after finds nothing at once instead of queueing again.
++std::atomic<bool> g_stop_search{false};
++std::mutex g_match_mutex;
++std::string g_search_mode;
++Clock::time_point g_host_told{};
++// The match this installation hosts, while open: its capacity and whether it is being played, sent
++// to Alboria at once and again every kMatchRefresh by the refresher.
++struct OpenMatchState {
++  bool open = false;
++  std::string mode;
++  int capacity = 0;
++  bool started = false;
++  std::optional<SessionInfo> session;
++};
++OpenMatchState g_match;
++std::atomic<bool> g_match_refresher{false};
++constexpr auto kMatchRefresh = std::chrono::seconds(10);
++// How long after Alboria said to host a new search is answered "host" at once.
++constexpr auto kHostTold = std::chrono::seconds(15);
++
++std::string TitleIdText() {
++  auto* kernel_state = REX_KERNEL_STATE();
++  return fmt::format("{:08X}", kernel_state ? kernel_state->title_id() : 0u);
++}
++
++// Tells Alboria about the hosted match as it is now (POST /v1/matchmaking/open), if it is open.
++void SendOpenMatch() {
++  OpenMatchState match;
++  {
++    std::lock_guard lock(g_match_mutex);
++    match = g_match;
++  }
++  const Status status = GetStatus();
++  if (!match.open || !match.session) return;
++  if (status.state != State::kConnected || status.code.empty()) {
++    REXSYS_DEBUG("Alboria: the open match waits for its room");
++    return;
++  }
++  const auto answer = CallSignedIn("/v1/matchmaking/open", {{"code", status.code},
++                                                             {"title_id", TitleIdText()},
++                                                             {"mode", match.mode},
++                                                             {"capacity", match.capacity},
++                                                             {"started", match.started},
++                                                             {"session", EncodeBase64(*match.session)}});
++  if (!answer.error.empty()) {
++    REXSYS_WARN("Alboria: the open match was not taken ({})", answer.error);
++    return;
++  }
++  // Logged when what Alboria knows of it changes, not on every refresh.
++  static std::string last_sent;
++  std::string sent = fmt::format("room {}, {} players, {}, mode {}", status.code, match.capacity,
++                                 match.started ? "being played" : "in its lobby", match.mode);
++  std::lock_guard lock(g_match_mutex);
++  if (sent != last_sent) REXSYS_INFO("Alboria: the match is open ({})", sent);
++  last_sent = std::move(sent);
++}
++
++void StartMatchRefresher() {
++  if (g_match_refresher.exchange(true)) return;
++  std::thread([] {
++    for (;;) {
++      std::this_thread::sleep_for(kMatchRefresh);
++      SendOpenMatch();
++    }
++  }).detach();
++}
++
++}  // namespace
++
++MatchFound Matchmake(const std::string& mode) {
++  g_stop_search.store(false);
++  {
++    std::lock_guard lock(g_match_mutex);
++    // The second search of a title just told to host: host now. Its match keeps the mode of the
++    // search Alboria decided, which is the one the others search with (the title's follow-up
++    // search asks with other contexts).
++    if (Clock::now() - g_host_told < kHostTold) return {MatchOutcome::kHost, {}, {}};
++    g_search_mode = mode;
++  }
++  const auto ticket = CallSignedIn("/v1/matchmaking/search", {{"title_id", TitleIdText()}, {"mode", mode}});
++  if (!ticket.error.empty()) {
++    // Without Alboria the title hosts, as it would with nobody to find.
++    REXSYS_WARN("Alboria: matchmaking could not start ({})", ticket.error);
++    return {MatchOutcome::kHost, {}, {}};
++  }
++  const std::string id = Text(ticket.json, "ticket");
++  REXSYS_INFO("Alboria: searching for a match ({})", mode);
++  for (;;) {
++    if (g_stop_search.load()) {
++      CallSignedIn("/v1/matchmaking/cancel", {{"ticket", id}});
++      REXSYS_INFO("Alboria: the search for a match was stopped");
++      return {MatchOutcome::kStopped, {}, {}};
++    }
++    const auto answer = CallSignedIn("/v1/matchmaking/poll", {{"ticket", id}});
++    const std::string state = answer.error.empty() ? Text(answer.json, "state") : std::string("host");
++    if (state == "join") {
++      const std::string code = Text(answer.json, "code");
++      REXSYS_INFO("Alboria: a match was found in room {}", code);
++      // The match's session comes with the answer: the room's may still be its host's party's.
++      const auto match_session = DecodeBase64(Text(answer.json, "session"));
++      if (JoinRoomForSession(code) && match_session && match_session->size() == kSessionInfoSize) {
++        SessionInfo session;
++        std::copy(match_session->begin(), match_session->end(), session.begin());
++        return {MatchOutcome::kJoin, session, Text(answer.json, "host")};
++      }
++      REXSYS_WARN("Alboria: the match's room did not bring its host's session; hosting instead");
++      return {MatchOutcome::kHost, {}, {}};
++    }
++    if (state == "host") {
++      REXSYS_INFO("Alboria: hosting a match{}", answer.error.empty() ? "" : " (Alboria did not answer)");
++      std::lock_guard lock(g_match_mutex);
++      g_host_told = Clock::now();
++      return {MatchOutcome::kHost, {}, {}};
++    }
++    std::this_thread::sleep_for(std::chrono::seconds(1));
++  }
++}
++
++void StopMatchmaking() {
++  g_stop_search.store(true);
++}
++
++namespace {
++std::atomic<uint32_t> g_search_request{0};
++}  // namespace
++
++void SetSearchRequest(uint32_t overlapped_ptr) {
++  g_search_request.store(overlapped_ptr);
++}
++
++void CancelSearchRequest(uint32_t overlapped_ptr) {
++  if (overlapped_ptr && g_search_request.load() == overlapped_ptr) StopMatchmaking();
++}
++
++void OpenMatch(int capacity, std::optional<bool> started, const std::optional<SessionInfo>& session) {
++  {
++    std::lock_guard lock(g_match_mutex);
++    if (!g_match.open) g_match.started = false;
++    if (session) g_match.session = session;
++    g_match.open = true;
++    g_match.mode = g_search_mode.empty() ? std::string("unknown") : g_search_mode;
++    g_match.capacity = std::clamp(capacity, 1, 10);
++    if (started) g_match.started = *started;
++  }
++  StartMatchRefresher();
++  RunDetached("opening the match", [] { SendOpenMatch(); });
++}
++
++void CloseMatch() {
++  {
++    std::lock_guard lock(g_match_mutex);
++    if (!g_match.open) return;
++    g_match.open = false;
++  }
++  const Status status = GetStatus();
++  if (status.code.empty()) return;
++  RunDetached("closing the match", [code = status.code] { CallSignedIn("/v1/matchmaking/close", {{"code", code}}); });
 +}
 +
 +uint64_t OnlineXuid(uint64_t xuid) {
@@ -2357,22 +2605,30 @@ index 0000000..b3dac97
 +  RunDetached("publishing the session", [code, session] { PublishHostedSession(code, session); });
 +}
 +
-+void PublishQosData(std::vector<uint8_t> data) {
++void PublishQosData(std::span<const uint8_t, 8> kid, std::vector<uint8_t> data) {
++  std::array<uint8_t, 8> id;
++  std::copy(kid.begin(), kid.end(), id.begin());
 +  std::string code;
 +  {
 +    std::lock_guard lock(g_mutex);
-+    if (g_hosted_qos == data) return;
-+    g_hosted_qos = data;
-+    g_qos_published = false;
++    auto& qos = g_hosted_qos[id];
++    if (qos.data == data) return;
++    qos.data = data;
++    qos.published = false;
 +    if (g_status.state != State::kConnected || !g_status.host) return;
-+    g_qos_published = true;
++    qos.published = true;
 +    code = g_status.code;
 +  }
-+  RunDetached("publishing the QoS data", [code, data = std::move(data)] { PublishHostedQos(code, data); });
++  RunDetached("publishing the QoS data", [code, id, data = std::move(data)] { PublishHostedQos(code, id, data); });
 +}
 +
-+std::optional<std::vector<uint8_t>> HostQosData() {
++std::optional<std::vector<uint8_t>> HostQosData(std::optional<std::span<const uint8_t, 8>> kid) {
 +  std::lock_guard lock(g_mutex);
++  if (kid) {
++    std::array<uint8_t, 8> id;
++    std::copy(kid->begin(), kid->end(), id.begin());
++    if (const auto it = g_host_qos_sessions.find(id); it != g_host_qos_sessions.end()) return it->second;
++  }
 +  return g_host_qos;
 +}
 +

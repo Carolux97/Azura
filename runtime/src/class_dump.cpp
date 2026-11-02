@@ -285,6 +285,10 @@ void DumpFields(const GuestReader& mem, uint32_t owner, const std::string& inden
     } else if (type == "ScriptStruct") {
       REXLOG_INFO("[Azura dump] {}struct {}", indent, mem.ObjectName(field));
       DumpFields(mem, field, indent + "  ");
+    } else if (type == "State") {
+      // A state's functions replace the class's own while the object is in that state.
+      REXLOG_INFO("[Azura dump] {}state {}", indent, mem.ObjectName(field));
+      DumpFields(mem, field, indent + "  ");
     } else if (type == "Enum") {
       REXLOG_INFO("[Azura dump] {}enum {} {{{}}}", indent, mem.ObjectName(field), EnumValues(mem, field));
     } else if (type.size() > 8 && type.compare(type.size() - 8, 8, "Property") == 0) {
