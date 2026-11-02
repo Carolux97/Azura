@@ -262,6 +262,9 @@ function(azura_configure_runtime target)
         COMMAND ${CMAKE_COMMAND} -E copy_directory
                 ${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts
                 $<TARGET_FILE_DIR:${target}>/assets/fonts
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                ${CMAKE_CURRENT_SOURCE_DIR}/assets/alboria
+                $<TARGET_FILE_DIR:${target}>/assets/alboria
         COMMENT "Installing azura.default.toml, gamecontrollerdb.txt and assets beside the executable")
     if(APPLE)
         add_custom_command(TARGET ${target} POST_BUILD

@@ -13,6 +13,7 @@
 
 #include <rex/input/input.h>
 #include <rex/input/input_system.h>
+#include <rex/ui/immediate_drawer.h>
 
 #include "input/overlay_input.h"
 #include "input/player_assignment.h"
@@ -33,7 +34,47 @@ using Slot = input::PlayerAssignment::Slot;
 namespace alboria = rex::system::xam::alboria;
 
 // How long the overlay takes to fade in.
-constexpr float kFadeSeconds = 0.15f;
+constexpr float kFadeSeconds = 0.18f;
+// The opening: the panel grows from 90 % with a little bounce and rises into place; the closing
+// runs the other way, faster.
+constexpr float kOpenSeconds = 0.32f;
+constexpr float kCloseSeconds = 0.2f;
+
+float Ease01(float value) {
+  return std::clamp(value, 0.0f, 1.0f);
+}
+
+// Overshoots a little before it settles.
+float EaseOutBack(float t) {
+  constexpr float c1 = 1.70158f;
+  constexpr float c3 = c1 + 1.0f;
+  return 1.0f + c3 * std::pow(t - 1.0f, 3.0f) + c1 * std::pow(t - 1.0f, 2.0f);
+}
+
+// Moves and scales the vertices `draw_list` got since it was made: the whole panel, its text and
+// its painting, about `center`, for the opening and closing animation.
+class PanelMotion {
+ public:
+  PanelMotion(ImDrawList* draw_list, ImVec2 center, float scale, float rise)
+      : draw_list_(draw_list), first_(draw_list->VtxBuffer.Size), center_(center), scale_(scale), rise_(rise) {}
+  ~PanelMotion() {
+    if (scale_ == 1.0f && rise_ == 0.0f) return;
+    for (int i = first_; i < draw_list_->VtxBuffer.Size; ++i) {
+      ImVec2& pos = draw_list_->VtxBuffer[i].pos;
+      pos.x = center_.x + (pos.x - center_.x) * scale_;
+      pos.y = center_.y + (pos.y - center_.y) * scale_ + rise_;
+    }
+  }
+  PanelMotion(const PanelMotion&) = delete;
+  PanelMotion& operator=(const PanelMotion&) = delete;
+
+ private:
+  ImDrawList* draw_list_;
+  int first_;
+  ImVec2 center_;
+  float scale_;
+  float rise_;
+};
 // How far the left stick goes before it counts as a press in a direction.
 constexpr int kStickPress = 20000;
 // How long the result of an action stays.
@@ -390,55 +431,45 @@ SettingsTexts LocalizedSettingsTexts(uint32_t language) {
   }
 }
 
-// A rounded pill button: the sun for the main action, white with a sky line for the others, with
-// the glyph of the control that does it before its label when `glyph` is set (the focused row's
-// buttons). Returns its width; `hit` says whether the mouse clicked it this frame.
+// The colours of a row's seal, light at its top and dark below; none (0) leaves the row without one.
+struct SealTone {
+  ImU32 light = 0;
+  ImU32 dark = 0;
+  // The same colours at `alpha`.
+  SealTone At(int alpha) const {
+    const auto with = [alpha](ImU32 c) { return (c & ~IM_COL32_A_MASK) | (static_cast<ImU32>(alpha) << IM_COL32_A_SHIFT); };
+    return {with(light), with(dark)};
+  }
+};
+// Gold while playing, green online, grey offline (the launcher's friend rows), and sky for a setting.
+constexpr SealTone kPlayingTone{IM_COL32(246, 196, 69, 255), IM_COL32(183, 122, 12, 255)};
+constexpr SealTone kOnlineTone{IM_COL32(70, 199, 154, 255), IM_COL32(18, 121, 90, 255)};
+constexpr SealTone kOfflineTone{IM_COL32(142, 154, 184, 255), IM_COL32(76, 87, 120, 255)};
+constexpr SealTone kSkyTone{IM_COL32(47, 94, 168, 255), IM_COL32(27, 47, 99, 255)};
+
+// A carved button (alboria_style.h): amber for the main action, mother-of-pearl for the others,
+// the control that does it in its seal when `glyph` is set (the focused row's buttons), Alboria's
+// ring rune there otherwise. Returns its width; `hit` says whether the mouse clicked it this frame.
 float DrawPill(ImDrawList* draw_list, ImFont* font, float size, ImVec2 right_center, const char* label, bool primary,
                float unit, int alpha, bool* hit, const PillGlyph* glyph = nullptr) {
-  const float glyph_height = size * 1.1f;
-  float glyph_width = 0.0f;
+  SealContent seal;
   if (glyph) {
-    glyph_width = glyph->pad ? AlboriaGlyph(draw_list, font, ImVec2(0, 0), glyph_height, glyph->look, glyph->control, 0)
-                             : AlboriaKey(draw_list, font, 0.0f, 0.0f, glyph_height, glyph->key, 0);
+    seal.control = true;
+    seal.pad = glyph->pad;
+    seal.look = glyph->look;
+    seal.control_id = glyph->control;
+    seal.key = glyph->key;
   }
-  const float glyph_space = glyph ? glyph_width + 8.0f * unit : 0.0f;
-  const float width = font->CalcTextSizeA(size, FLT_MAX, 0.0f, label).x + 28.0f * unit + glyph_space;
-  const float height = size + 14.0f * unit;
-  const ImVec2 min(right_center.x - width, right_center.y - height * 0.5f);
-  const ImVec2 max(right_center.x, right_center.y + height * 0.5f);
-  if (primary) {
-    draw_list->AddRectFilled(ImVec2(min.x, min.y + 3.0f * unit), ImVec2(max.x, max.y + 3.0f * unit), SunShadow(alpha),
-                             height * 0.5f);
-    draw_list->AddRectFilled(min, max, Sun(alpha), height * 0.5f);
-  } else {
-    draw_list->AddRectFilled(min, max, White(alpha), height * 0.5f);
-    draw_list->AddRect(min, max, SkyLine(alpha), height * 0.5f, 0, 2.0f * unit);
-  }
-  if (glyph) {
-    const float left = min.x + 10.0f * unit;
-    if (glyph->pad) {
-      AlboriaGlyph(draw_list, font, ImVec2(left + glyph_width * 0.5f, right_center.y), glyph_height, glyph->look,
-                   glyph->control, alpha);
-    } else {
-      AlboriaKey(draw_list, font, left, right_center.y, glyph_height, glyph->key, alpha);
-    }
-  }
-  AddTextCentered(draw_list, font, size, ImVec2((min.x + glyph_space + max.x) * 0.5f, right_center.y), Navy(alpha),
-                  label);
-  if (hit) {
-    const ImVec2 mouse = ImGui::GetIO().MousePos;
-    *hit = ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mouse.x >= min.x && mouse.x <= max.x && mouse.y >= min.y &&
-           mouse.y <= max.y;
-  }
-  return width;
+  return DrawRuneButton(draw_list, font, size, right_center, label, primary ? Stone::kAmber : Stone::kPearl, unit, alpha,
+                        hit, seal);
 }
 
 }  // namespace
 
 AlboriaOverlay::AlboriaOverlay(rex::ui::ImGuiDrawer* drawer, rex::input::InputSystem* input,
                                input::PlayerAssignment* assignment, uint32_t language, Page page,
-                               ImFont* title_font, ImFont* body_font, std::function<void()> join_by_code,
-                               AlboriaOverlay** owner)
+                               ImFont* title_font, ImFont* body_font, rex::ui::ImmediateTexture* header,
+                               std::function<void()> join_by_code, AlboriaOverlay** owner)
     : ImGuiDialog(drawer),
       input_(input),
       assignment_(assignment),
@@ -446,6 +477,7 @@ AlboriaOverlay::AlboriaOverlay(rex::ui::ImGuiDrawer* drawer, rex::input::InputSy
       page_(page),
       title_font_(title_font),
       body_font_(body_font),
+      header_(header),
       join_by_code_(std::move(join_by_code)),
       owner_(owner),
       opened_(Clock::now()),
@@ -723,16 +755,25 @@ bool AlboriaOverlay::AddFriendInput() {
 }
 
 void AlboriaOverlay::OnDraw(ImGuiIO& io) {
-  // Closing waits for what closed it to be released (coop_ui::CloseInputHeld).
+  // Closing plays its animation, then waits for what closed it to be released
+  // (coop_ui::CloseInputHeld); meanwhile the panel takes no input.
   if (closing_) {
+    if (!closing_since_) {
+      closing_since_ = Clock::now();
+      alboria_sounds::Play(Sound::kClose);
+    }
     std::vector<DeviceId> pads;
     if (assignment_) {
       for (const Slot& slot : assignment_->Slots()) {
         if (!slot.keyboard) pads.push_back(slot.device.id);
       }
     }
-    if (!CloseInputHeld(input_, pads)) Close();
-    return;
+    const bool shown = std::chrono::duration<float>(Clock::now() - *closing_since_).count() < kCloseSeconds;
+    if (!shown && !CloseInputHeld(input_, pads)) {
+      Close();
+      return;
+    }
+    if (!shown) return;
   }
 
   const Texts texts = LocalizedTexts(language_);
@@ -759,8 +800,8 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
     alboria_sounds::Play(group == alboria_sounds::Group::kMenu ? Sound::kAccept : Sound::kNotice);
   };
 
-  Actions actions = adding_ ? Actions{} : ReadInput();
-  if (adding_ && AddFriendInput()) {
+  Actions actions = adding_ || closing_ ? Actions{} : ReadInput();
+  if (adding_ && !closing_ && AddFriendInput()) {
     alboria_sounds::Play(Sound::kBack);
     adding_ = false;
   }
@@ -795,7 +836,11 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
   }
 
   const Clock::time_point now = Clock::now();
-  const float fade = std::min(1.0f, std::chrono::duration<float>(now - opened_).count() / kFadeSeconds);
+  // How far the opening and the closing have gone, for the fade and the panel's motion.
+  const float opened = std::chrono::duration<float>(now - opened_).count();
+  const float closed = closing_since_ ? Ease01(std::chrono::duration<float>(now - *closing_since_).count() / kCloseSeconds)
+                                      : 0.0f;
+  const float fade = Ease01(opened / kFadeSeconds) * (1.0f - closed);
   auto a = [&](int alpha) { return static_cast<int>(alpha * fade); };
   const std::vector<Slot> slots = assignment_ ? assignment_->Slots() : std::vector<Slot>{};
   const rex::input::DeviceInfo* pad = nullptr;
@@ -822,72 +867,101 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
   ImFont* body_font = body_font_ ? body_font_ : ImGui::GetFont();
   ImDrawList* draw_list = ImGui::GetForegroundDrawList();
   const ImVec2 mouse = io.MousePos;
-  const bool clicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+  const bool clicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !closing_;
   auto inside = [&](ImVec2 min, ImVec2 max) {
     return mouse.x >= min.x && mouse.x <= max.x && mouse.y >= min.y && mouse.y <= max.y;
   };
 
   // The game dimmed behind, with a touch of Alboria's night.
-  draw_list->AddRectFilled(ImVec2(0, 0), io.DisplaySize, IM_COL32(14, 20, 40, a(170)));
+  draw_list->AddRectFilled(ImVec2(0, 0), io.DisplaySize, IM_COL32(8, 12, 30, a(160)));
+  // Everything drawn from here on moves with the opening and the closing: scaled about the panel's
+  // centre and lowered a little, until the drawing ends.
+  const float opening = Ease01(opened / kOpenSeconds);
+  const float scale = closing_since_ ? 1.0f - 0.06f * closed * closed : 0.9f + 0.1f * EaseOutBack(opening);
+  const float rise = (closing_since_ ? 14.0f * closed : 24.0f * std::pow(1.0f - opening, 3.0f)) * unit;
+  const PanelMotion motion(draw_list, ImVec2(game_left + game_width * 0.5f, game_top + game_height * 0.5f), scale, rise);
 
-  const float panel_width = 720.0f * unit;
-  const float panel_height = 500.0f * unit;
-  const float margin = 32.0f * unit;
+  // The panel: pearl glass in its carved golden frame (alboria_style.h).
+  const float panel_width = 740.0f * unit;
+  const float panel_height = 580.0f * unit;
+  const float margin = 34.0f * unit;
   const ImVec2 panel_min(game_left + (game_width - panel_width) * 0.5f, game_top + (game_height - panel_height) * 0.5f);
   const ImVec2 panel_max(panel_min.x + panel_width, panel_min.y + panel_height);
-  const float radius = 22.0f * unit;
-  draw_list->AddRectFilled(ImVec2(panel_min.x, panel_min.y + 6.0f * unit), ImVec2(panel_max.x, panel_max.y + 6.0f * unit),
-                           IM_COL32(10, 16, 34, a(90)), radius);
-  draw_list->AddRectFilledMultiColor(ImVec2(panel_min.x, panel_min.y + radius), ImVec2(panel_max.x, panel_max.y - radius),
-                                     Paper(a(250)), Paper(a(250)), PaperDeep(a(250)), PaperDeep(a(250)));
-  draw_list->AddRectFilled(panel_min, ImVec2(panel_max.x, panel_min.y + radius * 2.0f), Paper(a(250)), radius,
-                           ImDrawFlags_RoundCornersTop);
-  draw_list->AddRectFilled(ImVec2(panel_min.x, panel_max.y - radius * 2.0f), panel_max, PaperDeep(a(250)), radius,
-                           ImDrawFlags_RoundCornersBottom);
-  draw_list->AddRect(panel_min, panel_max, SkyLine(a(255)), radius, 0, 2.0f * unit);
+  const float radius = 26.0f * unit;
+  // Its head: the Ring Plaza painted, fading into the glass, as the website's places do. It lies in
+  // the glass, under the panel's edge and groove, which run round it unbroken. The panel is opaque
+  // over the game, so the painting fades into exactly the glass's colour.
+  const float head_height = 120.0f * unit;
+  const ImVec2 head_max(panel_max.x, panel_min.y + head_height);
+  DrawCarvedPanel(draw_list, panel_min, panel_max, radius, unit, a(255), 1.0f, [&] {
+    if (header_) {
+      // The painting is wider than the head: its middle band, at the head's proportions.
+      const float band = std::min(1.0f, (head_height / panel_width) * (1024.0f / 320.0f));
+      draw_list->AddImageRounded(reinterpret_cast<ImTextureID>(header_), panel_min, head_max,
+                                 ImVec2(0.0f, 0.5f - band * 0.5f), ImVec2(1.0f, 0.5f + band * 0.5f), White(a(255)),
+                                 radius, ImDrawFlags_RoundCornersTop);
+    }
+    // The veil: clear at the top, the glass's own colour where the painting ends (DrawCarvedPanel's
+    // gradient at that height), and a few pixels past it, so no seam shows.
+    const float fade_end = head_height + 3.0f * unit;
+    const float at = fade_end / panel_height;
+    const ImU32 glass = IM_COL32(255 - static_cast<int>(19 * at), 255 - static_cast<int>(14 * at),
+                                 255 - static_cast<int>(3 * at), a(255));
+    const ImU32 clear = glass & ~IM_COL32_A_MASK;
+    draw_list->AddRectFilledMultiColor(ImVec2(panel_min.x, panel_min.y + head_height * 0.25f),
+                                       ImVec2(panel_max.x, panel_min.y + fade_end), clear, clear, glass, glass);
+  });
 
-  // The title, Alboria's planet beside it (the launcher's, from its 40 x 40 drawing), and the account
-  // on the right.
-  const float logo = 36.0f * unit / 40.0f;
-  const ImVec2 planet(panel_min.x + margin + 20.0f * logo, panel_min.y + 41.0f * unit);
-  DrawAlboriaPlanet(draw_list, planet, logo, a(255));
-  draw_list->AddText(title_font, 30.0f * unit, ImVec2(panel_min.x + margin + 46.0f * logo, panel_min.y + 23.0f * unit),
-                     Navy(a(255)), texts.title);
+  // The title on the painting: Alboria's planet in its pearl medallion, the name in ink, and the
+  // account on a tag of glass on the right, its tag in gold.
+  const float medallion = 26.0f * unit;
+  const ImVec2 medallion_center(panel_min.x + margin + medallion, panel_min.y + head_height - 28.0f * unit);
+  DrawMedallion(draw_list, medallion_center, medallion, a(255));
+  DrawAlboriaPlanet(draw_list, medallion_center, medallion * 0.72f / 20.0f, a(255));
+  draw_list->AddText(title_font, 32.0f * unit,
+                     ImVec2(medallion_center.x + medallion + 14.0f * unit, medallion_center.y - 19.0f * unit), Ink(a(255)),
+                     texts.title);
   const alboria::Identity identity = alboria::GetIdentity();
   if (identity.known) {
-    const std::string me = identity.gamertag + "#" + std::to_string(identity.tag);
-    const float width = body_font->CalcTextSizeA(16.0f * unit, FLT_MAX, 0.0f, me.c_str()).x;
-    draw_list->AddText(body_font, 16.0f * unit, ImVec2(panel_max.x - margin - width, panel_min.y + 32.0f * unit),
-                       NightSoft(a(255)), me.c_str());
+    const std::string name = identity.gamertag;
+    const std::string tag = "#" + std::to_string(identity.tag);
+    const float name_width = title_font->CalcTextSizeA(17.0f * unit, FLT_MAX, 0.0f, name.c_str()).x;
+    const float tag_width = title_font->CalcTextSizeA(17.0f * unit, FLT_MAX, 0.0f, tag.c_str()).x;
+    const ImVec2 max(panel_max.x - margin, medallion_center.y + 16.0f * unit);
+    const ImVec2 min(max.x - name_width - tag_width - 28.0f * unit, medallion_center.y - 16.0f * unit);
+    draw_list->AddRectFilled(min, max, White(a(215)), 16.0f * unit);
+    draw_list->AddRect(min, max, White(a(255)), 16.0f * unit, 0, 1.0f * unit);
+    draw_list->AddText(title_font, 17.0f * unit, ImVec2(min.x + 14.0f * unit, min.y + 6.0f * unit), Ink(a(255)), name.c_str());
+    draw_list->AddText(title_font, 17.0f * unit, ImVec2(min.x + 14.0f * unit + name_width, min.y + 6.0f * unit),
+                       GoldText(a(255)), tag.c_str());
   }
 
-  // The tabs.
+  // The tabs: small carved stones, the current one amber.
   const char* tab_names[] = {texts.friends, texts.invitations, texts.room, settings.tab};
-  float tab_x = panel_min.x + margin;
-  const float tab_y = panel_min.y + 74.0f * unit;
+  float tab_x = panel_min.x + margin + 10.0f * unit;
+  const float tab_middle = panel_min.y + head_height + 42.0f * unit;
   for (int i = 0; i < pages; ++i) {
     std::string label = tab_names[i];
     if (i == 1 && !invitations.empty()) label += " (" + std::to_string(invitations.size()) + ")";
-    const float width = title_font->CalcTextSizeA(18.0f * unit, FLT_MAX, 0.0f, label.c_str()).x + 30.0f * unit;
-    const ImVec2 min(tab_x, tab_y);
-    const ImVec2 max(tab_x + width, tab_y + 34.0f * unit);
     const bool current = static_cast<int>(page_) == i;
-    if (current) draw_list->AddRectFilled(min, max, Navy(a(255)), 17.0f * unit);
-    else draw_list->AddRect(min, max, SkyLine(a(255)), 17.0f * unit, 0, 2.0f * unit);
-    AddTextCentered(draw_list, title_font, 18.0f * unit, ImVec2((min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f),
-                    current ? White(a(255)) : Navy(a(255)), label.c_str());
-    if (clicked && inside(min, max) && !current) {
+    const Stone stone = current ? Stone::kAmber : Stone::kPearl;
+    const float width =
+        DrawRuneButton(draw_list, title_font, 16.0f * unit, ImVec2(0, 0), label.c_str(), stone, unit, 0, nullptr);
+    bool hit = false;
+    DrawRuneButton(draw_list, title_font, 16.0f * unit, ImVec2(tab_x + width, tab_middle), label.c_str(), stone, unit,
+                   a(255), &hit);
+    if (hit && !current) {
       page_ = static_cast<Page>(i);
       focus_ = 0;
     }
-    tab_x += width + 10.0f * unit;
+    tab_x += width + 26.0f * unit;
   }
 
   // The page.
-  const float list_top = tab_y + 52.0f * unit;
-  const float list_bottom = panel_max.y - 70.0f * unit;
+  const float list_top = tab_middle + 38.0f * unit;
+  const float list_bottom = panel_max.y - 72.0f * unit;
   const float row_height = 58.0f * unit;
-  const float row_gap = 8.0f * unit;
+  const float row_gap = 10.0f * unit;
   const float list_left = panel_min.x + margin;
   const float list_right = panel_max.x - margin;
   auto empty_text = [&](const char* text, const char* help = nullptr) {
@@ -898,24 +972,32 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
                          Fit(body_font, 15.0f * unit, help, list_right - list_left).c_str());
     }
   };
-  // A row of the list, with a coloured dot, its name and what it says; the focused one outlined.
-  // Returns the row's rectangle's vertical middle.
+  // A row of the list: glass, the focused one bright in a golden halo; a seal of what it is (`seal`:
+  // its light and dark colours, a ring rune in it), its name and what it says. Returns the row's
+  // vertical middle.
   const int visible_rows = std::max(1, static_cast<int>((list_bottom - list_top + row_gap) / (row_height + row_gap)));
   const int first_row = std::clamp(focus_ - visible_rows + 1, 0, std::max(0, rows_on_page() - visible_rows));
-  auto row = [&](int index, ImU32 dot, const std::string& name, const std::string& detail) -> float {
+  auto row = [&](int index, SealTone seal, const std::string& name, const std::string& detail) -> float {
     const float top = list_top + (index - first_row) * (row_height + row_gap);
     const ImVec2 min(list_left, top);
     const ImVec2 max(list_right, top + row_height);
     const bool focused = index == focus_;
-    draw_list->AddRectFilled(min, max, focused ? White(a(255)) : White(a(170)), 14.0f * unit);
-    draw_list->AddRect(min, max, focused ? SkyDeep(a(255)) : SkyLine(a(255)), 14.0f * unit, 0,
-                       (focused ? 2.5f : 1.5f) * unit);
+    const float round = 22.0f * unit;
+    if (focused) {
+      draw_list->AddRect(ImVec2(min.x - 6.0f * unit, min.y - 6.0f * unit), ImVec2(max.x + 6.0f * unit, max.y + 6.0f * unit),
+                         IM_COL32(255, 214, 120, a(70)), round + 6.0f * unit, 0, 6.0f * unit);
+      draw_list->AddRect(ImVec2(min.x - 3.0f * unit, min.y - 3.0f * unit), ImVec2(max.x + 3.0f * unit, max.y + 3.0f * unit),
+                         Gold(a(255)), round + 3.0f * unit, 0, 1.6f * unit);
+      draw_list->AddRect(ImVec2(min.x - 1.0f * unit, min.y - 1.0f * unit), ImVec2(max.x + 1.0f * unit, max.y + 1.0f * unit),
+                         GoldLight(a(255)), round + 1.0f * unit, 0, 2.0f * unit);
+    }
+    draw_list->AddRectFilled(min, max, focused ? White(a(250)) : White(a(165)), round);
+    if (!focused) draw_list->AddRect(min, max, White(a(250)), round, 0, 1.0f * unit);
     const float middle = top + row_height * 0.5f;
-    draw_list->AddCircleFilled(ImVec2(min.x + 22.0f * unit, middle), 6.0f * unit, dot);
-    draw_list->AddText(title_font, 19.0f * unit, ImVec2(min.x + 40.0f * unit, top + 8.0f * unit), Navy(a(255)),
-                       name.c_str());
-    draw_list->AddText(body_font, 14.0f * unit, ImVec2(min.x + 40.0f * unit, top + 32.0f * unit), NightSoft(a(255)),
-                       Fit(body_font, 14.0f * unit, detail, (max.x - min.x) * 0.55f).c_str());
+    if (seal.light) DrawStatusSeal(draw_list, ImVec2(min.x + 28.0f * unit, middle), 15.0f * unit, seal.light, seal.dark, a(255));
+    draw_list->AddText(title_font, 19.0f * unit, ImVec2(min.x + 54.0f * unit, top + 8.0f * unit), Ink(a(255)), name.c_str());
+    draw_list->AddText(body_font, 14.0f * unit, ImVec2(min.x + 54.0f * unit, top + 32.0f * unit), NightSoft(a(255)),
+                       Fit(body_font, 14.0f * unit, detail, (max.x - min.x) * 0.5f).c_str());
     if (clicked && inside(min, max)) focus_ = index;
     return middle;
   };
@@ -942,8 +1024,12 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
     auto field = [&](float left, float width, const std::string& text, const char* placeholder, bool focused) {
       const ImVec2 min(left, field_top);
       const ImVec2 max(left + width, field_top + field_height);
-      draw_list->AddRectFilled(min, max, White(a(255)), 12.0f * unit);
-      draw_list->AddRect(min, max, focused ? SkyDeep(a(255)) : SkyLine(a(255)), 12.0f * unit, 0, (focused ? 2.5f : 2.0f) * unit);
+      draw_list->AddRectFilled(min, max, White(a(235)), 16.0f * unit);
+      draw_list->AddRect(min, max, focused ? GoldDeep(a(255)) : Gold(a(190)), 16.0f * unit, 0, (focused ? 2.0f : 1.2f) * unit);
+      if (focused) {
+        draw_list->AddRect(ImVec2(min.x - 3.0f * unit, min.y - 3.0f * unit), ImVec2(max.x + 3.0f * unit, max.y + 3.0f * unit),
+                           IM_COL32(255, 214, 120, a(90)), 19.0f * unit, 0, 3.0f * unit);
+      }
       const bool empty = text.empty();
       std::string shown = empty ? placeholder : text;
       if (focused && std::fmod(std::chrono::duration<float>(now - opened_).count(), 1.0f) < 0.5f) shown = text + "|";
@@ -1008,19 +1094,20 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
   } else if (page_ == Page::kFriends) {
     // The first row: Add friend.
     if (first_row == 0) {
-      const float middle = row(0, Sun(a(255)), LocalizedAddTexts(language_).add_friend, LocalizedAddTexts(language_).help);
-      draw_list->AddText(title_font, 22.0f * unit, ImVec2(list_left + 15.5f * unit, middle - 13.0f * unit), Navy(a(255)), "+");
-      // Focused, the control that opens it, at the row's end where the other rows have buttons.
+      const float middle = row(0, SealTone{}, LocalizedAddTexts(language_).add_friend, LocalizedAddTexts(language_).help);
+      // Its seal: amber, with a plus.
+      const ImVec2 seal(list_left + 28.0f * unit, middle);
+      draw_list->AddCircleFilled(seal, 17.4f * unit, Gold(a(255)), 40);
+      draw_list->AddCircleFilled(seal, 16.2f * unit, GoldLight(a(255)), 40);
+      const int first = draw_list->VtxBuffer.Size;
+      draw_list->AddCircleFilled(seal, 15.0f * unit, White(a(255)), 40);
+      ShadeVertical(draw_list, first, seal.y - 15.0f * unit, seal.y + 15.0f * unit, IM_COL32(255, 216, 102, 255),
+                    IM_COL32(201, 138, 16, 255));
+      AddTextCentered(draw_list, title_font, 24.0f * unit, seal, White(a(255)), "+");
+      // Focused, a carved button at its end with the control that opens it, as the other rows have.
       if (focus_ == 0) {
-        const float height = 17.6f * unit;
-        const float right = list_right - 14.0f * unit;
-        if (pad) {
-          const float width = AlboriaGlyph(draw_list, title_font, ImVec2(0, 0), height, look, PadControl::kA, 0);
-          AlboriaGlyph(draw_list, title_font, ImVec2(right - width * 0.5f, middle), height, look, PadControl::kA, a(255));
-        } else {
-          const float width = AlboriaKey(draw_list, title_font, 0.0f, 0.0f, height, "Enter", 0);
-          AlboriaKey(draw_list, title_font, right - width, middle, height, "Enter", a(255));
-        }
+        DrawPill(draw_list, title_font, 16.0f * unit, ImVec2(list_right - 18.0f * unit, middle),
+                 LocalizedAddTexts(language_).add_friend, true, unit, a(255), nullptr, &enter_glyph);
       }
       bool hit = false;
       if (clicked && inside(ImVec2(list_left, middle - row_height * 0.5f), ImVec2(list_right, middle + row_height * 0.5f))) {
@@ -1037,18 +1124,19 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
     }
     for (int i = std::max(first_row, 1); i <= static_cast<int>(friends.size()) && i < first_row + visible_rows; ++i) {
       const alboria::Friend& f = friends[i - 1];
-      const ImU32 dot = f.playing ? Sun(a(255)) : f.online ? Online(a(255)) : SkyLine(a(255));
-      const float middle = row(i, dot, f.name, Activity(texts, f));
-      // A favourite: a sun ring around its dot (the fonts have no star).
+      const SealTone tone = f.playing ? kPlayingTone : f.online ? kOnlineTone : kOfflineTone;
+      const float middle = row(i, tone.At(a(255)), f.name, Activity(texts, f));
+      // A favourite: a ring of golden light around its seal (the fonts have no star).
       if (f.favourite) {
-        draw_list->AddCircle(ImVec2(list_left + 22.0f * unit, middle), 10.0f * unit, Sun(a(255)), 0, 2.0f * unit);
+        draw_list->AddCircle(ImVec2(list_left + 28.0f * unit, middle), 21.0f * unit, IM_COL32(255, 201, 60, a(255)), 0,
+                             2.0f * unit);
       }
-      float right = list_right - 14.0f * unit;
+      float right = list_right - 18.0f * unit;
       bool hit = false;
       if (f.joinable) {
         right -= DrawPill(draw_list, title_font, 16.0f * unit, ImVec2(right, middle), texts.join, true, unit, a(255), &hit,
                           i == focus_ ? &enter_glyph : nullptr) +
-                 10.0f * unit;
+                 24.0f * unit;
         if (hit && !busy) {
           focus_ = i;
           Act(false);
@@ -1066,12 +1154,13 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
   } else if (page_ == Page::kInvitations) {
     if (invitations.empty()) empty_text(texts.no_invitations);
     for (int i = first_row; i < static_cast<int>(invitations.size()) && i < first_row + visible_rows; ++i) {
-      const float middle = row(i, Sun(a(255)), invitations[i].from_name, Format(texts.invites_you, invitations[i].from_name));
-      float right = list_right - 14.0f * unit;
+      const float middle =
+          row(i, kPlayingTone.At(a(255)), invitations[i].from_name, Format(texts.invites_you, invitations[i].from_name));
+      float right = list_right - 18.0f * unit;
       bool hit = false;
       right -= DrawPill(draw_list, title_font, 16.0f * unit, ImVec2(right, middle), texts.join, true, unit, a(255), &hit,
                         i == focus_ ? &enter_glyph : nullptr) +
-               10.0f * unit;
+               24.0f * unit;
       if (hit && !busy) {
         focus_ = i;
         Act(false);
@@ -1088,7 +1177,7 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
     const char* labels[] = {settings.menu, settings.notices};
     const char* helps[] = {settings.menu_help, settings.notices_help};
     for (int i = 0; i < 2; ++i) {
-      const float middle = row(i, SkyDeep(a(255)), labels[i], helps[i]);
+      const float middle = row(i, kSkyTone.At(a(255)), labels[i], helps[i]);
       const int volume = alboria_sounds::Volume(setting_groups[i]);
       const float step = 16.0f * unit;
       const float gap = 4.0f * unit;
@@ -1098,8 +1187,16 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
       for (int v = 0; v < alboria_sounds::kMaxVolume; ++v) {
         const ImVec2 min(bar_left + v * (step + gap), middle - 9.0f * unit);
         const ImVec2 max(min.x + step, middle + 9.0f * unit);
-        draw_list->AddRectFilled(min, max, v < volume ? Sun(a(255)) : PaperDeep(a(255)), 4.0f * unit);
-        if (v < volume) draw_list->AddRect(min, max, SunShadow(a(255)), 4.0f * unit, 0, 1.0f * unit);
+        // A lit step is a small amber stone, the others empty glass with a golden line.
+        if (v < volume) {
+          const int first = draw_list->VtxBuffer.Size;
+          draw_list->AddRectFilled(min, max, White(a(255)), 5.0f * unit);
+          ShadeVertical(draw_list, first, min.y, max.y, IM_COL32(255, 243, 196, 255), IM_COL32(244, 179, 58, 255));
+          draw_list->AddRect(min, max, GoldDeep(a(255)), 5.0f * unit, 0, 1.2f * unit);
+        } else {
+          draw_list->AddRectFilled(min, max, IM_COL32(216, 184, 102, a(50)), 5.0f * unit);
+          draw_list->AddRect(min, max, Gold(a(140)), 5.0f * unit, 0, 1.0f * unit);
+        }
         if (clicked && inside(ImVec2(min.x, min.y - 6.0f * unit), ImVec2(max.x + gap, max.y + 6.0f * unit))) {
           focus_ = i;
           change_volume(i, v + 1 == volume ? v : v + 1);
@@ -1153,8 +1250,10 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
     }
   }
 
-  // Button hints along the bottom, with the glyphs of the input in use.
-  const float hints_y = panel_max.y - 36.0f * unit;
+  // Button hints along the bottom, under an engraved golden line, with the glyphs of the input in use.
+  const float hints_y = panel_max.y - 38.0f * unit;
+  draw_list->AddLine(ImVec2(panel_min.x + margin, hints_y - 14.0f * unit), ImVec2(panel_max.x - margin, hints_y - 14.0f * unit),
+                     Gold(a(150)), 1.0f * unit);
   float x = panel_min.x + margin;
   const float glyph = 20.0f * unit;
   auto hint = [&](PadControl control, const char* key, const char* text) {
@@ -1205,7 +1304,7 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
 }
 
 void AlboriaOverlay::OnClose() {
-  alboria_sounds::Play(Sound::kClose);
+  if (!closing_since_) alboria_sounds::Play(Sound::kClose);
   input::SetOverlayBlocking(false);
   alboria::SetOverlayShown(false);
   if (owner_) *owner_ = nullptr;
