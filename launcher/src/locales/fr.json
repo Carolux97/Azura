@@ -561,5 +561,13 @@
     "apply": "Utiliser ce serveur",
     "now": "Actuel : {url}",
     "badUrl": "Saisissez une adresse http ou https, comme http://192.168.1.20:8080"
+  },
+  "world": {
+    "arrival": "Le Belvédère de l'Arrivée",
+    "plaza": "La Place de l'Anneau",
+    "gate": "Le Portail",
+    "vault": "La Chambre Forte des Salons",
+    "observatory": "L'Observatoire",
+    "archive": "Les Archives"
   }
 }
