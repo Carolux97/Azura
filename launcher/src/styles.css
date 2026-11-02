@@ -780,6 +780,13 @@ code, kbd {
 .friend-pill { flex: none; padding: 3px 10px; border: 1px solid rgba(124, 92, 224, 0.35); border-radius: 999px; background: rgba(124, 92, 224, 0.1); font-weight: 800; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #7c5ce0; }
 .is-alboria .btn.friend-more { min-width: 34px; padding: 3px 10px; margin: 0 6px; background: rgba(255, 255, 255, 0.6); box-shadow: 0 0 0 1px rgba(216, 184, 102, 0.6); outline: 0; color: var(--night-soft); font-size: 18px; }
 .is-alboria .btn.friend-more::before, .is-alboria .btn.friend-more::after { display: none; }
+/* With its menu open the button is marked, a carved stone of amber in its golden frame, and shows an
+   arrow that folds the menu. */
+.is-alboria .btn.friend-more.is-open {
+  background: linear-gradient(180deg, #fff3c4 0%, #ffd866 45%, #f4b33a 100%); color: #2b1d04;
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.85), 0 0 0 2px #ffe9a8, 0 0 0 4px #c99838, 0 0 18px rgba(255, 196, 70, 0.55);
+}
+.friend-more .fold-arrow { display: block; width: 18px; height: 18px; margin: 0 auto; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
 .friend-menu, .friend-report { display: flex; flex-wrap: wrap; gap: 10px 6px; padding: 10px 12px; background: rgba(255, 255, 255, 0.85); border: 1px solid rgba(216, 184, 102, 0.7); border-radius: 18px; }
 .friend-report textarea { flex: 1 1 100%; min-height: 60px; resize: vertical; }
 .friend-report select { flex: 1 1 100%; }

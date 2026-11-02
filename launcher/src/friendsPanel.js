@@ -102,6 +102,18 @@ export const setupFriends = ({ state, t, toast, inFront, serviceBlock, startGame
     return element;
   };
 
+  // An arrow pointing up, drawn so it does not depend on a font: it folds a friend's open menu.
+  const foldArrow = () => {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("class", "fold-arrow");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", "M3 10.5 8 5.5l5 5");
+    svg.append(path);
+    return svg;
+  };
+
   const personRow = (name, detail, ...actions) => {
     const row = document.createElement("div");
     row.className = "friend-row";
@@ -135,13 +147,17 @@ export const setupFriends = ({ state, t, toast, inFront, serviceBlock, startGame
         button(t("friends.invite"), "btn btn-small", () => act("/v1/invitations", { friend: friend.id }, t("friends.invited", { name: friend.name }))),
       );
     }
-    actions.push(
-      button("⋯", "btn btn-small friend-more", () => {
-        menuFor = menuFor === friend.id ? null : friend.id;
-        reportFor = null;
-        render();
-      }),
-    );
+    // The button that opens the friend's menu: three dots; while the menu is open it is marked and
+    // shows an arrow that folds, so it reads as the way to close it again.
+    const menuOpen = menuFor === friend.id;
+    const more = button(menuOpen ? "" : "⋯", `btn btn-small friend-more${menuOpen ? " is-open" : ""}`, () => {
+      menuFor = menuOpen ? null : friend.id;
+      reportFor = null;
+      render();
+    });
+    more.setAttribute("aria-expanded", String(menuOpen));
+    if (menuOpen) more.append(foldArrow());
+    actions.push(more);
     const row = personRow(`${friend.favourite ? "★ " : ""}${friend.name}`, detail, ...actions);
     row.dataset.state = friend.presence?.status ?? "offline";
     const wrap = document.createElement("div");
