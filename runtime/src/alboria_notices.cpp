@@ -319,20 +319,20 @@ void AlboriaNotices::OnDraw(ImGuiIO& io) {
         const float w1 = AlboriaGlyph(draw_list, title_font, ImVec2(0, 0), glyph, look, first, 0);
         x += AlboriaGlyph(draw_list, title_font, ImVec2(x + w1 * 0.5f, middle), glyph, look, first, alpha);
         x += 2.0f * unit;
-        draw_list->AddText(body_font, detail_size, ImVec2(x, middle - detail_size * 0.55f), Navy(alpha), "+");
+        draw_list->AddText(body_font, detail_size, ImVec2(x, middle - detail_size * 0.55f), Ink(alpha), "+");
         x += body_font->CalcTextSizeA(detail_size, FLT_MAX, 0.0f, "+").x + 2.0f * unit;
         const float w2 = AlboriaGlyph(draw_list, title_font, ImVec2(0, 0), glyph, look, second, 0);
         x += AlboriaGlyph(draw_list, title_font, ImVec2(x + w2 * 0.5f, middle), glyph, look, second, alpha);
       } else {
         if (first_key) {
           x += AlboriaKey(draw_list, title_font, x, middle, glyph, first_key, alpha) + 2.0f * unit;
-          draw_list->AddText(body_font, detail_size, ImVec2(x, middle - detail_size * 0.55f), Navy(alpha), "+");
+          draw_list->AddText(body_font, detail_size, ImVec2(x, middle - detail_size * 0.55f), Ink(alpha), "+");
           x += body_font->CalcTextSizeA(detail_size, FLT_MAX, 0.0f, "+").x + 2.0f * unit;
         }
         x += AlboriaKey(draw_list, title_font, x, middle, glyph, second_key, alpha);
       }
       x += 5.0f * unit;
-      draw_list->AddText(body_font, detail_size, ImVec2(x, middle - detail_size * 0.55f), Navy(alpha), what);
+      draw_list->AddText(body_font, detail_size, ImVec2(x, middle - detail_size * 0.55f), Ink(alpha), what);
       x += body_font->CalcTextSizeA(detail_size, FLT_MAX, 0.0f, what).x + kHintGap * unit;
     };
     chord(PadControl::kBack, PadControl::kRightTrigger, "Shift", key.c_str(), texts.accept);
@@ -357,26 +357,25 @@ void AlboriaNotices::OnDraw(ImGuiIO& io) {
   const float center_x = io.DisplaySize.x * 0.5f - full_width * 0.5f + badge;
   const float middle = game_bottom - 60.0f * unit - height * 0.5f;
   const float width = (full_width - badge) * unfold;
-  const int panel_alpha = static_cast<int>(240.0f * Clamp01(unfold * 3.0f));
+  const int panel_alpha = static_cast<int>(255.0f * Clamp01(unfold * 3.0f));
   if (width > 1.0f) {
+    // A beam of pearl glass in Alboria's carved golden frame; its left end lies under the medallion.
     const ImVec2 min(center_x, middle - height * 0.5f);
     const ImVec2 max(center_x + width, middle + height * 0.5f);
-    draw_list->AddRectFilled(ImVec2(min.x, min.y + 4.0f * unit), ImVec2(max.x, max.y + 4.0f * unit),
-                             IM_COL32(0, 0, 0, panel_alpha / 4), height * 0.5f, ImDrawFlags_RoundCornersRight);
-    draw_list->AddRectFilled(min, max, Paper(panel_alpha), height * 0.5f, ImDrawFlags_RoundCornersRight);
-    draw_list->AddRect(min, max, SkyLine(panel_alpha), height * 0.5f, ImDrawFlags_RoundCornersRight, 2.0f * unit);
+    DrawCarvedPanel(draw_list, min, max, height * 0.5f, unit, panel_alpha);
 
-    // The time left, as a bar along the bottom that runs down.
+    // The time left, as a thread of golden rune light along the bottom that runs down.
     if (shown_->seconds != FLT_MAX && !shown_->leaving) {
       const float total = shown_->seconds - kTextStart;
       const float left = Clamp01(1.0f - (t - kTextStart) / total);
       const float bar_left = center_x + badge * 0.6f;
       const float bar_right = max.x - height * 0.4f;
-      const float bar_y = max.y - 7.0f * unit;
-      draw_list->AddLine(ImVec2(bar_left, bar_y), ImVec2(bar_right, bar_y), PaperDeep(panel_alpha), 3.0f * unit);
+      const float bar_y = max.y - 11.0f * unit;
+      draw_list->AddLine(ImVec2(bar_left, bar_y), ImVec2(bar_right, bar_y), Gold(panel_alpha * 60 / 255), 3.0f * unit);
       if (left > 0.0f) {
-        draw_list->AddLine(ImVec2(bar_left, bar_y), ImVec2(bar_left + (bar_right - bar_left) * left, bar_y),
-                           SkyDeep(panel_alpha), 3.0f * unit);
+        const ImVec2 end(bar_left + (bar_right - bar_left) * left, bar_y);
+        draw_list->AddLine(ImVec2(bar_left, bar_y), end, IM_COL32(255, 200, 70, panel_alpha * 70 / 255), 7.0f * unit);
+        draw_list->AddLine(ImVec2(bar_left, bar_y), end, IM_COL32(255, 212, 94, panel_alpha), 3.0f * unit);
       }
     }
 
@@ -386,9 +385,9 @@ void AlboriaNotices::OnDraw(ImGuiIO& io) {
       draw_list->PushClipRect(min, max, true);
       const float left = center_x + text_offset;
       float y = middle - height * 0.5f + 11.0f * unit;
-      draw_list->AddText(body_font, label_size, ImVec2(left, y), SkyDeep(a), label);
+      draw_list->AddText(body_font, label_size, ImVec2(left, y), GoldText(a), label);
       y += label_size + 3.0f * unit;
-      draw_list->AddText(title_font, name_size, ImVec2(left, y), Navy(a), notice.from_name.c_str());
+      draw_list->AddText(title_font, name_size, ImVec2(left, y), Ink(a), notice.from_name.c_str());
       y += name_size + 2.0f * unit;
       draw_list->AddText(body_font, detail_size, ImVec2(left, y), accept_failed ? Crimson(a) : NightSoft(a),
                          detail.c_str());
@@ -405,14 +404,13 @@ void AlboriaNotices::OnDraw(ImGuiIO& io) {
     }
   }
 
-  // The badge: a white disc with a sky line, and the planet with its moon on it.
+  // The badge: the logo's pearl medallion ringed in gold, and the planet with its moon on it.
   if (grow > 0.0f) {
     const ImVec2 center(center_x, middle);
     const int alpha = static_cast<int>(255.0f * Clamp01(grow * 2.0f));
     const float radius = badge * std::max(grow, 0.0f);
-    draw_list->AddCircleFilled(ImVec2(center.x, center.y + 4.0f * unit), radius, IM_COL32(0, 0, 0, alpha / 4), 48);
-    draw_list->AddCircleFilled(center, radius, White(alpha), 48);
-    draw_list->AddCircle(center, radius, SkyLine(alpha), 48, 2.0f * unit);
+    draw_list->AddCircleFilled(ImVec2(center.x, center.y + 5.0f * unit), radius * 1.1f, IM_COL32(0, 0, 0, alpha / 4), 48);
+    DrawMedallion(draw_list, center, radius, alpha);
     DrawAlboriaPlanet(draw_list, center, 1.5f * unit * grow, alpha, 1.0f + t * kMoonSpeed);
   }
 }

@@ -561,5 +561,13 @@
     "apply": "このサーバーを使う",
     "now": "現在: {url}",
     "badUrl": "http または https のアドレスを入力してください（例: http://192.168.1.20:8080）"
+  },
+  "world": {
+    "arrival": "到着の展望台",
+    "plaza": "リングの広場",
+    "gate": "ゲート",
+    "vault": "ルームの宝庫",
+    "observatory": "天文台",
+    "archive": "アーカイブ"
   }
 }

@@ -561,5 +561,13 @@
     "apply": "이 서버 사용",
     "now": "현재: {url}",
     "badUrl": "http 또는 https 주소를 입력하세요(예: http://192.168.1.20:8080)"
+  },
+  "world": {
+    "arrival": "도착의 전망대",
+    "plaza": "고리의 광장",
+    "gate": "관문",
+    "vault": "방의 금고",
+    "observatory": "천문대",
+    "archive": "기록 보관소"
   }
 }

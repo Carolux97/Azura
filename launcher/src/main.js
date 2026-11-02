@@ -1584,7 +1584,14 @@ const renderService = () => {
   panel.hidden = !block;
   if (block) {
     const game = gameName();
-    document.getElementById("service-panel-art").src = block.kind === "outdated" ? "alborians/greeter.svg" : "alborians/night-owl.svg";
+    // The Greeter at the Gate offers the update; the Night owl keeps watch from its Observatory.
+    const outdated = block.kind === "outdated";
+    document.getElementById("service-panel-art").src = outdated ? "world/greeter.webp" : "world/night-owl.webp";
+    panel.classList.toggle("place-gate", outdated);
+    panel.classList.toggle("place-observatory", !outdated);
+    const place = document.getElementById("service-panel-place");
+    place.dataset.i18n = outdated ? "world.gate" : "world.observatory";
+    place.textContent = t(place.dataset.i18n);
     const [title, text] =
       block.kind === "down"
         ? [t("alboriaService.downTitle"), t("alboriaService.downText")]
@@ -1655,7 +1662,7 @@ const renderService = () => {
       // The Greeter brings Alboria's notices.
       const greeter = document.createElement("img");
       greeter.className = "alborian";
-      greeter.src = "alborians/greeter.svg";
+      greeter.src = "world/greeter.webp";
       greeter.alt = "";
       const text = document.createElement("div");
       text.className = "alboria-notice-text";

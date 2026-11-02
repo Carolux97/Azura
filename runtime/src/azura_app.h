@@ -9,7 +9,10 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory>
+#include <vector>
 
 #include <imgui.h>
 
@@ -24,6 +27,8 @@
 #include <rex/system/flags.h>
 #include <rex/system/gpu_plugin.h>
 #include <rex/system/xam/alboria.h>
+#include <rex/ui/image_decode.h>
+#include <rex/ui/immediate_drawer.h>
 #include <rex/ui/keybinds.h>
 #include <rex/ui/presenter.h>
 
@@ -268,8 +273,8 @@ class AzuraApp : public rex::ReXApp {
       azura::alboria_sounds::Prepare();
       if (dialog_drawer_ && input) {
         alboria_notices_ = new azura::AlboriaNotices(dialog_drawer_, input, azura::input::InstalledPlayerAssignment(),
-                                                     REXCVAR_GET(user_language), title_font_, body_font_,
-                                                     &alboria_notices_);
+                                                     REXCVAR_GET(user_language), alboria_title_font_,
+                                                     alboria_body_font_, &alboria_notices_);
       }
       azura::input::InstallOverlayInput(
           input, [this] { app_context().CallInUIThread([this] { OpenAlboriaOverlay(OverlayPageForNotice()); }); },
@@ -425,6 +430,17 @@ class AzuraApp : public rex::ReXApp {
     };
     title_font_ = load_with_fallbacks("Barlow-SemiBold.ttf", "NotoSansCyrillic-SemiBold.ttf");
     body_font_ = load_with_fallbacks("Barlow-Medium.ttf", "NotoSansCyrillic-Medium.ttf");
+    // Alboria's screens (the overlay and its notices) are in its own rounded face, as on its website:
+    // Nunito, which draws Latin and Cyrillic itself, with the CJK font merged behind it.
+    auto load_alboria = [&](const char* nunito) -> ImFont* {
+      ImFont* font = load(nunito, false);
+      if (font && cjk) load(cjk, true);
+      return font;
+    };
+    alboria_title_font_ = load_alboria("Nunito-ExtraBold.ttf");
+    alboria_body_font_ = load_alboria("Nunito-SemiBold.ttf");
+    if (!alboria_title_font_) alboria_title_font_ = title_font_;
+    if (!alboria_body_font_) alboria_body_font_ = body_font_;
   }
 
   // The notice for unlocked achievements, in place of the SDK's toast.
@@ -469,6 +485,7 @@ class AzuraApp : public rex::ReXApp {
     join_by_code_menu_ = nullptr;
     delete alboria_overlay_;
     alboria_overlay_ = nullptr;
+    alboria_header_.reset();
     delete alboria_notices_;
     alboria_notices_ = nullptr;
     azura::alboria_sounds::Shutdown();
@@ -525,6 +542,26 @@ class AzuraApp : public rex::ReXApp {
     }
   }
 
+  // The painting in the Alboria overlay's head (assets/alboria/plaza-head.png), made a texture the
+  // first time the overlay opens; null when it cannot be read. On the UI thread.
+  rex::ui::ImmediateTexture* AlboriaHeader() {
+    if (!alboria_header_ && !alboria_header_failed_ && immediate_drawer()) {
+      std::ifstream file(exe_dir_ / "assets" / "alboria" / "plaza-head.png", std::ios::binary);
+      const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+      int width = 0;
+      int height = 0;
+      const std::vector<uint8_t> rgba = bytes.empty() ? std::vector<uint8_t>{}
+                                                      : rex::ui::DecodeImageRGBA(bytes.data(), bytes.size(), width, height);
+      if (!rgba.empty()) {
+        alboria_header_ = immediate_drawer()->CreateTexture(static_cast<uint32_t>(width), static_cast<uint32_t>(height),
+                                                            rex::ui::ImmediateTextureFilter::kLinear, false, rgba.data());
+      }
+      alboria_header_failed_ = !alboria_header_;
+      if (alboria_header_failed_) REXLOG_WARN("[Azura] The Alboria overlay's painting could not be read");
+    }
+    return alboria_header_.get();
+  }
+
   // The overlay's page for the notice on screen (Invitations for an invitation), else Friends.
   azura::AlboriaOverlay::Page OverlayPageForNotice() const {
     return alboria_notices_ ? alboria_notices_->OverlayPage() : azura::AlboriaOverlay::Page::kFriends;
@@ -541,8 +578,8 @@ class AzuraApp : public rex::ReXApp {
     if (azura::script::WhereInMenus() == azura::script::Menus::kPlaying) azura::input::PressStartForGame();
     alboria_overlay_ = new azura::AlboriaOverlay(
         dialog_drawer_, input, azura::input::InstalledPlayerAssignment(), REXCVAR_GET(user_language), page,
-        title_font_, body_font_, [this] { app_context().CallInUIThread([this] { OpenJoinByCode(); }); },
-        &alboria_overlay_);
+        alboria_title_font_, alboria_body_font_, AlboriaHeader(),
+        [this] { app_context().CallInUIThread([this] { OpenJoinByCode(); }); }, &alboria_overlay_);
   }
 
   std::unique_ptr<azura::prompts::ButtonPrompts> button_prompts_;
@@ -551,6 +588,9 @@ class AzuraApp : public rex::ReXApp {
   std::unique_ptr<azura::PerfOverlay> perf_overlay_;
   ImFont* title_font_ = nullptr;
   ImFont* body_font_ = nullptr;
+  // Alboria's rounded face (Nunito), for its overlay and notices; the game's fonts when it is missing.
+  ImFont* alboria_title_font_ = nullptr;
+  ImFont* alboria_body_font_ = nullptr;
   // Deletes itself when it closes, clearing this pointer. Accessed on the UI thread only.
   azura::ShaderCompileOverlay* shader_compile_overlay_ = nullptr;
   azura::OnlineRoomOverlay* online_room_overlay_ = nullptr;
@@ -558,6 +598,9 @@ class AzuraApp : public rex::ReXApp {
   // The Alboria overlay while it is open; deletes itself when it closes, clearing this pointer.
   // Accessed on the UI thread only.
   azura::AlboriaOverlay* alboria_overlay_ = nullptr;
+  // The overlay's painting (AlboriaHeader), kept for the app's life; released before the drawer.
+  std::unique_ptr<rex::ui::ImmediateTexture> alboria_header_;
+  bool alboria_header_failed_ = false;
   // Alboria's notices over the game, with online play on; lives as long as the app (deleted at
   // shutdown, which clears this pointer). Accessed on the UI thread only.
   azura::AlboriaNotices* alboria_notices_ = nullptr;
