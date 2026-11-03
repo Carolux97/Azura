@@ -47,6 +47,7 @@
 // scanning new GNames entries every so often until they appear.
 
 #include <algorithm>
+#include <deque>
 #include <cctype>
 #include <chrono>
 #include <cmath>
@@ -100,6 +101,9 @@ REXCVAR_DEFINE_BOOL(script_dump_code, false, "Azura/Debug",
 REXCVAR_DEFINE_BOOL(research_hold_lobby, false, "Azura/Debug",
                     "Research: the pre-game lobby stays waiting for players (state 1) instead of going on to "
                     "its vote");
+REXCVAR_DEFINE_STRING(research_last_maps, "", "Azura/Debug",
+                      "Research: comma-separated maps (as MP_Sandbar) taken as the pre-game lobby's last matches "
+                      "at start-up, so its vote leaves them out");
 REXCVAR_DEFINE_BOOL(research_auto_lobby, false, "Azura/Debug",
                     "Research: once the party is created (at start-up, and back from a match of the pre-game "
                     "lobby), its host creates a custom match by itself, as the menu would");
@@ -372,6 +376,8 @@ enum WatchedName {
   kBeginMatch,               // GearPreGameLobbyGame_Base: the lobby starts the match (force_lobby_playlist)
   kEndOfGameTransition,      // GearGameMP_Base.MatchOver: where players go after a match (playlist_lobby_vote)
   kGetNextMap,               // GameInfo and subclasses: the map a finished match travels to (playlist_lobby_vote)
+  kCheckMapAgainstPlaylist,  // GearGRI: whether a map can be played in a playlist (playlist_lobby_vote)
+  kGetNumberOfSupportedMaps,  // GearGRI.GetNumberOfSupportedMapsForPlaylist: how many it has (playlist_lobby_vote)
   kPlaylistPopulationRead,   // UIScene_FrontEnd: the menu is ready, its party made (research_auto_lobby)
   kPlaylistPopulationUpdated,  // UIScene_FrontEnd: the same at start-up (research_auto_lobby)
   kOnCreatePartyComplete,    // GearPartyGame_Base: the party's session is created (research_auto_lobby)
@@ -411,7 +417,7 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "Callback_Credits",      "Callback_ClientMenuOptionWasSelected", "ConditionalCreatePartySession",
     "GetPartyType",          "LocalPartyCreated",      "ClientSetHUD",       "OnCustomMapChanged",
     "ApplySensitivityScaling", "ViewAdhesion",
-    "GetAdjustedAimFor",     "NotifyInviteFailed",     "CancelPartyMatchmaking", "ContinueCreateMatch", "InitializeGameSelectionInternal", "UpdateCountdowns", "InitializeMapSelectionInternal", "PlacePlayerOnAssignedTeam", "HandleGameSessionJIP", "InitializePreGameGameSettings", "PreLogin", "PostLogin", "SetNumBots", "BeginMatch", "EndOfGameTransition", "GetNextMap", "OnUpdatePlaylistPopulationData", "OnPlaylistPopulationDataUpdated", "OnCreatePartyComplete", "IsEpicDev",
+    "GetAdjustedAimFor",     "NotifyInviteFailed",     "CancelPartyMatchmaking", "ContinueCreateMatch", "InitializeGameSelectionInternal", "UpdateCountdowns", "InitializeMapSelectionInternal", "PlacePlayerOnAssignedTeam", "HandleGameSessionJIP", "InitializePreGameGameSettings", "PreLogin", "PostLogin", "SetNumBots", "BeginMatch", "EndOfGameTransition", "GetNextMap", "CheckMapAgainstPlaylist", "GetNumberOfSupportedMapsForPlaylist", "OnUpdatePlaylistPopulationData", "OnPlaylistPopulationDataUpdated", "OnCreatePartyComplete", "IsEpicDev",
     "ProcessSoundEvent",     "Options_StepUp",         "Options_StepDown",   "ValueChangeLeft",
     "ValueChangeRight",      "Options_AcceptButton",   "Options_BackButton", "Options_DetailsEnter",
     "Options_DetailsLeave",  "Options_SliderLeft",     "Options_SliderRight"};
@@ -1814,6 +1820,83 @@ uint32_t LobbyNextMapCode(uint8_t* base) {
     return at;
   }();
   return address;
+}
+
+// --- Map rotation of the pre-game lobby (research, playlist_lobby_vote) ---
+//
+// The lobby's vote (GearPreGameGRI.InitializeMapSelectionInternal) draws four different maps at
+// random (three to vote on and the one "random" gives), each checked with
+// GearGRI.CheckMapAgainstPlaylist(MapProviderIndex, PlaylistIdToCheck), which answers the index or
+// -1 for a map the playlist does not have. How many it draws depends on
+// GetNumberOfSupportedMapsForPlaylist, which counts the maps that check answers for, so its loops
+// always end. While the vote is drawn, the check also answers -1 for the maps of the lobby's last
+// two matches; the count then leaves them out too. When too few maps would be left to draw four,
+// the count gets them back (the maps the check left out while counting) and the rest of the draw
+// checks without leaving any out, so the vote may offer them.
+constexpr size_t kLobbyMapMemory = 2;  // matches whose maps the vote leaves out
+constexpr int32_t kVoteMaps = 4;       // maps the vote draws
+std::mutex g_lobby_maps_mutex;
+std::deque<std::string> g_lobby_maps;  // the lobby's last matches' maps, newest last, lower case
+std::atomic<bool> g_drawing_vote_maps{false};
+std::atomic<bool> g_vote_leaves_out_maps{false};
+std::atomic<int32_t> g_maps_left_out{0};  // by the check, since the count began
+
+std::string Lower(std::string text) {
+  for (char& c : text) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  return text;
+}
+
+// The text of the FString at `address` (UTF-16BE), with '?' for what is not ASCII.
+std::string FStringText(const uint8_t* base, uint32_t address) {
+  const uint32_t data = LoadU32(base, address);
+  const uint32_t count = LoadU32(base, address + 4);
+  std::string text;
+  for (uint32_t i = 0; data && i + 1 < count && i < 256; ++i) {
+    const uint16_t w = static_cast<uint16_t>(base[data + i * 2] << 8 | base[data + i * 2 + 1]);
+    text.push_back(w < 128 ? static_cast<char>(w) : '?');
+  }
+  return text;
+}
+
+// The offset of the parameter or local `name` in `function`'s locals, or -1.
+int32_t LocalOffset(const uint8_t* base, uint32_t function, const char* name) {
+  for (uint32_t prop = LoadU32(base, function + kStructChildren); prop; prop = LoadU32(base, prop + kFieldNext)) {
+    if (ObjectName(base, prop) == name) return static_cast<int32_t>(LoadU32(base, prop + kPropertyOffset));
+  }
+  return -1;
+}
+
+// Remembers `map` as the lobby's latest match, forgetting the oldest past kLobbyMapMemory.
+void RememberLobbyMap(const std::string& map) {
+  std::lock_guard lock(g_lobby_maps_mutex);
+  g_lobby_maps.push_back(Lower(map));
+  while (g_lobby_maps.size() > kLobbyMapMemory) g_lobby_maps.pop_front();
+}
+
+// The maps research_last_maps names, remembered once at the first vote.
+void SeedLobbyMaps() {
+  static std::once_flag once;
+  std::call_once(once, [] {
+    const std::string list = REXCVAR_GET(research_last_maps);
+    size_t start = 0;
+    while (start < list.size()) {
+      const size_t end = std::min(list.find(',', start), list.size());
+      if (end > start) RememberLobbyMap(list.substr(start, end - start));
+      start = end + 1;
+    }
+  });
+}
+
+bool IsRecentLobbyMap(const std::string& map) {
+  std::lock_guard lock(g_lobby_maps_mutex);
+  return std::find(g_lobby_maps.begin(), g_lobby_maps.end(), Lower(map)) != g_lobby_maps.end();
+}
+
+std::string RecentLobbyMaps() {
+  std::lock_guard lock(g_lobby_maps_mutex);
+  std::string text;
+  for (const auto& map : g_lobby_maps) text += (text.empty() ? "" : ", ") + map;
+  return text.empty() ? "none" : text;
 }
 
 // --- Restart message box ---
@@ -3868,6 +3951,22 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     }
     return;
   }
+  // The lobby's history of maps: a match it starts (its own ProcessServerTravel, to the voted map)
+  // is remembered; a travel to the party closes the lobby, and its history goes with it.
+  if (Is(base, function, kProcessServerTravel) && REXCVAR_GET(playlist_lobby_vote)) {
+    const int32_t url_offset = ParamOffset(base, function, "URL");
+    const std::string url = url_offset >= 0
+                                ? FStringText(base, LoadU32(base, ctx.r4.u32 + kFrameLocals) + static_cast<uint32_t>(url_offset))
+                                : std::string();
+    const std::string outer = ObjectName(base, LoadU32(base, function + kObjectOuter));
+    if (outer == "GearPreGameLobbyGame_Base" && !url.empty() && Lower(url).rfind("gearstart", 0) != 0) {
+      RememberLobbyMap(url.substr(0, url.find('?')));
+      REXLOG_INFO("[Azura research] The lobby's last maps: {}", RecentLobbyMaps());
+    } else if (Lower(url).find("gearpartygame") != std::string::npos) {
+      std::lock_guard lock(g_lobby_maps_mutex);
+      g_lobby_maps.clear();
+    }
+  }
   if (Is(base, function, kServerTravel) || Is(base, function, kProcessServerTravel)) {
     const uint32_t locals = LoadU32(base, ctx.r4.u32 + kFrameLocals);
     const int32_t url_offset = ParamOffset(base, function, "URL");
@@ -3939,6 +4038,53 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
       ObjectName(base, LoadU32(base, function + kObjectOuter)) == "GearPreGameGRI") {
     static std::atomic<bool> done{false};
     LetPlaylistLobbyVote(base, function, done, true);
+    SeedLobbyMaps();
+    g_vote_leaves_out_maps.store(true);
+    g_drawing_vote_maps.store(true);
+    // The frame and result registers do not survive the call.
+    const uint32_t gri = LoadU32(base, ctx.r4.u32 + kFrameObject);
+    __imp__sub_822DF9E0(ctx, base);
+    g_drawing_vote_maps.store(false);
+    const uint32_t cls = LoadU32(base, gri + kObjectClass);
+    std::string drawn;
+    for (const char* name : {"FirstMapName", "SecondMapName", "ThirdMapName", "RandomMapName"}) {
+      const int32_t offset = ClassPropertyOffset(base, cls, name);
+      drawn += (drawn.empty() ? "" : ", ") + (offset >= 0 ? FStringText(base, gri + offset) : std::string("?"));
+    }
+    REXLOG_INFO("[Azura research] The vote's maps: {} (last maps {}, {})", drawn, RecentLobbyMaps(),
+                g_vote_leaves_out_maps.load() ? "left out" : "too few maps to leave them out");
+    return;
+  }
+  // While the vote draws its maps: the count of a playlist's maps leaves out the recent ones, unless
+  // fewer than the vote's four would be left; then it counts them again (a frame cannot run twice:
+  // its code has been read to the end).
+  if (Is(base, function, kGetNumberOfSupportedMaps) && g_drawing_vote_maps.load()) {
+    const uint32_t result = ctx.r5.u32;
+    g_maps_left_out.store(0);
+    __imp__sub_822DF9E0(ctx, base);
+    const int32_t left_out = g_maps_left_out.load();
+    if (result && left_out && static_cast<int32_t>(LoadU32(base, result)) < kVoteMaps &&
+        g_vote_leaves_out_maps.exchange(false)) {
+      StoreU32(base, result, LoadU32(base, result) + static_cast<uint32_t>(left_out));
+    }
+    if (result) REXLOG_INFO("[Azura research] The playlist has {} maps for the vote", static_cast<int32_t>(LoadU32(base, result)));
+    return;
+  }
+  // ...and the check of a map answers -1 for a recent one (its MapData local, the map's provider,
+  // holds its MapName).
+  if (Is(base, function, kCheckMapAgainstPlaylist) && g_drawing_vote_maps.load() && g_vote_leaves_out_maps.load()) {
+    const uint32_t result = ctx.r5.u32;
+    const uint32_t locals = LoadU32(base, ctx.r4.u32 + kFrameLocals);
+    __imp__sub_822DF9E0(ctx, base);
+    const int32_t map_data = LocalOffset(base, function, "MapData");
+    const uint32_t provider = map_data >= 0 ? LoadU32(base, locals + map_data) : 0;
+    const int32_t name = provider ? ClassPropertyOffset(base, LoadU32(base, provider + kObjectClass), "MapName") : -1;
+    if (result && static_cast<int32_t>(LoadU32(base, result)) != -1 && name >= 0 &&
+        IsRecentLobbyMap(FStringText(base, provider + name))) {
+      StoreU32(base, result, static_cast<uint32_t>(-1));
+      g_maps_left_out.fetch_add(1);
+    }
+    return;
   }
   // A playlist match (MatchType 4) gets its bots from matchmaking's reservations, not from its
   // settings' bot count (SetNumBots, setting 17), so one that came from the pre-game lobby has
@@ -3981,11 +4127,13 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   }
   if (Is(base, function, kGetNextMap) && g_lobby_return_pending.exchange(false)) {
     if (const uint32_t code = LobbyNextMapCode(base)) {
-      SetBoolField(base, LoadU32(base, ctx.r4.u32 + kFrameObject), "bUseSeamlessTravel", false);
-      const uint32_t own_code = LoadU32(base, ctx.r4.u32 + kFrameCode);
-      StoreU32(base, ctx.r4.u32 + kFrameCode, code);
+      // The frame register does not survive the call.
+      const uint32_t frame = ctx.r4.u32;
+      SetBoolField(base, LoadU32(base, frame + kFrameObject), "bUseSeamlessTravel", false);
+      const uint32_t own_code = LoadU32(base, frame + kFrameCode);
+      StoreU32(base, frame + kFrameCode, code);
       __imp__sub_822DF9E0(ctx, base);
-      StoreU32(base, ctx.r4.u32 + kFrameCode, own_code);
+      StoreU32(base, frame + kFrameCode, own_code);
       REXLOG_INFO("[Azura research] The match travels back to the pre-game lobby");
       return;
     }
@@ -4056,11 +4204,13 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   }
   if (Is(base, function, kPostLogin) && REXCVAR_GET(playlist_lobby_vote) &&
       ObjectName(base, LoadU32(base, function + kObjectOuter)) == "GearPreGameLobbyGame_Base") {
+    const uint32_t frame = ctx.r4.u32;  // the register does not survive the call
     __imp__sub_822DF9E0(ctx, base);
+    ctx.r4.u64 = frame;  // GiveLobbyPlayerATeam runs ChangeTeam on this frame
     const int32_t new_player = ParamOffset(base, function, "NewPlayer");
     if (new_player >= 0) {
-      GiveLobbyPlayerATeam(ctx, base, LoadU32(base, ctx.r4.u32 + kFrameObject),
-                           LoadU32(base, LoadU32(base, ctx.r4.u32 + kFrameLocals) + new_player));
+      GiveLobbyPlayerATeam(ctx, base, LoadU32(base, frame + kFrameObject),
+                           LoadU32(base, LoadU32(base, frame + kFrameLocals) + new_player));
     }
     return;
   }
