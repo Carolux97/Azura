@@ -5,7 +5,7 @@
 // super classes of those are followed too. The object table at 0x83473754 (chains linked through
 // UObject +4) is also walked: it does not hold every object, but it has classes that have not run
 // any script yet. Layouts (guest offsets, big-endian) are documented in
-// docs/reverse-engineering.md.
+// alboria-notes:azura/reverse-engineering.md.
 //
 // Everything here runs on its own thread and only reads guest memory, through vm_read_overwrite:
 // a plain read of an unmapped address would fault, and the runtime's exception handler treats any

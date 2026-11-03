@@ -1,5 +1,5 @@
 //! The C++ compiler the launcher builds the runtime with, on the player's machine
-//! (docs/player-runtime-build.md, section 6).
+//! (alboria-notes:azura/player-runtime-build.md, section 6).
 //!
 //! The runtime is the player's own game translated to C++ and compiled there, so the machine needs
 //! a compiler. This module finds one and checks that it works (it compiles and links a small C++23

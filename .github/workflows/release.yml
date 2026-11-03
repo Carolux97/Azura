@@ -1,5 +1,5 @@
 # Builds and publishes the launcher for macOS, Linux and Windows, each with the player kit of its platform
-# inside, so installed launchers update themselves and then the game (docs/player-runtime-build.md).
+# inside, so installed launchers update themselves and then the game (alboria-notes:azura/player-runtime-build.md).
 #
 # A release is published when main has a launcher version that is not released yet: bumping the
 # version in tauri.conf.json, package.json and Cargo.toml is how a release is asked for, so only a

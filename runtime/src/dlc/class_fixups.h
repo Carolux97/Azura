@@ -3,7 +3,7 @@
 // RAAM's Shadow's levels and script import a few properties that the game's Title Update added to
 // classes the disc build already has (GearPawn_LocustGeneralRaamBase.bShieldDispersed,
 // Vehicle_Reaver_Base.TaccomMesh, GearGRI.SHODTargets). Azura's script patch (see
-// docs/raams-shadow-dlc.md) creates those property objects, so the DLC's imports find them, but the
+// alboria-notes:azura/raams-shadow-dlc.md) creates those property objects, so the DLC's imports find them, but the
 // disc build's patch loader never links a property into an existing class: the property keeps
 // offset 0, which would make every access read or write the object's first word.
 //

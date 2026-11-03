@@ -1,7 +1,7 @@
 /*
  * The player's account: the welcome screen and the Account section.
  *
- * The player plays with an Alboria account (our online ecosystem: docs/alboria-relay.md, sections
+ * The player plays with an Alboria account (our online ecosystem: alboria-notes:azura/alboria-relay.md, sections
  * 3 and 4.6) or with a local account (no Alboria: Local and System Link). Until they choose, also
  * after updating from a launcher without accounts, the welcome screen asks: create an account,
  * sign in to one (which links this installation to it) or play locally. An account has no

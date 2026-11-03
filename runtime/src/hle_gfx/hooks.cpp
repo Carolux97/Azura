@@ -1,4 +1,4 @@
-// Hooks on the game's D3D calls that the HLE graphics path needs to see (docs/hle-graphics/
+// Hooks on the game's D3D calls that the HLE graphics path needs to see (alboria-notes:azura/hle-graphics/
 // 01-function-map.md has the evidence for each role). Every hook calls the original function;
 // with gfx = hle it also writes a marker (rex/graphics/hle/markers.h) into the device's command
 // buffer, before the call for the start of a clear, a resolve or a frame, after it for the rest.

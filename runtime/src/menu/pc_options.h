@@ -16,7 +16,7 @@
 //   - the script hooks (script_hooks.cpp) put each row's current value in the list as the menu
 //     builds it, hand back what the player chose when the menu saves, follow the selected row to
 //     open the calibration screen, and patch two spots of the menu's bytecode.
-// Values are kept in azura.toml next to the runtime. Details: docs/reverse-engineering.md,
+// Values are kept in azura.toml next to the runtime. Details: alboria-notes:azura/reverse-engineering.md,
 // "Options menu".
 
 #pragma once
