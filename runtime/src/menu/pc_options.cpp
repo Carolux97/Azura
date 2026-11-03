@@ -1414,6 +1414,13 @@ void PatchEngineSettings(CoalescedSection& section) {
   SetKey(section, "MaxSmoothedFrameRate", "1000");
 }
 
+void PatchNetDriverSettings(CoalescedSection& section) {
+  // A connection that hears nothing for ConnectionTimeout seconds is closed, and a match's clients
+  // only start the host migration then: 45 in the game's ini, 15 here. The Alboria SDK closes the
+  // host's connection sooner when the host stops answering on every path (see alboria.h).
+  SetKey(section, "ConnectionTimeout", "15.0");
+}
+
 void ApplyFrameRateLimit() {
   const double limit = REXCVAR_GET(frame_rate_limit);
   if (limit >= kFrameRateUnlimited) {

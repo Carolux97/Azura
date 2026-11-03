@@ -47,6 +47,7 @@
 // scanning new GNames entries every so often until they appear.
 
 #include <algorithm>
+#include <bit>
 #include <deque>
 #include <cctype>
 #include <chrono>
@@ -57,6 +58,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <set>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -104,6 +106,9 @@ REXCVAR_DEFINE_BOOL(research_hold_lobby, false, "Azura/Debug",
 REXCVAR_DEFINE_STRING(research_last_maps, "", "Azura/Debug",
                       "Research: comma-separated maps (as MP_Sandbar) taken as the pre-game lobby's last matches "
                       "at start-up, so its vote leaves them out");
+REXCVAR_DEFINE_BOOL(research_host_migration, false, "Azura/Debug",
+                    "Research: a match's map turns the engine's host migration on (GearGRI.PostBeginPlay turns "
+                    "it off, and nothing in the game's script turns it on)");
 REXCVAR_DEFINE_BOOL(research_auto_lobby, false, "Azura/Debug",
                     "Research: once the party is created (at start-up, and back from a match of the pre-game "
                     "lobby), its host creates a custom match by itself, as the menu would");
@@ -265,6 +270,16 @@ int32_t ParamOffset(const uint8_t* base, uint32_t function, const char* name) {
   return -1;
 }
 
+// The size in bytes of parameter `name` of `function` (its property's ElementSize), or 0.
+uint32_t ParamSize(const uint8_t* base, uint32_t function, const char* name) {
+  for (uint32_t prop = LoadU32(base, function + kStructChildren); prop; prop = LoadU32(base, prop + kFieldNext)) {
+    const uint64_t flags = (uint64_t(LoadU32(base, prop + kPropertyFlags)) << 32) | LoadU32(base, prop + kPropertyFlags + 4);
+    if (!(flags & kPropertyParm)) break;
+    if (ObjectName(base, prop) == name) return LoadU32(base, prop + kPropertyElementSize);
+  }
+  return 0;
+}
+
 // The value of the int or byte parameter `name` of the frame about to run `function`, or -1.
 int32_t SmallParam(const uint8_t* base, uint32_t function, uint32_t frame, const char* name) {
   for (uint32_t prop = LoadU32(base, function + kStructChildren); prop; prop = LoadU32(base, prop + kFieldNext)) {
@@ -364,6 +379,8 @@ enum WatchedName {
   kNotifyInviteFailed,       // GearPC: an accepted invite could not be followed
   kCancelPartyMatchmaking,   // GearPartyGame_Base: the player cancels matchmaking
   kCreatePlayerVersusMatch,  // GearPartyGame_Base's PlayerMatch state: the party hosts a match (playlist_lobby_vote)
+  kOnNoPartialPartyAvailable,  // the PlayerMatch state: a search found no match (playlist_lobby_vote)
+  kPostBeginPlay,            // Actors: set up as the level starts (research_host_migration, GearGRI's)
   kContinueCreateMatch,      // UIScene_FrontEnd: a match is created (force_custom_match_mode)
   kInitializeGameSelectionInternal,  // GearPreGameGRI: the lobby picks its games (force_lobby_playlist)
   kUpdateCountdowns,         // GearPreGameGRI: the lobby moves between its states (playlist_lobby_vote)
@@ -383,6 +400,11 @@ enum WatchedName {
   kPlaylistPopulationUpdated,  // UIScene_FrontEnd: the same at start-up (research_auto_lobby)
   kOnCreatePartyComplete,    // GearPartyGame_Base: the party's session is created (research_auto_lobby)
   kIsEpicDev,                // GearProfileSettings.IsEpicDev: whether the player starts Lambency
+  kInitGameReplicationInfo,  // GameInfo and subclasses: a match makes its GRI (research_host_migration)
+  kUpdateGRI,                // GearGameHostMigrationManager: a migrated match restores its state (research_host_migration)
+  kDelayedGameSessionDelete,  // the PlayerMatch state: deletes the search's game session after a cancel
+  kGetTeamId,                // GearGameHostMigrationManager: the team a migrated player had (research_host_migration)
+  kPlacePlayerOnSmallestTeam,  // GearGameMP_Base: a player goes to the smallest team (research_host_migration)
   kProcessSoundEvent,        // UISoundTheme: plays a menu sound by its event name (Menu sounds)
   // The menu sound events our menus play (MenuSound), in its order.
   kSoundStepUp,
@@ -418,7 +440,7 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "Callback_Credits",      "Callback_ClientMenuOptionWasSelected", "ConditionalCreatePartySession",
     "GetPartyType",          "LocalPartyCreated",      "ClientSetHUD",       "OnCustomMapChanged",
     "ApplySensitivityScaling", "ViewAdhesion",
-    "GetAdjustedAimFor",     "NotifyInviteFailed",     "CancelPartyMatchmaking", "CreatePlayerVersusMatch", "ContinueCreateMatch", "InitializeGameSelectionInternal", "UpdateCountdowns", "InitializeMapSelectionInternal", "PlacePlayerOnAssignedTeam", "HandleGameSessionJIP", "InitializePreGameGameSettings", "PreLogin", "PostLogin", "SetNumBots", "BeginMatch", "EndOfGameTransition", "GetNextMap", "CheckMapAgainstPlaylist", "GetNumberOfSupportedMapsForPlaylist", "OnUpdatePlaylistPopulationData", "OnPlaylistPopulationDataUpdated", "OnCreatePartyComplete", "IsEpicDev",
+    "GetAdjustedAimFor",     "NotifyInviteFailed",     "CancelPartyMatchmaking", "CreatePlayerVersusMatch", "OnNoPartialPartyAvailable", "PostBeginPlay", "ContinueCreateMatch", "InitializeGameSelectionInternal", "UpdateCountdowns", "InitializeMapSelectionInternal", "PlacePlayerOnAssignedTeam", "HandleGameSessionJIP", "InitializePreGameGameSettings", "PreLogin", "PostLogin", "SetNumBots", "BeginMatch", "EndOfGameTransition", "GetNextMap", "CheckMapAgainstPlaylist", "GetNumberOfSupportedMapsForPlaylist", "OnUpdatePlaylistPopulationData", "OnPlaylistPopulationDataUpdated", "OnCreatePartyComplete", "IsEpicDev", "InitGameReplicationInfo", "UpdateGRI", "DelayedGameSessionDelete", "GetTeamId", "PlacePlayerOnSmallestTeam",
     "ProcessSoundEvent",     "Options_StepUp",         "Options_StepDown",   "ValueChangeLeft",
     "ValueChangeRight",      "Options_AcceptButton",   "Options_BackButton", "Options_DetailsEnter",
     "Options_DetailsLeave",  "Options_SliderLeft",     "Options_SliderRight"};
@@ -2535,6 +2557,433 @@ bool PatchTravelURL(uint8_t* base, uint32_t fstring_addr) {
   return true;
 }
 
+// Research (research_host_migration): the WorldInfo that began a host migration, whose
+// PeerHostMigration (+1736: HostMigrationProgress, +1740 elapsed, +1744 travel countdown, +1748
+// travel URL) MonitorHostMigration logs on player input frames while it goes on.
+std::atomic<uint32_t> g_migration_world{0};
+// Set while a match's InitGame runs when the migration restored it (UpdateGRI was called).
+std::atomic<bool> g_migration_restored{false};
+// The team the migration's GetTeamId just answered for a player, and when (-1: none).
+struct MigratedTeam {
+  int32_t team = -1;
+  std::chrono::steady_clock::time_point at{};
+};
+MigratedTeam g_migrated_team;
+bool g_apply_saved_round = false;
+
+uint32_t WorldGri(const uint8_t* base, uint32_t world) {
+  const int32_t offset = ClassPropertyOffset(base, LoadU32(base, world + kObjectClass), "GRI");
+  const uint32_t gri = offset >= 0 ? LoadU32(base, world + offset) : 0;
+  return gri >= 0x10000 ? gri : 0;
+}
+
+// Defined with the match numbers below.
+void SaveRound(const uint8_t* base, uint32_t world);
+
+void MonitorHostMigration(uint8_t* base) {
+  const uint32_t world = g_migration_world.load();
+  if (!world) return;
+  // The migration ends in a travel, which frees this WorldInfo while script still runs: once its
+  // memory no longer holds a WorldInfo, the watch stops.
+  const uint32_t world_class = LoadU32(base, world + kObjectClass);
+  if (world_class < 0x10000 || ObjectName(base, world_class) != "WorldInfo") {
+    REXLOG_INFO("[Azura research] Host migration: its WorldInfo is gone (the map changed)");
+    g_migration_world.store(0);
+    return;
+  }
+  static uint8_t last_progress = 0xFF;
+  static auto last_log = std::chrono::steady_clock::time_point{};
+  const uint8_t progress = base[world + 1736];
+  const auto now = std::chrono::steady_clock::now();
+  if (progress == last_progress && now - last_log < std::chrono::seconds(1)) return;
+  last_progress = progress;
+  last_log = now;
+  auto f32 = [&](uint32_t at) {
+    const uint32_t bits = LoadU32(base, at);
+    float value;
+    std::memcpy(&value, &bits, 4);
+    return value;
+  };
+  std::string url;
+  const uint32_t data = LoadU32(base, world + 1748);
+  for (uint32_t i = 0; data >= 0x10000 && i + 1 < LoadU32(base, world + 1752) && i < 160; ++i) {
+    url.push_back(static_cast<char>(base[data + i * 2 + 1]));
+  }
+  REXLOG_INFO("[Azura research] Host migration: progress {}, elapsed {:.1f}, travel countdown {:.1f}, URL \"{}\"",
+              progress, f32(world + 1740), f32(world + 1744), url);
+  // Over once the progress is back to none after it went on (the first look may still see 0).
+  static bool went_on = false;
+  if (progress != 0) went_on = true;
+  if (progress == 0 && went_on) {
+    went_on = false;
+    g_migration_world.store(0);
+  }
+}
+
+// The matchmade invite waiting for the party's search session to be deleted (steady clock ticks
+// since it started waiting, 0 when none waits); see OnNoPartialPartyAvailable's hook.
+std::atomic<int64_t> g_invite_waits_since{0};
+constexpr auto kInviteWaitLimit = std::chrono::seconds(2);
+
+void DeliverWaitingInvite(const char* why) {
+  if (!g_invite_waits_since.exchange(0)) return;
+  rex::system::xam::alboria::DeliverMatchInvite();
+  REXLOG_INFO("[Azura online] The match's invite is delivered: {}", why);
+}
+
+// Delivers a waiting invite whose session cleanup never came.
+void DeliverLateInvite() {
+  const int64_t since = g_invite_waits_since.load();
+  if (!since) return;
+  const auto waited = std::chrono::steady_clock::now().time_since_epoch() - std::chrono::steady_clock::duration(since);
+  if (waited >= kInviteWaitLimit) DeliverWaitingInvite("no session cleanup came");
+}
+
+// A match's host that went silent on every Alboria path (alboria::TakeHostSilent) has gone, but the
+// game only closes its connection to the host after ConnectionTimeout without a packet (15 s
+// online, menu_patches.cpp), and only then starts its host migration. The net driver's timeout is
+// lowered for a moment instead, below how long the host has been silent and above any gap of the
+// connections that still work (the peers' keep the engine's keepalives), so the game closes the
+// host's connection on its next tick, the way it would have, and puts the timeout back right after.
+// The engine's net driver: the global at 0x83429828, +292.
+constexpr uint32_t kEngineGlobal = 0x83429828;
+constexpr uint32_t kEngineNetDriver = 292;
+constexpr float kSilentHostTimeout = 4.0f;
+constexpr auto kSilentHostRestoreAfter = std::chrono::seconds(3);
+// A lowered timeout: where it is, the value to put back, and the object it is in (which must
+// still be alive, of a class ending in `owner_class`, to write it back).
+struct LoweredSlot {
+  uint32_t address = 0;
+  float value = 0;
+  uint32_t owner = 0;
+  const char* owner_class = "";
+};
+std::vector<LoweredSlot> g_lowered_slots;  // the game's thread only
+std::chrono::steady_clock::time_point g_lowered_at{};
+
+void CloseSilentHost(uint8_t* base) {
+  if (!g_lowered_slots.empty()) {
+    if (std::chrono::steady_clock::now() - g_lowered_at < kSilentHostRestoreAfter) return;
+    // Put back where the object is still there; a travel destroys a match's drivers and their
+    // connections, and the next ones come from the ini.
+    int restored = 0;
+    for (const LoweredSlot& slot : g_lowered_slots) {
+      if (!azura::script::IsLiveObjectOf(base, slot.owner, slot.owner_class)) continue;
+      if (LoadF32(base, slot.address) != kSilentHostTimeout) continue;
+      StoreU32(base, slot.address, std::bit_cast<uint32_t>(slot.value));
+      ++restored;
+    }
+    REXLOG_INFO("[Azura online] The connection timeouts are back ({} of {})", restored, g_lowered_slots.size());
+    g_lowered_slots.clear();
+    return;
+  }
+  if (!rex::system::xam::alboria::TakeHostSilent()) return;
+  // Every net driver: the engine's (0x83429828 +292) and those the last scan of the object table
+  // found (research: which one holds the host's connection is not known yet).
+  std::vector<uint32_t> drivers = azura::script::NetDrivers(base);
+  const uint32_t engine = LoadU32(base, kEngineGlobal);
+  const uint32_t engine_driver = engine ? LoadU32(base, engine + kEngineNetDriver) : 0;
+  if (engine_driver && std::find(drivers.begin(), drivers.end(), engine_driver) == drivers.end()) {
+    drivers.push_back(engine_driver);
+  }
+  for (const uint32_t driver : drivers) {
+    const int32_t offset = ClassPropertyOffset(base, LoadU32(base, driver + kObjectClass), "ConnectionTimeout");
+    if (offset < 0) continue;
+    const uint32_t address = driver + static_cast<uint32_t>(offset);
+    const float value = LoadF32(base, address);
+    REXLOG_INFO("[Azura online] Net driver {} {:08X}{}: timeout {:.0f} lowered", ObjectName(base, driver), driver,
+                driver == engine_driver ? " (the engine's)" : "", value);
+    g_lowered_slots.push_back({address, value, driver, "NetDriver"});
+    // Research: a connection may keep its own copy of the timeout from when it was made.
+    for (const auto& [connection, slot] : azura::script::FindConnectionTimeouts(base, driver, value)) {
+      g_lowered_slots.push_back({slot, value, connection, "Connection"});
+    }
+  }
+  if (g_lowered_slots.empty()) {
+    REXLOG_WARN("[Azura online] The match's host is silent, but the game has no net driver to close it");
+    return;
+  }
+  for (const LoweredSlot& slot : g_lowered_slots) StoreU32(base, slot.address, std::bit_cast<uint32_t>(kSilentHostTimeout));
+  // Research: the engine closes a connection once its driver's time (a double, +320 of the driver)
+  // is ConnectionTimeout past the connection's LastReceiveTime. The silent host's connection was
+  // last heard from about kHostSilence ago, so its LastReceiveTime is a double that old: it is put
+  // far back, and the connection times out on the next tick (the other players' connections hear
+  // from them all the time, so none of theirs is in that range).
+  if (engine_driver) {
+    constexpr uint32_t kDriverTime = 320;
+    const uint64_t clock_bits = uint64_t(LoadU32(base, engine_driver + kDriverTime)) << 32 |
+                                LoadU32(base, engine_driver + kDriverTime + 4);
+    const double clock = std::bit_cast<double>(clock_bits);
+    REXLOG_INFO("[Azura research] Net driver time {:.2f}", clock);
+    if (clock > 10.0 && clock < 1e7) {
+      // Logged for every connection; only LastReceiveTime (+276 of the connection, found as the one
+      // double there that is that old on the host's connection alone) is put back.
+      constexpr uint32_t kConnectionLastReceiveTime = 276;
+      for (const auto& [address, value] : azura::script::StaleTimes(base, engine_driver, clock, 6.0, 14.0)) {
+        // Connections start on a 64 KB boundary (0x00260000, 0x01230000), so the low half is the offset.
+        if ((address & 0xFFFF) != kConnectionLastReceiveTime) continue;
+        const uint64_t bits = std::bit_cast<uint64_t>(clock - 1000.0);
+        StoreU32(base, address, static_cast<uint32_t>(bits >> 32));
+        StoreU32(base, address + 4, static_cast<uint32_t>(bits));
+        REXLOG_INFO("[Azura research] {:08X}: {:.2f} put back to {:.2f}", address, value, clock - 1000.0);
+      }
+    }
+  }
+  g_lowered_at = std::chrono::steady_clock::now();
+  REXLOG_INFO("[Azura online] The match's host is silent: its connection closes now (timeout {:.0f} s for a moment)",
+              kSilentHostTimeout);
+}
+
+// Research (research_host_migration): the match's scores every 10 seconds on a match's map, to see
+// what a host migration keeps: each team's (GRI.Teams) and each player's (GRI.PRIArray). The
+// WorldInfo comes from GearGRI.PostBeginPlay, and is checked to still be one before each read.
+std::atomic<uint32_t> g_score_world{0};
+
+// The value of property `name` of `object`, as text ("?" when its class has none).
+std::string PropertyText(const uint8_t* base, uint32_t object, const char* name) {
+  for (uint32_t owner = LoadU32(base, object + kObjectClass); owner; owner = LoadU32(base, owner + kStructSuper)) {
+    for (uint32_t field = LoadU32(base, owner + kStructChildren); field; field = LoadU32(base, field + kFieldNext)) {
+      if (ObjectName(base, field) != name) continue;
+      const std::string type = ObjectName(base, LoadU32(base, field + kObjectClass));
+      if (!type.ends_with("Property")) continue;
+      return ParamValue(base, type, object + LoadU32(base, field + kPropertyOffset));
+    }
+  }
+  return "?";
+}
+
+// Every number of `object` its classes up to `stop` declare (Int, Float, Byte and Bool properties),
+// as " name value;" text: where a match keeps its counts, such as each team's lives left.
+std::string NumbersText(const uint8_t* base, uint32_t object, const char* stop) {
+  std::string text;
+  for (uint32_t owner = LoadU32(base, object + kObjectClass); owner; owner = LoadU32(base, owner + kStructSuper)) {
+    if (ObjectName(base, owner) == stop) break;
+    for (uint32_t field = LoadU32(base, owner + kStructChildren); field; field = LoadU32(base, field + kFieldNext)) {
+      const std::string type = ObjectName(base, LoadU32(base, field + kObjectClass));
+      if (type != "IntProperty" && type != "FloatProperty" && type != "ByteProperty" && type != "BoolProperty") continue;
+      text += fmt::format(" {} {};", ObjectName(base, field),
+                          ParamValue(base, type, object + LoadU32(base, field + kPropertyOffset)));
+    }
+  }
+  return text;
+}
+
+// The team index of a PlayerReplicationInfo (its Team's TeamIndex), as text.
+std::string TeamIndexText(const uint8_t* base, uint32_t pri) {
+  const int32_t team = ClassPropertyOffset(base, LoadU32(base, pri + kObjectClass), "Team");
+  const uint32_t info = team >= 0 ? LoadU32(base, pri + team) : 0;
+  return info >= 0x10000 ? PropertyText(base, info, "TeamIndex") : "none";
+}
+
+// Research (host migration): every Int, Float and Byte value of `object` its classes up to `stop`
+// declare, each element of a static array included, as (address, name, raw bits): to put back what a
+// call changed. Bools are left out: their bits share words.
+struct NumberSlot {
+  uint32_t address;
+  std::string name;
+  uint32_t bits;
+  bool byte;  // one byte wide (ByteProperty) rather than four
+};
+// UProperty's CPF_Net: the property is replicated, so every player has the host's value.
+constexpr uint32_t kPropertyNet = 0x20;
+
+std::vector<NumberSlot> SnapshotNumbers(const uint8_t* base, uint32_t object, const char* stop,
+                                        bool replicated_only = false) {
+  std::vector<NumberSlot> slots;
+  for (uint32_t owner = LoadU32(base, object + kObjectClass); owner; owner = LoadU32(base, owner + kStructSuper)) {
+    if (ObjectName(base, owner) == stop) break;
+    for (uint32_t field = LoadU32(base, owner + kStructChildren); field; field = LoadU32(base, field + kFieldNext)) {
+      const std::string type = ObjectName(base, LoadU32(base, field + kObjectClass));
+      const bool byte = type == "ByteProperty";
+      if (type != "IntProperty" && type != "FloatProperty" && !byte) continue;
+      // The low word of the 64-bit flags (big-endian: the second word).
+      if (replicated_only && !(LoadU32(base, field + kPropertyFlags + 4) & kPropertyNet)) continue;
+      const uint32_t dim = std::clamp<uint32_t>(LoadU32(base, field + 64), 1, 16);
+      const uint32_t size = byte ? 1 : 4;
+      for (uint32_t i = 0; i < dim; ++i) {
+        const uint32_t address = object + LoadU32(base, field + kPropertyOffset) + i * size;
+        const std::string name = dim > 1 ? fmt::format("{}[{}]", ObjectName(base, field), i) : ObjectName(base, field);
+        slots.push_back({address, name, byte ? base[address] : LoadU32(base, address), byte});
+      }
+    }
+  }
+  return slots;
+}
+
+// Puts back the values of `before` that changed, but those named in `keep`; logs each one.
+void RestoreNumbers(uint8_t* base, const std::vector<NumberSlot>& before, std::initializer_list<const char*> keep,
+                    const char* what) {
+  std::string changed;
+  for (const NumberSlot& slot : before) {
+    const uint32_t now = slot.byte ? base[slot.address] : LoadU32(base, slot.address);
+    if (now == slot.bits) continue;
+    const bool kept = std::any_of(keep.begin(), keep.end(), [&](const char* name) { return slot.name == name; });
+    changed += fmt::format(" {} {}->{}{};", slot.name, slot.bits, now, kept ? " (kept)" : "");
+    if (kept) continue;
+    if (slot.byte) {
+      base[slot.address] = static_cast<uint8_t>(slot.bits);
+    } else {
+      StoreU32(base, slot.address, slot.bits);
+    }
+  }
+  REXLOG_INFO("[Azura research] Host migration: {} changed (raw values, put back unless kept):{}", what,
+              changed.empty() ? " nothing" : changed);
+}
+
+void LogMatchScores(const uint8_t* base) {
+  static auto last = std::chrono::steady_clock::time_point{};
+  const uint32_t world = g_score_world.load();
+  const auto now = std::chrono::steady_clock::now();
+  if (!world || now - last < std::chrono::seconds(10)) return;
+  last = now;
+  const uint32_t world_class = LoadU32(base, world + kObjectClass);
+  if (world_class < 0x10000 || ObjectName(base, world_class) != "WorldInfo") {
+    g_score_world.store(0);
+    return;
+  }
+  const int32_t gri_offset = ClassPropertyOffset(base, world_class, "GRI");
+  const uint32_t gri = gri_offset >= 0 ? LoadU32(base, world + gri_offset) : 0;
+  if (gri < 0x10000) return;
+  const uint32_t gri_class = LoadU32(base, gri + kObjectClass);
+  std::string text;
+  const int32_t teams = ClassPropertyOffset(base, gri_class, "Teams");
+  for (uint32_t i = 0; teams >= 0 && i < LoadU32(base, gri + teams + 4) && i < 4; ++i) {
+    const uint32_t team = LoadU32(base, LoadU32(base, gri + teams) + i * 4);
+    if (team >= 0x10000) text += fmt::format(" team {} {{{} }};", i, NumbersText(base, team, "ReplicationInfo"));
+  }
+  const int32_t players = ClassPropertyOffset(base, gri_class, "PRIArray");
+  for (uint32_t i = 0; players >= 0 && i < LoadU32(base, gri + players + 4) && i < 16; ++i) {
+    const uint32_t pri = LoadU32(base, LoadU32(base, gri + players) + i * 4);
+    if (pri < 0x10000) continue;
+    text += fmt::format(" [{} bot {} team {} score {} kills {} deaths {}]", PropertyText(base, pri, "PlayerName"),
+                        PropertyText(base, pri, "bBot"), TeamIndexText(base, pri),
+                        PropertyText(base, pri, "Score"), PropertyText(base, pri, "Kills"),
+                        PropertyText(base, pri, "Deaths"));
+  }
+  REXLOG_INFO("[Azura research] Scores:{}", text);
+  REXLOG_INFO("[Azura research] Match counts:{}", NumbersText(base, gri, "GameReplicationInfo"));
+}
+
+// The match in play when a migration begins, as every player sees it: the replicated numbers of
+// the GRI and of each team (by TeamIndex), whatever the game mode keeps there (lives, points, round
+// time, rounds). The migration itself keeps the players' and the teams' scores, but its new host
+// starts the round over; once that round is in progress, the new host writes these back
+// (ApplySavedRound). Object references are not kept (the reloaded map's objects are new ones), nor
+// what the host never replicated. The game's thread only.
+struct SavedRound {
+  bool valid = false;
+  std::vector<NumberSlot> gri;
+  std::map<int32_t, std::vector<NumberSlot>> teams;  // by TeamIndex
+  // Each player's team, by player name (GRI.PRIArray): the migration's own record answers the
+  // same team for every player (GetTeamId), so players are put back on these instead.
+  std::map<std::string, int32_t> player_teams;
+};
+SavedRound g_saved_round;
+
+// The GRI's teams (GRI.Teams), by TeamIndex.
+std::map<int32_t, uint32_t> GriTeams(const uint8_t* base, uint32_t gri) {
+  std::map<int32_t, uint32_t> teams;
+  const uint32_t cls = LoadU32(base, gri + kObjectClass);
+  const int32_t offset = ClassPropertyOffset(base, cls, "Teams");
+  for (uint32_t i = 0; offset >= 0 && i < LoadU32(base, gri + offset + 4) && i < 8; ++i) {
+    const uint32_t team = LoadU32(base, LoadU32(base, gri + offset) + i * 4);
+    if (team < 0x10000) continue;
+    const int32_t index = ClassPropertyOffset(base, LoadU32(base, team + kObjectClass), "TeamIndex");
+    teams[index >= 0 ? static_cast<int32_t>(LoadU32(base, team + index)) : static_cast<int32_t>(i)] = team;
+  }
+  return teams;
+}
+
+void SaveRound(const uint8_t* base, uint32_t world) {
+  const uint32_t gri = WorldGri(base, world);
+  if (!gri) {
+    REXLOG_WARN("[Azura research] Host migration: no GRI, the round is not saved");
+    return;
+  }
+  g_saved_round = {};
+  g_saved_round.valid = true;
+  g_saved_round.gri = SnapshotNumbers(base, gri, "Info", true);
+  for (const auto& [index, team] : GriTeams(base, gri)) {
+    g_saved_round.teams[index] = SnapshotNumbers(base, team, "Info", true);
+  }
+  const uint32_t gri_class = LoadU32(base, gri + kObjectClass);
+  const int32_t players = ClassPropertyOffset(base, gri_class, "PRIArray");
+  std::string saved_teams;
+  for (uint32_t i = 0; players >= 0 && i < LoadU32(base, gri + players + 4) && i < 32; ++i) {
+    const uint32_t pri = LoadU32(base, LoadU32(base, gri + players) + i * 4);
+    if (pri < 0x10000) continue;
+    const uint32_t pri_class = LoadU32(base, pri + kObjectClass);
+    const int32_t name = ClassPropertyOffset(base, pri_class, "PlayerName");
+    const int32_t team = ClassPropertyOffset(base, pri_class, "Team");
+    const uint32_t info = team >= 0 ? LoadU32(base, pri + team) : 0;
+    const int32_t index = info >= 0x10000 ? ClassPropertyOffset(base, LoadU32(base, info + kObjectClass), "TeamIndex") : -1;
+    if (name < 0 || index < 0) continue;
+    const std::string player = FStringText(base, pri + name);
+    // TeamIndex is an int (4 bytes, big-endian).
+    const int32_t team_index = static_cast<int32_t>(LoadU32(base, info + index));
+    g_saved_round.player_teams[player] = team_index;
+    saved_teams += fmt::format(" {} {};", player, team_index);
+  }
+  REXLOG_INFO("[Azura research] Host migration: the round saved ({} values of the GRI, {} teams); players' teams:{}",
+              g_saved_round.gri.size(), g_saved_round.teams.size(), saved_teams);
+}
+
+// Writes the values of `saved` into `object`'s same-named ones, but `skip`; returns what changed.
+std::string WriteSavedNumbers(uint8_t* base, uint32_t object, const std::vector<NumberSlot>& saved) {
+  // The new host's own state machine and counts it keeps itself.
+  static const std::set<std::string> skip = {"GameStatus", "Size", "NumPlayersAliveOnTeam", "TeamIndex"};
+  std::string changed;
+  for (const NumberSlot& now : SnapshotNumbers(base, object, "Info", true)) {
+    if (skip.count(now.name.substr(0, now.name.find('[')))) continue;
+    const auto it = std::find_if(saved.begin(), saved.end(), [&](const NumberSlot& s) { return s.name == now.name; });
+    if (it == saved.end() || it->bits == now.bits) continue;
+    if (now.byte) {
+      base[now.address] = static_cast<uint8_t>(it->bits);
+    } else {
+      StoreU32(base, now.address, it->bits);
+    }
+    changed += fmt::format(" {} {:08X}->{:08X};", now.name, now.bits, it->bits);
+  }
+  return changed;
+}
+
+// The new host of a migration: once its new round has been in progress for a second (the game
+// sets the round up as it starts it), it gets the saved round back.
+void ApplySavedRound(uint8_t* base) {
+  static std::chrono::steady_clock::time_point in_progress_since{};
+  if (!g_apply_saved_round) return;
+  const uint32_t world = g_score_world.load();
+  if (!world) return;
+  const uint32_t world_class = LoadU32(base, world + kObjectClass);
+  if (world_class < 0x10000 || ObjectName(base, world_class) != "WorldInfo") return;
+  const uint32_t gri = WorldGri(base, world);
+  const int32_t status = gri ? ClassPropertyOffset(base, LoadU32(base, gri + kObjectClass), "GameStatus") : -1;
+  constexpr uint8_t kRoundInProgress = 3;
+  if (status < 0 || base[gri + status] != kRoundInProgress) {
+    in_progress_since = {};
+    return;
+  }
+  const auto now = std::chrono::steady_clock::now();
+  if (in_progress_since == std::chrono::steady_clock::time_point{}) in_progress_since = now;
+  if (now - in_progress_since < std::chrono::seconds(1)) return;
+  g_apply_saved_round = false;
+  in_progress_since = {};
+  if (!g_saved_round.valid) {
+    REXLOG_WARN("[Azura research] Host migration: no saved round to give back");
+    return;
+  }
+  const std::string gri_changed = WriteSavedNumbers(base, gri, g_saved_round.gri);
+  REXLOG_INFO("[Azura research] Host migration: the round given back, GRI:{}", gri_changed.empty() ? " nothing" : gri_changed);
+  for (const auto& [index, team] : GriTeams(base, gri)) {
+    const auto saved = g_saved_round.teams.find(index);
+    if (saved == g_saved_round.teams.end()) continue;
+    const std::string team_changed = WriteSavedNumbers(base, team, saved->second);
+    REXLOG_INFO("[Azura research] Host migration: the round given back, team {}:{}", index,
+                team_changed.empty() ? " nothing" : team_changed);
+  }
+  g_saved_round = {};
+}
+
 // --- Rows that depend on other rows ---
 //
 // Some rows of ours are only shown with certain values of others (the sharpness row only with an
@@ -2659,8 +3108,47 @@ extern "C" void sub_822DF4D0(PPCContext& __restrict ctx, uint8_t* base) {
     if (ctx.r6.u32) azura::script::NoteClass(LoadU32(base, ctx.r6.u32 + kObjectOuter));
     if (ctx.r3.u32) azura::script::NoteClass(LoadU32(base, ctx.r3.u32 + kObjectClass));
   }
+  // Research (research_host_migration): a host migration that begins makes the game see a newer
+  // system for a minute (OnlineSubsystemLive migrates the session, XSessionMigrateHost, only on
+  // 0x200CE900 or later, from script or its own C++); elsewhere it keeps the oldest paths.
+  if (REXCVAR_GET(research_host_migration)) {
+    MonitorHostMigration(base);
+    LogMatchScores(base);
+    ApplySavedRound(base);
+  }
+  CloseSilentHost(base);
+  DeliverLateInvite();
+  // The game calls it on every frame while a migration waits: only the first of each counts.
+  if (ctx.r6.u32 && REXCVAR_GET(research_host_migration) && ObjectName(base, ctx.r6.u32) == "BeginHostMigration" &&
+      g_migration_world.load() != ctx.r3.u32) {
+    g_migration_world.store(ctx.r3.u32);
+    SaveRound(base, ctx.r3.u32);
+    constexpr uint32_t kMigratingSystemVersion = 0x200ED800;
+    constexpr int kMigrationSeconds = 60;
+    rex::system::xam::alboria::SetSystemVersionOverride(kMigratingSystemVersion, kMigrationSeconds);
+    REXLOG_INFO("[Azura research] Host migration begins: a newer system for {} s", kMigrationSeconds);
+  }
   if (REXCVAR_GET(script_trace)) {
     const uint32_t function = ctx.r6.u32;
+    // Research: what AWorldInfo::BeginHostMigration (0x826E8260) checks, as these are called:
+    // bAllowHostMigration (+700, 0x00400000), PeerHostMigration.bHostMigrationEnabled (+1760,
+    // 0x80000000), PeerHostMigration.HostMigrationProgress (+1736), and the peer connections of
+    // the engine's net driver (the global at 0x83429828, +292, a TArray at +68).
+    if (function && ctx.r3.u32) {
+      const std::string name = ObjectName(base, function);
+      if (name == "BeginHostMigration" || name == "ToggleHostMigration") {
+        const uint32_t world = ctx.r3.u32;
+        const uint32_t engine = LoadU32(base, 0x83429828);
+        const uint32_t driver = engine ? LoadU32(base, engine + 292) : 0;
+        // Logged when the state it sees changes (the game repeats the call on every frame).
+        static uint64_t last_seen = 0;
+        const uint64_t seen = uint64_t(world) << 8 | base[world + 1736];
+        if (seen != last_seen || name != "BeginHostMigration") REXLOG_INFO("[Azura research] {}: bAllowHostMigration {}, bHostMigrationEnabled {}, progress {}, peers {}",
+                    name, (LoadU32(base, world + 700) & 0x00400000) != 0, (LoadU32(base, world + 1760) & 0x80000000) != 0,
+                    base[world + 1736], driver ? static_cast<int32_t>(LoadU32(base, driver + 72)) : -1);
+        if (name == "BeginHostMigration") last_seen = seen;
+      }
+    }
     bool first = false;
     {
       std::lock_guard lock(g_seen_mutex);
@@ -2669,6 +3157,30 @@ extern "C" void sub_822DF4D0(PPCContext& __restrict ctx, uint8_t* base) {
     if (first) {
       const uint32_t outer = LoadU32(base, function + kObjectOuter);
       REXLOG_INFO("[Azura script] {}.{}", ObjectName(base, outer), ObjectName(base, function));
+      // Research: the C++ behind WorldInfo.BeginHostMigration, whose native only calls the
+      // object's virtual function at +904 of its vtable.
+      static std::atomic<bool> pc_vtable_logged{false};
+      if (ctx.r3.u32) {
+        const std::string cls = ObjectName(base, LoadU32(base, ctx.r3.u32 + kObjectClass));
+        if ((cls == "GearPartyPC" || cls == "GearPC_MP") && !pc_vtable_logged.exchange(true)) {
+          const uint32_t vtable = LoadU32(base, ctx.r3.u32);
+          REXLOG_INFO("[Azura research] {} vtable {:08X}: +1108 = {:08X}", cls, vtable, LoadU32(base, vtable + 1108));
+        }
+      }
+      static std::atomic<bool> online_vtable_logged{false};
+      if (ctx.r3.u32 && ObjectName(base, LoadU32(base, ctx.r3.u32 + kObjectClass)) == "OnlineSubsystemLive" &&
+          !online_vtable_logged.exchange(true)) {
+        const uint32_t vtable = LoadU32(base, ctx.r3.u32);
+        REXLOG_INFO("[Azura research] OnlineSubsystemLive vtable {:08X}: +524 = {:08X}, +528 = {:08X}", vtable,
+                    LoadU32(base, vtable + 524), LoadU32(base, vtable + 528));
+      }
+      static std::atomic<bool> vtable_logged{false};
+      if (ctx.r3.u32 && ObjectName(base, LoadU32(base, ctx.r3.u32 + kObjectClass)) == "WorldInfo" &&
+          !vtable_logged.exchange(true)) {
+        const uint32_t vtable = LoadU32(base, ctx.r3.u32);
+        REXLOG_INFO("[Azura research] WorldInfo vtable {:08X}: +904 = {:08X}, +908 = {:08X}", vtable,
+                    LoadU32(base, vtable + 904), LoadU32(base, vtable + 908));
+      }
     }
   }
   __imp__sub_822DF4D0(ctx, base);
@@ -3937,6 +4449,7 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     PlayQueuedMenuSounds(ctx, base);
     if (g_open_browser.load(std::memory_order_relaxed)) OpenSystemLinkBrowserForJoin(ctx, base);
     ReturnToMainMenuWhenRoomLost(ctx, base);
+    MonitorHostMigration(base);
     CreatePendingStartupParty(ctx, base);
     JoinRoomFromLauncher(base);
     ShowRoomMessage(ctx, base);
@@ -4090,16 +4603,20 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   // With Live parties, the player cancels matchmaking: the game waits for its pending search
   // (XSessionSearch) to end without cancelling it, and starts no other until it has, so Alboria's
   // search is stopped, which ends it.
-  // Told by Alboria to host: a lobby instead of a player match (OpenMatchmadeLobby). The function's
-  // result (whether creating the match started) is true: the party has gone on to the lobby.
-  // (A function of the party game's PlayerMatch state: its outer is the state, its object the game.)
-  if (Is(base, function, kCreatePlayerVersusMatch) && REXCVAR_GET(playlist_lobby_vote) && LiveMode() &&
-      ObjectName(base, LoadU32(base, function + kObjectOuter)) == "PlayerMatch") {
+  // Told by Alboria to host: a lobby instead of a player match (OpenMatchmadeLobby). Done where a
+  // search has just found no match (OnNoPartialPartyAvailable, which otherwise counts its searches
+  // and only creates the player match after several rounds), or else where the player match is
+  // created; that one's result (whether creating it started) is true: the party has gone on to the
+  // lobby. (Functions of the party game's PlayerMatch state: their outer is the state, their object
+  // the game.)
+  if ((Is(base, function, kOnNoPartialPartyAvailable) || Is(base, function, kCreatePlayerVersusMatch)) &&
+      REXCVAR_GET(playlist_lobby_vote) && LiveMode() && ObjectName(base, LoadU32(base, function + kObjectOuter)) == "PlayerMatch") {
     namespace alboria = rex::system::xam::alboria;
     const auto status = alboria::GetStatus();
+    // Only CreatePlayerVersusMatch has a result; OnNoPartialPartyAvailable has none to write.
     const uint32_t result = ctx.r5.u32;
     if (status.in_match && status.host && OpenMatchmadeLobby(ctx, base)) {
-      if (result) StoreU32(base, result, 1);
+      if (result && Is(base, function, kCreatePlayerVersusMatch)) StoreU32(base, result, 1);
       return;
     }
     // Sent into another player's match: its search was answered with no match so that the party
@@ -4115,12 +4632,92 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
         std::memset(base + locals, 0, kLocalsSize);
         RunInsteadWithResult(ctx, base, cancel, locals);
         ctx.r4.u64 = frame;
-        alboria::DeliverMatchInvite();
-        REXLOG_INFO("[Azura online] Sent into a match: the party left its matchmaking and joins the match's lobby");
-        if (result) StoreU32(base, result, 1);
+        // The cancel also starts a short timer (DelayedGameSessionDelete) that deletes the game
+        // session: the invite is delivered once it has run (DeliverInviteAfterSessionDelete), or the
+        // match's session the invite creates would be the one deleted, and the join would fail.
+        g_invite_waits_since.store(std::chrono::steady_clock::now().time_since_epoch().count());
+        REXLOG_INFO("[Azura online] Sent into a match: the party left its matchmaking; the invite follows its session cleanup");
+        if (result && Is(base, function, kCreatePlayerVersusMatch)) StoreU32(base, result, 1);
         return;
       }
     }
+  }
+  // Research (research_host_migration): a player who comes back to the migrated match is placed
+  // on the smallest team; the migration then reads the team the player had (GetTeamId) and places
+  // the player on the smallest team again, rather than on that one, so who goes where depends on
+  // the order players come back in. The placement that follows GetTeamId puts the player on the
+  // team it answered instead (ChangeTeam).
+  if (Is(base, function, kGetTeamId) && REXCVAR_GET(research_host_migration)) {
+    const uint32_t frame = ctx.r4.u32;
+    __imp__sub_822DF9E0(ctx, base);
+    const int32_t team = SmallParam(base, function, frame, "ReturnValue");
+    if (team >= 0 && team < 5) {
+      g_migrated_team = {team, std::chrono::steady_clock::now()};
+      REXLOG_INFO("[Azura research] Host migration: a player had team {}", team);
+    }
+    return;
+  }
+  if (Is(base, function, kPlacePlayerOnSmallestTeam) && REXCVAR_GET(research_host_migration) &&
+      !g_saved_round.player_teams.empty()) {
+    const int32_t asked = g_migrated_team.team;
+    g_migrated_team = {};
+    const uint32_t frame = ctx.r4.u32;
+    const uint32_t game = LoadU32(base, frame + kFrameObject);
+    const uint32_t change_team = FindInheritedFunction(base, LoadU32(base, game + kObjectClass), "ChangeTeam");
+    const int32_t new_player = ParamOffset(base, function, "NewPlayer");
+    const int32_t other = change_team ? ParamOffset(base, change_team, "Other") : -1;
+    const int32_t number = change_team ? ParamOffset(base, change_team, "N") : -1;
+    const uint32_t player = new_player >= 0 ? LoadU32(base, LoadU32(base, frame + kFrameLocals) + new_player) : 0;
+    // The player's name: its Controller's PlayerReplicationInfo.PlayerName.
+    const int32_t pri_offset = player ? ClassPropertyOffset(base, LoadU32(base, player + kObjectClass), "PlayerReplicationInfo") : -1;
+    const uint32_t pri = pri_offset >= 0 ? LoadU32(base, player + pri_offset) : 0;
+    const int32_t name_offset = pri >= 0x10000 ? ClassPropertyOffset(base, LoadU32(base, pri + kObjectClass), "PlayerName") : -1;
+    const std::string name = name_offset >= 0 ? FStringText(base, pri + name_offset) : std::string();
+    const auto saved = g_saved_round.player_teams.find(name);
+    if (saved != g_saved_round.player_teams.end() && other >= 0 && number >= 0) {
+      const int32_t team = saved->second;
+      constexpr uint32_t kLocalsSize = 128;
+      static uint32_t locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kLocalsSize);
+      std::memset(base + locals, 0, kLocalsSize);
+      StoreU32(base, locals + other, player);
+      if (ParamSize(base, change_team, "N") == 1) {
+        base[locals + number] = static_cast<uint8_t>(team);
+      } else {
+        StoreU32(base, locals + number, static_cast<uint32_t>(team));
+      }
+      RunOnObject(ctx, base, game, change_team, locals);
+      REXLOG_INFO("[Azura research] Host migration: {} goes back to team {} (the migration's record said {})", name,
+                  team, asked);
+      return;
+    }
+    REXLOG_INFO("[Azura research] Host migration: no saved team for '{}': the smallest team", name);
+  }
+  if (Is(base, function, kDelayedGameSessionDelete) && g_invite_waits_since.load()) {
+    __imp__sub_822DF9E0(ctx, base);
+    DeliverWaitingInvite("its session cleanup has run");
+    return;
+  }
+  // Research: GearGRI.PostBeginPlay turns host migration off on every map but the menu's
+  // (WorldInfo.ToggleHostMigration(false)); after it, a match's map turns it on again: WorldInfo's
+  // PeerHostMigration.bHostMigrationEnabled (+1760, the top bit, as AWorldInfo's C++ reads it).
+  if (Is(base, function, kPostBeginPlay) && REXCVAR_GET(research_host_migration) &&
+      ObjectName(base, LoadU32(base, function + kObjectOuter)) == "GearGRI") {
+    const uint32_t gri = LoadU32(base, ctx.r4.u32 + kFrameObject);
+    __imp__sub_822DF9E0(ctx, base);
+    const int32_t world_offset = ClassPropertyOffset(base, LoadU32(base, gri + kObjectClass), "WorldInfo");
+    const uint32_t world = world_offset >= 0 ? LoadU32(base, gri + world_offset) : 0;
+    // The map: the package the WorldInfo is in (its outermost object).
+    uint32_t package = world;
+    while (package && LoadU32(base, package + kObjectOuter)) package = LoadU32(base, package + kObjectOuter);
+    const std::string map = package ? ObjectName(base, package) : std::string();
+    if (world && ObjectName(base, LoadU32(base, world + kObjectClass)) == "WorldInfo" && map.rfind("MP_", 0) == 0) {
+      constexpr uint32_t kHostMigrationEnabled = 1760;
+      StoreU32(base, world + kHostMigrationEnabled, LoadU32(base, world + kHostMigrationEnabled) | 0x80000000u);
+      REXLOG_INFO("[Azura research] Host migration turned on for {}", map);
+      g_score_world.store(world);
+      azura::script::StartNetDriverScan(base);
+    }
+    return;
   }
   if (Is(base, function, kCancelPartyMatchmaking) && LiveMode()) {
     REXLOG_INFO("[Azura online] Matchmaking cancelled: stopping Alboria's search");
@@ -4187,6 +4784,62 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
       StoreU32(base, result, static_cast<uint32_t>(-1));
       g_maps_left_out.fetch_add(1);
     }
+    return;
+  }
+  // Research (research_host_migration): the new host of a migration loads the match's map again,
+  // and restores the match from what the migration kept (GearGameHostMigrationManager.UpdateGRI,
+  // from InitGameReplicationInfo) instead of setting the game's rules, which is where a match takes
+  // its bots (InitGame's SetGameRules, SetNumBots): it would go on without any. SetGameRules runs
+  // once InitGameReplicationInfo is done, so the bots come back (with no score, as theirs is not
+  // kept); it also sets the playlist's team size, which SetNumBots needs.
+  if (Is(base, function, kUpdateGRI) && REXCVAR_GET(research_host_migration)) {
+    g_migration_restored.store(true);
+    REXLOG_INFO("[Azura research] Host migration: the new host restores the match");
+  }
+  if (Is(base, function, kInitGameReplicationInfo) && REXCVAR_GET(research_host_migration) &&
+      ObjectName(base, LoadU32(base, function + kObjectOuter)) == "GearGameMP_Base") {
+    const uint32_t game = LoadU32(base, ctx.r4.u32 + kFrameObject);
+    g_migration_restored.store(false);
+    __imp__sub_822DF9E0(ctx, base);
+    if (!g_migration_restored.exchange(false)) {
+      // A match that is not a migrated one: what a past migration saved (as a client that did not
+      // become the host) must not reach it.
+      g_saved_round = {};
+      return;
+    }
+    const uint32_t game_class = LoadU32(base, game + kObjectClass);
+    const uint32_t set_rules = FindInheritedFunction(base, game_class, "SetGameRules");
+    if (!set_rules) {
+      REXLOG_WARN("[Azura research] Host migration: no SetGameRules, the match goes on without bots");
+      return;
+    }
+    // The values SetGameRules sets and SetNumBots reads, before and after.
+    auto bot_inputs = [&] {
+      std::string text;
+      for (const char* name : {"MatchType", "RequestedBots", "NumBots", "PlaylistTeamSize", "PlaylistTeamCount",
+                               "NumPlayers", "GoalScore", "TimeLimit"}) {
+        text += fmt::format(" {} {};", name, PropertyText(base, game, name));
+      }
+      return text;
+    };
+    REXLOG_INFO("[Azura research] Host migration: before SetGameRules:{}", bot_inputs());
+    // SetGameRules also sets the rules from this player's own settings (a custom match's, not the
+    // playlist's: GoalScore 5 for 2): everything it changes but the bots is put back, in the game
+    // and in its GRI, which the migration has just restored.
+    const int32_t gri_offset = ClassPropertyOffset(base, game_class, "GameReplicationInfo");
+    const uint32_t gri = gri_offset >= 0 ? LoadU32(base, game + gri_offset) : 0;
+    const auto game_before = SnapshotNumbers(base, game, "Info");
+    const auto gri_before = gri >= 0x10000 ? SnapshotNumbers(base, gri, "Info") : std::vector<NumberSlot>{};
+    constexpr uint32_t kLocalsSize = 512;
+    static uint32_t locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kLocalsSize);
+    std::memset(base + locals, 0, kLocalsSize);
+    RunOnObject(ctx, base, game, set_rules, locals);
+    REXLOG_INFO("[Azura research] Host migration: the match set its rules again (its bots with them):{}", bot_inputs());
+    RestoreNumbers(base, game_before, {"RequestedBots", "NumBots", "PlaylistTeamSize", "PlaylistTeamCount"},
+                   "SetGameRules (game)");
+    RestoreNumbers(base, gri_before, {}, "SetGameRules (GRI)");
+    REXLOG_INFO("[Azura research] Host migration: after putting back:{}", bot_inputs());
+    g_apply_saved_round = true;
     return;
   }
   // A playlist match (MatchType 4) gets its bots from matchmaking's reservations, not from its

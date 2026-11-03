@@ -1,9 +1,9 @@
 diff --git a/include/rex/system/xam/alboria.h b/include/rex/system/xam/alboria.h
 new file mode 100644
-index 0000000..d193142
+index 0000000..a85cd14
 --- /dev/null
 +++ b/include/rex/system/xam/alboria.h
-@@ -0,0 +1,498 @@
+@@ -0,0 +1,510 @@
 +/**
 + * @file        system/xam/alboria.h
 + * @brief       Alboria: System Link over the internet through our relay
@@ -313,6 +313,7 @@ index 0000000..d193142
 +    kInvitation,     // an invitation arrived: `id` is the invitation's
 +    kFriendRequest,  // someone asked to be the player's friend
 +    kFriendJoined,   // a friend joined the player's room
++    kHostLeft,       // the host of the match the player was in left it: `from_name` is the host's
 +  };
 +  Kind kind = Kind::kInvitation;
 +  std::string id;
@@ -394,6 +395,17 @@ index 0000000..d193142
 +void MatchSessionDeleted(std::span<const uint8_t, 8> kid);
 +// Whether the match this installation played in ended because its host left, once for each.
 +bool TakeHostLeft();
++// Whether this member of a match's room has heard nothing from the room's host for a few seconds
++// (kHostSilence), on its direct path or through the relay, once for each host. Both paths carry the
++// SDK's own probes and echoes every second, also while the game loads, so a host that is silent on
++// both has gone: the runtime then closes the game's connection to it, and the game starts its host
++// migration without waiting for its own connection timeout.
++bool TakeHostSilent();
++// Research (host migration): the system version XamGetSystemVersion answers for `seconds` from now
++// (0: the usual one). Gears of War 3 migrates a session's host only on a newer system than the one
++// the SDK claims, and the runtime sets it while a host migration goes on.
++void SetSystemVersionOverride(uint32_t version, int seconds);
++uint32_t SystemVersionOverride();
 +// Whether Alboria sent this installation into a match whose invite has not been given to the
 +// title yet (the search was answered with no match, so the title leaves its matchmaking first).
 +bool HasPendingMatchInvite();
@@ -542,10 +554,10 @@ index 0000000..c7fc5de
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria.cpp b/src/system/xam/alboria.cpp
 new file mode 100644
-index 0000000..0b0de6a
+index 0000000..db40d31
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,2432 @@
+@@ -0,0 +1,2505 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -638,6 +650,9 @@ index 0000000..0b0de6a
 +constexpr auto kLatencyInterval = std::chrono::seconds(1);
 +// A member only known from its relayed data is forgotten after this long without any.
 +constexpr auto kMemberSilence = std::chrono::seconds(30);
++// How long a match's host may go unheard on every path before TakeHostSilent reports it: more than
++// kDirectSilence, after which a host that is still there answers the relay's echoes within a second.
++constexpr auto kHostSilence = std::chrono::seconds(8);
 +// A HELLO's flags (section 5.3): the member takes direct connections.
 +constexpr uint8_t kHelloDirect = 0x01;
 +constexpr size_t kPeerEntrySize = 48;
@@ -784,10 +799,16 @@ index 0000000..0b0de6a
 +std::atomic<uint32_t> g_signed_in_ip{0};
 +// The match room this installation played in ended because its host left (TakeHostLeft).
 +std::atomic<bool> g_host_left{false};
++// TakeHostSilent: set when the match's host went silent, and the host it was reported for (guarded
++// by g_mutex), so each host is reported once.
++std::atomic<bool> g_host_silent{false};
++uint32_t g_silent_host = 0;
 +// The session ID of the match played through matchmaking, hosted or joined (MatchSessionDeleted).
 +std::optional<std::array<uint8_t, 8>> g_match_kid;
 +// The session of the match Alboria sent this installation into, until given to the title.
 +std::optional<SessionInfo> g_pending_match_invite;
++// The gamertag of the host of the match Alboria sent this installation into, for its notices.
++std::string g_match_host_name;
 +
 +// An IPv4 address in dotted form as a number, 0 when it is not one.
 +uint32_t ParseIp(const std::string& text) {
@@ -1098,8 +1119,22 @@ index 0000000..0b0de6a
 +  }
 +}
 +
++// Reports a match's host that went silent on every path (TakeHostSilent). Needs g_mutex.
++void CheckHostSilenceLocked(Clock::time_point now) {
++  if (g_status.state != State::kConnected || !g_status.in_match || g_status.host) return;
++  const auto host = g_peers.find(g_status.host_ip);
++  if (host == g_peers.end() || g_silent_host == g_status.host_ip) return;
++  const auto last_heard = std::max(host->second.last_heard_direct, host->second.last_heard_relay);
++  if (last_heard == Clock::time_point{} || now - last_heard < kHostSilence) return;
++  g_silent_host = g_status.host_ip;
++  g_host_silent.store(true);
++  REXSYS_INFO("Alboria: the match's host (member {}) has not been heard for {} s", g_status.host_ip & 0xFFFF,
++              std::chrono::duration_cast<std::chrono::seconds>(now - last_heard).count());
++}
++
 +// Probes, keeps direct paths open, falls back to the relay and measures each member. Needs g_mutex.
 +void TickPeersLocked(Clock::time_point now) {
++  CheckHostSilenceLocked(now);
 +  for (auto it = g_peers.begin(); it != g_peers.end();) {
 +    const uint32_t address = it->first;
 +    Peer& peer = it->second;
@@ -1477,6 +1512,7 @@ index 0000000..0b0de6a
 +  int hellos = 0;
 +  auto last_hello = std::chrono::steady_clock::time_point{};
 +  auto last_received = std::chrono::steady_clock::now();
++  auto last_ping = std::chrono::steady_clock::time_point{};
 +  std::vector<uint8_t> buffer(kMaxPacketSize + 1);
 +  std::string end_reason;
 +
@@ -1491,8 +1527,12 @@ index 0000000..0b0de6a
 +        }
 +        SendLocked(PacketType::kHello, hello);
 +        last_hello = now;
-+      } else if (welcomed && now - g_last_sent >= kKeepalive) {
++      } else if (welcomed && (now - g_last_sent >= kKeepalive ||
++                              (now - last_received >= kKeepalive && now - last_ping >= kKeepalive))) {
++        // Also while sending: data for a member who left the room gets no answer, and the other
++        // members may all be reached directly, so the relay would otherwise go unheard.
 +        SendLocked(PacketType::kPing, {});
++        last_ping = now;
 +      }
 +      if (welcomed) TickPeersLocked(now);
 +    }
@@ -1622,6 +1662,13 @@ index 0000000..0b0de6a
 +        if ((*body)[2] == kMovedHostLeft) {
 +          REXSYS_INFO("Alboria: the match's host left");
 +          g_host_left.store(true);
++          std::string host;
++          {
++            std::lock_guard lock(g_mutex);
++            host = g_match_host_name;
++          }
++          std::lock_guard lock(g_friends_mutex);
++          g_notices.push_back({Notice::Kind::kHostLeft, {}, 0, host});
 +        }
 +        RunDetached("reading the room", [] { RefreshCurrentRoom(); });
 +        break;
@@ -2564,8 +2611,14 @@ index 0000000..0b0de6a
 +    // search Alboria decided, which is the one the others search with (the title's follow-up
 +    // search asks with other contexts).
 +    if (Clock::now() - g_host_told < kHostTold) return {MatchOutcome::kHost, {}, {}};
-+    // The same for a title just sent into a match: its follow-up search finds nothing either.
-+    if (Clock::now() - g_join_told < kHostTold) return {MatchOutcome::kStopped, {}, {}};
++    // A title sent into a match, whose invite it has not been given yet: every search it makes
++    // meanwhile (it tries a few, minutes apart) finds nothing at once, until the invite is given or
++    // goes stale.
++    constexpr auto kPendingInviteLife = std::chrono::seconds(60);
++    if (Clock::now() - g_join_told < kPendingInviteLife) {
++      std::lock_guard pending(g_mutex);
++      if (g_pending_match_invite) return {MatchOutcome::kStopped, {}, {}};
++    }
 +    g_search_mode = mode;
 +  }
 +  const auto ticket = CallSignedIn("/v1/matchmaking/search", {{"title_id", TitleIdText()}, {"mode", mode}});
@@ -2603,6 +2656,7 @@ index 0000000..0b0de6a
 +      {
 +        std::lock_guard lock(g_mutex);
 +        g_pending_match_invite = session;
++        g_match_host_name = Text(answer.json, "host");
 +        std::array<uint8_t, 8> kid;
 +        std::copy_n(session.begin(), kid.size(), kid.begin());
 +        g_match_kid = kid;
@@ -2687,14 +2741,25 @@ index 0000000..0b0de6a
 +}
 +
 +void MatchSessionDeleted(std::span<const uint8_t, 8> kid) {
++  XnKid id;
++  std::copy(kid.begin(), kid.end(), id.begin());
 +  {
 +    std::lock_guard lock(g_mutex);
-+    if (!g_match_kid || !std::equal(kid.begin(), kid.end(), g_match_kid->begin())) return;
-+    g_match_kid.reset();
-+    if (g_status.state != State::kConnected || !g_status.in_match) return;
++    if (!g_match_kid || *g_match_kid != id) return;
 +  }
-+  REXSYS_INFO("Alboria: leaving the match");
-+  RunDetached("leaving the match", [] {
++  // Joining, the title may delete its session object of the match a moment before it makes the
++  // next one: the match is left only if a while later it still has none.
++  RunDetached("leaving the match", [id] {
++    constexpr auto kLeaveDelay = std::chrono::seconds(5);
++    std::this_thread::sleep_for(kLeaveDelay);
++    if (HasSessionWithKid(id)) return;
++    {
++      std::lock_guard lock(g_mutex);
++      if (!g_match_kid || *g_match_kid != id) return;
++      g_match_kid.reset();
++      if (g_status.state != State::kConnected || !g_status.in_match) return;
++    }
++    REXSYS_INFO("Alboria: leaving the match");
 +    const auto left = CallSignedIn("/v1/matchmaking/leave", nlohmann::json::object());
 +    if (!left.error.empty()) REXSYS_WARN("Alboria: leaving the match failed ({})", left.error);
 +  });
@@ -2702,6 +2767,26 @@ index 0000000..0b0de6a
 +
 +bool TakeHostLeft() {
 +  return g_host_left.exchange(false);
++}
++
++bool TakeHostSilent() {
++  return g_host_silent.exchange(false);
++}
++
++namespace {
++std::atomic<uint32_t> g_system_version_override{0};
++std::atomic<int64_t> g_system_version_until{0};  // steady clock, nanoseconds
++}  // namespace
++
++void SetSystemVersionOverride(uint32_t version, int seconds) {
++  g_system_version_until.store(
++      (std::chrono::steady_clock::now() + std::chrono::seconds(seconds)).time_since_epoch().count());
++  g_system_version_override.store(version);
++}
++
++uint32_t SystemVersionOverride() {
++  if (std::chrono::steady_clock::now().time_since_epoch().count() >= g_system_version_until.load()) return 0;
++  return g_system_version_override.load();
 +}
 +
 +bool HasPendingMatchInvite() {

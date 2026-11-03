@@ -159,6 +159,8 @@ void PatchValueNames(CoalescedSection& section, const std::string& language);
 void PatchSystemSettings(CoalescedSection& section);
 // [Engine.Engine] of Xbox360-GearEngine.ini: the frame rate smoothing ceiling.
 void PatchEngineSettings(CoalescedSection& section);
+// [IpDrv.TcpNetDriver] of Xbox360-GearEngine.ini, online: the connection timeout.
+void PatchNetDriverSettings(CoalescedSection& section);
 // Applies render_resolution (the Video menu's render resolution, "auto" for this computer) to the
 // draw resolution scale and the texture cache limits. Called at start-up, once the GPU plugin that
 // defines them is loaded and before the GPU starts: they cannot change while the game runs.

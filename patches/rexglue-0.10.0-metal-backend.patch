@@ -26349,7 +26349,7 @@ index 82a252c..3dcec80 100644
    if (event.gbutton.down) {
      if (xbutton == X_INPUT_GAMEPAD_GUIDE && !REXCVAR_GET(guide_button)) {
 diff --git a/src/kernel/xam/apps/xgi_app.cpp b/src/kernel/xam/apps/xgi_app.cpp
-index 2b222da..f380052 100644
+index 2b222da..db36b57 100644
 --- a/src/kernel/xam/apps/xgi_app.cpp
 +++ b/src/kernel/xam/apps/xgi_app.cpp
 @@ -10,7 +10,21 @@
@@ -26630,7 +26630,34 @@ index 2b222da..f380052 100644
  
        return X_E_SUCCESS;
      }
-@@ -288,6 +504,37 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -243,7 +459,25 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+ 
+       REXKRNL_DEBUG("XSessionMigrateHost({:08X}, {:08X}, {}, {}, {}, {})", obj_ptr,
+                     session_info_ptr, user_index, reserved1, reserved2, reserved3);
+-
++      // Research (host migration): the new host (a user index) gets the session's XSESSION_INFO
++      // with its own address and hosts it from now on; the others (XUSER_INDEX_NONE, 254) pass the
++      // new host's, which their copy of the session takes. The session ID and key stay.
++      constexpr uint32_t kUserIndexNone = 254;
++      if (auto session = FindSession(obj_ptr); session && session_info_ptr) {
++        auto info = memory_->TranslateVirtual(session_info_ptr);
++        if (user_index != kUserIndexNone) {
++          session->hosting = true;
++          session->host = MakeXnAddr(LinkAddress(), kernel_state_->player_identity().machine_id);
++          std::memcpy(info + kSessionInfoKidOffset, session->kid.data(), session->kid.size());
++          std::memcpy(info + kSessionInfoHostOffset, session->host.data(), session->host.size());
++          std::memcpy(info + kSessionInfoKeyOffset, session->key.data(), session->key.size());
++          REXKRNL_INFO("Alboria: hosting the migrated session {:08X}", obj_ptr);
++        } else {
++          std::memcpy(session->host.data(), info + kSessionInfoHostOffset, session->host.size());
++          REXKRNL_INFO("Alboria: the session {:08X} migrated to a new host", obj_ptr);
++        }
++        AddSession(obj_ptr, *session);
++      }
+       return X_E_SUCCESS;
+     }
+     case 0x000B0019: {
+@@ -288,6 +522,37 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
        REXKRNL_DEBUG("XSessionSearchByID({}, {:08X}, {:08X}, {:08X}, {:08X}, {}, {}, {})",
                      user_index, num_session_ids, session_ids_ptr, results_buffer_size,
                      search_results_ptr, reserved1, reserved2, reserved3);
@@ -26668,7 +26695,7 @@ index 2b222da..f380052 100644
  
        return X_E_SUCCESS;
      }
-@@ -329,7 +576,30 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -329,7 +594,30 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
  
        REXKRNL_DEBUG("XUserReadStats({}, {}, {:08X}, {}, {:08X}, {}, {:08X})", title_id, xuids_count,
                      xuids_ptr, specs_count, specs_ptr, results_size, results_ptr);
@@ -27049,6 +27076,34 @@ index 72a50cb..2a724c5 100644
    XCONTENT_AGGREGATE_DATA content_data = *content_data_ptr.as<XCONTENT_DATA*>();
  
    auto result = REX_KERNEL_STATE()->content_manager()->DeleteContent(xuid, content_data);
+diff --git a/src/kernel/xam/xam_info.cpp b/src/kernel/xam/xam_info.cpp
+index 1944372..a524eda 100644
+--- a/src/kernel/xam/xam_info.cpp
++++ b/src/kernel/xam/xam_info.cpp
+@@ -19,6 +19,11 @@
+ #include <rex/system/kernel_state.h>
+ #include <rex/system/user_module.h>
+ #include <rex/system/xenumerator.h>
++#include <rex/cvar.h>
++#include <rex/system/xam/alboria.h>
++
++REXCVAR_DEFINE_UINT32(xam_system_version, 0, "Kernel",
++                      "Research: the system version XamGetSystemVersion answers (0: the oldest)");
+ #include <rex/system/xthread.h>
+ #include <rex/system/xtypes.h>
+ 
+@@ -158,7 +163,10 @@ u32 XamGetSystemVersion_entry() {
+   // we pretend to be old we have less to worry with implementing.
+   // 0x200A3200
+   // 0x20096B00
+-  return 0;
++  // Research (xam_system_version): Gears of War 3 migrates a session's host (XSessionMigrateHost)
++  // only on 0x200CE900 or later, and checks 0x20096B00, 0x200A3200 and 0x200ED800 elsewhere.
++  if (const uint32_t version = rex::system::xam::alboria::SystemVersionOverride()) return version;
++  return REXCVAR_GET(xam_system_version);
+ }
+ 
+ void XCustomRegisterDynamicActions_entry() {
 diff --git a/src/kernel/xam/xam_misc.cpp b/src/kernel/xam/xam_misc.cpp
 index ff6cb56..46f05f5 100644
 --- a/src/kernel/xam/xam_misc.cpp

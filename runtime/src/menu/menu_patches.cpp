@@ -490,6 +490,8 @@ int PatchMenus(Coalesced& coalesced) {
         PatchSystemSettings(section);
       } else if (engine_config && section_name == "Engine.Engine") {
         PatchEngineSettings(section);
+      } else if (online && engine_config && section_name == "IpDrv.TcpNetDriver") {
+        PatchNetDriverSettings(section);
       } else if (online && ui_texts && section_name == "MessageBoxErrorStrings") {
         PatchOnlineMessages(section, language, party_option_names[language]);
       } else if (online && game_texts && section_name == "UIScene_WhatsUp") {
