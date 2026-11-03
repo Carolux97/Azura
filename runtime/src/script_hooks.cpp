@@ -363,6 +363,7 @@ enum WatchedName {
   kGetAdjustedAimFor,        // GearPC: bends a shot towards the target (aim assist)
   kNotifyInviteFailed,       // GearPC: an accepted invite could not be followed
   kCancelPartyMatchmaking,   // GearPartyGame_Base: the player cancels matchmaking
+  kCreatePlayerVersusMatch,  // GearPartyGame_Base's PlayerMatch state: the party hosts a match (playlist_lobby_vote)
   kContinueCreateMatch,      // UIScene_FrontEnd: a match is created (force_custom_match_mode)
   kInitializeGameSelectionInternal,  // GearPreGameGRI: the lobby picks its games (force_lobby_playlist)
   kUpdateCountdowns,         // GearPreGameGRI: the lobby moves between its states (playlist_lobby_vote)
@@ -417,7 +418,7 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "Callback_Credits",      "Callback_ClientMenuOptionWasSelected", "ConditionalCreatePartySession",
     "GetPartyType",          "LocalPartyCreated",      "ClientSetHUD",       "OnCustomMapChanged",
     "ApplySensitivityScaling", "ViewAdhesion",
-    "GetAdjustedAimFor",     "NotifyInviteFailed",     "CancelPartyMatchmaking", "ContinueCreateMatch", "InitializeGameSelectionInternal", "UpdateCountdowns", "InitializeMapSelectionInternal", "PlacePlayerOnAssignedTeam", "HandleGameSessionJIP", "InitializePreGameGameSettings", "PreLogin", "PostLogin", "SetNumBots", "BeginMatch", "EndOfGameTransition", "GetNextMap", "CheckMapAgainstPlaylist", "GetNumberOfSupportedMapsForPlaylist", "OnUpdatePlaylistPopulationData", "OnPlaylistPopulationDataUpdated", "OnCreatePartyComplete", "IsEpicDev",
+    "GetAdjustedAimFor",     "NotifyInviteFailed",     "CancelPartyMatchmaking", "CreatePlayerVersusMatch", "ContinueCreateMatch", "InitializeGameSelectionInternal", "UpdateCountdowns", "InitializeMapSelectionInternal", "PlacePlayerOnAssignedTeam", "HandleGameSessionJIP", "InitializePreGameGameSettings", "PreLogin", "PostLogin", "SetNumBots", "BeginMatch", "EndOfGameTransition", "GetNextMap", "CheckMapAgainstPlaylist", "GetNumberOfSupportedMapsForPlaylist", "OnUpdatePlaylistPopulationData", "OnPlaylistPopulationDataUpdated", "OnCreatePartyComplete", "IsEpicDev",
     "ProcessSoundEvent",     "Options_StepUp",         "Options_StepDown",   "ValueChangeLeft",
     "ValueChangeRight",      "Options_AcceptButton",   "Options_BackButton", "Options_DetailsEnter",
     "Options_DetailsLeave",  "Options_SliderLeft",     "Options_SliderRight"};
@@ -900,6 +901,75 @@ void RunInsteadWithResult(PPCContext& ctx, uint8_t* base, uint32_t function, uin
   ctx.r5.u64 = caller_result;
 }
 
+uint32_t FindInheritedFunction(const uint8_t* base, uint32_t cls, const char* name);
+
+// The playlist of the lobby the host opened for Alboria's matchmaking (the party's, as the player
+// chose it), -1 when none: the lobby's games, maps and match come from it.
+std::atomic<int32_t> g_lobby_playlist{-1};
+
+// The playlist the pre-game lobby plays: the matchmade one, or force_lobby_playlist (research).
+int32_t LobbyPlaylist() {
+  const int32_t matchmade = g_lobby_playlist.load();
+  return matchmade >= 0 ? matchmade : REXCVAR_GET(force_lobby_playlist);
+}
+
+// Runs `function` (with `locals`) on `object` instead of the frame's own object, for one call from a
+// hook: the frame's Object and the call's this (r3) are `object`'s meanwhile.
+void RunOnObject(PPCContext& ctx, uint8_t* base, uint32_t object, uint32_t function, uint32_t locals) {
+  const uint32_t frame = ctx.r4.u32;
+  const uint64_t self = ctx.r3.u64;
+  const uint32_t own_object = LoadU32(base, frame + kFrameObject);
+  StoreU32(base, frame + kFrameObject, object);
+  ctx.r3.u64 = object;
+  RunInsteadWithResult(ctx, base, function, locals);
+  ctx.r4.u64 = frame;
+  ctx.r3.u64 = self;
+  StoreU32(base, frame + kFrameObject, own_object);
+}
+
+// Alboria's matchmaking told this player to host, and the party game is about to create a player
+// match (GearPartyGame_Base.CreatePlayerVersusMatch, `ctx`'s frame), which has no lobby. Instead,
+// the party's matchmaking is cancelled (CancelPartyMatchmaking: back to the party, state 1) and the
+// front end creates a custom match, as research_auto_lobby does, which the hooks make a playlist
+// match's lobby of the party's playlist (GRI.PlaylistId): its session is opened to Alboria, and the
+// others come in as invited players. Returns whether it did.
+bool OpenMatchmadeLobby(PPCContext& ctx, uint8_t* base) {
+  const uint32_t frame = ctx.r4.u32;
+  const uint32_t party_game = LoadU32(base, frame + kFrameObject);
+  const uint32_t scene = g_front_end_scene.load();
+  const uint32_t party_class = LoadU32(base, party_game + kObjectClass);
+  const uint32_t cancel = FindInheritedFunction(base, party_class, "CancelPartyMatchmaking");
+  const int32_t mode = ClassPropertyOffset(base, party_class, "CurrMatchMode");
+  const int32_t gri_offset = ClassPropertyOffset(base, party_class, "GameReplicationInfo");
+  const uint32_t gri = gri_offset >= 0 ? LoadU32(base, party_game + gri_offset) : 0;
+  const int32_t playlist = gri ? ClassPropertyOffset(base, LoadU32(base, gri + kObjectClass), "PlaylistId") : -1;
+  const uint32_t scene_class = scene ? LoadU32(base, scene + kObjectClass) : 0;
+  const uint32_t select = scene_class ? FindInheritedFunction(base, scene_class, "HandleCustomMatchSelection") : 0;
+  const uint32_t launch = scene_class ? FindInheritedFunction(base, scene_class, "LaunchCustomMatch") : 0;
+  const int32_t selected = select ? ParamOffset(base, select, "SelectedGameMode") : -1;
+  if (!cancel || mode < 0 || playlist < 0 || !launch || selected < 0) {
+    REXLOG_WARN("[Azura online] The matchmade lobby cannot be opened (the party game or front end is not as expected)");
+    return false;
+  }
+  g_lobby_playlist.store(static_cast<int32_t>(LoadU32(base, gri + playlist)));
+  // Its session comes before its lobby can take players: Alboria sends nobody in until it can.
+  rex::system::xam::alboria::HoldNextMatch();
+  constexpr uint32_t kLocalsSize = 1024;
+  static uint32_t locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kLocalsSize);
+  std::memset(base + locals, 0, kLocalsSize);
+  RunInsteadWithResult(ctx, base, cancel, locals);
+  ctx.r4.u64 = frame;
+  constexpr uint8_t kCustomMatchMode = 2;
+  base[party_game + mode] = kCustomMatchMode;
+  std::memset(base + locals, 0, kLocalsSize);
+  base[locals + selected] = 0;
+  RunOnObject(ctx, base, scene, select, locals);
+  std::memset(base + locals, 0, kLocalsSize);
+  RunOnObject(ctx, base, scene, launch, locals);
+  REXLOG_INFO("[Azura online] Alboria said to host: the party opens a lobby of playlist {}", g_lobby_playlist.load());
+  return true;
+}
+
 // Research (research_auto_lobby): the host creates a custom match without the menu, once the menu
 // is ready with its party (it has read the playlists' population, after the party was created:
 // OnPlaylistPopulationDataUpdated at start-up, OnUpdatePlaylistPopulationData back from a match).
@@ -909,6 +979,7 @@ std::atomic<bool> g_auto_lobby_pending{true};
 // with its players; the travel goes back to the lobby instead of the next map (LobbyNextMapCode),
 // not seamless.
 std::atomic<bool> g_lobby_return_pending{false};
+
 // The party game (GearPartyGame_Base), seen as its party's session is created.
 std::atomic<uint32_t> g_party_game{0};
 
@@ -4019,6 +4090,38 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   // With Live parties, the player cancels matchmaking: the game waits for its pending search
   // (XSessionSearch) to end without cancelling it, and starts no other until it has, so Alboria's
   // search is stopped, which ends it.
+  // Told by Alboria to host: a lobby instead of a player match (OpenMatchmadeLobby). The function's
+  // result (whether creating the match started) is true: the party has gone on to the lobby.
+  // (A function of the party game's PlayerMatch state: its outer is the state, its object the game.)
+  if (Is(base, function, kCreatePlayerVersusMatch) && REXCVAR_GET(playlist_lobby_vote) && LiveMode() &&
+      ObjectName(base, LoadU32(base, function + kObjectOuter)) == "PlayerMatch") {
+    namespace alboria = rex::system::xam::alboria;
+    const auto status = alboria::GetStatus();
+    const uint32_t result = ctx.r5.u32;
+    if (status.in_match && status.host && OpenMatchmadeLobby(ctx, base)) {
+      if (result) StoreU32(base, result, 1);
+      return;
+    }
+    // Sent into another player's match: its search was answered with no match so that the party
+    // leaves its matchmaking here (a party still searching drops an invite), and then the match's
+    // lobby is joined as an accepted invite.
+    if (status.in_match && !status.host && alboria::HasPendingMatchInvite()) {
+      const uint32_t frame = ctx.r4.u32;
+      const uint32_t party_game = LoadU32(base, frame + kFrameObject);
+      const uint32_t cancel = FindInheritedFunction(base, LoadU32(base, party_game + kObjectClass), "CancelPartyMatchmaking");
+      if (cancel) {
+        constexpr uint32_t kLocalsSize = 64;
+        static uint32_t locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kLocalsSize);
+        std::memset(base + locals, 0, kLocalsSize);
+        RunInsteadWithResult(ctx, base, cancel, locals);
+        ctx.r4.u64 = frame;
+        alboria::DeliverMatchInvite();
+        REXLOG_INFO("[Azura online] Sent into a match: the party left its matchmaking and joins the match's lobby");
+        if (result) StoreU32(base, result, 1);
+        return;
+      }
+    }
+  }
   if (Is(base, function, kCancelPartyMatchmaking) && LiveMode()) {
     REXLOG_INFO("[Azura online] Matchmaking cancelled: stopping Alboria's search");
     rex::system::xam::alboria::StopMatchmaking();
@@ -4149,8 +4252,11 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     return;
   }
   if (Is(base, function, kInitializePreGameGameSettings) && REXCVAR_GET(playlist_lobby_vote)) {
+    const uint32_t lobby = LoadU32(base, ctx.r4.u32 + kFrameObject);  // the register does not survive the call
     __imp__sub_822DF9E0(ctx, base);
-    LetLobbyBeJoined(base, LoadU32(base, ctx.r4.u32 + kFrameObject));
+    LetLobbyBeJoined(base, lobby);
+    // The lobby takes players now: a matchmade one is open to Alboria's searchers from here.
+    rex::system::xam::alboria::MatchLobbyReady();
     return;
   }
   // GearPreGameLobbyGame_Base.PreLogin turns away whoever comes once every player was present
@@ -4225,7 +4331,7 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   // ID in their PlaylistId property (0x1000000B), which the match reads in InitGame for its teams,
   // map cycle and leaderboards. Settings.Properties is a TArray of SettingsProperty (20 bytes:
   // PropertyId, then SettingsData: Type, Value1, Value2, then AdvertisementType).
-  if (Is(base, function, kBeginMatch) && REXCVAR_GET(force_lobby_playlist) >= 0 &&
+  if (Is(base, function, kBeginMatch) && LobbyPlaylist() >= 0 &&
       ObjectName(base, LoadU32(base, function + kObjectOuter)) == "GearPreGameLobbyGame_Base") {
     const uint32_t game = LoadU32(base, ctx.r4.u32 + kFrameObject);
     const int32_t settings_offset = ClassPropertyOffset(base, LoadU32(base, game + kObjectClass), "PreGameGameSettings");
@@ -4241,23 +4347,23 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
       for (uint32_t i = 0; data && i < count; ++i) {
         const uint32_t entry = data + i * kSettingsPropertySize;
         if (LoadU32(base, entry) != kPlaylistIdProperty) continue;
-        StoreU32(base, entry + kSettingsValue1, static_cast<uint32_t>(REXCVAR_GET(force_lobby_playlist)));
+        StoreU32(base, entry + kSettingsValue1, static_cast<uint32_t>(LobbyPlaylist()));
         written = true;
       }
     }
     if (written) {
-      REXLOG_INFO("[Azura research] The match is one of playlist {}", REXCVAR_GET(force_lobby_playlist));
+      REXLOG_INFO("[Azura research] The match is one of playlist {}", LobbyPlaylist());
     } else {
       REXLOG_WARN("[Azura research] The lobby's session settings have no PlaylistId property");
     }
   }
   // Research: the lobby picks its games and maps from another playlist (force_lobby_playlist).
-  if (Is(base, function, kInitializeGameSelectionInternal) && REXCVAR_GET(force_lobby_playlist) >= 0) {
+  if (Is(base, function, kInitializeGameSelectionInternal) && LobbyPlaylist() >= 0) {
     const int32_t offset = ParamOffset(base, function, "CurrPlaylistId");
     const uint32_t at = LoadU32(base, ctx.r4.u32 + kFrameLocals) + static_cast<uint32_t>(offset);
     if (offset >= 0 && LoadU32(base, at) == 0) {
-      StoreU32(base, at, static_cast<uint32_t>(REXCVAR_GET(force_lobby_playlist)));
-      REXLOG_INFO("[Azura research] The lobby's playlist is {}", REXCVAR_GET(force_lobby_playlist));
+      StoreU32(base, at, static_cast<uint32_t>(LobbyPlaylist()));
+      REXLOG_INFO("[Azura research] The lobby's playlist is {}", LobbyPlaylist());
     }
   }
   // Research: a custom match whose session is created in another match mode

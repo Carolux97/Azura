@@ -2339,10 +2339,10 @@ index 0000000..1d7d7fb
 +}  // namespace rex::system::xam
 diff --git a/include/rex/system/xam/system_link.h b/include/rex/system/xam/system_link.h
 new file mode 100644
-index 0000000..740af0e
+index 0000000..1ec5eaf
 --- /dev/null
 +++ b/include/rex/system/xam/system_link.h
-@@ -0,0 +1,132 @@
+@@ -0,0 +1,135 @@
 +/**
 + * @file        system/xam/system_link.h
 + * @brief       System Link: the local network as XNet and the session services show it to a title
@@ -2457,6 +2457,9 @@ index 0000000..740af0e
 +std::optional<SystemLinkSession> FindSession(uint32_t handle);
 +// Whether this installation hosts a System Link session now.
 +bool HostingSystemLinkSession();
++// Whether the title still knows a session with the ID `kid` (a title can hold the same session in
++// more than one session object while it joins it).
++bool HasSessionWithKid(const XnKid& kid);
 +// The ID of the session whose host has IP address `ip`, or of any session when none matches.
 +std::optional<XnKid> FindSessionKid(uint32_t ip);
 +
@@ -26346,7 +26349,7 @@ index 82a252c..3dcec80 100644
    if (event.gbutton.down) {
      if (xbutton == X_INPUT_GAMEPAD_GUIDE && !REXCVAR_GET(guide_button)) {
 diff --git a/src/kernel/xam/apps/xgi_app.cpp b/src/kernel/xam/apps/xgi_app.cpp
-index 2b222da..52ccfd1 100644
+index 2b222da..f380052 100644
 --- a/src/kernel/xam/apps/xgi_app.cpp
 +++ b/src/kernel/xam/apps/xgi_app.cpp
 @@ -10,7 +10,21 @@
@@ -26513,18 +26516,21 @@ index 2b222da..52ccfd1 100644
        return X_E_SUCCESS;
      }
      case 0x000B0011: {
-@@ -123,6 +253,10 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -123,6 +253,13 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
        uint64_t session_nonce = memory::load_and_swap<uint64_t>(buffer + 8);
  
        REXKRNL_DEBUG("XGISessionDelete({:08X}, {:08X}, {:016X})", obj_ptr, flags, session_nonce);
-+      if (const auto session = FindSession(obj_ptr); session && session->match && session->hosting) {
-+        alboria::CloseMatch();
-+      }
++      const auto session = FindSession(obj_ptr);
++      if (session && session->match && session->hosting) alboria::CloseMatch();
 +      RemoveSession(obj_ptr);
++      // The match played through matchmaking ends for this installation once the title holds it in
++      // no session object any more (joining it, the title makes and deletes more than one): its
++      // party leaves the match's room (section 4.9).
++      if (session && session->live && !HasSessionWithKid(session->kid)) alboria::MatchSessionDeleted(session->kid);
  
        return X_E_SUCCESS;
      }
-@@ -148,6 +282,10 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -148,6 +285,10 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
        uint64_t session_nonce = memory::load_and_swap<uint64_t>(buffer + 8);
  
        REXKRNL_DEBUG("XSessionStart({:08X}, {:08X}, {:016X})", obj_ptr, flags, session_nonce);
@@ -26535,7 +26541,7 @@ index 2b222da..52ccfd1 100644
  
        return X_STATUS_SUCCESS;
      }
-@@ -179,6 +317,66 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -179,6 +320,66 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
        REXKRNL_DEBUG("XSessionSearch({}, {}, {}, {}, {}, {:08X}, {:08X}, {}, {:08X})", proc_index,
                      user_index, num_results, num_props, num_ctx, props_ptr, ctx_ptr,
                      results_buffer_size, search_results_ptr);
@@ -26602,7 +26608,7 @@ index 2b222da..52ccfd1 100644
        return X_E_SUCCESS;
      }
      case 0x000B0018: {
-@@ -191,6 +389,21 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -191,6 +392,21 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
  
        REXKRNL_DEBUG("XSessionModify({:08X}, {:08X}, {:08X}, {:08X})", obj_ptr, flags,
                      maxPublicSlots, maxPrivateSlots);
@@ -26624,7 +26630,7 @@ index 2b222da..52ccfd1 100644
  
        return X_E_SUCCESS;
      }
-@@ -288,6 +501,37 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -288,6 +504,37 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
        REXKRNL_DEBUG("XSessionSearchByID({}, {:08X}, {:08X}, {:08X}, {:08X}, {}, {}, {})",
                      user_index, num_session_ids, session_ids_ptr, results_buffer_size,
                      search_results_ptr, reserved1, reserved2, reserved3);
@@ -26662,7 +26668,7 @@ index 2b222da..52ccfd1 100644
  
        return X_E_SUCCESS;
      }
-@@ -329,7 +573,30 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -329,7 +576,30 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
  
        REXKRNL_DEBUG("XUserReadStats({}, {}, {:08X}, {}, {:08X}, {}, {:08X})", title_id, xuids_count,
                      xuids_ptr, specs_count, specs_ptr, results_size, results_ptr);
@@ -28447,10 +28453,10 @@ index 0000000..1cfbf15
 +}  // namespace rex::system::xam
 diff --git a/src/system/xam/system_link.cpp b/src/system/xam/system_link.cpp
 new file mode 100644
-index 0000000..d4d5e71
+index 0000000..dea3b5a
 --- /dev/null
 +++ b/src/system/xam/system_link.cpp
-@@ -0,0 +1,397 @@
+@@ -0,0 +1,405 @@
 +/**
 + * @file        system/xam/system_link.cpp
 + * @brief       System Link: the local network as XNet and the session services show it to a title
@@ -28821,6 +28827,14 @@ index 0000000..d4d5e71
 +  std::lock_guard<std::mutex> lock(g_mutex);
 +  for (const auto& [handle, session] : g_sessions) {
 +    if (session.hosting) return true;
++  }
++  return false;
++}
++
++bool HasSessionWithKid(const XnKid& kid) {
++  std::lock_guard<std::mutex> lock(g_mutex);
++  for (const auto& [handle, session] : g_sessions) {
++    if (session.kid == kid) return true;
 +  }
 +  return false;
 +}

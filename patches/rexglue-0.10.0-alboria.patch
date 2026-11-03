@@ -1,9 +1,9 @@
 diff --git a/include/rex/system/xam/alboria.h b/include/rex/system/xam/alboria.h
 new file mode 100644
-index 0000000..225eecb
+index 0000000..d193142
 --- /dev/null
 +++ b/include/rex/system/xam/alboria.h
-@@ -0,0 +1,471 @@
+@@ -0,0 +1,498 @@
 +/**
 + * @file        system/xam/alboria.h
 + * @brief       Alboria: System Link over the internet through our relay
@@ -76,6 +76,9 @@ index 0000000..225eecb
 +  kRoom = 12,
 +  // From the relay to a member: another member opens a stream to one of its ports (section 5.5).
 +  kStream = 13,
++  // From the relay to a member: it plays in another room now, a match's or its party's own
++  // (section 4.9): the room's kind, whether it hosts it, why, and its host's address.
++  kMoved = 14,
 +};
 +
 +enum class CloseReason : uint8_t {
@@ -174,8 +177,15 @@ index 0000000..225eecb
 +  std::string code;
 +  // This installation's virtual address, while connected.
 +  uint32_t virtual_ip = 0;
-+  // Whether the player hosts the room (while connected or setting it up).
++  // Whether the player hosts the room (while connected or setting it up): its party's leader in its
++  // party's room, the match host in a match's.
 +  bool host = false;
++  // Whether the player leads its party (section 4.9): its invitations and Join lead to it.
++  bool party_leader = false;
++  // Whether the room is a match's (matchmaking's), where several parties play.
++  bool in_match = false;
++  // The room host's virtual address, while connected.
++  uint32_t host_ip = 0;
 +  // Why the last attempt failed or the room ended, as an error code of the API
 +  // (docs/alboria-relay.md, section 4) or one of: network, server, relay_unreachable, room_closed,
 +  // banned, timed_out, replaced. A ban carries its reason after a colon ("banned:<reason>").
@@ -373,6 +383,23 @@ index 0000000..225eecb
 +               const std::optional<SessionInfo>& session = std::nullopt);
 +// The hosted match takes no more players (the title deleted its session).
 +void CloseMatch();
++// The next match this installation hosts is not open to matchmaking until MatchLobbyReady: its
++// session is created before its lobby can take players (the runtime opens a pre-game lobby).
++void HoldNextMatch();
++// The hosted match's lobby takes players now: Alboria may send searchers into it.
++void MatchLobbyReady();
++// The title deleted the session `kid`: when it is the match this installation plays through
++// matchmaking (hosted or joined), it leaves the match room (POST /v1/matchmaking/leave), and its
++// party goes back to a room of its own.
++void MatchSessionDeleted(std::span<const uint8_t, 8> kid);
++// Whether the match this installation played in ended because its host left, once for each.
++bool TakeHostLeft();
++// Whether Alboria sent this installation into a match whose invite has not been given to the
++// title yet (the search was answered with no match, so the title leaves its matchmaking first).
++bool HasPendingMatchInvite();
++// Gives the title the pending match's session as an accepted invite (XN_LIVE_INVITE_ACCEPTED), once
++// it has left its matchmaking: the match's lobby takes invited players. False when there is none.
++bool DeliverMatchInvite();
 +
 +// The Xbox Live XUID that stands for the friend with the account ID `id`: top bits 0x0009, then
 +// 0xA1B0 and the ID, so it never matches a local player's online XUID (OnlineXuid).
@@ -515,10 +542,10 @@ index 0000000..c7fc5de
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria.cpp b/src/system/xam/alboria.cpp
 new file mode 100644
-index 0000000..eead1f3
+index 0000000..0b0de6a
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,2254 @@
+@@ -0,0 +1,2432 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -753,6 +780,35 @@ index 0000000..eead1f3
 +std::atomic<bool> g_stop{false};
 +// The current or last attempt hosts a room (HostGame) rather than joining one, and of which type.
 +std::atomic<bool> g_hosting{false};
++// This installation's virtual address as the last sign-in gave it, 0 before (section 4.9).
++std::atomic<uint32_t> g_signed_in_ip{0};
++// The match room this installation played in ended because its host left (TakeHostLeft).
++std::atomic<bool> g_host_left{false};
++// The session ID of the match played through matchmaking, hosted or joined (MatchSessionDeleted).
++std::optional<std::array<uint8_t, 8>> g_match_kid;
++// The session of the match Alboria sent this installation into, until given to the title.
++std::optional<SessionInfo> g_pending_match_invite;
++
++// An IPv4 address in dotted form as a number, 0 when it is not one.
++uint32_t ParseIp(const std::string& text) {
++  uint32_t value = 0;
++  int parts = 0;
++  size_t at = 0;
++  while (at <= text.size() && parts < 4) {
++    const size_t end = std::min(text.find('.', at), text.size());
++    if (end == at || end - at > 3) return 0;
++    int part = 0;
++    for (size_t i = at; i < end; ++i) {
++      if (!std::isdigit(static_cast<unsigned char>(text[i]))) return 0;
++      part = part * 10 + (text[i] - '0');
++    }
++    if (part > 255) return 0;
++    value = value << 8 | uint32_t(part);
++    ++parts;
++    at = end + 1;
++  }
++  return parts == 4 ? value : 0;
++}
 +std::atomic<PartyType> g_host_party_type{PartyType::kJoinable};
 +// The service check (CheckService): one at a time, and its last answer.
 +std::atomic<bool> g_checking{false};
@@ -1235,6 +1291,9 @@ index 0000000..eead1f3
 +    g_identity.tag = Number(session.json, "tag", 0);
 +    g_identity.lambency = Flag(session.json, "lambency", false);
 +  }
++  // The address on every room's network that this sign-in gave (section 4.9): a server older than
++  // parties gives none, and its rooms' host is 10.77.0.1.
++  if (session.error.empty()) g_signed_in_ip.store(ParseIp(Text(session.json, "virtual_ip")));
 +  return session;
 +}
 +
@@ -1367,6 +1426,7 @@ index 0000000..eead1f3
 +}
 +
 +void PublishHostedSession(std::string code, SessionInfo session);
++void RefreshCurrentRoom();
 +void PublishHostedQos(std::string code, std::array<uint8_t, 8> kid, std::vector<uint8_t> data);
 +void AnswerStream(std::span<const uint8_t> announcement);
 +
@@ -1469,6 +1529,12 @@ index 0000000..eead1f3
 +        g_status.code = Text(ticket, "code");
 +        g_status.virtual_ip = virtual_ip;
 +        g_status.host = Flag(ticket, "host", false);
++        // The room's creator leads its party; who joins by code does not. The host's address comes
++        // with the ticket (a server older than parties gives none: its rooms' host is 10.77.0.1).
++        g_status.party_leader = g_status.host;
++        g_status.in_match = false;
++        g_status.host_ip = ParseIp(Text(ticket, "host_ip"));
++        if (!g_status.host_ip) g_status.host_ip = kNetwork | 1;
 +        // A server older than party types answers none: its rooms are joinable.
 +        g_status.party_type = Text(ticket, "party_type", "joinable") == "invite_only"
 +                                  ? PartyType::kInviteOnly
@@ -1539,6 +1605,27 @@ index 0000000..eead1f3
 +        g_status.party_type = (*body)[0] == 2 ? PartyType::kInviteOnly : PartyType::kJoinable;
 +        break;
 +      }
++      case PacketType::kMoved: {
++        // Moved to another room (section 4.9): the connection, the key and the address stay, and
++        // so do the title's sessions. The rest of what the room is comes from /v1/rooms/current.
++        if (body->size() < 7) break;
++        constexpr uint8_t kMovedHostLeft = 3;
++        {
++          std::lock_guard lock(g_mutex);
++          g_status.in_match = (*body)[0] == 2;
++          g_status.host = (*body)[1] != 0;
++          g_status.host_ip = uint32_t((*body)[3]) << 24 | uint32_t((*body)[4]) << 16 |
++                             uint32_t((*body)[5]) << 8 | (*body)[6];
++          REXSYS_INFO("Alboria: moved to {} room{}", g_status.in_match ? "a match's" : "the party's",
++                      g_status.host ? ", hosting it" : "");
++        }
++        if ((*body)[2] == kMovedHostLeft) {
++          REXSYS_INFO("Alboria: the match's host left");
++          g_host_left.store(true);
++        }
++        RunDetached("reading the room", [] { RefreshCurrentRoom(); });
++        break;
++      }
 +      case PacketType::kPing: {
 +        std::lock_guard lock(g_mutex);
 +        SendLocked(PacketType::kPong, {});
@@ -1582,12 +1669,44 @@ index 0000000..eead1f3
 +    g_status.code.clear();
 +    g_status.virtual_ip = 0;
 +    g_status.host = false;
++    g_status.party_leader = false;
++    g_status.in_match = false;
++    g_status.host_ip = 0;
 +  }
 +  // The room the player hosted ended under it: signed out of Live, as when a room fails to come up.
 +  if (failed) SetLiveSignedIn(false);
 +}
 +
 +// Sends the session of the Live party this installation hosts to Alboria, for the room `code`.
++// Reads what this installation's room is now (POST /v1/rooms/current), after the relay said it moved
++// (section 4.9): its party's code and type, its roles, its host's address, and the host's QoS data
++// by session, which the title reads the match's settings from when it joins.
++void RefreshCurrentRoom() {
++  const auto room = CallSignedIn("/v1/rooms/current", nlohmann::json::object());
++  if (!room.error.empty()) {
++    REXSYS_WARN("Alboria: the room it moved to could not be read ({})", room.error);
++    return;
++  }
++  std::lock_guard lock(g_mutex);
++  if (g_status.state != State::kConnected) return;
++  g_status.code = Text(room.json, "code", g_status.code);
++  g_status.party_type = Text(room.json, "party_type", "joinable") == "invite_only" ? PartyType::kInviteOnly
++                                                                                  : PartyType::kJoinable;
++  g_status.party_leader = Flag(room.json, "party_leader", g_status.party_leader);
++  g_status.host = Flag(room.json, "host", g_status.host);
++  g_status.in_match = Text(room.json, "kind") == "match";
++  if (const uint32_t host_ip = ParseIp(Text(room.json, "host_ip"))) g_status.host_ip = host_ip;
++  if (const auto sessions = room.json.find("qos_sessions"); sessions != room.json.end() && sessions->is_object()) {
++    for (const auto& [id, value] : sessions->items()) {
++      const auto kid = DecodeHex<8>(id);
++      const auto qos = value.is_string() ? DecodeBase64(value.get<std::string>()) : std::nullopt;
++      if (kid && qos && !qos->empty()) g_host_qos_sessions[*kid] = std::move(*qos);
++    }
++  }
++  REXSYS_INFO("Alboria: in {} room of party {}{}{}", g_status.in_match ? "a match's" : "its party's", g_status.code,
++              g_status.party_leader ? ", leading it" : "", g_status.host ? ", hosting the room" : "");
++}
++
 +void PublishHostedSession(std::string code, SessionInfo session) {
 +  const auto published = CallSignedIn("/v1/rooms/session", {{"code", code}, {"session", EncodeBase64(session)}});
 +  if (published.error.empty()) REXSYS_INFO("Alboria: the room has the Live party's session");
@@ -1941,7 +2060,7 @@ index 0000000..eead1f3
 +std::optional<Header> ParseHeader(std::span<const uint8_t> packet) {
 +  if (packet.size() < kHeaderSize + kTagSize || packet.size() > kMaxPacketSize) return std::nullopt;
 +  if (packet[0] != kMagic0 || packet[1] != kMagic1 || packet[2] != kVersion) return std::nullopt;
-+  if (packet[3] < uint8_t(PacketType::kHello) || packet[3] > uint8_t(PacketType::kStream)) {
++  if (packet[3] < uint8_t(PacketType::kHello) || packet[3] > uint8_t(PacketType::kMoved)) {
 +    return std::nullopt;
 +  }
 +  Header header;
@@ -2367,6 +2486,8 @@ index 0000000..eead1f3
 +std::mutex g_match_mutex;
 +std::string g_search_mode;
 +Clock::time_point g_host_told{};
++// When Alboria last sent this installation into a match, for its follow-up search the same way.
++Clock::time_point g_join_told{};
 +// The match this installation hosts, while open: its capacity and whether it is being played, sent
 +// to Alboria at once and again every kMatchRefresh by the refresher.
 +struct OpenMatchState {
@@ -2375,8 +2496,12 @@ index 0000000..eead1f3
 +  int capacity = 0;
 +  bool started = false;
 +  std::optional<SessionInfo> session;
++  // Not yet open to matchmaking: its lobby cannot take players yet (HoldNextMatch).
++  bool held = false;
 +};
 +OpenMatchState g_match;
++// The next match opened is held (HoldNextMatch).
++std::atomic<bool> g_hold_next_match{false};
 +std::atomic<bool> g_match_refresher{false};
 +constexpr auto kMatchRefresh = std::chrono::seconds(10);
 +// How long after Alboria said to host a new search is answered "host" at once.
@@ -2395,7 +2520,7 @@ index 0000000..eead1f3
 +    match = g_match;
 +  }
 +  const Status status = GetStatus();
-+  if (!match.open || !match.session) return;
++  if (!match.open || !match.session || match.held) return;
 +  if (status.state != State::kConnected || status.code.empty()) {
 +    REXSYS_DEBUG("Alboria: the open match waits for its room");
 +    return;
@@ -2439,6 +2564,8 @@ index 0000000..eead1f3
 +    // search Alboria decided, which is the one the others search with (the title's follow-up
 +    // search asks with other contexts).
 +    if (Clock::now() - g_host_told < kHostTold) return {MatchOutcome::kHost, {}, {}};
++    // The same for a title just sent into a match: its follow-up search finds nothing either.
++    if (Clock::now() - g_join_told < kHostTold) return {MatchOutcome::kStopped, {}, {}};
 +    g_search_mode = mode;
 +  }
 +  const auto ticket = CallSignedIn("/v1/matchmaking/search", {{"title_id", TitleIdText()}, {"mode", mode}});
@@ -2458,17 +2585,31 @@ index 0000000..eead1f3
 +    const auto answer = CallSignedIn("/v1/matchmaking/poll", {{"ticket", id}});
 +    const std::string state = answer.error.empty() ? Text(answer.json, "state") : std::string("host");
 +    if (state == "join") {
-+      const std::string code = Text(answer.json, "code");
-+      REXSYS_INFO("Alboria: a match was found in room {}", code);
-+      // The match's session comes with the answer: the room's may still be its host's party's.
++      // Alboria has moved this installation's party into the match's room (section 4.9: MOVED
++      // follows). The match is its host's pre-game lobby, which takes players as invited ones: its
++      // session goes to the title as an accepted invite, as joining by code does, but only once the
++      // title has left its matchmaking (a title still searching drops the invite). The search is
++      // answered with no match, the title then goes to host one, and the runtime leaves its
++      // matchmaking there instead and has the invite given (DeliverMatchInvite).
 +      const auto match_session = DecodeBase64(Text(answer.json, "session"));
-+      if (JoinRoomForSession(code) && match_session && match_session->size() == kSessionInfoSize) {
-+        SessionInfo session;
-+        std::copy(match_session->begin(), match_session->end(), session.begin());
-+        return {MatchOutcome::kJoin, session, Text(answer.json, "host")};
++      if (!match_session || match_session->size() != kSessionInfoSize) {
++        REXSYS_WARN("Alboria: the match came without its host's session; hosting instead");
++        return {MatchOutcome::kHost, {}, {}};
 +      }
-+      REXSYS_WARN("Alboria: the match's room did not bring its host's session; hosting instead");
-+      return {MatchOutcome::kHost, {}, {}};
++      SessionInfo session;
++      std::copy(match_session->begin(), match_session->end(), session.begin());
++      REXSYS_INFO("Alboria: a match was found ({}'s); its invite waits for the title to leave matchmaking",
++                  Text(answer.json, "host"));
++      {
++        std::lock_guard lock(g_mutex);
++        g_pending_match_invite = session;
++        std::array<uint8_t, 8> kid;
++        std::copy_n(session.begin(), kid.size(), kid.begin());
++        g_match_kid = kid;
++      }
++      std::lock_guard lock(g_match_mutex);
++      g_join_told = Clock::now();
++      return {MatchOutcome::kStopped, {}, {}};
 +    }
 +    if (state == "host") {
 +      REXSYS_INFO("Alboria: hosting a match{}", answer.error.empty() ? "" : " (Alboria did not answer)");
@@ -2497,9 +2638,18 @@ index 0000000..eead1f3
 +}
 +
 +void OpenMatch(int capacity, std::optional<bool> started, const std::optional<SessionInfo>& session) {
++  if (session) {
++    std::array<uint8_t, 8> kid;
++    std::copy_n(session->begin(), kid.size(), kid.begin());
++    std::lock_guard lock(g_mutex);
++    g_match_kid = kid;
++  }
 +  {
 +    std::lock_guard lock(g_match_mutex);
-+    if (!g_match.open) g_match.started = false;
++    if (!g_match.open) {
++      g_match.started = false;
++      g_match.held = g_hold_next_match.exchange(false);
++    }
 +    if (session) g_match.session = session;
 +    g_match.open = true;
 +    g_match.mode = g_search_mode.empty() ? std::string("unknown") : g_search_mode;
@@ -2519,6 +2669,57 @@ index 0000000..eead1f3
 +  const Status status = GetStatus();
 +  if (status.code.empty()) return;
 +  RunDetached("closing the match", [code = status.code] { CallSignedIn("/v1/matchmaking/close", {{"code", code}}); });
++}
++
++void HoldNextMatch() {
++  g_hold_next_match.store(true);
++}
++
++void MatchLobbyReady() {
++  {
++    std::lock_guard lock(g_match_mutex);
++    g_hold_next_match.store(false);
++    if (!g_match.open || !g_match.held) return;
++    g_match.held = false;
++  }
++  REXSYS_INFO("Alboria: the match's lobby takes players now");
++  RunDetached("opening the match", [] { SendOpenMatch(); });
++}
++
++void MatchSessionDeleted(std::span<const uint8_t, 8> kid) {
++  {
++    std::lock_guard lock(g_mutex);
++    if (!g_match_kid || !std::equal(kid.begin(), kid.end(), g_match_kid->begin())) return;
++    g_match_kid.reset();
++    if (g_status.state != State::kConnected || !g_status.in_match) return;
++  }
++  REXSYS_INFO("Alboria: leaving the match");
++  RunDetached("leaving the match", [] {
++    const auto left = CallSignedIn("/v1/matchmaking/leave", nlohmann::json::object());
++    if (!left.error.empty()) REXSYS_WARN("Alboria: leaving the match failed ({})", left.error);
++  });
++}
++
++bool TakeHostLeft() {
++  return g_host_left.exchange(false);
++}
++
++bool HasPendingMatchInvite() {
++  std::lock_guard lock(g_mutex);
++  return g_pending_match_invite.has_value();
++}
++
++bool DeliverMatchInvite() {
++  {
++    std::lock_guard lock(g_mutex);
++    if (!g_pending_match_invite) return false;
++    g_last_invite = g_pending_match_invite;
++    g_accepted_invite = g_pending_match_invite;
++    g_pending_match_invite.reset();
++  }
++  REXSYS_INFO("Alboria: joining the match as an accepted invite");
++  REX_KERNEL_STATE()->BroadcastNotification(kNotifyLiveInviteAccepted, 0);
++  return true;
 +}
 +
 +uint64_t OnlineXuid(uint64_t xuid) {
@@ -2550,7 +2751,7 @@ index 0000000..eead1f3
 +  std::string code;
 +  {
 +    std::lock_guard lock(g_mutex);
-+    if (g_status.state != State::kConnected || !g_status.host || g_status.party_type == party_type) return;
++    if (g_status.state != State::kConnected || !g_status.party_leader || g_status.party_type == party_type) return;
 +    g_status.party_type = party_type;
 +    code = g_status.code;
 +  }
@@ -2658,9 +2859,13 @@ index 0000000..eead1f3
 +uint32_t VirtualAddress() {
 +  std::lock_guard lock(g_mutex);
 +  if (g_status.state == State::kConnected) return g_status.virtual_ip;
-+  // The host of a room is always its first address, so a game being hosted has it before the
-+  // relay answers.
-+  if (g_status.state == State::kWorking && g_hosting.load()) return kNetwork | 1;
++  // A game being hosted needs its address before the relay answers: the one its sign-in gave, the
++  // same in every room (section 4.9); with a server older than parties, a room's host is always its
++  // first address.
++  if (g_status.state == State::kWorking && g_hosting.load()) {
++    const uint32_t signed_in = g_signed_in_ip.load();
++    return signed_in ? signed_in : kNetwork | 1;
++  }
 +  return 0;
 +}
 +
@@ -2696,7 +2901,7 @@ index 0000000..eead1f3
 +    latency.host = true;
 +    return latency;
 +  }
-+  const auto host = g_peers.find(kNetwork | 1);
++  const auto host = g_peers.find(g_status.host_ip);
 +  if (host != g_peers.end() && host->second.rtt_ms >= 0) {
 +    latency.known = true;
 +    latency.milliseconds = host->second.rtt_ms;
