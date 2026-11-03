@@ -47,6 +47,7 @@
 #include "controls_menu.h"
 #include "local_coop_menu.h"
 #include "connection_menu.h"
+#include "versus_online_menu.h"
 #include "local_coop_notices.h"
 #include "gpu_list.h"
 #include "hle_gfx/frame_capture.h"
@@ -316,6 +317,17 @@ class AzuraApp : public rex::ReXApp {
         }
       });
     });
+    // Choosing Versus online in Versus' menu opens Azura's matchmaking menu, on the UI thread.
+    azura::script::SetVersusOnlineHandler([this] {
+      app_context().CallInUIThread([this] {
+        auto* input = runtime() ? static_cast<rex::input::InputSystem*>(runtime()->input_system()) : nullptr;
+        if (!shutting_down_ && dialog_drawer_ && input && !versus_online_menu_) {
+          versus_online_menu_ = new azura::VersusOnlineMenu(dialog_drawer_, input, azura::input::InstalledPlayerAssignment(),
+                                                            REXCVAR_GET(user_language), title_font_, body_font_,
+                                                            &versus_online_menu_);
+        }
+      });
+    });
     // In the game's menus (not the title screen) the keyboard's Return and Escape accept and go back,
     // in every scene: the Options, their message boxes, the multiplayer preferences, the pause menu.
     rex::input::mnk::SetMenuKeysQuery(
@@ -465,6 +477,7 @@ class AzuraApp : public rex::ReXApp {
     azura::menu::SetUpscalingSupport(nullptr);
     azura::script::SetLocalCoopHandler(nullptr);
     azura::script::SetConnectionHandler(nullptr);
+    azura::script::SetVersusOnlineHandler(nullptr);
     azura::script::SetControlsMenuHandler(nullptr);
     azura::script::SetJoinByCodeHandler(nullptr);
     rex::ui::UnregisterBind("bind_alboria_overlay");
@@ -493,6 +506,8 @@ class AzuraApp : public rex::ReXApp {
     local_coop_menu_ = nullptr;
     delete connection_menu_;
     connection_menu_ = nullptr;
+    delete versus_online_menu_;
+    versus_online_menu_ = nullptr;
     delete controls_menu_;
     controls_menu_ = nullptr;
     delete coop_notices_;
@@ -572,7 +587,7 @@ class AzuraApp : public rex::ReXApp {
   void OpenAlboriaOverlay(azura::AlboriaOverlay::Page page) {
     auto* input = runtime() ? static_cast<rex::input::InputSystem*>(runtime()->input_system()) : nullptr;
     if (shutting_down_ || !dialog_drawer_ || !input || alboria_overlay_ || join_by_code_menu_ || local_coop_menu_ ||
-        connection_menu_ || controls_menu_) {
+        connection_menu_ || versus_online_menu_ || controls_menu_) {
       return;
     }
     if (azura::script::WhereInMenus() == azura::script::Menus::kPlaying) azura::input::PressStartForGame();
@@ -608,6 +623,7 @@ class AzuraApp : public rex::ReXApp {
   // Accessed on the UI thread only.
   azura::LocalCoopMenu* local_coop_menu_ = nullptr;
   azura::ConnectionMenu* connection_menu_ = nullptr;
+  azura::VersusOnlineMenu* versus_online_menu_ = nullptr;
   azura::ControlsMenu* controls_menu_ = nullptr;
   // The local co-op notices, from the game's start to its end. Accessed on the UI thread only.
   azura::LocalCoopNotices* coop_notices_ = nullptr;

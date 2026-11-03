@@ -164,7 +164,9 @@ void OnlineRoomOverlay::OnDraw(ImGuiIO& io) {
     case alboria::State::kWorking:
       error_.clear();
       title = texts.title;
-      line = status.host ? texts.creating : texts.joining;
+      // A match room (matchmaking) says the same to everyone: who hosts is never shown
+      // (alboria-notes:alboria-server/online-rules.md).
+      line = status.host && !status.in_match ? texts.creating : texts.joining;
       break;
     case alboria::State::kConnected:
       error_.clear();

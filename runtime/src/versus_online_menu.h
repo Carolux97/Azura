@@ -1,0 +1,80 @@
+// Azura's own Versus online menu: the player chooses Standard (Ranked is shown, coming soon) and
+// one or more of its modes, and the menu searches for a match through Alboria, showing how the
+// search goes (the players found so far) until the game opens or joins the match's pre-game lobby.
+// Opened from Versus' menu (Versus online, menu_patches.cpp; script_hooks.cpp opens it).
+//
+// Nothing it shows tells who will host the match (alboria-notes:alboria-server/online-rules.md).
+
+#pragma once
+
+#include <chrono>
+#include <map>
+#include <string>
+#include <vector>
+
+#include <rex/input/input_system.h>
+#include <rex/ui/imgui_dialog.h>
+
+#include "coop_ui.h"
+#include "input/player_assignment.h"
+
+struct ImFont;
+
+namespace azura {
+
+class VersusOnlineMenu : public rex::ui::ImGuiDialog {
+ public:
+  // `owner` is cleared when the menu closes and deletes itself. `language` is the Xbox 360 language
+  // ID of the user_language setting. The fonts may be null (ImGui's default is used).
+  VersusOnlineMenu(rex::ui::ImGuiDrawer* drawer, rex::input::InputSystem* input, input::PlayerAssignment* assignment,
+                   uint32_t language, ImFont* title_font, ImFont* body_font, VersusOnlineMenu** owner);
+
+ protected:
+  void OnDraw(ImGuiIO& io) override;
+  void OnClose() override;
+
+ private:
+  using Clock = std::chrono::steady_clock;
+
+  // The menu's screens: choosing the modes, searching, the match found (until the game takes over),
+  // and a search that could not be made.
+  enum class Screen { kChoose, kSearching, kReady, kError };
+
+  // What the player pressed this frame, from the controllers and the keyboard.
+  struct Presses {
+    int move = 0;
+    bool accept = false;
+    bool mark = false;
+    bool back = false;
+  };
+  Presses ReadInput();
+  // Starts a search for the modes marked, or says that none is.
+  void Search();
+  // Follows the search and acts on the player's presses.
+  void Update(const Presses& presses);
+
+  rex::input::InputSystem* input_;
+  input::PlayerAssignment* assignment_;
+  uint32_t language_;
+  ImFont* title_font_;
+  ImFont* body_font_;
+  VersusOnlineMenu** owner_;
+  Clock::time_point opened_;
+  coop_ui::LastUsedInput last_input_;
+  // Each controller's buttons the frame before (the left stick's direction as D-pad bits). A
+  // controller seen for the first time does nothing that frame: the press that opened the menu does
+  // not also act in it.
+  std::map<rex::input::DeviceId, uint16_t> previous_buttons_;
+  Screen screen_ = Screen::kChoose;
+  Clock::time_point screen_since_;
+  // The mode list's focused row.
+  int focus_ = 0;
+  // Since when "choose at least one mode" shows, after a search with none marked.
+  Clock::time_point no_mode_since_{};
+  // Why the last search failed (Alboria's error), for the error screen.
+  std::string error_;
+  // A press closed the menu, which closes once it is released (coop_ui::CloseInputHeld).
+  bool closing_ = false;
+};
+
+}  // namespace azura

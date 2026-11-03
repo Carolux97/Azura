@@ -42,9 +42,12 @@ namespace {
 
 std::atomic<int> g_quit_option{-1};
 std::atomic<int> g_options_option{-1};
+std::atomic<int> g_versus_online_option{-1};
 
 // Label of the added option. Its text is the [MainMenu] key of the same name.
 constexpr const char* kQuitLabel = "AzuraQuit";
+// Label of Versus' own online option (online play on), and its text's key the same way.
+constexpr const char* kVersusOnlineLabel = "AzuraVersusOnline";
 
 // The game mounts its folder here (rex::Runtime::SetupVfs); the overlay device holds the patched
 // copies.
@@ -59,6 +62,9 @@ struct Texts {
   const char* dlc_tooltip;
   const char* not_installed;  // the option's whole title while it is not installed
   const char* not_installed_tooltip;
+  // Versus' own online option (online play on), which opens Azura's matchmaking menu.
+  const char* versus_online;
+  const char* versus_online_tooltip;
 };
 
 // Texts of online play on Alboria (network_mode = online), for each localization.
@@ -107,20 +113,20 @@ const OnlineTexts& OnlineTextsFor(const std::string& language) {
 // Texts for each localization, keyed by the extension of its files.
 const std::map<std::string, Texts>& LocalizedTexts() {
   static const std::map<std::string, Texts> texts = {
-      {"int", {"Quit Game", "Close Gears of War 3 and return to the desktop.", "(coming soon)", "RAAM's Shadow", "Play the RAAM's Shadow campaign.", "Not Installed", "Add RAAM's Shadow from the launcher (Installation, Downloadable content) to play it."}},
-      {"esn", {"Salir del juego", "Cierra Gears of War 3 y vuelve al escritorio.", "(próximamente)", "Sombras de RAAM", "Juega la campaña de Sombras de RAAM.", "No instalado", "Añade Sombras de RAAM desde el launcher (Instalación, Contenido descargable) para jugarla."}},
-      {"deu", {"Spiel beenden", "Beendet Gears of War 3 und kehrt zum Desktop zurück.", "(demnächst)", "RAAMs Schatten", "Spiele die Kampagne RAAM's Shadow.", "Nicht installiert", "Füge RAAMs Schatten im Launcher hinzu (Installation, Herunterladbare Inhalte), um es zu spielen."}},
-      {"ita", {"Esci dal gioco", "Chiudi Gears of War 3 e torna al desktop.", "(prossimamente)", "L'ombra di RAAM", "Gioca la campagna RAAM's Shadow.", "Non installato", "Aggiungi L'ombra di RAAM dal launcher (Installazione, Contenuti scaricabili) per giocarlo."}},
-      {"jpn", {"ゲームを終了", "Gears of War 3 を終了してデスクトップに戻ります。", "(近日公開)", "RAAM's Shadow", "RAAM's Shadow のキャンペーンをプレイします。", "未インストール", "ランチャー (インストール、ダウンロードコンテンツ) から RAAM's Shadow を追加するとプレイできます。"}},
-      {"esm", {"Salir del juego", "Cierra Gears of War 3 y vuelve al escritorio.", "(próximamente)", "Sombras de RAAM", "Juega la campaña de Sombras de RAAM.", "No instalado", "Agrega Sombras de RAAM desde el launcher (Instalación, Contenido descargable) para jugarla."}},
-      {"fra", {"Quitter le jeu", "Fermer Gears of War 3 et revenir au bureau.", "(bientôt)", "L'Ombre de RAAM", "Jouer la campagne RAAM's Shadow.", "Non installé", "Ajoutez L'Ombre de RAAM depuis le launcher (Installation, Contenu téléchargeable) pour y jouer."}},
-      {"ptb", {"Sair do jogo", "Fecha o Gears of War 3 e volta para a área de trabalho.", "(em breve)", "A Sombra de RAAM", "Jogue a campanha RAAM's Shadow.", "Não instalado", "Adicione A Sombra de RAAM pelo launcher (Instalação, Conteúdo para download) para jogar."}},
-      {"pol", {"Wyjdź z gry", "Zamknij Gears of War 3 i wróć do pulpitu.", "(wkrótce)", "Cień RAAM-a", "Zagraj w kampanię RAAM's Shadow.", "Niezainstalowane", "Dodaj Cień RAAM-a w launcherze (Instalacja, Zawartość do pobrania), aby zagrać."}},
-      {"rus", {"Выйти из игры", "Закрыть Gears of War 3 и вернуться на рабочий стол.", "(скоро)", "Тень RAAM", "Пройти кампанию RAAM's Shadow.", "Не установлено", "Добавьте «Тень RAAM» в лаунчере (Установка, Загружаемый контент), чтобы играть."}},
-      {"cze", {"Ukončit hru", "Zavřít Gears of War 3 a vrátit se na plochu.", "(již brzy)", "RAAMův stín", "Hrát kampaň RAAM's Shadow.", "Nenainstalováno", "Přidejte RAAMův stín v launcheru (Instalace, Stahovatelný obsah) a můžete hrát."}},
-      {"hun", {"Kilépés a játékból", "A Gears of War 3 bezárása és visszatérés az asztalra.", "(hamarosan)", "RAAM árnyéka", "A RAAM's Shadow kampány játszása.", "Nincs telepítve", "Add hozzá a RAAM árnyékát a launcherben (Telepítés, Letölthető tartalom) a játékhoz."}},
-      {"chn", {"退出遊戲", "關閉 Gears of War 3 並返回桌面。", "(即將推出)", "RAAM's Shadow", "遊玩 RAAM's Shadow 戰役。", "未安裝", "在啟動器（安裝、下載內容）中加入 RAAM's Shadow 即可遊玩。"}},
-      {"kor", {"게임 종료", "Gears of War 3를 닫고 바탕 화면으로 돌아갑니다.", "(출시 예정)", "RAAM's Shadow", "RAAM's Shadow 캠페인을 플레이합니다.", "설치되지 않음", "런처(설치, 다운로드 콘텐츠)에서 RAAM's Shadow를 추가하면 플레이할 수 있습니다."}},
+      {"int", {"Quit Game", "Close Gears of War 3 and return to the desktop.", "(coming soon)", "RAAM's Shadow", "Play the RAAM's Shadow campaign.", "Not Installed", "Add RAAM's Shadow from the launcher (Installation, Downloadable content) to play it.", "Versus Online", "Find a match against other players on Alboria."}},
+      {"esn", {"Salir del juego", "Cierra Gears of War 3 y vuelve al escritorio.", "(próximamente)", "Sombras de RAAM", "Juega la campaña de Sombras de RAAM.", "No instalado", "Añade Sombras de RAAM desde el launcher (Instalación, Contenido descargable) para jugarla.", "Versus online", "Busca partida contra otros jugadores en Alboria."}},
+      {"deu", {"Spiel beenden", "Beendet Gears of War 3 und kehrt zum Desktop zurück.", "(demnächst)", "RAAMs Schatten", "Spiele die Kampagne RAAM's Shadow.", "Nicht installiert", "Füge RAAMs Schatten im Launcher hinzu (Installation, Herunterladbare Inhalte), um es zu spielen.", "Versus online", "Suche ein Match gegen andere Spieler auf Alboria."}},
+      {"ita", {"Esci dal gioco", "Chiudi Gears of War 3 e torna al desktop.", "(prossimamente)", "L'ombra di RAAM", "Gioca la campagna RAAM's Shadow.", "Non installato", "Aggiungi L'ombra di RAAM dal launcher (Installazione, Contenuti scaricabili) per giocarlo.", "Versus online", "Cerca una partita contro altri giocatori su Alboria."}},
+      {"jpn", {"ゲームを終了", "Gears of War 3 を終了してデスクトップに戻ります。", "(近日公開)", "RAAM's Shadow", "RAAM's Shadow のキャンペーンをプレイします。", "未インストール", "ランチャー (インストール、ダウンロードコンテンツ) から RAAM's Shadow を追加するとプレイできます。", "オンライン対戦", "Alboria で他のプレイヤーとのマッチを探します。"}},
+      {"esm", {"Salir del juego", "Cierra Gears of War 3 y vuelve al escritorio.", "(próximamente)", "Sombras de RAAM", "Juega la campaña de Sombras de RAAM.", "No instalado", "Agrega Sombras de RAAM desde el launcher (Instalación, Contenido descargable) para jugarla.", "Versus online", "Busca partida contra otros jugadores en Alboria."}},
+      {"fra", {"Quitter le jeu", "Fermer Gears of War 3 et revenir au bureau.", "(bientôt)", "L'Ombre de RAAM", "Jouer la campagne RAAM's Shadow.", "Non installé", "Ajoutez L'Ombre de RAAM depuis le launcher (Installation, Contenu téléchargeable) pour y jouer.", "Versus en ligne", "Trouvez une partie contre d'autres joueurs sur Alboria."}},
+      {"ptb", {"Sair do jogo", "Fecha o Gears of War 3 e volta para a área de trabalho.", "(em breve)", "A Sombra de RAAM", "Jogue a campanha RAAM's Shadow.", "Não instalado", "Adicione A Sombra de RAAM pelo launcher (Instalação, Conteúdo para download) para jogar.", "Versus online", "Encontre uma partida contra outros jogadores no Alboria."}},
+      {"pol", {"Wyjdź z gry", "Zamknij Gears of War 3 i wróć do pulpitu.", "(wkrótce)", "Cień RAAM-a", "Zagraj w kampanię RAAM's Shadow.", "Niezainstalowane", "Dodaj Cień RAAM-a w launcherze (Instalacja, Zawartość do pobrania), aby zagrać.", "Versus online", "Znajdź mecz z innymi graczami w Alborii."}},
+      {"rus", {"Выйти из игры", "Закрыть Gears of War 3 и вернуться на рабочий стол.", "(скоро)", "Тень RAAM", "Пройти кампанию RAAM's Shadow.", "Не установлено", "Добавьте «Тень RAAM» в лаунчере (Установка, Загружаемый контент), чтобы играть.", "Versus онлайн", "Найти матч с другими игроками в Alboria."}},
+      {"cze", {"Ukončit hru", "Zavřít Gears of War 3 a vrátit se na plochu.", "(již brzy)", "RAAMův stín", "Hrát kampaň RAAM's Shadow.", "Nenainstalováno", "Přidejte RAAMův stín v launcheru (Instalace, Stahovatelný obsah) a můžete hrát.", "Versus online", "Najděte zápas proti dalším hráčům na Alborii."}},
+      {"hun", {"Kilépés a játékból", "A Gears of War 3 bezárása és visszatérés az asztalra.", "(hamarosan)", "RAAM árnyéka", "A RAAM's Shadow kampány játszása.", "Nincs telepítve", "Add hozzá a RAAM árnyékát a launcherben (Telepítés, Letölthető tartalom) a játékhoz.", "Online Versus", "Keress meccset más játékosok ellen az Alborián."}},
+      {"chn", {"退出遊戲", "關閉 Gears of War 3 並返回桌面。", "(即將推出)", "RAAM's Shadow", "遊玩 RAAM's Shadow 戰役。", "未安裝", "在啟動器（安裝、下載內容）中加入 RAAM's Shadow 即可遊玩。", "線上對戰", "在 Alboria 尋找與其他玩家的對戰。"}},
+      {"kor", {"게임 종료", "Gears of War 3를 닫고 바탕 화면으로 돌아갑니다.", "(출시 예정)", "RAAM's Shadow", "RAAM's Shadow 캠페인을 플레이합니다.", "설치되지 않음", "런처(설치, 다운로드 콘텐츠)에서 RAAM's Shadow를 추가하면 플레이할 수 있습니다.", "온라인 대전", "Alboria에서 다른 플레이어와의 매치를 찾습니다."}},
   };
   return texts;
 }
@@ -281,6 +287,30 @@ int PatchMenuStructure(CoalescedSection& section) {
       }
     });
   }
+  // With online play on, Versus' Recreational and Competitive (Xbox LIVE's playlists) become one
+  // option, Versus online, which opens Azura's own matchmaking menu (script_hooks.cpp): no next
+  // screen and no halt, as Options in the main menu. It takes Recreational's place and picture;
+  // Private stays.
+  if (REXCVAR_GET(network_mode) == "online") {
+    EditScreen(section, "MAINMENUOP_VS_Competitiveness", [](std::vector<std::u16string>& entries) {
+      const auto recreational =
+          std::find_if(entries.begin(), entries.end(), [](const auto& e) { return EntryLabel(e) == u"Recreational"; });
+      if (recreational == entries.end()) return;
+      std::u16string picture;
+      const std::u16string marker = u"ImagePath=\"";
+      if (const size_t start = recreational->find(marker); start != std::u16string::npos) {
+        const size_t end = recreational->find(u'"', start + marker.size());
+        if (end != std::u16string::npos) picture = recreational->substr(start, end - start + 1) + u",";
+      }
+      const std::u16string online = u"(Label=\"" + U16(kVersusOnlineLabel) + u"\"," + picture + u"Next=MAINMENUOP_None)";
+      const auto at = static_cast<size_t>(recreational - entries.begin());
+      std::erase_if(entries, [](const std::u16string& e) {
+        return EntryLabel(e) == u"Recreational" || EntryLabel(e) == u"Competitive";
+      });
+      entries.insert(entries.begin() + static_cast<std::ptrdiff_t>(std::min(at, entries.size())), online);
+      g_versus_online_option.store(static_cast<int>(std::min(at, entries.size() - 1)), std::memory_order_release);
+    });
+  }
   if (!REXCVAR_GET(menu_coming_soon)) return quit_option;
   EditScreen(section, "MAINMENUOP_CampaignStandard", DisableLabels({"CreatePublic", "JoinPublic"}));
   EditScreen(section, "MAINMENUOP_CampaignArcade", DisableLabels({"CreatePublic", "JoinPublic"}));
@@ -313,6 +343,9 @@ void PatchMenuTexts(CoalescedSection& section, const Texts& texts) {
       key.value.empty_marker = false;
     }
   }
+  section.keys.push_back({CoalescedString::FromAscii(kVersusOnlineLabel), CoalescedString::FromUtf8(texts.versus_online)});
+  section.keys.push_back({CoalescedString::FromAscii(std::string("TOOLTIP_") + kVersusOnlineLabel),
+                          CoalescedString::FromUtf8(texts.versus_online_tooltip)});
   section.keys.push_back({CoalescedString::FromAscii(kQuitLabel), CoalescedString::FromUtf8(texts.quit)});
   section.keys.push_back({CoalescedString::FromAscii(std::string("TOOLTIP_") + kQuitLabel),
                           CoalescedString::FromUtf8(texts.quit_tooltip)});
@@ -578,6 +611,10 @@ int MainMenuQuitOption() {
 
 int MainMenuOptionsOption() {
   return g_options_option.load(std::memory_order_acquire);
+}
+
+int VersusOnlineOption() {
+  return g_versus_online_option.load(std::memory_order_acquire);
 }
 
 }  // namespace azura::menu

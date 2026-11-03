@@ -289,6 +289,8 @@ std::function<void()> g_restart_handler;
 std::function<void()> g_local_coop_handler;
 // Opens the Alboria menu (SetConnectionHandler).
 std::function<void()> g_connection_handler;
+// Opens the Versus online menu (SetVersusOnlineHandler).
+std::function<void()> g_versus_online_handler;
 // Opens the Join by code screen (SetJoinByCodeHandler).
 std::function<void()> g_join_by_code_handler;
 // A join in a room on Alboria (JoinSystemLinkPartyInRoom, "Join by code" below): the System Link
@@ -731,6 +733,32 @@ bool IsQuitSelection(const uint8_t* base, uint32_t frame, int quit_option) {
          static_cast<int32_t>(LoadU32(base, locals + option)) == quit_option;
 }
 
+// A choice in Versus' menu (UIScene_FrontEnd.HandleMenuSelection on MAINMENUOP_VS_Competitiveness,
+// the frame about to run). With online play on, its Recreational and Competitive are one option,
+// Versus online (menu_patches.cpp), but the script handles the menu's choices by their original
+// position (0 Recreational, 1 Competitive, 2 Private): the options after Versus online are turned
+// into those, replayed (simulated) choices too, as the menu does when it goes back to its screens.
+// Returns whether the choice is Versus online, which the script does not know.
+bool VersusMenuChoice(uint8_t* base, uint32_t frame) {
+  const int online_option = azura::menu::VersusOnlineOption();
+  if (online_option < 0) return false;
+  const uint32_t function = LoadU32(base, frame + kFrameNode);
+  const uint32_t locals = LoadU32(base, frame + kFrameLocals);
+  const int32_t screen_at = ParamOffset(base, function, "ParentScreen");
+  const int32_t option_at = ParamOffset(base, function, "SelectedOption");
+  const int32_t simulating = ParamOffset(base, function, "bIsSimulating");
+  if (screen_at < 0 || option_at < 0 || base[locals + screen_at] != azura::menu::kVersusScreen) return false;
+  const int option = static_cast<int32_t>(LoadU32(base, locals + option_at));
+  const bool simulated = simulating >= 0 && LoadU32(base, locals + simulating) != 0;
+  if (option > online_option) {
+    // Recreational's place is Versus online's; Competitive's is gone.
+    StoreU32(base, locals + option_at, static_cast<uint32_t>(option + 1));
+    REXLOG_INFO("[Azura online] Versus' menu: option {} is the game's {}{}", option, option + 1, simulated ? " (replayed)" : "");
+    return false;
+  }
+  return option == online_option && !simulated;
+}
+
 void RequestQuit() {
   if (g_quit_requested.exchange(true)) return;
   std::function<void()> handler;
@@ -936,38 +964,36 @@ void RunOnObject(PPCContext& ctx, uint8_t* base, uint32_t object, uint32_t funct
   StoreU32(base, frame + kFrameObject, own_object);
 }
 
-// Alboria's matchmaking told this player to host, and the party game is about to create a player
-// match (GearPartyGame_Base.CreatePlayerVersusMatch, `ctx`'s frame), which has no lobby. Instead,
-// the party's matchmaking is cancelled (CancelPartyMatchmaking: back to the party, state 1) and the
-// front end creates a custom match, as the menu would, which the hooks make a playlist
-// match's lobby of the party's playlist (GRI.PlaylistId): its session is opened to Alboria, and the
-// others come in as invited players. Returns whether it did.
-bool OpenMatchmadeLobby(PPCContext& ctx, uint8_t* base) {
+// Opens a playlist match's pre-game lobby of `playlist` for Alboria's matchmaking, from a hook's
+// frame (`ctx`) while the front end is up: the party game `party_game`'s match mode becomes 2
+// (custom) and the front end creates a custom match, as the menu would (HandleCustomMatchSelection,
+// LaunchCustomMatch), which the hooks make a playlist match's lobby of `playlist`: its session is
+// opened to Alboria once the lobby takes players, and the others come in as invited players. With
+// `cancel` (a function of the party game), the party's own matchmaking is cancelled first. Returns
+// whether it did.
+bool LaunchMatchmadeLobby(PPCContext& ctx, uint8_t* base, uint32_t party_game, int32_t playlist, uint32_t cancel) {
   const uint32_t frame = ctx.r4.u32;
-  const uint32_t party_game = LoadU32(base, frame + kFrameObject);
   const uint32_t scene = g_front_end_scene.load();
-  const uint32_t party_class = LoadU32(base, party_game + kObjectClass);
-  const uint32_t cancel = FindInheritedFunction(base, party_class, "CancelPartyMatchmaking");
-  const int32_t mode = ClassPropertyOffset(base, party_class, "CurrMatchMode");
-  const int32_t gri_offset = ClassPropertyOffset(base, party_class, "GameReplicationInfo");
-  const uint32_t gri = gri_offset >= 0 ? LoadU32(base, party_game + gri_offset) : 0;
-  const int32_t playlist = gri ? ClassPropertyOffset(base, LoadU32(base, gri + kObjectClass), "PlaylistId") : -1;
+  const uint32_t party_class = party_game ? LoadU32(base, party_game + kObjectClass) : 0;
+  const int32_t mode = party_class ? ClassPropertyOffset(base, party_class, "CurrMatchMode") : -1;
   const uint32_t scene_class = scene ? LoadU32(base, scene + kObjectClass) : 0;
   const uint32_t select = scene_class ? FindInheritedFunction(base, scene_class, "HandleCustomMatchSelection") : 0;
   const uint32_t launch = scene_class ? FindInheritedFunction(base, scene_class, "LaunchCustomMatch") : 0;
   const int32_t selected = select ? ParamOffset(base, select, "SelectedGameMode") : -1;
-  if (!cancel || mode < 0 || playlist < 0 || !launch || selected < 0) {
+  if (mode < 0 || playlist < 0 || !launch || selected < 0) {
     REXLOG_WARN("[Azura online] The matchmade lobby cannot be opened (the party game or front end is not as expected)");
     return false;
   }
-  g_lobby_playlist.store(static_cast<int32_t>(LoadU32(base, gri + playlist)));
+  g_lobby_playlist.store(playlist);
   // Its session comes before its lobby can take players: Alboria sends nobody in until it can.
   rex::system::xam::alboria::HoldNextMatch();
   constexpr uint32_t kLocalsSize = 1024;
   static uint32_t locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kLocalsSize);
-  std::memset(base + locals, 0, kLocalsSize);
-  RunInsteadWithResult(ctx, base, cancel, locals);
-  ctx.r4.u64 = frame;
+  if (cancel) {
+    std::memset(base + locals, 0, kLocalsSize);
+    RunInsteadWithResult(ctx, base, cancel, locals);
+    ctx.r4.u64 = frame;
+  }
   constexpr uint8_t kCustomMatchMode = 2;
   base[party_game + mode] = kCustomMatchMode;
   std::memset(base + locals, 0, kLocalsSize);
@@ -976,8 +1002,48 @@ bool OpenMatchmadeLobby(PPCContext& ctx, uint8_t* base) {
   std::memset(base + locals, 0, kLocalsSize);
   g_matchmade_match.store(true);
   RunOnObject(ctx, base, scene, launch, locals);
-  REXLOG_INFO("[Azura online] Alboria said to host: the party opens a lobby of playlist {}", g_lobby_playlist.load());
+  REXLOG_INFO("[Azura online] The party opens a matchmade lobby of playlist {}", playlist);
   return true;
+}
+
+// Alboria's matchmaking told this player to host, and the party game is about to create a player
+// match (GearPartyGame_Base.CreatePlayerVersusMatch, `ctx`'s frame), which has no lobby. Instead,
+// the party's matchmaking is cancelled (CancelPartyMatchmaking: back to the party, state 1) and a
+// lobby of the party's playlist (GRI.PlaylistId) is opened (LaunchMatchmadeLobby). Returns whether
+// it did.
+bool OpenMatchmadeLobby(PPCContext& ctx, uint8_t* base) {
+  const uint32_t party_game = LoadU32(base, ctx.r4.u32 + kFrameObject);
+  const uint32_t party_class = LoadU32(base, party_game + kObjectClass);
+  const uint32_t cancel = FindInheritedFunction(base, party_class, "CancelPartyMatchmaking");
+  const int32_t gri_offset = ClassPropertyOffset(base, party_class, "GameReplicationInfo");
+  const uint32_t gri = gri_offset >= 0 ? LoadU32(base, party_game + gri_offset) : 0;
+  const int32_t playlist = gri ? ClassPropertyOffset(base, LoadU32(base, gri + kObjectClass), "PlaylistId") : -1;
+  if (!cancel || playlist < 0) {
+    REXLOG_WARN("[Azura online] The matchmade lobby cannot be opened (the party game is not as expected)");
+    return false;
+  }
+  REXLOG_INFO("[Azura online] Alboria said to host the party's matchmaking");
+  return LaunchMatchmadeLobby(ctx, base, party_game, static_cast<int32_t>(LoadU32(base, gri + playlist)), cancel);
+}
+
+// Azura's Versus online menu (versus_online_menu.cpp) searches through Alboria itself, with the
+// game's party idle in the front end, and asks for what the game does next: a lobby to open (the
+// playlist of the mode Alboria decided on, -1 when none) or the match's invite to take. Done on
+// player 1's next input frame (RunVersusOnlineRequests).
+std::atomic<int32_t> g_menu_lobby_request{-1};
+std::atomic<bool> g_menu_invite_request{false};
+
+// The party game of the front end, from a player input frame's object (`player_input`, whose outer
+// is its PlayerController): the controller's WorldInfo.Game. 0 when it is not a party game.
+uint32_t FrontEndPartyGame(const uint8_t* base, uint32_t player_input) {
+  const uint32_t controller = LoadU32(base, player_input + kObjectOuter);
+  if (!controller) return 0;
+  const int32_t world_at = ClassPropertyOffset(base, LoadU32(base, controller + kObjectClass), "WorldInfo");
+  const uint32_t world = world_at >= 0 ? LoadU32(base, controller + static_cast<uint32_t>(world_at)) : 0;
+  const int32_t game_at = world ? ClassPropertyOffset(base, LoadU32(base, world + kObjectClass), "Game") : -1;
+  const uint32_t game = game_at >= 0 ? LoadU32(base, world + static_cast<uint32_t>(game_at)) : 0;
+  if (!game || ObjectName(base, LoadU32(base, game + kObjectClass)).find("PartyGame") == std::string::npos) return 0;
+  return game;
 }
 
 // A playlist match from the pre-game lobby has ended and travels on
@@ -2916,6 +2982,19 @@ void SetConnectionHandler(std::function<void()> handler) {
   g_connection_handler = std::move(handler);
 }
 
+void SetVersusOnlineHandler(std::function<void()> handler) {
+  std::lock_guard lock(g_quit_mutex);
+  g_versus_online_handler = std::move(handler);
+}
+
+void RequestMatchmadeLobby(int32_t playlist) {
+  g_menu_lobby_request.store(playlist);
+}
+
+void RequestMatchInvite() {
+  g_menu_invite_request.store(true);
+}
+
 void JoinSystemLinkPartyInRoom() {
   // With Live parties on Alboria the SDK hands the host's session to the game as an accepted
   // invite, and the game joins the party itself.
@@ -3655,6 +3734,25 @@ bool InMainMenu(uint8_t* base) {
          !(LoadU32(base, scene + kFrontEndFlags) & kOnTitleScreenBit);
 }
 
+// On a player input frame (`ctx`, about to run PlayerInput) in the front end: does what the Versus
+// online menu asked for once Alboria decided. Told to host, the party opens the lobby of the
+// decided mode's playlist (LaunchMatchmadeLobby; its matchmaking is idle, nothing to cancel); sent
+// into a match, the match's invite is given to the game, which joins its lobby as an invited player
+// (the game is not searching, so it takes the invite at once).
+void RunVersusOnlineRequests(PPCContext& ctx, uint8_t* base) {
+  if (!InMainMenu(base)) return;
+  if (const int32_t playlist = g_menu_lobby_request.exchange(-1); playlist >= 0) {
+    const uint32_t party_game = FrontEndPartyGame(base, ctx.r3.u32);
+    if (!party_game || !LaunchMatchmadeLobby(ctx, base, party_game, playlist, 0)) {
+      REXLOG_WARN("[Azura online] Versus online: no party game to open the lobby with");
+    }
+  }
+  if (g_menu_invite_request.exchange(false)) {
+    const bool given = rex::system::xam::alboria::DeliverMatchInvite();
+    REXLOG_INFO("[Azura online] Versus online: the match's invite {}", given ? "is given to the game" : "was not there");
+  }
+}
+
 // On a player input frame (`ctx`, about to run PlayerInput) in the main menu: shows the message box
 // of a room that failed or ended, when one is pending, with GearPC.NotifyInviteFailed.
 void ShowRoomMessage(PPCContext& ctx, uint8_t* base) {
@@ -4169,6 +4267,7 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
       ApplySavedRound(base);
     }
     CreatePendingStartupParty(ctx, base);
+    RunVersusOnlineRequests(ctx, base);
     JoinRoomFromLauncher(base);
     ShowRoomMessage(ctx, base);
     RefreshPartyPanelTitle(ctx, base);
@@ -4772,6 +4871,18 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   if (options_option >= 0 && Is(base, function, kHandleMenuSelection) &&
       IsQuitSelection(base, ctx.r4.u32, options_option)) {
     OpenOptionsFromMainMenu(ctx, base, function);
+    return;
+  }
+  // Versus online opens Azura's own matchmaking menu (the script, which does not know the option,
+  // does not run).
+  if (Is(base, function, kHandleMenuSelection) && VersusMenuChoice(base, ctx.r4.u32)) {
+    std::function<void()> handler;
+    {
+      std::lock_guard lock(g_quit_mutex);
+      handler = g_versus_online_handler;
+    }
+    REXLOG_INFO("[Azura online] Opening the Versus online menu");
+    if (handler) handler();
     return;
   }
   const int quit_option = azura::menu::MainMenuQuitOption();

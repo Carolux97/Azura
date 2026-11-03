@@ -26349,7 +26349,7 @@ index 82a252c..3dcec80 100644
    if (event.gbutton.down) {
      if (xbutton == X_INPUT_GAMEPAD_GUIDE && !REXCVAR_GET(guide_button)) {
 diff --git a/src/kernel/xam/apps/xgi_app.cpp b/src/kernel/xam/apps/xgi_app.cpp
-index 2b222da..db36b57 100644
+index 2b222da..abfd16d 100644
 --- a/src/kernel/xam/apps/xgi_app.cpp
 +++ b/src/kernel/xam/apps/xgi_app.cpp
 @@ -10,7 +10,21 @@
@@ -26541,7 +26541,7 @@ index 2b222da..db36b57 100644
  
        return X_STATUS_SUCCESS;
      }
-@@ -179,6 +320,66 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -179,6 +320,67 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
        REXKRNL_DEBUG("XSessionSearch({}, {}, {}, {}, {}, {:08X}, {:08X}, {}, {:08X})", proc_index,
                      user_index, num_results, num_props, num_ctx, props_ptr, ctx_ptr,
                      results_buffer_size, search_results_ptr);
@@ -26550,10 +26550,10 @@ index 2b222da..db36b57 100644
 +      // search's query and contexts (XUSER_CONTEXT: ID, value); the properties (skill, level)
 +      // differ between players and are left out. The answer: the match Alboria sent this player
 +      // into (one XSESSION_SEARCHRESULT with its host's session), or none, so the title hosts.
-+      // The result carries one property, the host's gamertag (0x40008109, a string): Gears of War
-+      // 3 takes it as the match's owner and drops a result without one (**verified** in its code:
-+      // the property is read at 0x82985668, the empty owner dropped at 0x829844B0). The rest of
-+      // what it checks (nonce, owner's ID, build) comes from the host's QoS data.
++      // The result carries one property, an owner's gamertag (0x40008109, a string), "Alboria":
++      // Gears of War 3 takes it as the match's owner and drops a result without one (**verified**
++      // in its code: the property is read at 0x82985668, the empty owner dropped at 0x829844B0).
++      // The rest of what it checks (nonce, owner's ID, build) comes from the host's QoS data.
 +      const uint32_t overlapped = CurrentRequestOverlapped();
 +      constexpr uint32_t kHeaderSize = 8;
 +      constexpr uint32_t kResultSize = 92;
@@ -26581,7 +26581,7 @@ index 2b222da..db36b57 100644
 +            std::memcpy(result, found.session.data(), found.session.size());
 +            memory::store_and_swap<uint32_t>(result + 60, 9);  // open public slots
 +            memory::store_and_swap<uint32_t>(result + 68, 1);  // filled public slots
-+            // The owner's gamertag: an XUSER_PROPERTY (ID, then XUSER_DATA: type, and the string's
++            // The owner's name: an XUSER_PROPERTY (ID, then XUSER_DATA: type, and the string's
 +            // size in bytes and address at +16), with the UTF-16 big-endian text after it.
 +            constexpr uint32_t kPropertyGamertag = 0x40008109;
 +            constexpr uint8_t kXUserDataTypeUnicode = 4;
@@ -26589,7 +26589,8 @@ index 2b222da..db36b57 100644
 +            const uint32_t text_ptr = property_ptr + kPropertySize;
 +            uint8_t* property = memory_->TranslateVirtual(property_ptr);
 +            std::memset(property, 0, kPropertySize + kMaxNameChars * 2);
-+            const std::u16string name = rex::string::to_utf16(found.host_name.empty() ? "Alboria" : found.host_name);
++            // Never the host's own name (alboria-notes:alboria-server/online-rules.md).
++            const std::u16string name = u"Alboria";
 +            const uint32_t chars = std::min<uint32_t>(static_cast<uint32_t>(name.size()), kMaxNameChars - 1);
 +            for (uint32_t i = 0; i < chars; ++i) {
 +              memory::store_and_swap<uint16_t>(memory_->TranslateVirtual(text_ptr + i * 2), name[i]);
@@ -26608,7 +26609,7 @@ index 2b222da..db36b57 100644
        return X_E_SUCCESS;
      }
      case 0x000B0018: {
-@@ -191,6 +392,21 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -191,6 +393,21 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
  
        REXKRNL_DEBUG("XSessionModify({:08X}, {:08X}, {:08X}, {:08X})", obj_ptr, flags,
                      maxPublicSlots, maxPrivateSlots);
@@ -26630,7 +26631,7 @@ index 2b222da..db36b57 100644
  
        return X_E_SUCCESS;
      }
-@@ -243,7 +459,25 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -243,7 +460,25 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
  
        REXKRNL_DEBUG("XSessionMigrateHost({:08X}, {:08X}, {}, {}, {}, {})", obj_ptr,
                      session_info_ptr, user_index, reserved1, reserved2, reserved3);
@@ -26657,7 +26658,7 @@ index 2b222da..db36b57 100644
        return X_E_SUCCESS;
      }
      case 0x000B0019: {
-@@ -288,6 +522,37 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -288,6 +523,37 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
        REXKRNL_DEBUG("XSessionSearchByID({}, {:08X}, {:08X}, {:08X}, {:08X}, {}, {}, {})",
                      user_index, num_session_ids, session_ids_ptr, results_buffer_size,
                      search_results_ptr, reserved1, reserved2, reserved3);
@@ -26695,7 +26696,7 @@ index 2b222da..db36b57 100644
  
        return X_E_SUCCESS;
      }
-@@ -329,7 +594,30 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -329,7 +595,30 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
  
        REXKRNL_DEBUG("XUserReadStats({}, {}, {:08X}, {}, {:08X}, {}, {:08X})", title_id, xuids_count,
                      xuids_ptr, specs_count, specs_ptr, results_size, results_ptr);

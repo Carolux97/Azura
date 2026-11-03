@@ -1,9 +1,9 @@
 diff --git a/include/rex/system/xam/alboria.h b/include/rex/system/xam/alboria.h
 new file mode 100644
-index 0000000..a85cd14
+index 0000000..7c05a6a
 --- /dev/null
 +++ b/include/rex/system/xam/alboria.h
-@@ -0,0 +1,510 @@
+@@ -0,0 +1,539 @@
 +/**
 + * @file        system/xam/alboria.h
 + * @brief       Alboria: System Link over the internet through our relay
@@ -313,7 +313,8 @@ index 0000000..a85cd14
 +    kInvitation,     // an invitation arrived: `id` is the invitation's
 +    kFriendRequest,  // someone asked to be the player's friend
 +    kFriendJoined,   // a friend joined the player's room
-+    kHostLeft,       // the host of the match the player was in left it: `from_name` is the host's
++    kHostLeft,       // the match the player was in ended because its host left (who hosted is never
++                     // said: alboria-notes:alboria-server/online-rules.md)
 +  };
 +  Kind kind = Kind::kInvitation;
 +  std::string id;
@@ -362,16 +363,40 @@ index 0000000..a85cd14
 +struct MatchFound {
 +  MatchOutcome outcome = MatchOutcome::kHost;
 +  SessionInfo session{};
-+  // The host's gamertag (kJoin), which the title shows as the match's owner.
-+  std::string host_name;
 +};
 +// Searches for a match through Alboria (POST /v1/matchmaking/search, then /poll every second)
-+// for the mode `mode` (the title's own description of what it searches for: equal modes play
-+// together). Blocks the calling thread, a worker's, until Alboria decides or StopMatchmaking: it
++// for the modes SetSearchModes gave, or else the mode `mode` (the title's own description of what
++// it searches for: equal modes play together). Blocks the calling thread, a worker's, until Alboria decides or StopMatchmaking: it
 +// may take minutes, since Alboria waits for others before it has a player host alone with bots.
 +MatchFound Matchmake(const std::string& mode);
 +// Stops the search running (the title cancelled it).
 +void StopMatchmaking();
++// The modes the next searches are for, as the player chose them in the runtime's own matchmaking
++// menu (the title's playlists, in the player's order; players sharing one play together, a match of
++// that one). Empty: the title's own search describes its mode.
++void SetSearchModes(std::vector<std::string> modes);
++// How the matchmaking search goes, for the runtime's menu to show.
++enum class SearchPhase {
++  kIdle,       // no search since the last ResetSearchStatus
++  kSearching,  // Alboria is looking (alone, or gathering with others)
++  kHost,       // this installation's game opens the match (never shown as such to the player)
++  kJoin,       // this installation's game joins the match
++  kStopped,    // the search was stopped
++  kFailed,     // Alboria could not be reached: the title plays alone, with bots
++};
++struct SearchStatus {
++  SearchPhase phase = SearchPhase::kIdle;
++  // The Alboria names (Gamertag#tag) of the players found so far, this installation's party among
++  // them, in Alboria's order (which never tells who will host).
++  std::vector<std::string> players;
++  // The mode the match is of, once decided (kHost, kJoin).
++  std::string mode;
++  // Why it failed (kFailed): Alboria's error.
++  std::string error;
++};
++SearchStatus GetSearchStatus();
++// Back to kIdle (the menu starts a new search, or closes).
++void ResetSearchStatus();
 +// The title's search request (its XOVERLAPPED) running a matchmaking search, and its cancelling:
 +// a cancelled request whose search is running stops it.
 +void SetSearchRequest(uint32_t overlapped_ptr);
@@ -455,13 +480,17 @@ index 0000000..a85cd14
 +// to the host: straight to it on a direct path, or through the relay (member to relay to host and
 +// back) otherwise. The host runs the game itself, so it has none (0 ms), and so does a game in no
 +// room.
++// A member's round trip to its room's host. In a match room (matchmaking) nothing tells the host
++// apart (alboria-notes:alboria-server/online-rules.md): its own is the mean of its round trips to
++// the others, as a member's, and `host` is false.
 +struct Latency {
-+  // In a room this installation hosts.
++  // In a room this installation hosts (not a match room).
 +  bool host = false;
-+  // A member's round trip to the host has been measured (milliseconds and direct are then set).
++  // A round trip has been measured (milliseconds and direct are then set).
 +  bool known = false;
 +  int milliseconds = 0;
-+  // Whether the host is reached directly rather than through the relay.
++  // Whether the host is reached directly rather than through the relay (for a match room's host,
++  // every other member).
 +  bool direct = false;
 +};
 +Latency GetLatency();
@@ -554,10 +583,10 @@ index 0000000..c7fc5de
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria.cpp b/src/system/xam/alboria.cpp
 new file mode 100644
-index 0000000..db40d31
+index 0000000..318c0f2
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,2505 @@
+@@ -0,0 +1,2578 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -807,8 +836,6 @@ index 0000000..db40d31
 +std::optional<std::array<uint8_t, 8>> g_match_kid;
 +// The session of the match Alboria sent this installation into, until given to the title.
 +std::optional<SessionInfo> g_pending_match_invite;
-+// The gamertag of the host of the match Alboria sent this installation into, for its notices.
-+std::string g_match_host_name;
 +
 +// An IPv4 address in dotted form as a number, 0 when it is not one.
 +uint32_t ParseIp(const std::string& text) {
@@ -1662,13 +1689,8 @@ index 0000000..db40d31
 +        if ((*body)[2] == kMovedHostLeft) {
 +          REXSYS_INFO("Alboria: the match's host left");
 +          g_host_left.store(true);
-+          std::string host;
-+          {
-+            std::lock_guard lock(g_mutex);
-+            host = g_match_host_name;
-+          }
 +          std::lock_guard lock(g_friends_mutex);
-+          g_notices.push_back({Notice::Kind::kHostLeft, {}, 0, host});
++          g_notices.push_back({Notice::Kind::kHostLeft, {}, 0, {}});
 +        }
 +        RunDetached("reading the room", [] { RefreshCurrentRoom(); });
 +        break;
@@ -2526,12 +2548,16 @@ index 0000000..db40d31
 +
 +namespace {
 +
-+// The search running (Matchmake), stopped by StopMatchmaking; the mode it searched for, which the
-+// match this installation then hosts is open for; and when Alboria last said to host, so the
-+// title's second search right after finds nothing at once instead of queueing again.
++// The search running (Matchmake), stopped by StopMatchmaking; the mode of the match Alboria decided
++// on (or the one searched for), which the match this installation then hosts is open for; the
++// modes the player chose in the runtime's menu (SetSearchModes); how the search goes, for that menu;
++// and when Alboria last said to host, so the title's second search right after finds nothing at
++// once instead of queueing again.
 +std::atomic<bool> g_stop_search{false};
 +std::mutex g_match_mutex;
 +std::string g_search_mode;
++std::vector<std::string> g_search_modes;
++SearchStatus g_search_status;
 +Clock::time_point g_host_told{};
 +// When Alboria last sent this installation into a match, for its follow-up search the same way.
 +Clock::time_point g_join_told{};
@@ -2603,40 +2629,99 @@ index 0000000..db40d31
 +
 +}  // namespace
 +
++namespace {
++
++// Sets how the search goes (under g_match_mutex).
++void SetSearchPhaseLocked(SearchPhase phase, std::string error = {}) {
++  g_search_status.phase = phase;
++  g_search_status.error = std::move(error);
++}
++
++}  // namespace
++
++void SetSearchModes(std::vector<std::string> modes) {
++  std::lock_guard lock(g_match_mutex);
++  g_search_modes = std::move(modes);
++}
++
++SearchStatus GetSearchStatus() {
++  std::lock_guard lock(g_match_mutex);
++  return g_search_status;
++}
++
++void ResetSearchStatus() {
++  std::lock_guard lock(g_match_mutex);
++  g_search_status = {};
++}
++
 +MatchFound Matchmake(const std::string& mode) {
 +  g_stop_search.store(false);
++  nlohmann::json request = {{"title_id", TitleIdText()}};
 +  {
 +    std::lock_guard lock(g_match_mutex);
 +    // The second search of a title just told to host: host now. Its match keeps the mode of the
 +    // search Alboria decided, which is the one the others search with (the title's follow-up
 +    // search asks with other contexts).
-+    if (Clock::now() - g_host_told < kHostTold) return {MatchOutcome::kHost, {}, {}};
++    if (Clock::now() - g_host_told < kHostTold) return {MatchOutcome::kHost, {}};
 +    // A title sent into a match, whose invite it has not been given yet: every search it makes
 +    // meanwhile (it tries a few, minutes apart) finds nothing at once, until the invite is given or
 +    // goes stale.
 +    constexpr auto kPendingInviteLife = std::chrono::seconds(60);
 +    if (Clock::now() - g_join_told < kPendingInviteLife) {
 +      std::lock_guard pending(g_mutex);
-+      if (g_pending_match_invite) return {MatchOutcome::kStopped, {}, {}};
++      if (g_pending_match_invite) return {MatchOutcome::kStopped, {}};
 +    }
-+    g_search_mode = mode;
++    // The player's modes, or else the title's own.
++    if (g_search_modes.empty()) {
++      request["mode"] = mode;
++      g_search_mode = mode;
++    } else {
++      request["modes"] = g_search_modes;
++      g_search_mode = g_search_modes.front();
++    }
++    g_search_status = {};
++    SetSearchPhaseLocked(SearchPhase::kSearching);
 +  }
-+  const auto ticket = CallSignedIn("/v1/matchmaking/search", {{"title_id", TitleIdText()}, {"mode", mode}});
++  const auto ticket = CallSignedIn("/v1/matchmaking/search", request);
 +  if (!ticket.error.empty()) {
 +    // Without Alboria the title hosts, as it would with nobody to find.
 +    REXSYS_WARN("Alboria: matchmaking could not start ({})", ticket.error);
-+    return {MatchOutcome::kHost, {}, {}};
++    std::lock_guard lock(g_match_mutex);
++    SetSearchPhaseLocked(SearchPhase::kFailed, ticket.error);
++    return {MatchOutcome::kHost, {}};
 +  }
 +  const std::string id = Text(ticket.json, "ticket");
-+  REXSYS_INFO("Alboria: searching for a match ({})", mode);
++  REXSYS_INFO("Alboria: searching for a match ({})", request.contains("modes") ? request["modes"].dump() : mode);
 +  for (;;) {
 +    if (g_stop_search.load()) {
 +      CallSignedIn("/v1/matchmaking/cancel", {{"ticket", id}});
 +      REXSYS_INFO("Alboria: the search for a match was stopped");
-+      return {MatchOutcome::kStopped, {}, {}};
++      std::lock_guard lock(g_match_mutex);
++      SetSearchPhaseLocked(SearchPhase::kStopped);
++      return {MatchOutcome::kStopped, {}};
 +    }
 +    const auto answer = CallSignedIn("/v1/matchmaking/poll", {{"ticket", id}});
 +    const std::string state = answer.error.empty() ? Text(answer.json, "state") : std::string("host");
++    if (state == "waiting" && answer.json.contains("players") && answer.json["players"].is_array()) {
++      std::vector<std::string> players;
++      for (const auto& player : answer.json["players"]) {
++        if (player.is_string()) players.push_back(player.get<std::string>());
++      }
++      std::lock_guard lock(g_match_mutex);
++      g_search_status.players = std::move(players);
++    }
++    // The mode Alboria decided on (host, join): the match's.
++    if (state == "host" || state == "join") {
++      const std::string decided = Text(answer.json, "mode");
++      std::lock_guard lock(g_match_mutex);
++      if (!decided.empty()) g_search_mode = decided;
++      g_search_status.mode = g_search_mode;
++      if (!answer.error.empty()) {
++        SetSearchPhaseLocked(SearchPhase::kFailed, answer.error);
++      } else {
++        SetSearchPhaseLocked(state == "host" ? SearchPhase::kHost : SearchPhase::kJoin);
++      }
++    }
 +    if (state == "join") {
 +      // Alboria has moved this installation's party into the match's room (section 4.9: MOVED
 +      // follows). The match is its host's pre-game lobby, which takes players as invited ones: its
@@ -2647,29 +2732,29 @@ index 0000000..db40d31
 +      const auto match_session = DecodeBase64(Text(answer.json, "session"));
 +      if (!match_session || match_session->size() != kSessionInfoSize) {
 +        REXSYS_WARN("Alboria: the match came without its host's session; hosting instead");
-+        return {MatchOutcome::kHost, {}, {}};
++        std::lock_guard lock(g_match_mutex);
++        SetSearchPhaseLocked(SearchPhase::kHost);
++        return {MatchOutcome::kHost, {}};
 +      }
 +      SessionInfo session;
 +      std::copy(match_session->begin(), match_session->end(), session.begin());
-+      REXSYS_INFO("Alboria: a match was found ({}'s); its invite waits for the title to leave matchmaking",
-+                  Text(answer.json, "host"));
++      REXSYS_INFO("Alboria: a match was found; its invite waits for the title to leave matchmaking");
 +      {
 +        std::lock_guard lock(g_mutex);
 +        g_pending_match_invite = session;
-+        g_match_host_name = Text(answer.json, "host");
 +        std::array<uint8_t, 8> kid;
 +        std::copy_n(session.begin(), kid.size(), kid.begin());
 +        g_match_kid = kid;
 +      }
 +      std::lock_guard lock(g_match_mutex);
 +      g_join_told = Clock::now();
-+      return {MatchOutcome::kStopped, {}, {}};
++      return {MatchOutcome::kStopped, {}};
 +    }
 +    if (state == "host") {
 +      REXSYS_INFO("Alboria: hosting a match{}", answer.error.empty() ? "" : " (Alboria did not answer)");
 +      std::lock_guard lock(g_match_mutex);
 +      g_host_told = Clock::now();
-+      return {MatchOutcome::kHost, {}, {}};
++      return {MatchOutcome::kHost, {}};
 +    }
 +    std::this_thread::sleep_for(std::chrono::seconds(1));
 +  }
@@ -2982,6 +3067,23 @@ index 0000000..db40d31
 +  std::lock_guard lock(g_mutex);
 +  Latency latency;
 +  if (g_status.state != State::kConnected) return latency;
++  if (g_status.host && g_status.in_match) {
++    int total = 0;
++    int measured = 0;
++    bool direct = true;
++    for (const auto& [address, peer] : g_peers) {
++      if (peer.rtt_ms < 0) continue;
++      total += peer.rtt_ms;
++      ++measured;
++      direct = direct && peer.rtt_direct;
++    }
++    if (measured) {
++      latency.known = true;
++      latency.milliseconds = total / measured;
++      latency.direct = direct;
++    }
++    return latency;
++  }
 +  if (g_status.host) {
 +    latency.host = true;
 +    return latency;

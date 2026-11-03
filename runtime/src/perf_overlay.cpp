@@ -28,7 +28,8 @@ REXCVAR_DEFINE_STRING(performance_overlay, "off", "Azura/Graphics",
                       "frame times, the average frame rate and the 1% low");
 REXCVAR_DEFINE_BOOL(latency_overlay, false, "Network",
                     "Show the latency in the performance overlay's corner: in an Alboria room a "
-                    "member's round trip to the host, direct or through the relay; 0 ms for the host, "
+                    "member's round trip to the host, direct or through the relay (a matchmade match's host shows its "
+                    "mean round trip to the others); 0 ms for a private room's host, "
                     "which runs the game, and for a game in no room");
 REXCVAR_DEFINE_STRING(performance_overlay_position, "top_right", "Azura/Graphics",
                       "Corner of the performance overlay: top_left, top_right, bottom_left or bottom_right");
@@ -272,9 +273,10 @@ void PerfOverlay::OnDraw(ImGuiIO& io) {
     return DrawSpacedText(nullptr, text_font, label_size, ImVec2(), 0, text, label_spacing);
   };
 
-  // The latency row: "PING 18 ms DIRECT" (or RELAY) for a member, "PING 0 ms HOST" for the host,
-  // "PING 0 ms" in no room; the time green, imulsion gold or red as it grows. It never shows an
-  // address.
+  // The latency row: "PING 18 ms DIRECT" (or RELAY) for a member, "PING 0 ms HOST" for a private
+  // room's host, "PING 0 ms" in no room; the time green, imulsion gold or red as it grows. A match
+  // room's host shows its mean round trip to the others, as a member does (alboria::GetLatency):
+  // who hosts a matchmade match is never shown. It never shows an address.
   char ping_ms[16] = "";
   if (ping) std::snprintf(ping_ms, sizeof(ping_ms), "%d ms", latency.known ? latency.milliseconds : 0);
   const char* ping_path = latency.host ? "HOST" : latency.known ? (latency.direct ? "DIRECT" : "RELAY") : "";

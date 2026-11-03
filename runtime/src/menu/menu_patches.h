@@ -36,6 +36,9 @@ constexpr int kMainMenuScreen = 1;
 // Standard and Arcade.
 constexpr int kCampaignScreen = 3;
 constexpr int kCampaignDlcOption = 2;
+// Screen index of Versus' menu (MAINMENUOP_VS_Competitiveness), seen in HandleMenuSelection on
+// 3 November 2026.
+constexpr int kVersusScreen = 11;
 
 // Applies the menu changes to `coalesced`. Texts are chosen by the extension of each GearGameUI
 // localization file it holds ("esn", "int", ...). Returns the index of the Quit Game option in the
@@ -51,5 +54,9 @@ int MainMenuQuitOption();
 
 // Index of the Options option in the main menu, or -1 if the menus were not patched.
 int MainMenuOptionsOption();
+
+// Index of Versus' own online option (Versus online) in Versus' menu, or -1 when there is none
+// (online play off, or the menus were not patched).
+int VersusOnlineOption();
 
 }  // namespace azura::menu

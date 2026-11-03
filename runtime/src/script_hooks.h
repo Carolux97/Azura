@@ -21,6 +21,14 @@ void SetLocalCoopHandler(std::function<void()> handler);
 // What choosing Connection in the Options runs (from the game's script thread): it opens the
 // Alboria menu (connection_menu.h). nullptr to stop.
 void SetConnectionHandler(std::function<void()> handler);
+// What choosing Versus online in Versus' menu runs (from the game's script thread): it opens the
+// Versus online menu (versus_online_menu.h). nullptr to stop.
+void SetVersusOnlineHandler(std::function<void()> handler);
+// What the Versus online menu asks the game for once Alboria decided, done on player 1's next input
+// frame in the front end: open the matchmade pre-game lobby of `playlist` (this player hosts), or
+// take the match's invite (Alboria sent this player into another's match). Any thread.
+void RequestMatchmadeLobby(int32_t playlist);
+void RequestMatchInvite();
 
 // The two controls menus (controls_menu.h), opened from the Options' Keyboard and mouse and
 // Controller categories.
