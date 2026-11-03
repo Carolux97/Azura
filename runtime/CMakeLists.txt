@@ -51,7 +51,7 @@ set(AZURA_SOURCES
     src/achievement_toast.cpp
     src/hooks.cpp
     src/script_hooks.cpp
-    src/host_migration_research.cpp
+    src/host_migration.cpp
     src/class_dump.cpp
     src/dlc/bytecode.cpp
     src/dlc/class_fixups.cpp
