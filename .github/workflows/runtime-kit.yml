@@ -1,5 +1,5 @@
 # Builds the player kit (scripts/build-kit.sh) on macOS, Linux and Windows: what the launcher needs to build
-# the runtime on a player's machine from their own default.xex (docs/player-runtime-build.md). The
+# the runtime on a player's machine from their own default.xex (alboria-notes:azura/player-runtime-build.md). The
 # kit holds no game data, so it builds here; scripts/kit/check_kit.py checks it before it is kept.
 #
 # It runs when something that defines the kit changes (the SDK patches, the build scripts, the

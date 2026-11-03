@@ -1,4 +1,4 @@
-// Frame captures for comparing the graphics paths (docs/hle-graphics/02-design.md, phase 4): with
+// Frame captures for comparing the graphics paths (alboria-notes:azura/hle-graphics/02-design.md, phase 4): with
 // the environment variable AZURA_CAPTURE_DIR set, a background thread saves the game's output
 // image there every AZURA_CAPTURE_EVERY seconds (default 5), as binary PPM files named after the
 // seconds since start. The images are the game's: keep them local (captures/ is ignored by git).

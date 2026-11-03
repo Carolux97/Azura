@@ -1,4 +1,4 @@
-// HLE graphics path (docs/hle-graphics/02-design.md). With gfx = hle, render targets are host
+// HLE graphics path (alboria-notes:azura/hle-graphics/02-design.md). With gfx = hle, render targets are host
 // textures driven by the game's D3D calls instead of emulated EDRAM. The game's D3D library keeps
 // running; hooks on its render target, clear, resolve and frame calls (hooks.cpp) write markers
 // (rex/graphics/hle/markers.h) into its command buffer, and the frame planner (planner.cpp)

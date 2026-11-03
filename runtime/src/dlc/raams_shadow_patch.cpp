@@ -2,7 +2,7 @@
 //
 // The content and the way each object is written follow tools/dlc/make_patch.py one for one (the same
 // exports, NetIndexes and names in the same order), so both write the same bytes; the Python tool is
-// where the format was worked out, and docs/raams-shadow-dlc.md explains each choice.
+// where the format was worked out, and alboria-notes:azura/raams-shadow-dlc.md explains each choice.
 
 #include "raams_shadow_patch.h"
 

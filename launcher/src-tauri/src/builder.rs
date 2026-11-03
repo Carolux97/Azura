@@ -1,5 +1,5 @@
 //! Builds the runtime on the player's machine from their own default.xex
-//! (docs/player-runtime-build.md, sections 5 and 8).
+//! (alboria-notes:azura/player-runtime-build.md, sections 5 and 8).
 //!
 //! The recompiled game cannot be distributed, so the launcher builds it here, with the player kit
 //! (`scripts/build-kit.sh`) and the machine's C++ compiler (`toolchain.rs`). The kit's `kit.json`

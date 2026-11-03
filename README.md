@@ -38,7 +38,7 @@ installs with winget when they are missing; the game runs with Vulkan, as on Lin
 | `patches/` | Our changes to the ReXGlue SDK (the Metal backend, the Xenos shader compiler, the PowerPC interpreter and fixes) and to MoltenVK, applied by the build scripts. |
 | `scripts/` | Build, player kit and release scripts; `build-launcher-windows.sh` builds the Windows launcher from Linux. |
 | `tools/` | [extract-xiso](https://github.com/XboxDev/extract-xiso), to extract disc images. |
-| `docs/` | Design notes: the [Metal backend](docs/metal-backend-design.md), the [Xenos shader compiler](docs/shader-compiler-design.md), the [PowerPC interpreter](docs/ppc-interpreter-design.md), [building the runtime on the player's machine](docs/player-runtime-build.md), [Linux GPU measurements](docs/linux-gpu-measurement.md) and the game's internals for modding menus and settings ([reverse-engineering.md](docs/reverse-engineering.md)). |
+| (notes) | The design and research notes (backends, shader compiler, interpreter, the game's internals) are kept in a private repository, `alboria-notes`; references in the code read `alboria-notes:azura/<file>`. |
 | `sdk/` | The ReXGlue SDK: its prebuilt release for your platform and its source tree, which the build patches. Ignored by git. |
 | `iniciar-linux.sh` | Sets up and starts the launcher from a checkout on Linux. |
 

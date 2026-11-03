@@ -1,4 +1,4 @@
-// Frame planner of the HLE graphics path (docs/hle-graphics/02-design.md): receives the markers the
+// Frame planner of the HLE graphics path (alboria-notes:azura/hle-graphics/02-design.md): receives the markers the
 // D3D hooks write (hooks.cpp), on the command processor thread, in stream order.
 //
 // For now it checks the marker stream: it counts each event, logs the first markers in full and

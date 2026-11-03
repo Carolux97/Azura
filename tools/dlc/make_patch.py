@@ -10,7 +10,7 @@ content is Azura's own, kept to what the DLC needs to load and play:
   - those properties and functions on disc classes (functions with empty bodies: the DLC overrides
     them or only needs them to exist).
 Every index and name comes from the disc's GearGame package, read from the game folder given on the
-command line; nothing is taken from the Title Update. See docs/raams-shadow-dlc.md.
+command line; nothing is taken from the Title Update. See alboria-notes:azura/raams-shadow-dlc.md.
 
 The launcher uses the runtime's C++ version (runtime/src/dlc/raams_shadow_patch.cpp, `azura
 --make_dlc_patch`), which writes the same bytes; this one is for trying changes, which must then be

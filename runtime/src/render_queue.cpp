@@ -12,7 +12,7 @@
 // AzuraCheckRenderCommand runs right before the rendering thread reads a command's vtable
 // (midasm hook at 0x823F42D8 in the manifest). Its acquire fence orders that read, and everything
 // the command reads, after the read of the write pointer: that is the fix, since the reordering
-// that crashes is on the reading side (the evidence is in docs/reverse-engineering.md). As a
+// that crashes is on the reading side (the evidence is in alboria-notes:azura/reverse-engineering.md). As a
 // safety net, a command whose vtable still does not look valid is waited for (the producer's
 // writes arrive within microseconds) and logged as a warning instead of crashing; that warning
 // would mean the writing side reorders too.

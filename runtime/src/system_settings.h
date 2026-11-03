@@ -1,6 +1,6 @@
 // Video options that switch the engine's own settings (its SystemSettings object) while the game
 // runs: depth of field, dynamic shadows, ambient occlusion, bloom and lens flares. Each one writes
-// the setting's fields in guest memory (docs/reverse-engineering.md, "Engine settings
+// the setting's fields in guest memory (alboria-notes:azura/reverse-engineering.md, "Engine settings
 // (SystemSettings)").
 
 #pragma once
