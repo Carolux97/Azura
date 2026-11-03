@@ -1,9 +1,9 @@
 diff --git a/include/rex/system/xam/alboria.h b/include/rex/system/xam/alboria.h
 new file mode 100644
-index 0000000..7c05a6a
+index 0000000..604f17f
 --- /dev/null
 +++ b/include/rex/system/xam/alboria.h
-@@ -0,0 +1,539 @@
+@@ -0,0 +1,574 @@
 +/**
 + * @file        system/xam/alboria.h
 + * @brief       Alboria: System Link over the internet through our relay
@@ -389,6 +389,8 @@ index 0000000..7c05a6a
 +  // The Alboria names (Gamertag#tag) of the players found so far, this installation's party among
 +  // them, in Alboria's order (which never tells who will host).
 +  std::vector<std::string> players;
++  // Those of `players` in this installation's own party, for the menu to mark them.
++  std::vector<std::string> party;
 +  // The mode the match is of, once decided (kHost, kJoin).
 +  std::string mode;
 +  // Why it failed (kFailed): Alboria's error.
@@ -397,6 +399,33 @@ index 0000000..7c05a6a
 +SearchStatus GetSearchStatus();
 +// Back to kIdle (the menu starts a new search, or closes).
 +void ResetSearchStatus();
++
++// The search of this installation's party, for a member who does not lead it (only its leader
++// searches; POST /v1/matchmaking/party): what the leader's menu shows, for the member's to show too.
++struct PartySearch {
++  enum class State {
++    kIdle,       // the leader is not searching (or Alboria did not answer)
++    kSearching,  // the leader is searching
++    kFound,      // the party has gone into a match
++  };
++  State state = State::kIdle;
++  // The leader's modes, in its order.
++  std::vector<std::string> modes;
++  // How long the leader has searched, in milliseconds, as Alboria answered.
++  int searching_ms = 0;
++  // As SearchStatus's: the players found so far, and those of this party.
++  std::vector<std::string> players;
++  std::vector<std::string> party;
++};
++// Asks Alboria how the party's search goes. Blocks the calling thread for the request.
++PartySearch FollowPartySearch();
++
++// For the host of a match room: its players' names (gamertag#tag) on each team, as Alboria decided
++// them (/v1/rooms/current: each party on one team, the players shared out), for the game to place
++// them so. Empty otherwise.
++std::vector<std::vector<std::string>> MatchTeams();
++// Reads the room again in the background, MatchTeams among it.
++void RefreshMatchTeams();
 +// The title's search request (its XOVERLAPPED) running a matchmaking search, and its cancelling:
 +// a cancelled request whose search is running stops it.
 +void SetSearchRequest(uint32_t overlapped_ptr);
@@ -437,6 +466,12 @@ index 0000000..7c05a6a
 +// Gives the title the pending match's session as an accepted invite (XN_LIVE_INVITE_ACCEPTED), once
 +// it has left its matchmaking: the match's lobby takes invited players. False when there is none.
 +bool DeliverMatchInvite();
++// Whether a party member's invite to another party's match is ready (the SDK follows the party's
++// moves for its members), once for each: the title then takes it with DeliverMatchInvite.
++bool TakeMemberMatchInvite();
++// Gives the title the last match or party invite again, as an accepted invite (the title dropped
++// it). False when there is none.
++bool RetryMatchInvite();
 +
 +// The Xbox Live XUID that stands for the friend with the account ID `id`: top bits 0x0009, then
 +// 0xA1B0 and the ID, so it never matches a local player's online XUID (OnlineXuid).
@@ -583,10 +618,10 @@ index 0000000..c7fc5de
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria.cpp b/src/system/xam/alboria.cpp
 new file mode 100644
-index 0000000..318c0f2
+index 0000000..09fbfa1
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,2578 @@
+@@ -0,0 +1,2747 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -836,6 +871,10 @@ index 0000000..318c0f2
 +std::optional<std::array<uint8_t, 8>> g_match_kid;
 +// The session of the match Alboria sent this installation into, until given to the title.
 +std::optional<SessionInfo> g_pending_match_invite;
++// A party member's invite to another party's match is ready for the title (TakeMemberMatchInvite).
++std::atomic<bool> g_member_match_invite{false};
++// The players of the match room this installation hosts, on each team (MatchTeams).
++std::vector<std::vector<std::string>> g_match_teams;
 +
 +// An IPv4 address in dotted form as a number, 0 when it is not one.
 +uint32_t ParseIp(const std::string& text) {
@@ -866,6 +905,9 @@ index 0000000..318c0f2
 +// invite. Guarded by g_mutex.
 +std::optional<SessionInfo> g_hosted_session;
 +bool g_session_published = false;
++// The party leader's Live party session a member last joined, for telling the new one its leader
++// hosts after a match (FollowPartyAfterMove).
++std::optional<SessionInfo> g_party_session;
 +std::optional<SessionInfo> g_accepted_invite;
 +std::optional<SessionInfo> g_last_invite;  // the last one, read or not
 +// The room being joined is a friend's whose session the title is looking up (JoinFriendSession):
@@ -1489,6 +1531,8 @@ index 0000000..318c0f2
 +
 +void PublishHostedSession(std::string code, SessionInfo session);
 +void RefreshCurrentRoom();
++// A party member keeps with its party as it moves (section 4.9; after RefreshCurrentRoom).
++void FollowPartyAfterMove(bool left_match);
 +void PublishHostedQos(std::string code, std::array<uint8_t, 8> kid, std::vector<uint8_t> data);
 +void AnswerStream(std::span<const uint8_t> announcement);
 +
@@ -1635,6 +1679,7 @@ index 0000000..318c0f2
 +          SessionInfo session;
 +          std::memcpy(session.data(), invite->data(), session.size());
 +          g_last_invite = session;
++          g_party_session = session;
 +          if (g_join_for_search.exchange(false)) {
 +            REXSYS_INFO("Alboria: in the friend's room, with its host's Live party for the title's search");
 +          } else {
@@ -1677,14 +1722,24 @@ index 0000000..318c0f2
 +        // so do the title's sessions. The rest of what the room is comes from /v1/rooms/current.
 +        if (body->size() < 7) break;
 +        constexpr uint8_t kMovedHostLeft = 3;
++        bool left_match = false;
 +        {
 +          std::lock_guard lock(g_mutex);
++          left_match = g_status.in_match && (*body)[0] != 2;
 +          g_status.in_match = (*body)[0] == 2;
 +          g_status.host = (*body)[1] != 0;
 +          g_status.host_ip = uint32_t((*body)[3]) << 24 | uint32_t((*body)[4]) << 16 |
 +                             uint32_t((*body)[5]) << 8 | (*body)[6];
 +          REXSYS_INFO("Alboria: moved to {} room{}", g_status.in_match ? "a match's" : "the party's",
 +                      g_status.host ? ", hosting it" : "");
++          // Back in its party's room as its host: the Live party session the title made meanwhile
++          // (in the match's room, which it did not host) is published now, for the members to join.
++          if (!g_status.in_match && g_status.host && g_hosted_session && !g_session_published) {
++            g_session_published = true;
++            RunDetached("publishing the session", [code = g_status.code, session = *g_hosted_session] {
++              PublishHostedSession(code, session);
++            });
++          }
 +        }
 +        if ((*body)[2] == kMovedHostLeft) {
 +          REXSYS_INFO("Alboria: the match's host left");
@@ -1692,7 +1747,10 @@ index 0000000..318c0f2
 +          std::lock_guard lock(g_friends_mutex);
 +          g_notices.push_back({Notice::Kind::kHostLeft, {}, 0, {}});
 +        }
-+        RunDetached("reading the room", [] { RefreshCurrentRoom(); });
++        RunDetached("reading the room", [left_match] {
++          RefreshCurrentRoom();
++          FollowPartyAfterMove(left_match);
++        });
 +        break;
 +      }
 +      case PacketType::kPing: {
@@ -1765,6 +1823,17 @@ index 0000000..318c0f2
 +  g_status.host = Flag(room.json, "host", g_status.host);
 +  g_status.in_match = Text(room.json, "kind") == "match";
 +  if (const uint32_t host_ip = ParseIp(Text(room.json, "host_ip"))) g_status.host_ip = host_ip;
++  g_match_teams.clear();
++  if (const auto teams = room.json.find("teams"); teams != room.json.end() && teams->is_array()) {
++    for (const auto& team : *teams) {
++      if (!team.is_array()) continue;
++      std::vector<std::string> names;
++      for (const auto& name : team) {
++        if (name.is_string()) names.push_back(name.get<std::string>());
++      }
++      g_match_teams.push_back(std::move(names));
++    }
++  }
 +  if (const auto sessions = room.json.find("qos_sessions"); sessions != room.json.end() && sessions->is_object()) {
 +    for (const auto& [id, value] : sessions->items()) {
 +      const auto kid = DecodeHex<8>(id);
@@ -1772,8 +1841,15 @@ index 0000000..318c0f2
 +      if (kid && qos && !qos->empty()) g_host_qos_sessions[*kid] = std::move(*qos);
 +    }
 +  }
-+  REXSYS_INFO("Alboria: in {} room of party {}{}{}", g_status.in_match ? "a match's" : "its party's", g_status.code,
-+              g_status.party_leader ? ", leading it" : "", g_status.host ? ", hosting the room" : "");
++  // Said once for each room and roles (the match's host reads it every few seconds for its teams).
++  static std::string last_said;
++  const std::string said = fmt::format("in {} room of party {}{}{}", g_status.in_match ? "a match's" : "its party's",
++                                       g_status.code, g_status.party_leader ? ", leading it" : "",
++                                       g_status.host ? ", hosting the room" : "");
++  if (said != last_said) {
++    last_said = said;
++    REXSYS_INFO("Alboria: {}", said);
++  }
 +}
 +
 +void PublishHostedSession(std::string code, SessionInfo session) {
@@ -2654,6 +2730,127 @@ index 0000000..318c0f2
 +  g_search_status = {};
 +}
 +
++std::vector<std::vector<std::string>> MatchTeams() {
++  std::lock_guard lock(g_mutex);
++  return g_match_teams;
++}
++
++void RefreshMatchTeams() {
++  RunDetached("reading the match's teams", [] { RefreshCurrentRoom(); });
++}
++
++namespace {
++
++// A party member (not its leader) keeps with its party as Alboria moves it, since the title takes
++// only the leader along with an invite:
++// - moved into another party's match: its own invite to the match (the match's session, from
++//   /v1/matchmaking/party, which has it once the match is open), for the title to take
++//   (TakeMemberMatchInvite). In its own leader's match there is none: the title brings its party;
++// - moved back to its party's room after a match: it joins its leader's Live party again, as an
++//   accepted invite, as joining a friend's room does.
++void FollowPartyAfterMove(bool left_match) {
++  Status status;
++  {
++    std::lock_guard lock(g_mutex);
++    status = g_status;
++  }
++  if (status.party_leader || status.host || !LiveSignedIn()) return;
++  if (status.in_match) {
++    constexpr int kTries = 10;
++    for (int i = 0; i < kTries; ++i) {
++      const auto answer = CallSignedIn("/v1/matchmaking/party", nlohmann::json::object());
++      if (answer.error.empty() && Text(answer.json, "state") == "found") {
++        const auto match_session = DecodeBase64(Text(answer.json, "session"));
++        if (!match_session || match_session->size() != kSessionInfoSize) return;  // its leader's match
++        SessionInfo session;
++        std::copy(match_session->begin(), match_session->end(), session.begin());
++        {
++          std::lock_guard lock(g_mutex);
++          g_pending_match_invite = session;
++          std::array<uint8_t, 8> kid;
++          std::copy_n(session.begin(), kid.size(), kid.begin());
++          g_match_kid = kid;
++        }
++        g_member_match_invite.store(true);
++        REXSYS_INFO("Alboria: the party went into another party's match: its invite waits for the title");
++        return;
++      }
++      std::this_thread::sleep_for(std::chrono::seconds(1));
++    }
++    return;
++  }
++  if (!left_match) return;
++  // The leader's title makes a new Live party session as it leaves the match, published a moment
++  // later: the one the room has is waited for until it is not the one joined before the match (for
++  // up to kTries seconds, then whatever the room has).
++  std::optional<SessionInfo> found;
++  constexpr int kTries = 10;
++  for (int i = 0; i < kTries; ++i) {
++    const auto room = CallSignedIn("/v1/rooms/current", nlohmann::json::object());
++    const auto invite = room.error.empty() ? DecodeBase64(Text(room.json, "session")) : std::nullopt;
++    if (invite && invite->size() == kSessionInfoSize) {
++      SessionInfo session;
++      std::memcpy(session.data(), invite->data(), session.size());
++      found = session;
++      std::lock_guard lock(g_mutex);
++      if (g_party_session != session) break;
++    }
++    std::this_thread::sleep_for(std::chrono::seconds(1));
++  }
++  if (!found) return;
++  const SessionInfo session = *found;
++  {
++    std::lock_guard lock(g_mutex);
++    g_last_invite = session;
++    g_accepted_invite = session;
++    g_party_session = session;
++  }
++  REXSYS_INFO("Alboria: back from the match, joining the party leader's Live party again");
++  REX_KERNEL_STATE()->BroadcastNotification(kNotifyLiveInviteAccepted, 0);
++}
++
++}  // namespace
++
++bool TakeMemberMatchInvite() {
++  return g_member_match_invite.exchange(false);
++}
++
++bool RetryMatchInvite() {
++  {
++    std::lock_guard lock(g_mutex);
++    if (!g_last_invite) return false;
++    g_accepted_invite = g_last_invite;
++  }
++  REXSYS_INFO("Alboria: taking the match's invite again");
++  REX_KERNEL_STATE()->BroadcastNotification(kNotifyLiveInviteAccepted, 0);
++  return true;
++}
++
++PartySearch FollowPartySearch() {
++  PartySearch search;
++  const auto answer = CallSignedIn("/v1/matchmaking/party", nlohmann::json::object());
++  if (!answer.error.empty()) return search;
++  const std::string state = Text(answer.json, "state");
++  const auto names = [&](const char* key) {
++    std::vector<std::string> out;
++    if (!answer.json.contains(key) || !answer.json[key].is_array()) return out;
++    for (const auto& name : answer.json[key]) {
++      if (name.is_string()) out.push_back(name.get<std::string>());
++    }
++    return out;
++  };
++  if (state == "searching") {
++    search.state = PartySearch::State::kSearching;
++    search.modes = names("modes");
++    search.searching_ms = Number<int>(answer.json, "searching_ms", 0);
++    search.players = names("players");
++    search.party = names("party");
++  } else if (state == "found") {
++    search.state = PartySearch::State::kFound;
++  }
++  return search;
++}
++
 +MatchFound Matchmake(const std::string& mode) {
 +  g_stop_search.store(false);
 +  nlohmann::json request = {{"title_id", TitleIdText()}};
@@ -2702,13 +2899,20 @@ index 0000000..318c0f2
 +    }
 +    const auto answer = CallSignedIn("/v1/matchmaking/poll", {{"ticket", id}});
 +    const std::string state = answer.error.empty() ? Text(answer.json, "state") : std::string("host");
-+    if (state == "waiting" && answer.json.contains("players") && answer.json["players"].is_array()) {
-+      std::vector<std::string> players;
-+      for (const auto& player : answer.json["players"]) {
-+        if (player.is_string()) players.push_back(player.get<std::string>());
-+      }
++    // The players found (waiting) or already in the match sent into (join).
++    if (state == "waiting" || state == "join") {
++      // The names in a list of the answer, empty without it.
++      const auto names = [&](const char* key) {
++        std::vector<std::string> out;
++        if (!answer.json.contains(key) || !answer.json[key].is_array()) return out;
++        for (const auto& name : answer.json[key]) {
++          if (name.is_string()) out.push_back(name.get<std::string>());
++        }
++        return out;
++      };
 +      std::lock_guard lock(g_match_mutex);
-+      g_search_status.players = std::move(players);
++      if (answer.json.contains("players")) g_search_status.players = names("players");
++      if (answer.json.contains("party")) g_search_status.party = names("party");
 +    }
 +    // The mode Alboria decided on (host, join): the match's.
 +    if (state == "host" || state == "join") {

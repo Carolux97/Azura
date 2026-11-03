@@ -6,17 +6,25 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
+#include <mutex>
 #include <thread>
 #include <vector>
 
 #include <imgui.h>
 
+#include <rex/cvar.h>
 #include <rex/input/input.h>
 #include <rex/logging.h>
 #include <rex/system/xam/alboria.h>
 
+#include "menu/pc_options.h"
 #include "script_hooks.h"
+
+REXCVAR_DEFINE_STRING(versus_online_modes, "11,15,13", "Azura/Online",
+                      "The Standard modes the Versus online menu searches for: their playlists' IDs, separated "
+                      "by commas (the player's last choice, kept for the next search)");
 
 namespace azura {
 
@@ -29,6 +37,8 @@ using Slot = input::PlayerAssignment::Slot;
 namespace alboria = rex::system::xam::alboria;
 
 constexpr float kFadeSeconds = 0.18f;
+// The players of this player's own party, while searching: a light blue.
+constexpr ImU32 PartyBlue(int alpha) { return IM_COL32(150, 205, 255, alpha); }
 constexpr float kPi = 3.14159265f;
 // How far the left stick goes before it counts as a press.
 constexpr int kStickPress = 20000;
@@ -79,6 +89,12 @@ struct Texts {
   const char* retry;
   const char* enter;  // the Enter key
   const char* space;  // the Space key
+  std::array<const char*, kModes> mode_help;  // what each mode is about, in kModePlaylists' order
+  const char* hide;             // a party member hides its leader's search
+  const char* leader_searches;  // above a party member's view of its leader's search
+  const char* journal;          // the button that opens the War Journal: stats and awards
+  const char* party_too_big;    // a search refused because the party has more than a team's places
+  const char* party_too_big_help;
 };
 
 // In the game's languages; the runtime loads the Cyrillic and CJK fonts each one needs. The modes'
@@ -95,7 +111,8 @@ Texts LocalizedTexts(uint32_t language) {
               "検索をキャンセル", "マッチ準備完了", "全員接続しました", "+ ボット %d", "投票に移動します",
               "マップとモードは全員で選びます", "オンライン対戦", "Alboria に接続できません",
               "インターネット接続を確認して、もう一度お試しください。",
-              "ランチャーから Alboria にサインインしてください。", "もう一度検索", "Enter", "Space"};
+              "ランチャーから Alboria にサインインしてください。", "もう一度検索", "Enter", "Space",
+              {"5人ずつの2チームがリスポーン回数を共有します。相手チームの残り回数をゼロにすればラウンド勝利。", "フィールドを移動するリングを確保して守り、得点を重ねます。リスポーンあり。", "リスポーンなし。ダウンした敵は処刑でしか倒せません。", "リスポーンなしの1ラウンド1ライフ。最後まで生き残ったチームの勝ち。", "相手のリーダーを捕まえて得点しつつ、自分たちのリーダーを守ります。", "2人1組の5チームで戦います。先に目標スコアに届いたペアの勝ち。"}, "隠す", "グループのリーダーが検索中", "統計と報酬", "グループの人数が多すぎます", "公開マッチに参加できるグループは5人までです。"};
     case 7:  // Korean
       return {"VERSUS · ALBORIA", "온라인 대전", "전 세계 플레이어와 대결", "오픈 매치", "스탠다드",
               "언제든 참가하고 나갈 수 있습니다 · 업적에 포함됩니다", "랭크", "출시 예정", "디비전과 시즌 랭크",
@@ -104,7 +121,8 @@ Texts LocalizedTexts(uint32_t language) {
               "빈자리", "%d / %d · 빈자리는 봇이 채웁니다", "검색 취소", "매치 준비 완료", "모두 연결되었습니다",
               "+ 봇 %d", "투표로 이동합니다", "맵과 모드는 모두가 함께 고릅니다", "온라인 대전",
               "Alboria에 연결할 수 없습니다", "인터넷 연결을 확인하고 다시 시도하세요.",
-              "런처에서 Alboria에 로그인하세요.", "다시 검색", "Enter", "Space"};
+              "런처에서 Alboria에 로그인하세요.", "다시 검색", "Enter", "Space",
+              {"5명씩 두 팀이 부활 횟수를 함께 씁니다. 상대 팀의 부활을 모두 소진시키면 라운드 승리.", "맵을 옮겨 다니는 링을 점령하고 지켜 점수를 얻습니다. 부활 가능.", "부활 없음. 쓰러진 적은 처형으로만 처치할 수 있습니다.", "부활 없이 라운드마다 목숨 하나. 마지막까지 남은 팀이 승리합니다.", "상대 리더를 붙잡아 점수를 얻고, 우리 리더를 지킵니다.", "2인 1조 다섯 팀. 목표 점수에 먼저 닿은 팀이 승리합니다."}, "숨기기", "파티 리더가 검색 중", "통계와 보상", "파티 인원이 너무 많습니다", "공개 매치는 최대 5명까지의 파티만 참가할 수 있습니다."};
     case 8:  // Traditional Chinese
       return {"VERSUS · ALBORIA", "線上對戰", "與全世界的玩家對戰", "開放對戰", "標準", "隨時加入或離開 · 計入成就",
               "排名", "即將推出", "分級與賽季排名", "模式 · 一個或多個",
@@ -112,7 +130,8 @@ Texts LocalizedTexts(uint32_t language) {
               "返回", "搜尋中", {"Alboria", "搜尋", "玩家", "就緒"}, "空位", "%d / %d · 空位由機器人補上",
               "取消搜尋", "對戰就緒", "所有人都已連線", "+ %d 個機器人", "正在進入投票", "地圖與模式由大家一起選",
               "線上對戰", "無法連線到 Alboria", "請檢查網路連線後再試一次。", "請從啟動器登入 Alboria。", "再次搜尋",
-              "Enter", "Space"};
+              "Enter", "Space",
+              {"兩隊各五人，共用復活次數。耗盡對手的復活次數即贏得該回合。", "佔領並守住在地圖上移動的據點來得分，可以復活。", "不能復活。倒地的敵人只能用處決解決。", "不能復活，每回合一條命。最後存活的隊伍獲勝。", "抓住對方的首領來得分，同時保護自己的首領。", "五支兩人小隊對戰，先達到目標分數的小隊獲勝。"}, "隱藏", "你的隊長正在搜尋", "統計與獎勵", "隊伍人數太多", "公開對戰最多只接受 5 人的隊伍。"};
     case 12:  // Russian
       return {"VERSUS · ALBORIA", "VERSUS ОНЛАЙН", "Сражайтесь с игроками со всего мира", "ОТКРЫТЫЕ МАТЧИ",
               "СТАНДАРТ", "Входите и выходите когда угодно · засчитывается для достижений", "РЕЙТИНГ", "СКОРО",
@@ -123,86 +142,93 @@ Texts LocalizedTexts(uint32_t language) {
               "Отменить поиск", "МАТЧ ГОТОВ", "Все подключены", "+ ботов: %d", "Переход к голосованию",
               "Карту и режим выбирают все вместе", "VERSUS ОНЛАЙН", "Нет связи с Alboria",
               "Проверьте подключение к интернету и попробуйте снова.", "Войдите в Alboria в лаунчере.",
-              "Искать снова", "Enter", "Пробел"};
+              "Искать снова", "Enter", "Пробел",
+              {"Две команды по пять человек с общим запасом возрождений. Исчерпайте запас противника, чтобы выиграть раунд.", "Захватывайте и удерживайте кольцо, которое перемещается по карте, чтобы набирать очки. Возрождения есть.", "Без возрождений. Поверженного врага можно добить только казнью.", "Без возрождений, одна жизнь за раунд. Побеждает последняя выжившая команда.", "Захватите лидера противника, чтобы набирать очки, и защищайте своего.", "Пять команд по двое. Побеждает пара, первой набравшая нужный счёт."}, "Скрыть", "Лидер вашей группы ищет матч", "Статистика и награды", "Слишком большая группа", "В открытые матчи можно искать группой не больше чем из 5 игроков."};
     case 3:  // German
       return {"VERSUS · ALBORIA", "VERSUS ONLINE", "Spiele gegen die Welt", "OFFENE MATCHES", "STANDARD",
-              "Jederzeit beitreten und gehen · z\xC3\xA4hlt f\xC3\xBCr Erfolge", "RANGLISTE", "DEMN\xC3\x84""CHST",
-              "Divisionen und Saisonr\xC3\xA4nge", "MODI · EINER ODER MEHRERE",
-              {"Team-Deathmatch", "King of the Hill", "Hinrichtung", "Kriegsgebiet", "Anf\xC3\xBChrer schnappen",
+              "Jederzeit beitreten und gehen · zählt für Erfolge", "RANGLISTE", "DEMNÄCHST",
+              "Divisionen und Saisonränge", "MODI · EINER ODER MEHRERE",
+              {"Team-Deathmatch", "King of the Hill", "Hinrichtung", "Kriegsgebiet", "Anführer schnappen",
                "Wingman"},
-              "W\xC3\xA4hle mindestens einen Modus", "Suchen", "Modus markieren", "Zur\xC3\xBC""ck", "SUCHE",
+              "Wähle mindestens einen Modus", "Suchen", "Modus markieren", "Zurück", "SUCHE",
               {"Alboria", "Suche", "Spieler", "Bereit"}, "frei",
-              "%d von %d · freie Pl\xC3\xA4tze \xC3\xBC""bernehmen Bots", "Suche abbrechen", "MATCH BEREIT",
-              "Alle sind verbunden", "+ %d Bots", "Weiter zur Abstimmung", "Karte und Modus w\xC3\xA4hlen alle gemeinsam",
+              "%d von %d · freie Plätze übernehmen Bots", "Suche abbrechen", "MATCH BEREIT",
+              "Alle sind verbunden", "+ %d Bots", "Weiter zur Abstimmung", "Karte und Modus wählen alle gemeinsam",
               "VERSUS ONLINE", "Keine Verbindung zu Alboria",
-              "Pr\xC3\xBC""fe deine Internetverbindung und versuche es erneut.",
-              "Melde dich im Launcher bei Alboria an.", "Erneut suchen", "Eingabe", "Leertaste"};
+              "Prüfe deine Internetverbindung und versuche es erneut.",
+              "Melde dich im Launcher bei Alboria an.", "Erneut suchen", "Eingabe", "Leertaste",
+              {"Zwei Teams zu fünft mit gemeinsamen Wiederbelebungen. Nimm dem Gegner alle, um die Runde zu gewinnen.", "Erobere und halte den Ring, der über die Karte wandert, um zu punkten. Mit Wiederbelebung.", "Keine Wiederbelebung. Niedergestreckte Gegner fallen nur durch eine Hinrichtung.", "Keine Wiederbelebung, ein Leben pro Runde. Das letzte stehende Team gewinnt.", "Schnapp dir den gegnerischen Anführer, um zu punkten, und beschütze deinen eigenen.", "Fünf Teams zu zweit. Das Paar, das zuerst die Punktzahl erreicht, gewinnt."}, "Ausblenden", "Dein Gruppenleiter sucht", "Statistiken und Auszeichnungen", "Deine Gruppe ist zu groß", "Öffentliche Matches nehmen Gruppen mit bis zu 5 Spielern."};
     case 4:  // French
       return {"VERSUS · ALBORIA", "VERSUS EN LIGNE", "Affrontez le monde entier", "PARTIES OUVERTES", "STANDARD",
-              "Rejoignez et quittez quand vous voulez · compte pour les succ\xC3\xA8s", "CLASS\xC3\x89""E",
-              "BIENT\xC3\x94T", "Divisions et rangs de saison", "MODES · UN OU PLUSIEURS",
-              {"Match \xC3\xA0 mort en \xC3\xA9quipe", "Roi de la colline", "Ex\xC3\xA9""cution", "Zone de guerre",
-               "Capture du chef", "Co\xC3\xA9quipier"},
+              "Rejoignez et quittez quand vous voulez · compte pour les succès", "CLASSÉE",
+              "BIENTÔT", "Divisions et rangs de saison", "MODES · UN OU PLUSIEURS",
+              {"Match à mort en équipe", "Roi de la colline", "Exécution", "Zone de guerre",
+               "Capture du chef", "Coéquipier"},
               "Choisissez au moins un mode", "Rechercher", "Cocher le mode", "Retour", "RECHERCHE",
-              {"Alboria", "Recherche", "Joueurs", "Pr\xC3\xAAt"}, "libre",
-              "%d sur %d · les places libres seront prises par des bots", "Annuler la recherche", "PARTIE PR\xC3\x8ATE",
-              "Tout le monde est connect\xC3\xA9", "+ %d bots", "Passage au vote",
+              {"Alboria", "Recherche", "Joueurs", "Prêt"}, "libre",
+              "%d sur %d · les places libres seront prises par des bots", "Annuler la recherche", "PARTIE PRÊTE",
+              "Tout le monde est connecté", "+ %d bots", "Passage au vote",
               "La carte et le mode se choisissent ensemble", "VERSUS EN LIGNE", "Impossible de joindre Alboria",
-              "V\xC3\xA9rifiez votre connexion internet et r\xC3\xA9""essayez.",
-              "Connectez-vous \xC3\xA0 Alboria depuis le launcher.", "Rechercher \xC3\xA0 nouveau", "Entr\xC3\xA9""e",
-              "Espace"};
+              "Vérifiez votre connexion internet et réessayez.",
+              "Connectez-vous à Alboria depuis le launcher.", "Rechercher à nouveau", "Entrée",
+              "Espace",
+              {"Deux équipes de cinq partagent leurs réapparitions. Épuisez celles de l'adversaire pour gagner la manche.", "Prenez et tenez l'anneau qui se déplace sur la carte pour marquer. Avec réapparitions.", "Pas de réapparition. Un ennemi à terre ne peut être achevé que par une exécution.", "Pas de réapparition, une vie par manche. La dernière équipe debout gagne.", "Capturez le chef adverse pour marquer, tout en protégeant le vôtre.", "Cinq équipes de deux. Le premier binôme à atteindre le score gagne."}, "Masquer", "Le chef de ton groupe cherche", "Statistiques et récompenses", "Ton groupe est trop grand", "Les parties publiques acceptent des groupes de 5 joueurs au plus."};
     case 5:  // Spanish
-      return {"VERSUS · ALBORIA", "VERSUS ONLINE", "Juega contra el mundo", "PARTIDAS ABIERTAS", "EST\xC3\x81NDAR",
-              "Entra y sal cuando quieras · cuenta para los logros", "CLASIFICATORIA", "PR\xC3\x93XIMAMENTE",
+      return {"VERSUS · ALBORIA", "VERSUS ONLINE", "Juega contra el mundo", "PARTIDAS ABIERTAS", "ESTÁNDAR",
+              "Entra y sal cuando quieras · cuenta para los logros", "CLASIFICATORIA", "PRÓXIMAMENTE",
               "Divisiones y rangos de temporada", "MODOS · UNO O VARIOS",
-              {"Duelo por equipos", "Rey de la colina", "Ejecuci\xC3\xB3n", "Zona de guerra", "Capturar al l\xC3\xAD""der",
-               "Compa\xC3\xB1""eros"},
-              "Elige al menos un modo", "Buscar", "Marcar modo", "Atr\xC3\xA1s", "BUSCANDO",
-              {"Alboria", "B\xC3\xBAsqueda", "Jugadores", "Listos"}, "libre",
-              "%d de %d · los huecos libres al empezar los ocupan bots", "Cancelar b\xC3\xBAsqueda",
-              "PARTIDA LISTA", "Todos conectados", "+ %d bots", "Entrando en la votaci\xC3\xB3n",
+              {"Duelo por equipos", "Rey de la colina", "Ejecución", "Zona de guerra", "Capturar al líder",
+               "Compañeros"},
+              "Elige al menos un modo", "Buscar", "Marcar modo", "Atrás", "BUSCANDO",
+              {"Alboria", "Búsqueda", "Jugadores", "Listos"}, "libre",
+              "%d de %d · los huecos libres al empezar los ocupan bots", "Cancelar búsqueda",
+              "PARTIDA LISTA", "Todos conectados", "+ %d bots", "Entrando en la votación",
               "Mapa y modo se eligen entre todos", "VERSUS ONLINE", "No se puede conectar con Alboria",
-              "Comprueba tu conexi\xC3\xB3n a internet y vuelve a intentarlo.",
-              "Inicia sesi\xC3\xB3n en Alboria desde el launcher.", "Buscar otra vez", "Intro", "Espacio"};
+              "Comprueba tu conexión a internet y vuelve a intentarlo.",
+              "Inicia sesión en Alboria desde el launcher.", "Buscar otra vez", "Intro", "Espacio",
+              {"Dos equipos de cinco comparten las reapariciones. Agota las del rival para ganar la ronda.", "Toma y defiende el anillo, que va cambiando de sitio por el mapa, para sumar puntos. Con reapariciones.", "Sin reapariciones. A un enemigo derribado solo se le remata con una ejecución.", "Sin reapariciones, una vida por ronda. Gana el último equipo en pie.", "Captura al líder rival para puntuar mientras proteges al tuyo.", "Cinco equipos de dos. Gana la pareja que llegue antes a la puntuación."}, "Ocultar", "Tu líder de grupo está buscando", "Estadísticas y premios", "Tu grupo es demasiado grande", "El online público admite grupos de hasta 5 jugadores."};
     case 6:  // Italian
       return {"VERSUS · ALBORIA", "VERSUS ONLINE", "Gioca contro il mondo", "PARTITE APERTE", "STANDARD",
               "Entra ed esci quando vuoi · conta per gli obiettivi", "CLASSIFICATA", "PROSSIMAMENTE",
-              "Divisioni e gradi stagionali", "MODALIT\xC3\x80 · UNA O PI\xC3\x99",
+              "Divisioni e gradi stagionali", "MODALITÀ · UNA O PIÙ",
               {"Deathmatch a squadre", "Re della collina", "Esecuzione", "Zona di guerra", "Cattura il leader",
                "Spalla"},
-              "Scegli almeno una modalit\xC3\xA0", "Cerca", "Segna modalit\xC3\xA0", "Indietro", "RICERCA",
+              "Scegli almeno una modalità", "Cerca", "Segna modalità", "Indietro", "RICERCA",
               {"Alboria", "Ricerca", "Giocatori", "Pronti"}, "libero",
               "%d di %d · i posti liberi saranno presi dai bot", "Annulla ricerca", "PARTITA PRONTA",
-              "Tutti connessi", "+ %d bot", "Si passa alla votazione", "Mappa e modalit\xC3\xA0 si scelgono insieme",
+              "Tutti connessi", "+ %d bot", "Si passa alla votazione", "Mappa e modalità si scelgono insieme",
               "VERSUS ONLINE", "Impossibile raggiungere Alboria",
               "Controlla la connessione a internet e riprova.", "Accedi ad Alboria dal launcher.", "Cerca di nuovo",
-              "Invio", "Spazio"};
+              "Invio", "Spazio",
+              {"Due squadre da cinque condividono le rinascite. Esaurisci quelle avversarie per vincere il round.", "Conquista e difendi l'anello, che si sposta sulla mappa, per fare punti. Con rinascite.", "Niente rinascite. Un nemico a terra si elimina solo con un'esecuzione.", "Niente rinascite, una vita per round. Vince l'ultima squadra in piedi.", "Cattura il leader avversario per fare punti, proteggendo il tuo.", "Cinque squadre da due. Vince la coppia che raggiunge per prima il punteggio."}, "Nascondi", "Il capo del tuo gruppo sta cercando", "Statistiche e premi", "Il tuo gruppo è troppo grande", "Le partite pubbliche accettano gruppi fino a 5 giocatori."};
     case 9:  // Portuguese
-      return {"VERSUS · ALBORIA", "VERSUS ONLINE", "Jogue contra o mundo", "PARTIDAS ABERTAS", "PADR\xC3\x83O",
+      return {"VERSUS · ALBORIA", "VERSUS ONLINE", "Jogue contra o mundo", "PARTIDAS ABERTAS", "PADRÃO",
               "Entre e saia quando quiser · conta para as conquistas", "RANQUEADA", "EM BREVE",
-              "Divis\xC3\xB5""es e patentes da temporada", "MODOS · UM OU MAIS",
-              {"Mata-mata em equipe", "Rei da colina", "Execu\xC3\xA7\xC3\xA3o", "Zona de guerra", "Capturar o l\xC3\xAD""der",
+              "Divisões e patentes da temporada", "MODOS · UM OU MAIS",
+              {"Mata-mata em equipe", "Rei da colina", "Execução", "Zona de guerra", "Capturar o líder",
                "Parceiro"},
               "Escolha pelo menos um modo", "Buscar", "Marcar modo", "Voltar", "BUSCANDO",
               {"Alboria", "Busca", "Jogadores", "Prontos"}, "livre",
-              "%d de %d · as vagas livres ser\xC3\xA3o ocupadas por bots", "Cancelar busca", "PARTIDA PRONTA",
-              "Todos conectados", "+ %d bots", "Indo para a vota\xC3\xA7\xC3\xA3o", "Mapa e modo s\xC3\xA3o escolhidos por todos",
-              "VERSUS ONLINE", "N\xC3\xA3o foi poss\xC3\xADvel conectar ao Alboria",
-              "Verifique sua conex\xC3\xA3o com a internet e tente de novo.", "Entre no Alboria pelo launcher.",
-              "Buscar de novo", "Enter", "Espa\xC3\xA7o"};
+              "%d de %d · as vagas livres serão ocupadas por bots", "Cancelar busca", "PARTIDA PRONTA",
+              "Todos conectados", "+ %d bots", "Indo para a votação", "Mapa e modo são escolhidos por todos",
+              "VERSUS ONLINE", "Não foi possível conectar ao Alboria",
+              "Verifique sua conexão com a internet e tente de novo.", "Entre no Alboria pelo launcher.",
+              "Buscar de novo", "Enter", "Espaço",
+              {"Duas equipes de cinco dividem os renascimentos. Esgote os do rival para vencer a rodada.", "Tome e defenda o anel, que muda de lugar pelo mapa, para pontuar. Com renascimentos.", "Sem renascimentos. Um inimigo caído só morre com uma execução.", "Sem renascimentos, uma vida por rodada. Vence a última equipe de pé.", "Capture o líder rival para pontuar enquanto protege o seu.", "Cinco equipes de dois. Vence a dupla que chegar primeiro à pontuação."}, "Ocultar", "O líder do seu grupo está buscando", "Estatísticas e prêmios", "Seu grupo é grande demais", "As partidas públicas aceitam grupos de até 5 jogadores."};
     case 11:  // Polish
-      return {"VERSUS · ALBORIA", "VERSUS ONLINE", "Zagraj przeciwko \xC5\x9Bwiatu", "OTWARTE MECZE", "STANDARD",
-              "Do\xC5\x82\xC4\x85""czaj i wychod\xC5\xBA kiedy chcesz · liczy si\xC4\x99 do osi\xC4\x85gni\xC4\x99\xC4\x87",
-              "RANKINGOWY", "WKR\xC3\x93TCE", "Dywizje i rangi sezonowe", "TRYBY · JEDEN LUB WI\xC4\x98""CEJ",
-              {"Dru\xC5\xBCynowy deathmatch", "Kr\xC3\xB3l wzg\xC3\xB3rza", "Egzekucja", "Strefa wojny",
-               "Schwytaj przyw\xC3\xB3""dc\xC4\x99", "Skrzyd\xC5\x82owy"},
-              "Wybierz co najmniej jeden tryb", "Szukaj", "Zaznacz tryb", "Wr\xC3\xB3\xC4\x87", "SZUKANIE",
+      return {"VERSUS · ALBORIA", "VERSUS ONLINE", "Zagraj przeciwko światu", "OTWARTE MECZE", "STANDARD",
+              "Dołączaj i wychodź kiedy chcesz · liczy się do osiągnięć",
+              "RANKINGOWY", "WKRÓTCE", "Dywizje i rangi sezonowe", "TRYBY · JEDEN LUB WIĘCEJ",
+              {"Drużynowy deathmatch", "Król wzgórza", "Egzekucja", "Strefa wojny",
+               "Schwytaj przywódcę", "Skrzydłowy"},
+              "Wybierz co najmniej jeden tryb", "Szukaj", "Zaznacz tryb", "Wróć", "SZUKANIE",
               {"Alboria", "Szukanie", "Gracze", "Gotowi"}, "wolne",
-              "%d z %d · wolne miejsca zajm\xC4\x85 boty", "Anuluj szukanie", "MECZ GOTOWY",
-              "Wszyscy po\xC5\x82\xC4\x85""czeni", "+ %d bot\xC3\xB3w", "Przechodzimy do g\xC5\x82osowania",
-              "Map\xC4\x99 i tryb wybieraj\xC4\x85 wszyscy", "VERSUS ONLINE", "Brak po\xC5\x82\xC4\x85""czenia z Albori\xC4\x85",
-              "Sprawd\xC5\xBA po\xC5\x82\xC4\x85""czenie z internetem i spr\xC3\xB3""buj ponownie.",
-              "Zaloguj si\xC4\x99 do Alborii w launcherze.", "Szukaj ponownie", "Enter", "Spacja"};
+              "%d z %d · wolne miejsca zajmą boty", "Anuluj szukanie", "MECZ GOTOWY",
+              "Wszyscy połączeni", "+ %d botów", "Przechodzimy do głosowania",
+              "Mapę i tryb wybierają wszyscy", "VERSUS ONLINE", "Brak połączenia z Alborią",
+              "Sprawdź połączenie z internetem i spróbuj ponownie.",
+              "Zaloguj się do Alborii w launcherze.", "Szukaj ponownie", "Enter", "Spacja",
+              {"Dwie pięcioosobowe drużyny dzielą się odrodzeniami. Wyczerpij odrodzenia rywali, by wygrać rundę.", "Zdobywaj i utrzymuj krąg, który przenosi się po mapie, by zdobywać punkty. Z odrodzeniami.", "Bez odrodzeń. Powalonego wroga można dobić tylko egzekucją.", "Bez odrodzeń, jedno życie na rundę. Wygrywa ostatnia stojąca drużyna.", "Schwytaj przywódcę rywali, by zdobywać punkty, i chroń swojego.", "Pięć drużyn po dwie osoby. Wygrywa para, która pierwsza zdobędzie wynik."}, "Ukryj", "Lider twojej drużyny szuka", "Statystyki i nagrody", "Twoja drużyna jest za duża", "Mecze publiczne przyjmują drużyny do 5 graczy."};
     default:
       return {"VERSUS · ALBORIA", "VERSUS ONLINE", "Play against the world", "OPEN MATCHES", "STANDARD",
               "Join and leave at any time · counts for achievements", "RANKED", "COMING SOON",
@@ -213,7 +239,8 @@ Texts LocalizedTexts(uint32_t language) {
               "%d of %d · free places at the start are taken by bots", "Cancel search", "MATCH READY",
               "Everyone connected", "+ %d bots", "Entering the vote", "Map and mode are chosen by everyone",
               "VERSUS ONLINE", "Cannot reach Alboria", "Check your internet connection and try again.",
-              "Sign in to Alboria from the launcher.", "Search again", "Enter", "Space"};
+              "Sign in to Alboria from the launcher.", "Search again", "Enter", "Space",
+              {"Two teams of five share a pool of respawns. Run the other team out of them to win the round.", "Take and hold the ring, which moves around the map, to score. With respawns.", "No respawns. A downed enemy can only be finished with an execution.", "No respawns, one life per round. The last team standing wins.", "Capture the enemy leader to score while you protect your own.", "Five teams of two. The first pair to reach the score wins."}, "Hide", "Your party leader is searching", "Stats and awards", "Your party is too big", "Public matches take parties of up to 5 players."};
   }
 }
 
@@ -223,9 +250,32 @@ Texts LocalizedTexts(uint32_t language) {
 // menu: what it decides is done by the game on its next input frame (script::RequestMatchmadeLobby,
 // RequestMatchInvite), whether the menu is still open or not.
 
-// Standard's modes the player marked, kept while the game runs. Team Deathmatch, King of the Hill and
-// Execution at first.
-std::array<bool, kModes> g_marked = {true, true, true, false, false, false};
+// Standard's modes the player marked: read from versus_online_modes as the menu opens, and written
+// back to it (and to azura.toml) as the player marks or unmarks one.
+std::array<bool, kModes> g_marked = {};
+
+void LoadMarked() {
+  const std::string saved = REXCVAR_GET(versus_online_modes);
+  g_marked = {};
+  size_t start = 0;
+  while (start <= saved.size()) {
+    const size_t end = std::min(saved.find(',', start), saved.size());
+    const int playlist = std::atoi(saved.substr(start, end - start).c_str());
+    const auto found = std::find(kModePlaylists.begin(), kModePlaylists.end(), playlist);
+    if (found != kModePlaylists.end()) g_marked[found - kModePlaylists.begin()] = true;
+    start = end + 1;
+  }
+}
+
+void SaveMarked() {
+  std::string saved;
+  for (int i = 0; i < kModes; ++i) {
+    if (!g_marked[i]) continue;
+    if (!saved.empty()) saved += ',';
+    saved += std::to_string(kModePlaylists[i]);
+  }
+  menu::StoreControlsSetting("versus_online_modes", saved, true);
+}
 std::atomic<bool> g_search_running{false};
 // The player cancelled the search running: whatever it decides is not acted on.
 std::atomic<bool> g_search_cancelled{false};
@@ -236,14 +286,13 @@ int64_t NowTicks() {
   return std::chrono::steady_clock::now().time_since_epoch().count();
 }
 
+std::vector<std::string> MarkedModes();
+
 // Searches for a match of the modes marked. The game then opens the lobby of the playlist Alboria
 // decided on (this player hosts: never said as such), or takes the match's invite.
 void StartSearch() {
   if (g_search_running.exchange(true)) return;
-  std::vector<std::string> modes;
-  for (int i = 0; i < kModes; ++i) {
-    if (g_marked[i]) modes.push_back("playlist:" + std::to_string(kModePlaylists[i]));
-  }
+  const std::vector<std::string> modes = MarkedModes();
   g_search_cancelled.store(false);
   g_search_started.store(NowTicks());
   alboria::ResetSearchStatus();
@@ -272,6 +321,50 @@ void CancelSearch() {
   if (!g_search_running.load()) return;
   g_search_cancelled.store(true);
   alboria::StopMatchmaking();
+}
+
+// --- A party member's view ------------------------------------------------------------------------
+//
+// Only a party's leader searches. Its members follow the search through Alboria
+// (alboria::FollowPartySearch), about once a second while they are in their party's room with
+// others, not leading it and not playing: once the leader searches, the member's menu opens to show
+// the same search, with nothing to do in it but hide it.
+
+std::mutex g_party_mutex;
+alboria::PartySearch g_party_search;
+// When g_party_search came (NowTicks), for the leader's clock to go on between answers.
+int64_t g_party_received = 0;
+std::atomic<bool> g_follower_running{false};
+// The member hid the leader's search: it does not open again until that search ends.
+std::atomic<bool> g_follow_hidden{false};
+
+alboria::PartySearch PartySearchNow(int64_t* received = nullptr) {
+  std::lock_guard lock(g_party_mutex);
+  if (received) *received = g_party_received;
+  return g_party_search;
+}
+
+// The modes of a search ("playlist:<id>") by their names, joined by " · ".
+std::string ModesLine(const Texts& texts, const std::vector<std::string>& modes) {
+  std::string line;
+  for (const std::string& mode : modes) {
+    int playlist = -1;
+    if (std::sscanf(mode.c_str(), "playlist:%d", &playlist) != 1) continue;
+    const auto found = std::find(kModePlaylists.begin(), kModePlaylists.end(), playlist);
+    if (found == kModePlaylists.end()) continue;
+    if (!line.empty()) line += " · ";
+    line += texts.modes[found - kModePlaylists.begin()];
+  }
+  return line;
+}
+
+// The modes the player marked, as a search sends them.
+std::vector<std::string> MarkedModes() {
+  std::vector<std::string> modes;
+  for (int i = 0; i < kModes; ++i) {
+    if (g_marked[i]) modes.push_back("playlist:" + std::to_string(kModePlaylists[i]));
+  }
+  return modes;
 }
 
 // --- Drawing --------------------------------------------------------------------------------------
@@ -481,9 +574,37 @@ float AddSpacedText(ImDrawList* draw_list, ImFont* font, float size, ImVec2 at, 
 
 }  // namespace
 
+void StartPartySearchFollower(std::function<void()> open_view) {
+  if (g_follower_running.exchange(true)) return;
+  std::thread([open_view = std::move(open_view)] {
+    while (g_follower_running.load()) {
+      std::this_thread::sleep_for(std::chrono::seconds(1));
+      const alboria::Status status = alboria::GetStatus();
+      const bool member = status.state == alboria::State::kConnected && !status.party_leader && !status.in_match &&
+                          alboria::HasOtherMembers() && script::WhereInMenus() != script::Menus::kPlaying;
+      alboria::PartySearch search;
+      if (member) search = alboria::FollowPartySearch();
+      {
+        std::lock_guard lock(g_party_mutex);
+        g_party_search = search;
+        g_party_received = NowTicks();
+      }
+      if (search.state != alboria::PartySearch::State::kSearching) {
+        g_follow_hidden.store(false);
+      } else if (!g_follow_hidden.load() && open_view) {
+        open_view();
+      }
+    }
+  }).detach();
+}
+
+void StopPartySearchFollower() {
+  g_follower_running.store(false);
+}
+
 VersusOnlineMenu::VersusOnlineMenu(rex::ui::ImGuiDrawer* drawer, rex::input::InputSystem* input,
                                    input::PlayerAssignment* assignment, uint32_t language, ImFont* title_font,
-                                   ImFont* body_font, VersusOnlineMenu** owner)
+                                   ImFont* body_font, VersusOnlineMenu** owner, bool watching)
     : ImGuiDialog(drawer),
       input_(input),
       assignment_(assignment),
@@ -493,11 +614,13 @@ VersusOnlineMenu::VersusOnlineMenu(rex::ui::ImGuiDrawer* drawer, rex::input::Inp
       owner_(owner),
       opened_(Clock::now()),
       last_input_(input),
+      watching_(watching),
       screen_since_(Clock::now()) {
   if (assignment_) assignment_->SetBlocked(true);
   alboria::RefreshIdentity();
+  LoadMarked();
   // A search still running (the menu was closed meanwhile) shows again.
-  if (g_search_running.load()) screen_ = Screen::kSearching;
+  if (g_search_running.load() || watching_) screen_ = Screen::kSearching;
   script::PlayMenuSound(script::MenuSound::kOpen);
 }
 
@@ -520,6 +643,7 @@ VersusOnlineMenu::Presses VersusOnlineMenu::ReadInput() {
     if (pressed & rex::input::X_INPUT_GAMEPAD_DPAD_DOWN) presses.move = 1;
     if (pressed & rex::input::X_INPUT_GAMEPAD_A) presses.accept = true;
     if (pressed & rex::input::X_INPUT_GAMEPAD_X) presses.mark = true;
+    if (pressed & rex::input::X_INPUT_GAMEPAD_Y) presses.journal = true;
     if (pressed & rex::input::X_INPUT_GAMEPAD_B) presses.back = true;
   }
   // The keyboard, through ImGui's keys (the game's keyboard input is blocked).
@@ -530,6 +654,7 @@ VersusOnlineMenu::Presses VersusOnlineMenu::ReadInput() {
     presses.accept = true;
   }
   if (ImGui::IsKeyPressed(ImGuiKey_Space, false)) presses.mark = true;
+  if (ImGui::IsKeyPressed(ImGuiKey_Tab, false)) presses.journal = true;
   if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) presses.back = true;
   return presses;
 }
@@ -553,6 +678,28 @@ void VersusOnlineMenu::Search() {
 }
 
 void VersusOnlineMenu::Update(const Presses& presses) {
+  // A party member's view: it follows the leader's search until the party goes into the match, or
+  // closes when the search ends; B hides it.
+  if (watching_) {
+    if (screen_ == Screen::kReady) {
+      if (std::chrono::duration<float>(Clock::now() - screen_since_).count() >= kReadySeconds) Close();
+      return;
+    }
+    const alboria::PartySearch search = PartySearchNow();
+    if (alboria::GetStatus().in_match || search.state == alboria::PartySearch::State::kFound) {
+      script::PlayMenuSound(script::MenuSound::kAccept);
+      screen_ = Screen::kReady;
+      screen_since_ = Clock::now();
+    } else if (presses.back) {
+      script::PlayMenuSound(script::MenuSound::kBack);
+      g_follow_hidden.store(true);
+      closing_ = true;
+    } else if (search.state == alboria::PartySearch::State::kIdle &&
+               std::chrono::duration<float>(Clock::now() - screen_since_).count() >= 2.0f) {
+      Close();
+    }
+    return;
+  }
   switch (screen_) {
     case Screen::kChoose:
       if (presses.back) {
@@ -560,9 +707,15 @@ void VersusOnlineMenu::Update(const Presses& presses) {
         closing_ = true;
       } else if (presses.accept) {
         Search();
+      } else if (presses.journal) {
+        // The War Journal, the game's own screen of stats and awards: the menu closes for it.
+        script::PlayMenuSound(script::MenuSound::kAccept);
+        script::RequestWarJournal();
+        closing_ = true;
       } else if (presses.mark) {
         script::PlayMenuSound(script::MenuSound::kAccept);
         g_marked[focus_] = !g_marked[focus_];
+        SaveMarked();
       } else if (presses.move) {
         script::PlayMenuSound(presses.move < 0 ? script::MenuSound::kUp : script::MenuSound::kDown);
         focus_ = (focus_ + presses.move + kModes) % kModes;
@@ -657,12 +810,8 @@ void VersusOnlineMenu::OnDraw(ImGuiIO& io) {
   std::string subtitle = texts.subtitle;
   if (screen_ == Screen::kSearching) {
     title = texts.searching;
-    subtitle.clear();
-    for (int i = 0; i < kModes; ++i) {
-      if (!g_marked[i]) continue;
-      if (!subtitle.empty()) subtitle += " · ";
-      subtitle += texts.modes[i];
-    }
+    subtitle = watching_ ? std::string(texts.leader_searches) + " · " + ModesLine(texts, PartySearchNow().modes)
+                         : ModesLine(texts, MarkedModes());
   } else if (screen_ == Screen::kReady) {
     title = texts.ready_title;
     subtitle = texts.ready_subtitle;
@@ -719,9 +868,10 @@ void VersusOnlineMenu::OnDraw(ImGuiIO& io) {
     }
   };
 
-  // The places of a match: the players found (this player's emblem in amber), then the free ones.
+  // The places of a match: the players found (this player's emblem in amber, the rest of its party
+  // in light blue), then the free ones.
   auto draw_places = [&](ImVec2 top_left, float width, int columns, const std::vector<std::string>& players,
-                         int bots) {
+                         const std::vector<std::string>& party, int bots) {
     const float gap = 8.0f * u;
     const float place_width = (width - gap * (columns - 1)) / columns;
     const float place_height = 40.0f * u;
@@ -736,11 +886,13 @@ void VersusOnlineMenu::OnDraw(ImGuiIO& io) {
         DrawCutPanel(draw_list, min, max, 8.0f * u, PanelSolid(alpha), SteelLine(alpha), 1.0f * u);
         const std::string& name = players[i];
         const bool mine = name == me;
-        DrawEmblem(draw_list, ImVec2(min.x + 22.0f * u, (min.y + max.y) * 0.5f), 20.0f * u, mine ? Imulsion(alpha) : TextDim(alpha), 1.3f * u);
+        const bool partner = !mine && std::find(party.begin(), party.end(), name) != party.end();
+        DrawEmblem(draw_list, ImVec2(min.x + 22.0f * u, (min.y + max.y) * 0.5f), 20.0f * u,
+                   mine ? Imulsion(alpha) : partner ? PartyBlue(alpha) : TextDim(alpha), 1.3f * u);
         const size_t hash = name.rfind('#');
         const std::string gamertag = Fit(title_font, 15.0f * u, name.substr(0, hash), place_width - 110.0f * u);
         const ImVec2 text_at(min.x + 42.0f * u, min.y + 11.0f * u);
-        draw_list->AddText(title_font, 15.0f * u, text_at, Text(alpha), gamertag.c_str());
+        draw_list->AddText(title_font, 15.0f * u, text_at, partner ? PartyBlue(alpha) : Text(alpha), gamertag.c_str());
         if (hash != std::string::npos) {
           const float w = title_font->CalcTextSizeA(15.0f * u, FLT_MAX, 0.0f, gamertag.c_str()).x;
           draw_list->AddText(title_font, 15.0f * u, ImVec2(text_at.x + w, text_at.y), TextFaint(alpha), name.c_str() + hash);
@@ -804,9 +956,10 @@ void VersusOnlineMenu::OnDraw(ImGuiIO& io) {
       hint_x += DrawCancelGlyph(draw_list, title_font, ImVec2(hint_x, hint_y), u, pad, "Esc", a(255));
     } else if (pad) {
       hint_x += DrawPadGlyph(draw_list, title_font, ImVec2(hint_x + 8.0f * u, hint_y + 8.0f * u), 16.0f * u, LookOf(*pad),
-                             PadControl::kX, a(255), u);
+                             which == 2 ? PadControl::kX : PadControl::kY, a(255), u);
     } else {
-      hint_x += DrawConfirmGlyph(draw_list, title_font, ImVec2(hint_x, hint_y), u, nullptr, texts.space, a(255));
+      hint_x += DrawConfirmGlyph(draw_list, title_font, ImVec2(hint_x, hint_y), u, nullptr, which == 2 ? texts.space : "Tab",
+                                 a(255));
     }
     hint_x += 6.0f * u;
     draw_list->AddText(body_font, 13.0f * u, ImVec2(hint_x, hint_y), Text(a(255)), label);
@@ -861,19 +1014,31 @@ void VersusOnlineMenu::OnDraw(ImGuiIO& io) {
         draw_list->AddText(title_font, 16.0f * u, ImVec2(row_min.x + 44.0f * u, middle - 9.0f * u),
                            focused ? Imulsion(a(255)) : g_marked[i] ? Text(a(255)) : TextDim(a(255)), texts.modes[i]);
       }
+      // What the focused mode is about, under the list; "choose at least one mode" in its place for
+      // a while after a search with none.
+      const ImVec2 help_at(modes_min.x + 12.0f * u, modes_max.y + 12.0f * u);
       if (std::chrono::duration<float>(now - no_mode_since_).count() < kNoModeSeconds) {
-        draw_list->AddText(body_font, 13.0f * u, ImVec2(modes_min.x + 10.0f * u, modes_max.y + 10.0f * u), ErrorText(a(255)),
-                           texts.no_mode);
+        draw_list->AddText(body_font, 13.0f * u, help_at, ErrorText(a(255)), texts.no_mode);
+      } else {
+        draw_list->AddRectFilled(ImVec2(help_at.x - 12.0f * u, help_at.y + 1.0f * u), ImVec2(help_at.x - 9.0f * u, help_at.y + 34.0f * u),
+                                 Imulsion(a(200)));
+        draw_list->AddText(body_font, 13.5f * u, help_at, TextDim(a(255)), texts.mode_help[focus_], nullptr,
+                           modes_max.x - modes_min.x - 24.0f * u);
       }
       hint(0, texts.search);
       hint(2, texts.mark);
+      hint(3, texts.journal);
       hint(1, texts.back);
       break;
     }
     case Screen::kSearching:
     case Screen::kReady: {
+      // The search shown: this player's own, or, for a party member, its leader's.
       const alboria::SearchStatus status = alboria::GetSearchStatus();
-      std::vector<std::string> players = status.players;
+      int64_t party_received = 0;
+      const alboria::PartySearch party_search = watching_ ? PartySearchNow(&party_received) : alboria::PartySearch();
+      std::vector<std::string> players = watching_ ? party_search.players : status.players;
+      const std::vector<std::string>& party = watching_ ? party_search.party : status.party;
       if (players.empty() && !me.empty()) players.push_back(me);
       const bool ready = screen_ == Screen::kReady;
       if (!ready) {
@@ -912,26 +1077,29 @@ void VersusOnlineMenu::OnDraw(ImGuiIO& io) {
           DrawAlboriano(draw_list, glyph, blip, (decoded ? 17.0f : 14.0f) * u, decoded ? Imulsion(alpha) : TextFaint(alpha),
                         (decoded ? 1.6f : 1.1f) * u);
         }
+        const auto ticks_to_seconds = [](int64_t ticks) {
+          return static_cast<int>(ticks / std::chrono::steady_clock::period::den * std::chrono::steady_clock::period::num);
+        };
         const int64_t started = g_search_started.load();
-        const int seconds = started ? static_cast<int>((NowTicks() - started) / std::chrono::steady_clock::period::den *
-                                                       std::chrono::steady_clock::period::num)
-                                    : 0;
+        const int seconds = watching_ ? party_search.searching_ms / 1000 + (party_received ? ticks_to_seconds(NowTicks() - party_received) : 0)
+                            : started ? ticks_to_seconds(NowTicks() - started)
+                                      : 0;
         char clock[16];
         std::snprintf(clock, sizeof(clock), "%d:%02d", seconds / 60, seconds % 60);
         AddTextCentered(draw_list, title_font, 30.0f * u, ImVec2(center.x, center.y + r + 34.0f * u), Text(a(255)), clock);
       }
       const float list_left = ready ? 64.0f : 330.0f;
       const float list_width = 1216.0f - list_left;
-      const int step = ready ? 4 : status.phase == alboria::SearchPhase::kIdle ? 0 : players.size() >= 2 ? 2 : 1;
+      const int step = ready ? 4 : !watching_ && status.phase == alboria::SearchPhase::kIdle ? 0 : players.size() >= 2 ? 2 : 1;
       draw_steps(at(list_left, 196), (ready ? 700.0f : list_width) * u, step);
       const int columns = ready ? 3 : 2;
       const int bots = ready ? std::max(0, kMatchPlaces - static_cast<int>(players.size())) : -1;
-      draw_places(at(list_left, 230), list_width * u, columns, players, bots);
+      draw_places(at(list_left, 230), list_width * u, columns, players, party, bots);
       if (!ready) {
         char found[160];
         std::snprintf(found, sizeof(found), texts.found, std::min(kMatchPlaces, static_cast<int>(players.size())), kMatchPlaces);
         draw_list->AddText(body_font, 12.0f * u, at(list_left, 470), TextFaint(a(255)), found);
-        hint(1, texts.cancel);
+        hint(1, watching_ ? texts.hide : texts.cancel);
       } else {
         // The countdown to the vote.
         const int left = std::max(1, static_cast<int>(std::ceil(kReadySeconds - std::chrono::duration<float>(now - screen_since_).count())));
@@ -951,9 +1119,14 @@ void VersusOnlineMenu::OnDraw(ImGuiIO& io) {
       const ImVec2 icon(min.x + 46.0f * u, min.y + 48.0f * u);
       DrawEmblem(draw_list, icon, 34.0f * u, ErrorText(a(255)), 1.6f * u);
       const bool signed_out = error_ == "signed_out" || error_ == "no_account" || error_ == "unauthorized";
-      draw_list->AddText(title_font, 22.0f * u, ImVec2(min.x + 80.0f * u, min.y + 30.0f * u), ErrorText(a(255)), texts.unreachable);
+      const bool too_big = error_ == "party_too_big";
+      draw_list->AddText(title_font, 22.0f * u, ImVec2(min.x + 80.0f * u, min.y + 30.0f * u), ErrorText(a(255)),
+                         too_big ? texts.party_too_big : texts.unreachable);
       draw_list->AddText(body_font, 14.0f * u, ImVec2(min.x + 80.0f * u, min.y + 64.0f * u), TextDim(a(255)),
-                         signed_out ? texts.signed_out_help : texts.unreachable_help, nullptr, max.x - min.x - 110.0f * u);
+                         too_big      ? texts.party_too_big_help
+                         : signed_out ? texts.signed_out_help
+                                      : texts.unreachable_help,
+                         nullptr, max.x - min.x - 110.0f * u);
       hint(0, texts.retry);
       hint(1, texts.back);
       break;
@@ -963,7 +1136,7 @@ void VersusOnlineMenu::OnDraw(ImGuiIO& io) {
 
 void VersusOnlineMenu::OnClose() {
   // Closed by a press while searching: the search stops (the menu's own back press already did).
-  if (screen_ == Screen::kSearching) CancelSearch();
+  if (screen_ == Screen::kSearching && !watching_) CancelSearch();
   script::PlayMenuSound(script::MenuSound::kClose);
   if (assignment_) assignment_->SetBlocked(false);
   if (owner_) *owner_ = nullptr;

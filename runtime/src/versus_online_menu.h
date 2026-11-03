@@ -8,6 +8,7 @@
 #pragma once
 
 #include <chrono>
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
@@ -22,12 +23,20 @@ struct ImFont;
 
 namespace azura {
 
+// A party member follows its leader's search: about once a second, while the player is a member
+// (not the leader) of a party with others on Alboria and not playing, it asks Alboria how the
+// leader's search goes, and calls `open_view` (from its own thread) while the leader searches,
+// unless the player hid that search. `open_view` opens the menu with `watching`.
+void StartPartySearchFollower(std::function<void()> open_view);
+void StopPartySearchFollower();
+
 class VersusOnlineMenu : public rex::ui::ImGuiDialog {
  public:
   // `owner` is cleared when the menu closes and deletes itself. `language` is the Xbox 360 language
   // ID of the user_language setting. The fonts may be null (ImGui's default is used).
   VersusOnlineMenu(rex::ui::ImGuiDrawer* drawer, rex::input::InputSystem* input, input::PlayerAssignment* assignment,
-                   uint32_t language, ImFont* title_font, ImFont* body_font, VersusOnlineMenu** owner);
+                   uint32_t language, ImFont* title_font, ImFont* body_font, VersusOnlineMenu** owner,
+                   bool watching = false);
 
  protected:
   void OnDraw(ImGuiIO& io) override;
@@ -45,6 +54,7 @@ class VersusOnlineMenu : public rex::ui::ImGuiDialog {
     int move = 0;
     bool accept = false;
     bool mark = false;
+    bool journal = false;
     bool back = false;
   };
   Presses ReadInput();
@@ -61,6 +71,8 @@ class VersusOnlineMenu : public rex::ui::ImGuiDialog {
   VersusOnlineMenu** owner_;
   Clock::time_point opened_;
   coop_ui::LastUsedInput last_input_;
+  // A party member's view of its leader's search (StartPartySearchFollower), not a search of its own.
+  bool watching_ = false;
   // Each controller's buttons the frame before (the left stick's direction as D-pad bits). A
   // controller seen for the first time does nothing that frame: the press that opened the menu does
   // not also act in it.

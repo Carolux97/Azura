@@ -328,6 +328,19 @@ class AzuraApp : public rex::ReXApp {
         }
       });
     });
+    // A party member sees its leader's search: the Versus online menu opens for it to follow.
+    azura::StartPartySearchFollower([this] {
+      app_context().CallInUIThread([this] {
+        auto* input = runtime() ? static_cast<rex::input::InputSystem*>(runtime()->input_system()) : nullptr;
+        if (shutting_down_ || !dialog_drawer_ || !input || versus_online_menu_ || alboria_overlay_ || join_by_code_menu_ ||
+            local_coop_menu_ || connection_menu_ || controls_menu_) {
+          return;
+        }
+        versus_online_menu_ = new azura::VersusOnlineMenu(dialog_drawer_, input, azura::input::InstalledPlayerAssignment(),
+                                                          REXCVAR_GET(user_language), title_font_, body_font_,
+                                                          &versus_online_menu_, true);
+      });
+    });
     // In the game's menus (not the title screen) the keyboard's Return and Escape accept and go back,
     // in every scene: the Options, their message boxes, the multiplayer preferences, the pause menu.
     rex::input::mnk::SetMenuKeysQuery(
@@ -478,6 +491,7 @@ class AzuraApp : public rex::ReXApp {
     azura::script::SetLocalCoopHandler(nullptr);
     azura::script::SetConnectionHandler(nullptr);
     azura::script::SetVersusOnlineHandler(nullptr);
+    azura::StopPartySearchFollower();
     azura::script::SetControlsMenuHandler(nullptr);
     azura::script::SetJoinByCodeHandler(nullptr);
     rex::ui::UnregisterBind("bind_alboria_overlay");

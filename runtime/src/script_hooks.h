@@ -29,6 +29,9 @@ void SetVersusOnlineHandler(std::function<void()> handler);
 // take the match's invite (Alboria sent this player into another's match). Any thread.
 void RequestMatchmadeLobby(int32_t playlist);
 void RequestMatchInvite();
+// What the Versus online menu's stats and awards button asks for: the War Journal, opened on player
+// 1's next input frame in the front end as the main menu's Journal opens it. Any thread.
+void RequestWarJournal();
 
 // The two controls menus (controls_menu.h), opened from the Options' Keyboard and mouse and
 // Controller categories.
