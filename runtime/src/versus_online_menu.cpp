@@ -354,14 +354,44 @@ GameTexts LocalizedGameTexts(uint32_t language, OnlineGame game) {
   }
 }
 
-// The error screen's title and text when the match Alboria sent this player to could not be joined
-// (the host's game turned them away): the player's party is online again, and they can search again.
-struct JoinFailedTexts {
+// The error screen's title and text for a notice the runtime left (script::TakeOnlineMenuNotice).
+struct NoticeTexts {
   const char* title;
   const char* help;
 };
 
-JoinFailedTexts LocalizedJoinFailedTexts(uint32_t language) {
+// When the matchmade lobby or match closed under the player (its host went): neutral, it does not say
+// who hosted.
+NoticeTexts LocalizedRoomClosedTexts(uint32_t language) {
+  switch (language) {
+    case 2:  // Japanese
+      return {"ロビーが閉じられました", "マッチを続けられませんでした。グループはオンラインのままです。もう一度検索できます。"};
+    case 7:  // Korean
+      return {"로비가 닫혔습니다", "매치를 계속할 수 없었습니다. 파티는 계속 온라인 상태입니다. 다시 검색할 수 있습니다."};
+    case 8:  // Traditional Chinese
+      return {"大廳已關閉", "對戰無法繼續。你的群組仍在線上，可以再次搜尋。"};
+    case 12:  // Russian
+      return {"Лобби закрыто", "Матч не смог продолжиться. Ваша группа по-прежнему в сети, можно искать снова."};
+    case 3:  // German
+      return {"Die Lobby wurde geschlossen", "Das Match konnte nicht weitergehen. Deine Gruppe ist weiter online; du kannst erneut suchen."};
+    case 4:  // French
+      return {"Le salon a été fermé", "La partie n'a pas pu continuer. Votre groupe est toujours en ligne : vous pouvez relancer la recherche."};
+    case 5:  // Spanish
+      return {"La sala se ha cerrado", "La partida no ha podido seguir. Tu grupo sigue online y puedes buscar otra vez."};
+    case 6:  // Italian
+      return {"La sala è stata chiusa", "La partita non è potuta continuare. Il tuo gruppo è ancora online: puoi cercare di nuovo."};
+    case 9:  // Portuguese
+      return {"A sala foi fechada", "A partida não pôde continuar. Seu grupo continua online e você pode buscar outra vez."};
+    case 11:  // Polish
+      return {"Poczekalnia została zamknięta", "Mecz nie mógł być kontynuowany. Twoja grupa jest nadal online i możesz szukać ponownie."};
+    default:  // English
+      return {"The lobby closed", "The match couldn't go on. Your party is still online and you can search again."};
+  }
+}
+
+// When the match Alboria sent this player to could not be joined (the host's game turned them away):
+// the player's party is online again, and they can search again.
+NoticeTexts LocalizedJoinFailedTexts(uint32_t language) {
   switch (language) {
     case 2:  // Japanese
       return {"マッチに参加できませんでした", "マッチ側が参加を受け付けませんでした。グループはオンラインに戻っています。もう一度検索できます。"};
@@ -800,9 +830,10 @@ VersusOnlineMenu::VersusOnlineMenu(rex::ui::ImGuiDrawer* drawer, rex::input::Inp
   }
   // A search still running (the menu was closed meanwhile) shows again.
   if (g_search_running.load() || watching_) screen_ = Screen::kSearching;
-  // The match Alboria sent this player to could not be joined: say so, to search again.
-  if (!watching_ && script::TakeMatchJoinFailed()) {
-    error_ = "join_failed";
+  // The match Alboria sent this player to could not be joined, or the lobby closed under it: say so,
+  // to search again.
+  if (const char* notice = watching_ ? nullptr : script::TakeOnlineMenuNotice()) {
+    error_ = notice;
     screen_ = Screen::kError;
   }
   script::PlayMenuSound(script::MenuSound::kOpen);
@@ -1352,8 +1383,9 @@ void VersusOnlineMenu::OnDraw(ImGuiIO& io) {
       DrawEmblem(draw_list, icon, 34.0f * u, ErrorText(a(255)), 1.6f * u);
       const bool signed_out = error_ == "signed_out" || error_ == "no_account" || error_ == "unauthorized";
       const bool too_big = error_ == "party_too_big";
-      const bool join_failed = error_ == "join_failed";
-      const JoinFailedTexts join_texts = LocalizedJoinFailedTexts(language_);
+      const bool room_closed = error_ == "room_closed";
+      const bool join_failed = error_ == "join_failed" || room_closed;
+      const NoticeTexts join_texts = room_closed ? LocalizedRoomClosedTexts(language_) : LocalizedJoinFailedTexts(language_);
       draw_list->AddText(title_font, 22.0f * u, ImVec2(min.x + 80.0f * u, min.y + 30.0f * u), ErrorText(a(255)),
                          too_big ? texts.party_too_big : join_failed ? join_texts.title : texts.unreachable);
       draw_list->AddText(body_font, 14.0f * u, ImVec2(min.x + 80.0f * u, min.y + 64.0f * u), TextDim(a(255)),

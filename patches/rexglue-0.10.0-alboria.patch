@@ -1,9 +1,9 @@
 diff --git a/include/rex/system/xam/alboria.h b/include/rex/system/xam/alboria.h
 new file mode 100644
-index 0000000..a3ac626
+index 0000000..71a265c
 --- /dev/null
 +++ b/include/rex/system/xam/alboria.h
-@@ -0,0 +1,576 @@
+@@ -0,0 +1,585 @@
 +/**
 + * @file        system/xam/alboria.h
 + * @brief       Alboria: System Link over the internet through our relay
@@ -449,6 +449,15 @@ index 0000000..a3ac626
 +// matchmaking (hosted or joined), it leaves the match room (POST /v1/matchmaking/leave), and its
 +// party goes back to a room of its own.
 +void MatchSessionDeleted(std::span<const uint8_t, 8> kid);
++// The title lost the matchmade match it played in: it sent its players back to the main menu from
++// it without them choosing to leave (a pre-game lobby whose host went: it has no host migration).
++// The match session's deletion then does not leave the match room, which would take this player out
++// of its party too (POST /v1/matchmaking/leave); for a party's leader, EndMatch takes the party back
++// whole instead. Cleared once this installation is out of the match room.
++void MatchLost();
++// This installation leads a party whose title lost the match (MatchLost): the party goes back, whole,
++// to a room of its own (POST /v1/matchmaking/end), in the background.
++void EndMatch();
 +// Whether the match this installation played in ended because its host left, once for each.
 +bool TakeHostLeft();
 +// Whether this member of a match's room has heard nothing from the room's host for a few seconds
@@ -620,10 +629,10 @@ index 0000000..c7fc5de
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria.cpp b/src/system/xam/alboria.cpp
 new file mode 100644
-index 0000000..4e34e5e
+index 0000000..cf5e807
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,2764 @@
+@@ -0,0 +1,2790 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -866,6 +875,8 @@ index 0000000..4e34e5e
 +std::atomic<uint32_t> g_signed_in_ip{0};
 +// The match room this installation played in ended because its host left (TakeHostLeft).
 +std::atomic<bool> g_host_left{false};
++// The title lost the matchmade match it played in (MatchLost), until this installation is out of its room.
++std::atomic<bool> g_match_lost{false};
 +// TakeHostSilent: set when the match's host went silent, and the host it was reported for (guarded
 +// by g_mutex), so each host is reported once.
 +std::atomic<bool> g_host_silent{false};
@@ -1726,11 +1737,15 @@ index 0000000..4e34e5e
 +        if (body->size() < 7) break;
 +        constexpr uint8_t kMovedHostLeft = 3;
 +        bool left_match = false;
++        // A match the title lost (MatchLost): its party's leader took it back, and the online menu
++        // says the room closed, so Alboria's "the match is over" notice is not shown.
++        const bool lost = g_match_lost.load();
 +        std::optional<SessionInfo> to_publish;
 +        {
 +          std::lock_guard lock(g_mutex);
 +          left_match = g_status.in_match && (*body)[0] != 2;
 +          g_status.in_match = (*body)[0] == 2;
++          if (!g_status.in_match) g_match_lost.store(false);
 +          g_status.host = (*body)[1] != 0;
 +          g_status.host_ip = uint32_t((*body)[3]) << 24 | uint32_t((*body)[4]) << 16 |
 +                             uint32_t((*body)[5]) << 8 | (*body)[6];
@@ -1744,7 +1759,9 @@ index 0000000..4e34e5e
 +            to_publish = *g_hosted_session;
 +          }
 +        }
-+        if ((*body)[2] == kMovedHostLeft) {
++        if ((*body)[2] == kMovedHostLeft && lost) {
++          REXSYS_INFO("Alboria: back from the match the title lost");
++        } else if ((*body)[2] == kMovedHostLeft) {
 +          REXSYS_INFO("Alboria: the match's host left");
 +          g_host_left.store(true);
 +          std::lock_guard lock(g_friends_mutex);
@@ -3067,9 +3084,27 @@ index 0000000..4e34e5e
 +      g_match_kid.reset();
 +      if (g_status.state != State::kConnected || !g_status.in_match) return;
 +    }
++    // A match the title lost (MatchLost) is not left: the party's leader takes it back whole.
++    if (g_match_lost.load()) {
++      REXSYS_INFO("Alboria: the lost match's session is gone; its room is not left (the party stays together)");
++      return;
++    }
 +    REXSYS_INFO("Alboria: leaving the match");
 +    const auto left = CallSignedIn("/v1/matchmaking/leave", nlohmann::json::object());
 +    if (!left.error.empty()) REXSYS_WARN("Alboria: leaving the match failed ({})", left.error);
++  });
++}
++
++void MatchLost() {
++  g_match_lost.store(true);
++  REXSYS_INFO("Alboria: the title lost the match: its session's deletion keeps the party together");
++}
++
++void EndMatch() {
++  RunDetached("ending the match", [] {
++    REXSYS_INFO("Alboria: the party goes back from the match its title lost");
++    const auto ended = CallSignedIn("/v1/matchmaking/end", nlohmann::json::object());
++    if (!ended.error.empty()) REXSYS_WARN("Alboria: ending the match failed ({})", ended.error);
 +  });
 +}
 +

@@ -296,9 +296,23 @@ std::function<void(int)> g_versus_online_handler;
 std::atomic<int> g_online_menu_game{0};
 // The failed join was into a matchmade match Alboria sent this player to (its match room): once
 // its party is Local, an online one is created again, as at start-up, and the online menu opens to
-// say the match could not be joined (g_match_join_failed_notice) and to search again.
+// say the match could not be joined and to search again.
 std::atomic<bool> g_match_join_failed{false};
-std::atomic<bool> g_match_join_failed_notice{false};
+// What the online menu opening next is to say (TakeOnlineMenuNotice): nothing, the match could not
+// be joined, or the matchmade lobby or match closed under the player.
+enum OnlineMenuNotice { kNoNotice, kJoinFailedNotice, kRoomClosedNotice };
+std::atomic<int> g_online_menu_notice{kNoNotice};
+// The game sent this player back to the main menu from a matchmade lobby or match it did not choose
+// to leave (its host went and the lobby has no host migration): once in the main menu, the match is
+// ended if Alboria made this player its host, and the online menu opens to search again.
+std::atomic<bool> g_matchmade_lobby_lost{false};
+// The player chose to leave the matchmade lobby (UIScene_PregameLobby.OnLeaveLobby_Confirmed).
+std::atomic<bool> g_left_lobby_by_choice{false};
+// The matchmade lobby's host is asking to leave it (OnLeaveGame running for it).
+std::atomic<bool> g_host_leaving_lobby{false};
+// The matchmade lobby's host confirmed leaving it: its game goes back to the main menu by itself on
+// the next player input frame (HostLeaveMatchmadeLobby), not through LeaveMatch.
+std::atomic<bool> g_host_leave_requested{false};
 // Horde (1) or Beast (2), as the player last chose one in the main menu (HandleHordeSelection,
 // HandleSiegeSelection): the two share their Standard / Private screen.
 std::atomic<int> g_horde_or_beast{0};
@@ -423,6 +437,13 @@ enum WatchedName {
   kUpdatePopulationNumbers,  // UIWidget_MainMenu: how many play each playlist, in its menus
   kSetHostIcon,              // UIWidget_SmallPartyPanel: marks a player of the party panel as its host
   kUpdatePlayerList,         // UIWidget_SmallPartyPanel: fills the party panel's slots from the players
+  kOnLeaveGame,              // UIScene_PregameLobby: a player asks to leave the pre-game lobby
+  kCanBackUpToMapSelect,     // UIScene_PregameLobby: whether the host may go back to choosing the map
+  kCanLeaveGame,             // UIScene_PregameLobby: whether the player may leave the lobby now
+  kIsOfficialMatch,          // GearGFxMoviePlayer: whether the menus' match is an official (playlist) one
+  kIsPlayerMatch,            // GearGFxMoviePlayer: whether the menus' match is a player (playlist) one
+  kOnLeaveLobbyConfirmed,    // UIScene_PregameLobby: a player confirmed leaving the pre-game lobby
+  kReturnToMainMenu,         // PlayerController and subclasses: the game sends the player to the main menu
   kProcessSoundEvent,        // UISoundTheme: plays a menu sound by its event name (Menu sounds)
   // The menu sound events our menus play (MenuSound), in its order.
   kSoundStepUp,
@@ -458,7 +479,7 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "Callback_Credits",      "Callback_ClientMenuOptionWasSelected", "ConditionalCreatePartySession",
     "GetPartyType",          "LocalPartyCreated",      "ClientSetHUD",       "OnCustomMapChanged",
     "ApplySensitivityScaling", "ViewAdhesion",
-    "GetAdjustedAimFor",     "NotifyInviteFailed",     "CancelPartyMatchmaking", "CreatePlayerVersusMatch", "OnNoPartialPartyAvailable", "PostBeginPlay", "ContinueCreateMatch", "InitializeGameSelectionInternal", "UpdateCountdowns", "InitializeMapSelectionInternal", "GetTeamForCurrentPlayer", "HandleGameSessionJIP", "InitializePreGameGameSettings", "PreLogin", "PostLogin", "SetNumBots", "BeginMatch", "EndOfGameTransition", "GetNextMap", "CheckMapAgainstPlaylist", "GetNumberOfSupportedMapsForPlaylist", "IsEpicDev", "InitGameReplicationInfo", "UpdateGRI", "DelayedGameSessionDelete", "PlacePlayerOnSmallestTeam", "GetOccupiedTeamSize", "GetGameSummaryFromProviderIndex", "HandleHordeSelection", "HandleSiegeSelection", "HandleHordeAndSiegeMatchModeSelection", "UpdateNatType", "UpdatePopulationNumbers", "SetHostIcon", "UpdatePlayerList",
+    "GetAdjustedAimFor",     "NotifyInviteFailed",     "CancelPartyMatchmaking", "CreatePlayerVersusMatch", "OnNoPartialPartyAvailable", "PostBeginPlay", "ContinueCreateMatch", "InitializeGameSelectionInternal", "UpdateCountdowns", "InitializeMapSelectionInternal", "GetTeamForCurrentPlayer", "HandleGameSessionJIP", "InitializePreGameGameSettings", "PreLogin", "PostLogin", "SetNumBots", "BeginMatch", "EndOfGameTransition", "GetNextMap", "CheckMapAgainstPlaylist", "GetNumberOfSupportedMapsForPlaylist", "IsEpicDev", "InitGameReplicationInfo", "UpdateGRI", "DelayedGameSessionDelete", "PlacePlayerOnSmallestTeam", "GetOccupiedTeamSize", "GetGameSummaryFromProviderIndex", "HandleHordeSelection", "HandleSiegeSelection", "HandleHordeAndSiegeMatchModeSelection", "UpdateNatType", "UpdatePopulationNumbers", "SetHostIcon", "UpdatePlayerList", "OnLeaveGame", "CanBackUpToMapSelect", "CanLeaveGame", "IsOfficialMatch", "IsPlayerMatch", "OnLeaveLobby_Confirmed", "ReturnToMainMenu",
     "ProcessSoundEvent",     "Options_StepUp",         "Options_StepDown",   "ValueChangeLeft",
     "ValueChangeRight",      "Options_AcceptButton",   "Options_BackButton", "Options_DetailsEnter",
     "Options_DetailsLeave",  "Options_SliderLeft",     "Options_SliderRight"};
@@ -3046,8 +3067,15 @@ void SetConnectionHandler(std::function<void()> handler) {
   g_connection_handler = std::move(handler);
 }
 
-bool TakeMatchJoinFailed() {
-  return g_match_join_failed_notice.exchange(false);
+const char* TakeOnlineMenuNotice() {
+  switch (g_online_menu_notice.exchange(kNoNotice)) {
+    case kJoinFailedNotice:
+      return "join_failed";
+    case kRoomClosedNotice:
+      return "room_closed";
+    default:
+      return nullptr;
+  }
 }
 
 void SetVersusOnlineHandler(std::function<void(int)> handler) {
@@ -4282,6 +4310,34 @@ void ReturnToMainMenuWhenRoomLost(PPCContext& ctx, uint8_t* base) {
   ctx.r3.u64 = own_r3;
 }
 
+// On a player input frame (`ctx`) after the matchmade lobby's host confirmed leaving it
+// (g_host_leave_requested): its game goes back to the main menu by itself (its controller's
+// ReturnToMainMenu), as a player leaving a match does.
+void HostLeaveMatchmadeLobby(PPCContext& ctx, uint8_t* base) {
+  if (!g_host_leave_requested.exchange(false)) return;
+  const uint32_t controller = LoadU32(base, ctx.r3.u32 + kObjectOuter);
+  const uint32_t return_to_menu = FindControllerFunction(base, controller, "ReturnToMainMenu");
+  if (!return_to_menu) {
+    REXLOG_WARN("[Azura online] The lobby's host leaves, but ReturnToMainMenu was not found on its controller");
+    return;
+  }
+  if (!g_return_to_menu_locals) {
+    g_return_to_menu_locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kReturnToMainMenuLocalsSize);
+    if (!g_return_to_menu_locals) return;
+  }
+  std::memset(base + g_return_to_menu_locals, 0, kReturnToMainMenuLocalsSize);
+  StoreU32(base, g_return_to_menu_locals + 4, 1);  // bClearMenuHistory; bReturnToStartScreen stays 0
+  REXLOG_INFO("[Azura online] The matchmade lobby's host leaves it: back to the main menu by itself");
+  const uint32_t frame = ctx.r4.u32;
+  const uint32_t own_object = LoadU32(base, frame + kFrameObject);
+  const uint64_t own_r3 = ctx.r3.u64;
+  StoreU32(base, frame + kFrameObject, controller);
+  ctx.r3.u64 = controller;
+  RunInstead(ctx, base, return_to_menu, g_return_to_menu_locals);
+  StoreU32(base, frame + kFrameObject, own_object);
+  ctx.r3.u64 = own_r3;
+}
+
 // UIScene_SystemLink.OnFindOnlineGamesComplete has just run (`ctx`): joins the first party found,
 // or searches again.
 void JoinFoundParty(PPCContext& ctx, uint8_t* base, uint32_t find_complete) {
@@ -4445,8 +4501,26 @@ void CreatePendingStartupParty(PPCContext& ctx, uint8_t* base) {
   StoreU32(base, frame + kFrameObject, own_object);
   ctx.r3.u64 = own_r3;
   // After a matchmade match that could not be joined: the online menu says so, to search again.
-  if (g_match_join_failed_notice.load()) {
+  if (g_online_menu_notice.load() == kJoinFailedNotice) {
     REXLOG_INFO("[Azura online] The online party is back after a failed match: the online menu opens to search again");
+    OpenOnlineMenu(g_online_menu_game.load());
+  }
+}
+
+// On a player input frame in the main menu, after the game sent the player back from a matchmade
+// lobby or match it did not choose to leave (g_matchmade_lobby_lost): the match room still stands on
+// Alboria, waiting for a host migration the lobby does not do. Each party's leader takes its party
+// back, whole, to a room of its own (alboria::EndMatch), and its online menu opens to say the room
+// closed and to search again; a member goes back with its leader and follows its search as usual.
+void HandleMatchmadeLobbyLost(uint8_t* base) {
+  namespace alboria = rex::system::xam::alboria;
+  if (!g_matchmade_lobby_lost.load(std::memory_order_relaxed) || !InMainMenu(base)) return;
+  g_matchmade_lobby_lost.store(false);
+  const alboria::Status status = alboria::GetStatus();
+  if (status.in_match && status.party_leader) alboria::EndMatch();
+  if (status.party_leader) {
+    REXLOG_INFO("[Azura online] Back in the main menu after the matchmade lobby closed: the online menu opens to search again");
+    g_online_menu_notice.store(kRoomClosedNotice);
     OpenOnlineMenu(g_online_menu_game.load());
   }
 }
@@ -4455,7 +4529,7 @@ void CreatePendingStartupParty(PPCContext& ctx, uint8_t* base) {
 // an online party is created over it in the main menu, as at start-up (CreatePendingStartupParty),
 // which then opens the online menu with the notice (TakeMatchJoinFailed).
 void RecreateOnlinePartyAfterFailedMatch() {
-  g_match_join_failed_notice.store(true);
+  g_online_menu_notice.store(kJoinFailedNotice);
   g_pending_startup_party.store(kBootOnline);
   REXLOG_INFO("[Azura online] The matchmade match could not be joined: an online party is created again");
 }
@@ -4655,6 +4729,8 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     PlayQueuedMenuSounds(ctx, base);
     if (g_open_browser.load(std::memory_order_relaxed)) OpenSystemLinkBrowserForJoin(ctx, base);
     ReturnToMainMenuWhenRoomLost(ctx, base);
+    HandleMatchmadeLobbyLost(base);
+    HostLeaveMatchmadeLobby(ctx, base);
     DeliverLateInvite();
     if (HostMigration()) {
       CloseSilentHost(base);
@@ -5155,6 +5231,88 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
       GiveLobbyPlayerATeam(ctx, base, LoadU32(base, frame + kFrameObject),
                            LoadU32(base, LoadU32(base, frame + kFrameLocals) + new_player));
     }
+    return;
+  }
+  // The lobby's button bar offers its host "back to the map selection" (CanBackUpToMapSelect: a custom
+  // match's host chooses the map) in the place of leaving, which a matchmade lobby has no use for (it
+  // votes): there it answers no, so its host is offered to leave as everyone else.
+  if (Is(base, function, kCanBackUpToMapSelect) && LiveMode() && rex::system::xam::alboria::GetStatus().in_match) {
+    const uint32_t result = ctx.r5.u32;
+    __imp__sub_822DF9E0(ctx, base);
+    if (result) StoreU32(base, result, 0);
+    return;
+  }
+  // CanLeaveGame decides whether the lobby offers to leave ("Back to the lobby"), which in an official
+  // or player match's lobby its host is not (the network's authority): in a matchmade lobby it may,
+  // as everyone else. What the game answered is logged when it changes.
+  if (Is(base, function, kCanLeaveGame) && LiveMode() && rex::system::xam::alboria::GetStatus().in_match) {
+    const uint32_t result = ctx.r5.u32;
+    __imp__sub_822DF9E0(ctx, base);
+    static int last = -1;
+    const int answer = result ? static_cast<int>(LoadU32(base, result) != 0) : -1;
+    if (answer != last) {
+      last = answer;
+      REXLOG_INFO("[Azura online] CanLeaveGame answered {} in the matchmade lobby{}", answer,
+                  rex::system::xam::alboria::GetStatus().host ? " (the match room's host): yes" : "");
+    }
+    if (result && rex::system::xam::alboria::GetStatus().host) StoreU32(base, result, 1);
+    return;
+  }
+  // Leaving confirmed. A matchmade lobby's host does not run it: its LeaveMatch ends the lobby as a
+  // custom match's host does, taking everyone into its own party. Its game goes back to the main menu
+  // by itself instead (HostLeaveMatchmadeLobby), and the others' lobby closes under them, so each
+  // party goes back whole to a room of its own (HandleMatchmadeLobbyLost).
+  if (Is(base, function, kOnLeaveLobbyConfirmed) && LiveMode()) {
+    const int32_t alias_at = ParamOffset(base, function, "SelectedInputAlias");
+    const uint32_t locals = LoadU32(base, ctx.r4.u32 + kFrameLocals);
+    const bool accepted = alias_at >= 0 && NameText(base, LoadU32(base, locals + static_cast<uint32_t>(alias_at))) == "AcceptLeave";
+    const rex::system::xam::alboria::Status status = rex::system::xam::alboria::GetStatus();
+    if (accepted) {
+      g_left_lobby_by_choice.store(true);
+      REXLOG_INFO("[Azura online] The player chose to leave the lobby");
+    }
+    if (accepted && status.in_match && status.host) {
+      g_host_leave_requested.store(true);
+      return;
+    }
+  }
+  // The game sends the player to the main menu from a matchmade lobby or match it did not choose to
+  // leave: the lobby closed under it (its host went; a lobby has no host migration).
+  // Only a controller of the lobby or the match (GearPreGamePC, GearPC_MP): the front end's own
+  // (GearMenuPC) also goes to the main menu as a party member follows its leader into a match.
+  if (Is(base, function, kReturnToMainMenu) && LiveMode()) {
+    const rex::system::xam::alboria::Status status = rex::system::xam::alboria::GetStatus();
+    const uint32_t controller = LoadU32(base, ctx.r4.u32 + kFrameObject);
+    const std::string controller_class = controller >= 0x10000 ? ObjectName(base, LoadU32(base, controller + kObjectClass)) : "";
+    const bool in_lobby_or_match =
+        controller_class.find("PreGame") != std::string::npos || controller_class.find("_MP") != std::string::npos;
+    const bool chosen = in_lobby_or_match && g_left_lobby_by_choice.exchange(false);
+    if (in_lobby_or_match && status.in_match && !chosen && !g_room_message_pending.load() &&
+        !g_matchmade_lobby_lost.exchange(true)) {
+      REXLOG_INFO("[Azura online] The game sends the player back to the main menu from a matchmade lobby or match");
+      // Before the match session's deletion would leave the match room (and the party with it).
+      rex::system::xam::alboria::MatchLost();
+    }
+  }
+  // UIScene_PregameLobby.OnLeaveGame lets a player leave the pre-game lobby: in an official or player
+  // match's lobby (IsOfficialMatch, IsPlayerMatch; a matchmade lobby is a player match's) only one
+  // that is not the network's authority, so its host never could (on Xbox LIVE the lobby went with
+  // its host); otherwise as CanLeaveGame says. In a matchmade lobby its host may leave as everyone
+  // else: while OnLeaveGame runs for it, both answer no, so CanLeaveGame decides (yes for it, above).
+  if (Is(base, function, kOnLeaveGame) && LiveMode() && rex::system::xam::alboria::GetStatus().in_match) {
+    const bool host = rex::system::xam::alboria::GetStatus().host;
+    REXLOG_INFO("[Azura online] A player asks to leave the matchmade lobby{}", host ? " (the match room's host)" : "");
+    if (host) {
+      g_host_leaving_lobby.store(true);
+      __imp__sub_822DF9E0(ctx, base);
+      g_host_leaving_lobby.store(false);
+      return;
+    }
+  }
+  if ((Is(base, function, kIsOfficialMatch) || Is(base, function, kIsPlayerMatch)) && g_host_leaving_lobby.load()) {
+    const uint32_t result = ctx.r5.u32;
+    __imp__sub_822DF9E0(ctx, base);
+    if (result) StoreU32(base, result, 0);
     return;
   }
   if (Is(base, function, kHandleGameSessionJIP) && LiveMode()) {

@@ -25,10 +25,11 @@ void SetConnectionHandler(std::function<void()> handler);
 // script thread), with the game (0 Versus, 1 Horde, 2 Beast): it opens the online menu
 // (versus_online_menu.h) for that game. nullptr to stop.
 void SetVersusOnlineHandler(std::function<void(int game)> handler);
-// Whether the online menu opening now is to say that the matchmade match Alboria sent this player to
-// could not be joined (once: it clears the notice). The runtime has left that match's room and
-// created an online party again.
-bool TakeMatchJoinFailed();
+// What the online menu opening now is to say, once (it clears it): "join_failed" (the matchmade match
+// Alboria sent this player to could not be joined; the runtime left its room and created an online
+// party again), "room_closed" (the matchmade lobby or match closed under the player: its host went),
+// or nullptr.
+const char* TakeOnlineMenuNotice();
 // What the Versus online menu asks the game for once Alboria decided, done on player 1's next input
 // frame in the front end: open the matchmade pre-game lobby of `playlist` (this player hosts), or
 // take the match's invite (Alboria sent this player into another's match). Any thread.
