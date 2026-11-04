@@ -33,6 +33,10 @@ struct Texts {
   const char* too_old;
   // This installation is not linked to an Alboria account (alboria-notes:azura/alboria-relay.md, section 3).
   const char* no_account;
+  // A new room cannot be made now: the service or the game is in maintenance (section 4.2).
+  const char* maintenance;
+  // Online play of this game is switched off in the console (section 4.2).
+  const char* game_off;
   const char* other;
   // Joining a friend in a matchmade match: their team has no place left, or the match has not
   // opened yet.
@@ -52,6 +56,8 @@ Texts LocalizedTexts(uint32_t language) {
       return {"オンラインルーム", "ルームを作成中…", "ルームに参加中…", "オンライン", "Alboria に接続できません",
               "そのコードのゲームはありません", "ゲームは満員です", "ルームは閉じられました", "Alboria から利用を禁止されています",
               "オンラインで遊ぶには Azura を更新してください", "ランチャーから Alboria にサインインしてください",
+              "Alboria はメンテナンス中です。後でもう一度お試しください",
+              "このゲームのオンラインプレイは停止中です",
               "Alboria から応答がありません", "フレンドのチームに空きがありません",
               "試合を開始しています。少し待ってからもう一度お試しください",
               "あなたのパーティーはフレンドのパーティーに入りきりません",
@@ -59,19 +65,25 @@ Texts LocalizedTexts(uint32_t language) {
     case 7:  // Korean
       return {"온라인 방", "방을 만드는 중…", "방에 참가하는 중…", "온라인", "Alboria에 연결할 수 없습니다",
               "그 코드의 게임이 없습니다", "게임이 꽉 찼습니다", "방이 닫혔습니다", "Alboria에서 이용이 정지되었습니다",
-              "온라인으로 플레이하려면 Azura를 업데이트하세요", "런처에서 Alboria에 로그인하세요", "Alboria가 응답하지 않았습니다",
+              "온라인으로 플레이하려면 Azura를 업데이트하세요", "런처에서 Alboria에 로그인하세요", "Alboria 점검 중입니다. 나중에 다시 시도하세요",
+              "이 게임의 온라인 플레이가 꺼져 있습니다",
+              "Alboria가 응답하지 않았습니다",
               "친구의 팀에 빈자리가 없습니다",
               "경기가 시작되는 중입니다. 잠시 후 다시 시도하세요",
               "내 파티가 친구의 파티에 다 들어갈 수 없습니다", "이미 그 방에 있습니다"};
     case 8:  // Traditional Chinese
       return {"線上房間", "正在建立房間…", "正在加入房間…", "線上", "無法連線到 Alboria", "沒有使用這個代碼的遊戲",
               "遊戲已滿", "房間已關閉", "你已被 Alboria 停權", "請更新 Azura 才能線上遊玩", "請從啟動器登入 Alboria",
+              "Alboria 正在維護，請稍後再試",
+              "這款遊戲的線上遊戲已關閉",
               "Alboria 沒有回應", "好友的隊伍已沒有空位",
               "比賽正在開始，請稍後再試", "你的隊伍無法全部加入好友的隊伍", "你已經在這個房間裡"};
     case 12:  // Russian
       return {"ОНЛАЙН-КОМНАТА", "Создание комнаты…", "Вход в комнату…", "ОНЛАЙН", "Нет связи с Alboria",
               "Нет игры с таким кодом", "Игра заполнена", "Комната закрыта", "Alboria заблокировала вас",
-              "Обновите Azura, чтобы играть онлайн", "Войдите в Alboria в лаунчере", "Alboria не ответила",
+              "Обновите Azura, чтобы играть онлайн", "Войдите в Alboria в лаунчере", "Alboria на обслуживании, попробуйте позже",
+              "Онлайн-игра в этой игре отключена",
+              "Alboria не ответила",
               "В команде друга нет мест",
               "Матч начинается, попробуйте чуть позже",
               "Ваша группа не помещается в группу друга",
@@ -81,6 +93,8 @@ Texts LocalizedTexts(uint32_t language) {
               "Keine Verbindung zu Alboria", "Kein Spiel hat diesen Code", "Das Spiel ist voll",
               "Der Raum wurde geschlossen", "Du wurdest von Alboria gesperrt",
               "Aktualisiere Azura, um online zu spielen", "Melde dich im Launcher bei Alboria an",
+              "Alboria wird gewartet, versuche es sp\xC3\xA4ter erneut",
+              "Das Onlinespiel dieses Spiels ist ausgeschaltet",
               "Alboria hat nicht geantwortet", "Im Team deines Freundes ist kein Platz frei",
               "Das Match beginnt gerade, versuch es gleich noch einmal",
               "Deine Gruppe passt nicht in die deines Freundes",
@@ -90,6 +104,8 @@ Texts LocalizedTexts(uint32_t language) {
               "Impossible de joindre Alboria", "Aucune partie n'a ce code", "La partie est pleine",
               "Le salon a \xC3\xA9t\xC3\xA9 ferm\xC3\xA9", "Tu as \xC3\xA9t\xC3\xA9 banni d'Alboria",
               "Mets \xC3\xA0 jour Azura pour jouer en ligne", "Connecte-toi \xC3\xA0 Alboria depuis le launcher",
+              "Alboria est en maintenance, r\xC3\xA9""essaie plus tard",
+              "Le jeu en ligne est d\xC3\xA9sactiv\xC3\xA9 pour ce jeu",
               "Alboria n'a pas r\xC3\xA9pondu", "Il n'y a plus de place dans l'\xC3\xA9quipe de ton ami",
               "Le match commence, r\xC3\xA9""essaie dans un instant",
               "Ton groupe ne tient pas dans celui de ton ami",
@@ -99,6 +115,8 @@ Texts LocalizedTexts(uint32_t language) {
               "No se puede conectar con Alboria", "Ninguna partida tiene ese c\xC3\xB3""digo",
               "La partida est\xC3\xA1 llena", "La sala se ha cerrado", "Alboria te ha vetado",
               "Actualiza Azura para jugar online", "Inicia sesi\xC3\xB3n en Alboria desde el launcher",
+              "Alboria est\xC3\xA1 en mantenimiento, int\xC3\xA9ntalo m\xC3\xA1s tarde",
+              "El online de este juego est\xC3\xA1 desactivado",
               "Alboria no ha respondido", "No queda sitio en el equipo de tu amigo",
               "La partida est\xC3\xA1 empezando; prueba otra vez en un momento",
               "Tu grupo no cabe en el de tu amigo",
@@ -107,7 +125,9 @@ Texts LocalizedTexts(uint32_t language) {
       return {"STANZA ONLINE", "Creazione della stanza\xE2\x80\xA6", "Ingresso nella stanza\xE2\x80\xA6", "ONLINE",
               "Impossibile raggiungere Alboria", "Nessuna partita ha questo codice",
               "La partita \xC3\xA8 piena", "La stanza \xC3\xA8 stata chiusa", "Alboria ti ha bandito",
-              "Aggiorna Azura per giocare online", "Accedi ad Alboria dal launcher", "Alboria non ha risposto",
+              "Aggiorna Azura per giocare online", "Accedi ad Alboria dal launcher", "Alboria \xC3\xA8 in manutenzione, riprova pi\xC3\xB9 tardi",
+              "Il gioco online \xC3\xA8 disattivato per questo gioco",
+              "Alboria non ha risposto",
               "Non c'\xC3\xA8 pi\xC3\xB9 posto nella squadra del tuo amico",
               "La partita sta iniziando, riprova tra un attimo",
               "Il tuo gruppo non entra in quello del tuo amico",
@@ -117,7 +137,9 @@ Texts LocalizedTexts(uint32_t language) {
               "N\xC3\xA3o foi poss\xC3\xADvel conectar ao Alboria",
               "Nenhuma partida tem esse c\xC3\xB3""digo", "A partida est\xC3\xA1 cheia",
               "A sala foi fechada", "O Alboria te baniu", "Atualize o Azura para jogar online",
-              "Entre no Alboria pelo launcher", "O Alboria n\xC3\xA3o respondeu", "N\xC3\xA3o h\xC3\xA1 vaga na equipe do seu amigo",
+              "Entre no Alboria pelo launcher", "O Alboria est\xC3\xA1 em manuten\xC3\xA7\xC3\xA3o, tente mais tarde",
+              "O online deste jogo est\xC3\xA1 desativado",
+              "O Alboria n\xC3\xA3o respondeu", "N\xC3\xA3o h\xC3\xA1 vaga na equipe do seu amigo",
               "A partida est\xC3\xA1 come\xC3\xA7""ando, tente de novo em instantes",
               "Seu grupo n\xC3\xA3o cabe no do seu amigo",
               "Voc\xC3\xAA j\xC3\xA1 est\xC3\xA1 nessa sala"};
@@ -127,7 +149,9 @@ Texts LocalizedTexts(uint32_t language) {
               "Brak po\xC5\x82\xC4\x85""czenia z Alboria", "\xC5\xBB""adna gra nie ma tego kodu",
               "Gra jest pe\xC5\x82na", "Pok\xC3\xB3j zosta\xC5\x82 zamkni\xC4\x99ty",
               "Alboria ci\xC4\x99 zablokowa\xC5\x82""a", "Zaktualizuj Azur\xC4\x99, aby gra\xC4\x87 online",
-              "Zaloguj si\xC4\x99 do Alborii w launcherze", "Alboria nie odpowiedzia\xC5\x82""a", "W dru\xC5\xBCynie znajomego nie ma miejsca",
+              "Zaloguj si\xC4\x99 do Alborii w launcherze", "Alboria jest w trakcie konserwacji, spr\xC3\xB3""buj p\xC3\xB3\xC5\xBAniej",
+              "Gra online w tej grze jest wy\xC5\x82\xC4\x85""czona",
+              "Alboria nie odpowiedzia\xC5\x82""a", "W dru\xC5\xBCynie znajomego nie ma miejsca",
               "Mecz si\xC4\x99 zaczyna, spr\xC3\xB3""buj za chwil\xC4\x99",
               "Twoja dru\xC5\xBCyna nie zmie\xC5\x9B""ci si\xC4\x99 w dru\xC5\xBCynie znajomego",
               "Ju\xC5\xBC jeste\xC5\x9B w tym pokoju"};
@@ -135,6 +159,8 @@ Texts LocalizedTexts(uint32_t language) {
       return {"ONLINE ROOM", "Creating the room\xE2\x80\xA6", "Joining the room\xE2\x80\xA6", "ONLINE", "Cannot reach Alboria",
               "No game has that code", "The game is full", "The room was closed",
               "Alboria has banned you", "Update Azura to play online", "Sign in to Alboria from the launcher",
+              "Alboria is in maintenance, try again later",
+              "Online play of this game is switched off",
               "Alboria did not answer", "Your friend's team has no place left",
               "The match is starting; try again in a moment",
               "Your party does not fit in your friend's",
@@ -149,8 +175,10 @@ const char* ErrorText(const Texts& texts, const std::string& error) {
   if (error == "room_full") return texts.full;
   if (error == "room_closed" || error == "replaced") return texts.closed;
   if (error.rfind("banned", 0) == 0) return texts.banned;
-  if (error == "client_too_old") return texts.too_old;
+  if (error == "client_too_old" || error == "launcher_outdated") return texts.too_old;
   if (error == "no_account") return texts.no_account;
+  if (error == "maintenance" || error == "game_maintenance") return texts.maintenance;
+  if (error == "game_offline") return texts.game_off;
   if (error == "team_full") return texts.team_full;
   if (error == "match_starting") return texts.starting;
   if (error == "party_does_not_fit") return texts.party_does_not_fit;
