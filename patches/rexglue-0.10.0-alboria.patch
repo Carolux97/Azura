@@ -618,10 +618,10 @@ index 0000000..c7fc5de
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria.cpp b/src/system/xam/alboria.cpp
 new file mode 100644
-index 0000000..09fbfa1
+index 0000000..bbd03c6
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,2747 @@
+@@ -0,0 +1,2755 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -1723,6 +1723,7 @@ index 0000000..09fbfa1
 +        if (body->size() < 7) break;
 +        constexpr uint8_t kMovedHostLeft = 3;
 +        bool left_match = false;
++        std::optional<SessionInfo> to_publish;
 +        {
 +          std::lock_guard lock(g_mutex);
 +          left_match = g_status.in_match && (*body)[0] != 2;
@@ -1733,12 +1734,11 @@ index 0000000..09fbfa1
 +          REXSYS_INFO("Alboria: moved to {} room{}", g_status.in_match ? "a match's" : "the party's",
 +                      g_status.host ? ", hosting it" : "");
 +          // Back in its party's room as its host: the Live party session the title made meanwhile
-+          // (in the match's room, which it did not host) is published now, for the members to join.
++          // (in the match's room, which it did not host) is published, for the members to join, once
++          // the room is read (a player leaving a match leaves its party: its party's code is new).
 +          if (!g_status.in_match && g_status.host && g_hosted_session && !g_session_published) {
 +            g_session_published = true;
-+            RunDetached("publishing the session", [code = g_status.code, session = *g_hosted_session] {
-+              PublishHostedSession(code, session);
-+            });
++            to_publish = *g_hosted_session;
 +          }
 +        }
 +        if ((*body)[2] == kMovedHostLeft) {
@@ -1747,8 +1747,16 @@ index 0000000..09fbfa1
 +          std::lock_guard lock(g_friends_mutex);
 +          g_notices.push_back({Notice::Kind::kHostLeft, {}, 0, {}});
 +        }
-+        RunDetached("reading the room", [left_match] {
++        RunDetached("reading the room", [left_match, to_publish] {
 +          RefreshCurrentRoom();
++          if (to_publish) {
++            std::string code;
++            {
++              std::lock_guard lock(g_mutex);
++              code = g_status.code;
++            }
++            PublishHostedSession(code, *to_publish);
++          }
 +          FollowPartyAfterMove(left_match);
 +        });
 +        break;

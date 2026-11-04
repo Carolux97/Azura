@@ -492,12 +492,25 @@ int GlyphOf(uint32_t c) {
 // `text` as a cipher being broken: each character shows as itself (deciphered) or as a glyph of
 // Alboriano, `share` of them deciphered (0 none, 1 all). Which ones are is partly fixed by the
 // character's place and partly flickers with time `t`, so the text seems half read and lost again.
+// A negative `share` is a text nearly read: all of it deciphered but, now and then (kSlipEvery),
+// one character that slips back to its glyph for a moment (kSlipFor).
 // Each character takes the width of its letter or of a glyph, whichever is wider, so the text does
 // not move as it changes. `seed` tells texts apart. Returns its width; with no `draw_list`, only
 // measures.
 float AddCipherText(ImDrawList* draw_list, ImFont* font, float size, ImVec2 at, ImU32 color, const char* text,
                     float spacing, float share, uint32_t seed, float t) {
   const float glyph_size = size * 0.85f;
+  constexpr float kSlipEvery = 1.6f;
+  constexpr float kSlipFor = 0.35f;
+  const bool nearly = share < 0.0f;
+  const uint32_t slot = static_cast<uint32_t>(t / kSlipEvery);
+  const bool slipping = nearly && std::fmod(t, kSlipEvery) < kSlipFor;
+  uint32_t characters = 0;
+  for (const char* p = text; *p; ++p) {
+    if ((static_cast<unsigned char>(*p) & 0xC0) != 0x80 && *p != ' ') ++characters;
+  }
+  const uint32_t slipped = characters ? Mix(seed * 4099u + slot) % characters : 0;
+  uint32_t letter = 0;
   float x = at.x;
   uint32_t index = 0;
   for (const char* p = text; *p; ++index) {
@@ -515,7 +528,9 @@ float AddCipherText(ImDrawList* draw_list, ImFont* font, float size, ImVec2 at, 
     const bool space = c == ' ';
     const float settled = static_cast<float>(Mix(seed * 977u + index) % 1000) / 1000.0f;
     const float flicker = static_cast<float>(Mix(seed * 31u + index * 7919u + static_cast<uint32_t>(t * 5.0f)) % 1000) / 1000.0f;
-    const bool deciphered = share >= 1.0f || settled < share || flicker < share * 0.45f;
+    const bool deciphered = nearly ? !(slipping && !space && letter == slipped)
+                                   : share >= 1.0f || settled < share || flicker < share * 0.45f;
+    if (!space) ++letter;
     if (draw_list && !space) {
       if (deciphered) {
         draw_list->AddText(font, size, ImVec2(x + (width - letter_width) * 0.5f, at.y), color, p, next);
@@ -852,8 +867,9 @@ void VersusOnlineMenu::OnDraw(ImGuiIO& io) {
       const ImU32 color = done ? Ok(a(255)) : now_step ? Imulsion(a(static_cast<int>(255 * pulse))) : SteelLine(a(255));
       DrawDiamond(draw_list, ImVec2(x + 5.0f * u, left.y + 8.0f * u), 10.0f * u, color, color, done || now_step, 1.4f * u);
       x += 16.0f * u;
-      // The step's name: deciphered once done, half read while it goes on, in Alboriano before.
-      const float share = done ? 1.0f : now_step ? 0.5f + 0.25f * std::sin(t * 1.3f) : 0.12f;
+      // The step's name: deciphered once done, nearly read while it goes on (a letter slips now and
+      // then), in Alboriano before.
+      const float share = done ? 1.0f : now_step ? -1.0f : 0.12f;
       const float label_width = AddCipherText(draw_list, title_font, 12.0f * u, ImVec2(x, left.y),
                                               done || now_step ? Text(a(255)) : TextFaint(a(255)), texts.steps[i], 0.8f * u,
                                               share, static_cast<uint32_t>(i + 1), t);
