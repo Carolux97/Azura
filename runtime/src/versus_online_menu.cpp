@@ -1056,32 +1056,65 @@ void VersusOnlineMenu::OnDraw(ImGuiIO& io) {
         AddTextCentered(draw_list, title_font, 13.0f * u, ImVec2((min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f), TextFaint(a(255)), text);
       } else {
         // An empty place, scanned now and then: a band crosses it left to right, waking glyphs of
-        // Alboriano that change as it passes and fade behind it. Each place has its own rhythm.
+        // Alboriano that flicker as its edge passes, then settle and cool down behind it (white-hot,
+        // amber, an ember's red) until they fade, after the band has left too. Each place has its
+        // own rhythm.
         constexpr float kScanEvery = 4.5f;
         constexpr float kScanTakes = 1.4f;
-        const float scan = std::fmod(t + static_cast<float>(Mix(i + 11) % 4500) / 1000.0f, kScanEvery) / kScanTakes;
+        constexpr float kCoolSeconds = 1.0f;
+        constexpr float kFlickerSeconds = 0.15f;
+        const float cycle_time = std::fmod(t + static_cast<float>(Mix(i + 11) % 4500) / 1000.0f, kScanEvery);
+        const auto cycle = static_cast<uint32_t>((t + static_cast<float>(Mix(i + 11) % 4500) / 1000.0f) / kScanEvery);
+        const float scan = cycle_time / kScanTakes;
         const float band = 70.0f * u;
-        const float band_x = min.x - band + scan * (max.x - min.x + 2.0f * band);
+        const float travel = max.x - min.x + 2.0f * band;
+        const float speed = travel / kScanTakes;  // per second
+        const float band_x = min.x - band + scan * travel;
         const bool scanning = scan < 1.0f;
+        const bool cooling = cycle_time < kScanTakes + kCoolSeconds;
         const float pulse = 0.3f + 0.7f * (0.5f + 0.5f * std::sin(t * 3.6f + i * 0.7f));
         DrawDashedRect(draw_list, min, max, SteelLine(a(255)), 5.0f * u, 1.0f * u);
-        if (scanning) {
+        if (cooling) {
           draw_list->PushClipRect(min, max, true);
           const float step = 22.0f * u;
           const float middle = (min.y + max.y) * 0.5f;
           for (float gx = min.x + step * 0.5f; gx < max.x; gx += step) {
-            // Lit behind the band's edge, fading out over a band's width.
-            const float behind = band_x - gx;
-            const float light = behind < 0.0f ? std::max(0.0f, 1.0f + behind / (12.0f * u)) : std::max(0.0f, 1.0f - behind / band);
-            if (light <= 0.0f) continue;
-            const int glyph = static_cast<int>(Mix(static_cast<uint32_t>(gx) * 7u + i * 131u + static_cast<uint32_t>(t * 12.0f)) % kGlyphCount);
-            DrawAlboriano(draw_list, glyph, ImVec2(gx, middle), 14.0f * u, Imulsion(a(static_cast<int>(200 * light))), 1.2f * u);
+            // How long ago the band's edge passed this glyph (negative: it is about to).
+            const float since = (band_x - gx) / speed;
+            if (since < -12.0f * u / speed || since > kCoolSeconds) continue;
+            const float heat = since <= 0.0f ? 1.0f + since * speed / (12.0f * u) : 1.0f - since / kCoolSeconds;
+            if (heat <= 0.0f) continue;
+            // Hot glyphs flicker; once the edge has gone by, each keeps the one it settled on.
+            const uint32_t when = since < kFlickerSeconds ? static_cast<uint32_t>(t * 20.0f) : cycle * 7919u;
+            const int glyph = static_cast<int>(Mix(static_cast<uint32_t>(gx) * 7u + i * 131u + when) % kGlyphCount);
+            // White-hot, then amber, then an ember's red, fading out.
+            const float c = 1.0f - heat;  // 0 hot, 1 cold
+            const auto mix = [](float from, float to, float k) { return static_cast<int>(from + (to - from) * k); };
+            const int r = c < 0.4f ? mix(255, 255, c / 0.4f) : mix(255, 170, (c - 0.4f) / 0.6f);
+            const int g = c < 0.4f ? mix(240, 184, c / 0.4f) : mix(184, 50, (c - 0.4f) / 0.6f);
+            const int b = c < 0.4f ? mix(190, 28, c / 0.4f) : mix(28, 10, (c - 0.4f) / 0.6f);
+            const int alpha = static_cast<int>(230 * std::min(1.0f, heat * 1.6f));
+            DrawAlboriano(draw_list, glyph, ImVec2(gx, middle), 14.0f * u, IM_COL32(r, g, b, a(alpha)), 1.2f * u);
           }
-          draw_list->AddLine(ImVec2(band_x, min.y + 2.0f * u), ImVec2(band_x, max.y - 2.0f * u), Imulsion(a(170)), 1.2f * u);
+          if (scanning) {
+            // The band's edge: a glow that fades out behind it, a faint line, and on it a column of
+            // small glyphs that change many times a second, as if each line of the place were being
+            // read.
+            const float glow = 40.0f * u;
+            draw_list->AddRectFilledMultiColor(ImVec2(band_x - glow, min.y), ImVec2(band_x, max.y), Imulsion(a(0)), Imulsion(a(60)),
+                                               Imulsion(a(60)), Imulsion(a(0)));
+            draw_list->AddLine(ImVec2(band_x, min.y + 2.0f * u), ImVec2(band_x, max.y - 2.0f * u), Imulsion(a(110)), 1.0f * u);
+            constexpr int kEdgeGlyphs = 3;
+            const float edge_step = (max.y - min.y) / (kEdgeGlyphs + 1);
+            for (int row = 1; row <= kEdgeGlyphs; ++row) {
+              const int glyph = static_cast<int>(Mix(i * 977u + static_cast<uint32_t>(row) * 31u + static_cast<uint32_t>(t * 20.0f)) % kGlyphCount);
+              DrawAlboriano(draw_list, glyph, ImVec2(band_x, min.y + row * edge_step), 8.0f * u, Imulsion(a(235)), 1.1f * u);
+            }
+          }
           draw_list->PopClipRect();
         }
         AddTextCentered(draw_list, body_font, 13.0f * u, ImVec2((min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f),
-                        TextFaint(a(static_cast<int>(255 * pulse * (scanning ? 0.35f : 1.0f)))), texts.free_place);
+                        TextFaint(a(static_cast<int>(255 * pulse * (cooling ? 0.35f : 1.0f)))), texts.free_place);
       }
     }
   };
