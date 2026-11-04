@@ -410,7 +410,7 @@ const std::vector<SettingRow>& KeyboardSettings() {
 }
 
 // The Controller category's rows but the control scheme, which the Assignment tab chooses. Value
-// IDs as GearProfileSettings defines them (docs/reverse-engineering.md); the sensitivities are
+// IDs as GearProfileSettings defines them (alboria-notes:azura/reverse-engineering.md); the sensitivities are
 // floats from 0 to 1 in steps of 0.05, as the game's sliders.
 const std::vector<SettingRow>& ControllerSettings() {
   static const std::vector<SettingRow> rows = {

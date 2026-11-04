@@ -31,7 +31,7 @@
 // just before it reaches Flash; when the menu saves, the values GetOptionValueAt returns are
 // applied; the selected row of the Video list is followed to open the brightness calibration; and
 // the menu's bytecode is patched where it would refuse to show Video and Keyboard and mouse as
-// lists. The layouts and bytecode involved are in docs/reverse-engineering.md.
+// lists. The layouts and bytecode involved are in alboria-notes:azura/reverse-engineering.md.
 //
 // Online parties (Alboria): with network_mode = online, the Joinable and Invite only party types
 // are offered without Xbox LIVE, and choosing one hosts a room on Alboria and creates a System
@@ -603,7 +603,7 @@ int32_t UserOfController(const uint8_t* base, uint32_t controller) {
   return user < 4 ? static_cast<int32_t>(user) : -1;
 }
 
-// The mouse's share of one player's look input this frame (docs/reverse-engineering.md, Mouse
+// The mouse's share of one player's look input this frame (alboria-notes:azura/reverse-engineering.md, Mouse
 // look). The engine's PlayerInput.PlayerInput adds aMouseX and aMouseY to aTurn and aLookUp; what
 // GearPlayerInput.PlayerInput does afterwards (the profile's look sensitivity, the pitch ratio)
 // and GearPC.UpdateRotation (the slow motion division, the conversion to whole rotator units) is
@@ -802,7 +802,7 @@ std::unordered_set<uint32_t> g_seen;  // UFunction addresses already logged
 
 // --- PC options (see menu/pc_options.h) ---
 //
-// Offsets from the dump of UIScene_Options (docs/reverse-engineering.md, "Options menu").
+// Offsets from the dump of UIScene_Options (alboria-notes:azura/reverse-engineering.md, "Options menu").
 constexpr uint32_t kFrameObject = 20;
 constexpr uint32_t kOptionsCurrentMode = 1028;      // UIScene_Options.CurrentMode (byte)
 // CurrentMode while the list of categories is shown (OMI_MAX).
@@ -1321,7 +1321,7 @@ void ShowPcOptionValue(uint8_t* base, uint32_t caller) {
 // _Targeting, _RoadieRun, ...), each with its own FOVAngle from GearCamera.ini: 80 by default, 95
 // in cover, 50 aiming, 105 roadie running. The mode in use answers GetDesiredFOV(ViewedPawn) from
 // its FOVAngle, through the weapon's GetAdjustedFOV or GetTargetingFOV when there is one
-// (docs/reverse-engineering.md, "Field of view"). Just before that function runs, FOVAngle is set
+// (alboria-notes:azura/reverse-engineering.md, "Field of view"). Just before that function runs, FOVAngle is set
 // to the mode's own value times field_of_view / 80, so every mode keeps its proportion to the base
 // camera and a change in the menu shows on the next frame. Cinematics (Matinee) and a forced field
 // of view (Kismet's Set Camera FOV) do not take it from the modes.
@@ -1380,7 +1380,7 @@ void ApplyFieldOfView(uint8_t* base, uint32_t mode) {
 
 // As the engine's PlayerInput.PlayerInput returns on `player_input`: undoes field_of_view's share
 // of the turn. That function multiplies the right stick's aTurn and aLookUp, and the mouse axes it
-// then adds to them, by FOVScale, GetFOVAngle() * 0.01111 (docs/reverse-engineering.md, Mouse
+// then adds to them, by FOVScale, GetFOVAngle() * 0.01111 (alboria-notes:azura/reverse-engineering.md, Mouse
 // look), so a wider view would turn faster. Dividing both by field_of_view / 80 leaves the turn
 // the player gets for a given mouse motion or stick deflection as with the game's field of view,
 // while the slower turn when aiming or zoomed, which comes from those modes' own narrower angles,
@@ -1721,7 +1721,7 @@ void RestoreBulletAimAssist(uint8_t* base, const AimAssistBefore& before) {
 // effect), the engine's default (GearEngine.DefaultPostProcess, War_PostProcess.
 // DefaultScenePostProcess) and a level's (WorldInfo.WorldPostProcessChain, when it has one). The
 // game ships it with bEnableImageGrain set and SceneImageGrainScale 0.0125, and no script reads or
-// writes it (docs/reverse-engineering.md, "Film grain"). With film_grain off, bEnableImageGrain is
+// writes it (alboria-notes:azura/reverse-engineering.md, "Film grain"). With film_grain off, bEnableImageGrain is
 // cleared in every one of those effects each frame; on, each effect gets back the value the game
 // gave it.
 
@@ -3182,7 +3182,7 @@ extern "C" void sub_82319958(PPCContext& __restrict ctx, uint8_t* base) {
 // --- Online parties (Alboria) ---
 //
 // The party options offer Joinable and Invite only when GearPC.CanAllPlayersPlayOnline() says
-// every local player may play on Xbox LIVE (docs/reverse-engineering.md, "Party types, System
+// every local player may play on Xbox LIVE (alboria-notes:azura/reverse-engineering.md, "Party types, System
 // Link and Manage/Invite"). With network_mode = online it says yes. Choosing one of them runs
 // UIScene_FrontEnd.Callback_DialogItemPress, which checks the Xbox LIVE sign-in (natively, out of
 // reach of these hooks) and shows the Gold message: while Alboria answers (CheckService, asked as
@@ -3257,7 +3257,7 @@ bool HostMigration() {
 // Answers CanAllPlayersPlayOnline with yes when online. The frame is about to run it; returns
 // whether it was answered.
 // The party the game creates when it leaves the title screen (UIScene_FrontEnd.
-// ConditionalCreatePartySession, docs/reverse-engineering.md "The party at start-up"). Without an
+// ConditionalCreatePartySession, alboria-notes:azura/reverse-engineering.md "The party at start-up"). Without an
 // Xbox Live sign-in the game always makes it Local (LocalPartyCreated); with online play on, the
 // runtime makes it the one startup_party names instead while the function runs: a room's party
 // (kBootOnline) or a System Link one (kBootSystemLink), both created as choosing them does.
@@ -3391,7 +3391,7 @@ bool ChooseOnlinePartyType(PPCContext& ctx, uint8_t* base, uint32_t dialog_item_
 // System Link, while the player is in a room (hosting it, or joined by code): the party options'
 // BuildPartyOptions, which ticks the party's type, and the party panel's UpdatePanelTitle, which
 // names it. Both compare
-// PartyGRI.CurrPartyType with a byte constant for each type (docs/reverse-engineering.md, "Party
+// PartyGRI.CurrPartyType with a byte constant for each type (alboria-notes:azura/reverse-engineering.md, "Party
 // options"): for this call the System Link one can never match and the chosen type's one is
 // System Link's. Returns whether it ran.
 // The online party type a room's party shows (kFriendsOnlyType or kInviteRequiredType), or -1 out

@@ -4,7 +4,7 @@
 // ShouldTurnCursorRedFor, which the Title Update added to Vehicle_Reaver_Base, and calls them with
 // Super. Azura's script patch cannot add them to that class: the disc build's patch loader breaks
 // on a class that receives both a new property (Vehicle_Reaver_Base.TaccomMesh) and new functions
-// (see docs/raams-shadow-dlc.md). So the DLC's import of them stays unresolved, and its Super call
+// (see alboria-notes:azura/raams-shadow-dlc.md). So the DLC's import of them stays unresolved, and its Super call
 // reaches UObject::CallFunction with no function.
 //
 // HandleMissingSuper takes such a call: it runs the nearest function of the same name in the

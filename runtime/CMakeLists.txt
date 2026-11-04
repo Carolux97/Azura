@@ -6,7 +6,7 @@
 # Our own code (runtime/src, with the SDK's host sources) is the object library azura_host, which
 # needs no generated code: it builds without a default.xex, and the executable links it with the
 # code generated from one. That split lets our code be built once and linked on another machine
-# with the code generated there (docs/player-runtime-build.md).
+# with the code generated there (alboria-notes:azura/player-runtime-build.md).
 
 cmake_minimum_required(VERSION 3.25)
 project(azura LANGUAGES C CXX)

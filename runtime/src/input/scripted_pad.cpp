@@ -1,5 +1,5 @@
 // A controller that presses buttons on a fixed schedule, for unattended test runs (the HLE graphics
-// comparisons of docs/hle-graphics/ reach the main menu with it). Only installed when the
+// comparisons of alboria-notes:azura/hle-graphics/ reach the main menu with it). Only installed when the
 // environment variable AZURA_SCRIPTED_PAD is set, to a comma-separated list of
 // "seconds:button" presses counted from start, for example "45:start,50:a,55:a". Buttons: a, b, x,
 // y, start, back, up, down, left, right. Each press is held for a fifth of a second.

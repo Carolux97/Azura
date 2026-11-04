@@ -1347,7 +1347,7 @@ void PatchOptionsMenu(CoalescedSection& section, const std::string& language) {
   const std::u16string controller_text = CategoryText(section, kControllerCategory);
   const auto controller_title = Quoted(controller_text, u"CategoryDescription");
   controls.controller_title = controller_title.empty() ? std::string("CONTROLLER") : controller_title[0];
-  // The Controller category's rows, in the game's order (docs/reverse-engineering.md).
+  // The Controller category's rows, in the game's order (alboria-notes:azura/reverse-engineering.md).
   constexpr int kControllerRows[] = {2, 58, 375, 368, 59, 60, 1, 38, 39, 51};
   const auto row_labels = Quoted(controller_text, u"SettingDescription");
   for (size_t i = 0; i < std::size(kControllerRows) && i < row_labels.size(); ++i) {

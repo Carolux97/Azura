@@ -11,11 +11,11 @@
 # - patches/rexglue-0.10.0-codegen-stamp.patch: codegen re-running when the generator itself
 #   changes (the files in STAMP_PATHS);
 # - patches/rexglue-0.10.0-hle-gfx.patch: the new files of the HLE graphics path
-#   (docs/hle-graphics/02-design.md; the files in HLE_PATHS). Its small changes to existing files
+#   (alboria-notes:azura/hle-graphics/02-design.md; the files in HLE_PATHS). Its small changes to existing files
 #   (the gfx option's use, the marker hook in the command processor) go with the patch that already
 #   holds each of those files.
 # - patches/rexglue-0.10.0-alboria.patch: the new files of the Alboria client
-#   (docs/alboria-relay.md; the files in ALBORIA_PATHS), Monocypher among them. Its changes to
+#   (alboria-notes:azura/alboria-relay.md; the files in ALBORIA_PATHS), Monocypher among them. Its changes to
 #   existing files (System Link, sockets, the build) go with the patch that already holds each one.
 # Each changed file goes to exactly one patch, so the patches apply in any order. The base is the
 # SDK commit with the patches that come before them, rebuilt in a temporary folder, so nothing

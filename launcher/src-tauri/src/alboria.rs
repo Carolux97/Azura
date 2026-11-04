@@ -1,5 +1,5 @@
 //! The player's Alboria account, from the launcher. Alboria is our online ecosystem; its protocol is
-//! in `docs/alboria-relay.md` (sections 3 and 4.6).
+//! in `alboria-notes:azura/alboria-relay.md` (sections 3 and 4.6).
 //!
 //! An account is the player's email, with no password: a 6-digit code sent to it proves it is
 //! theirs. This installation is a device of the account: the launcher links it the first time, from
