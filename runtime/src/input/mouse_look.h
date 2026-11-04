@@ -6,7 +6,7 @@
 // after the right stick has been through the game's curve, acceleration and deceleration, and
 // GearPC.UpdateRotation turns the view by them. On the console they are always zero. The script
 // hooks call ApplyMouseLook as that function starts, and it writes the mouse motion since the last
-// frame there (docs/reverse-engineering.md, Mouse look). While it does, the SDK's keyboard and
+// frame there (alboria-notes:azura/reverse-engineering.md, Mouse look). While it does, the SDK's keyboard and
 // mouse driver stops turning the mouse into right stick (rex::input::InputSystem::TakeMouseLook).
 //
 // What the game does to the look input after that is for the stick, and the script hooks keep the

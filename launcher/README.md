@@ -54,7 +54,7 @@ Both sides read and write the same `azura.toml`.
 ## Runtime
 
 The runtime is the game recompiled for this computer. Players build it with the launcher from
-their own `default.xex` (`src-tauri/src/builder.rs`, `docs/player-runtime-build.md`): the player
+their own `default.xex` (`src-tauri/src/builder.rs`, `alboria-notes:azura/player-runtime-build.md`): the player
 kit (`scripts/build-kit.sh`, built in CI) holds everything but the game, and `kit.json` the
 commands to build it, which the launcher runs with the machine's compiler. Install in the
 Installation view, or Play when nothing is installed, does it: codegen with the kit's code
@@ -81,12 +81,12 @@ Where the runtime comes from, in order: `AZURA_RUNTIME_BUILD` (a build folder, c
 
 The game is the folder of the player's dump or its disc image (`.iso`), picked with either button
 of the Installation view or dropped on it. A disc image is read in place (`src-tauri/src/disc_image.rs`)
-and the runtime mounts it itself; see `docs/player-runtime-build.md`, section 5.
+and the runtime mounts it itself; see `alboria-notes:azura/player-runtime-build.md`, section 5.
 
 ## Compiler
 
 The runtime is built on the player's machine from their own `default.xex`
-(`docs/player-runtime-build.md`), so the launcher needs a C++ compiler there; the Installation
+(`alboria-notes:azura/player-runtime-build.md`), so the launcher needs a C++ compiler there; the Installation
 view shows its state and installs one when it is missing (`src-tauri/src/toolchain.rs`). A
 compiler counts only when it compiles and links a small C++23 program. On macOS it is Apple's,
 from the Command Line Tools or Xcode; `xcrun` is run only once `xcode-select -p` names a folder,
@@ -138,7 +138,7 @@ open.
 ## Account
 
 `src/account.js` and `src-tauri/src/alboria.rs`. The player plays with an Alboria account (the
-protocol is in `docs/alboria-relay.md`, sections 3 and 4.6) or with a local account. Until they
+protocol is in `alboria-notes:azura/alboria-relay.md`, sections 3 and 4.6) or with a local account. Until they
 choose, also after updating from a launcher without accounts, a welcome screen asks: create an
 account, sign in to one, or play locally. The choice is `account` in `launcher.toml` and sets the
 game's `network_mode` in `azura.toml`: `online` for an Alboria account, `system_link` for a local

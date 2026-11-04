@@ -6,7 +6,7 @@
 //! as `0000000000000000/4D5308AB/00000002/<package>/`, where the game finds it on start-up.
 //!
 //! RAAM's Shadow, the campaign add-on, also needs classes that only the game's Title Update has.
-//! Azura declares them in a script patch of its own (see `docs/raams-shadow-dlc.md`), which holds
+//! Azura declares them in a script patch of its own (see `alboria-notes:azura/raams-shadow-dlc.md`), which holds
 //! the object indices of the player's GearGame package, so it is made here, from the player's game
 //! files, by the runtime (`azura --make_dlc_patch=<folder>`,
 //! `runtime/src/dlc/raams_shadow_patch.h`), into `<runtime>/dlc/raams-shadow/`. Its

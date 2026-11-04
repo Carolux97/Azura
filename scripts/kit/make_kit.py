@@ -2,7 +2,7 @@
 """Assembles the player kit from a probe build (run by scripts/build-kit.sh).
 
 The player's machine builds the runtime from their own default.xex with only a C++ compiler: no
-CMake, no Ninja, no SDK source (docs/player-runtime-build.md). Everything else ships in the kit,
+CMake, no Ninja, no SDK source (alboria-notes:azura/player-runtime-build.md). Everything else ships in the kit,
 and so do the commands that build it, which CMake computes here, on a machine that has CMake:
 
 - runtime/CMakeLists.txt, configured with AZURA_KIT_PROBE against the patched SDK as installed,

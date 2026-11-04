@@ -1,5 +1,5 @@
 // Azura's GearGame script patch for RAAM's Shadow, written on the player's machine from their own
-// game files (the C++ version of tools/dlc/make_patch.py; see docs/raams-shadow-dlc.md).
+// game files (the C++ version of tools/dlc/make_patch.py; see alboria-notes:azura/raams-shadow-dlc.md).
 //
 // RAAM's Shadow's packages import a few classes, properties and functions of the GearGame script
 // package that only the game's Title Update has. The disc build reads script patches from the update

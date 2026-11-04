@@ -25,7 +25,7 @@ non_volatile_as_local = true
 
 # No function entry hints and no jump table entries: functions the automatic discovery misses
 # (indirect call targets, tail-call targets) and jump table cases it does not detect run in the
-# runtime's PowerPC interpreter (ppc_interpreter_fallback, docs/ppc-interpreter-design.md). The
+# runtime's PowerPC interpreter (ppc_interpreter_fallback, alboria-notes:azura/ppc-interpreter-design.md). The
 # runtime log names each function it interprets ("Interpreting guest function 0x..."); one can be
 # added here as `0xADDRESS = {}` under [entrypoint.functions] to recompile it, which is only worth
 # it if it costs noticeable time (the log also reports that every 10 seconds).

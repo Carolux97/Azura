@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds the player kit for this platform: everything the launcher needs to build the runtime on a
 # player's machine from their own default.xex, with only a C++ compiler there
-# (docs/player-runtime-build.md). Needs no game files, so it runs in CI.
+# (alboria-notes:azura/player-runtime-build.md). Needs no game files, so it runs in CI.
 #
 # Steps:
 #   1. set up the SDK as scripts/build.sh does (our patches, and on macOS the patched MoltenVK);

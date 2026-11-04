@@ -16,7 +16,7 @@
 namespace azura::dlc {
 namespace {
 
-// Guest addresses and object layouts (Unreal Engine 3, big-endian; see docs/reverse-engineering.md).
+// Guest addresses and object layouts (Unreal Engine 3, big-endian; see alboria-notes:azura/reverse-engineering.md).
 constexpr uint32_t kGNames = 0x8343D148;       // TArray<FNameEntry*>
 constexpr uint32_t kObjectHash = 0x83473754;   // TArray<UObject*>: heads of the by-name hash chains
 constexpr uint32_t kObjectHashNext = 4;

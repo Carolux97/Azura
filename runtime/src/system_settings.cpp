@@ -28,7 +28,7 @@ struct Setting {
 };
 
 // Offsets verified by starting the game with each [SystemSettings] value changed and reading the
-// object (docs/reverse-engineering.md, "Engine settings (SystemSettings)"). The game reads depth of
+// object (alboria-notes:azura/reverse-engineering.md, "Engine settings (SystemSettings)"). The game reads depth of
 // field (+64), ambient occlusion (+1040), bloom (+72) and lens flares (+96) as it draws; those are
 // the reads the community patches for this game replace with 0.
 const std::array<Setting, 5> kSettings = {{

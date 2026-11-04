@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Compares the graphics paths (gfx = pm4 and gfx = hle) on the same scripted runs, alternating the
-# order every round so heat and background load affect them alike (docs/hle-graphics/03-results.md).
+# order every round so heat and background load affect them alike (alboria-notes:azura/hle-graphics/03-results.md).
 # VARIANTS lists what to compare as "name:runtime options" separated by "|" (names without "_";
 # default "pm4:--gfx=pm4|hle:--gfx=hle"), for example to compare an HLE option on and off.
 #

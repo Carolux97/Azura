@@ -31,7 +31,7 @@ struct Texts {
   const char* closed;
   const char* banned;
   const char* too_old;
-  // This installation is not linked to an Alboria account (docs/alboria-relay.md, section 3).
+  // This installation is not linked to an Alboria account (alboria-notes:azura/alboria-relay.md, section 3).
   const char* no_account;
   const char* other;
 };
