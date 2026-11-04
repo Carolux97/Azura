@@ -629,10 +629,10 @@ index 0000000..c7fc5de
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria.cpp b/src/system/xam/alboria.cpp
 new file mode 100644
-index 0000000..cf5e807
+index 0000000..1b32be8
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,2790 @@
+@@ -0,0 +1,2807 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -1657,7 +1657,10 @@ index 0000000..cf5e807
 +        // The room's creator leads its party; who joins by code does not. The host's address comes
 +        // with the ticket (a server older than parties gives none: its rooms' host is 10.77.0.1).
 +        g_status.party_leader = g_status.host;
-+        g_status.in_match = false;
++        // Joining a friend whose party plays a matchmade match puts this installation in the match's
++        // room, on the friend's team (a server older than that answers no kind: a party's room).
++        g_status.in_match = Text(ticket, "kind") == "match";
++        if (g_status.in_match) g_match_lost.store(false);
 +        g_status.host_ip = ParseIp(Text(ticket, "host_ip"));
 +        if (!g_status.host_ip) g_status.host_ip = kNetwork | 1;
 +        // A server older than party types answers none: its rooms are joinable.
@@ -1693,7 +1696,21 @@ index 0000000..cf5e807
 +          SessionInfo session;
 +          std::memcpy(session.data(), invite->data(), session.size());
 +          g_last_invite = session;
-+          g_party_session = session;
++          if (g_status.in_match) {
++            // The match's session, joined in progress: it is left as any match joined through
++            // matchmaking (MatchSessionDeleted). The party's own session, for after the match, is
++            // the one the friend's party had before it.
++            XnKid kid;
++            std::copy_n(session.begin(), kid.size(), kid.begin());
++            g_match_kid = kid;
++            if (auto party = DecodeBase64(Text(ticket, "party_session")); party && party->size() == kSessionInfoSize) {
++              SessionInfo party_session;
++              std::memcpy(party_session.data(), party->data(), party_session.size());
++              g_party_session = party_session;
++            }
++          } else {
++            g_party_session = session;
++          }
 +          if (g_join_for_search.exchange(false)) {
 +            REXSYS_INFO("Alboria: in the friend's room, with its host's Live party for the title's search");
 +          } else {

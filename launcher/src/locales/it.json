@@ -542,6 +542,8 @@
     "joining": "Ingresso nella stanza di {name}…",
     "joinFailed": "Impossibile unirsi: {detail}",
     "roomGone": "Quella stanza non è più aperta",
+    "teamFull": "Non c'è più posto nella squadra del tuo amico",
+    "matchStarting": "La partita sta iniziando, riprova tra un attimo",
     "requestToast": "{name} ti ha inviato una richiesta di amicizia",
     "failed": "Alboria non ha risposto. Riprova.",
     "reason": {

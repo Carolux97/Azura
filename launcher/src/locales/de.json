@@ -542,6 +542,8 @@
     "joining": "Trete dem Raum von {name} bei …",
     "joinFailed": "Beitritt nicht möglich: {detail}",
     "roomGone": "Dieser Raum ist nicht mehr offen",
+    "teamFull": "Im Team deines Freundes ist kein Platz frei",
+    "matchStarting": "Das Match beginnt gerade, versuch es gleich noch einmal",
     "requestToast": "{name} hat dir eine Freundschaftsanfrage geschickt",
     "failed": "Alboria hat nicht geantwortet. Versuche es erneut.",
     "reason": {

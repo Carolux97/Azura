@@ -44,6 +44,9 @@ export const setupFriends = ({ state, t, toast, inFront, serviceBlock, startGame
   const errorText = (error) => {
     if (error?.error === "list_full") return t("friends.listFull");
     if (error?.error === "invite_only" || error?.error === "room_not_found") return t("friends.roomGone");
+    // A friend in a matchmade match: their team is full, or the match has not opened yet.
+    if (error?.error === "team_full") return t("friends.teamFull");
+    if (error?.error === "match_starting") return t("friends.matchStarting");
     if (error?.error === "not_in_room") return t("friends.notInRoom");
     return t("friends.failed");
   };

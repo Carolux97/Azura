@@ -542,6 +542,8 @@
     "joining": "Joining {name}'s room…",
     "joinFailed": "Couldn't join: {detail}",
     "roomGone": "That room is no longer open",
+    "teamFull": "Your friend's team has no place left",
+    "matchStarting": "The match is starting, try again in a moment",
     "requestToast": "{name} sent you a friend request",
     "failed": "Alboria did not answer. Try again.",
     "reason": {

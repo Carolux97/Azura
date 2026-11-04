@@ -542,6 +542,8 @@
     "joining": "Csatlakozás {name} szobájához…",
     "joinFailed": "Nem sikerült csatlakozni: {detail}",
     "roomGone": "Az a szoba már nincs nyitva",
+    "teamFull": "A barátod csapatában nincs több hely",
+    "matchStarting": "A meccs most kezdődik, próbáld újra egy pillanat múlva",
     "requestToast": "{name} barátkérést küldött",
     "failed": "Az Alboria nem válaszolt. Próbáld újra.",
     "reason": {

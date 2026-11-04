@@ -542,6 +542,8 @@
     "joining": "Uniéndote a la sala de {name}…",
     "joinFailed": "No se pudo unir: {detail}",
     "roomGone": "Esa sala ya no está abierta",
+    "teamFull": "No queda sitio en el equipo de tu amigo",
+    "matchStarting": "La partida está empezando, prueba otra vez en un momento",
     "requestToast": "{name} te ha enviado una solicitud de amistad",
     "failed": "Alboria no ha respondido. Inténtalo de nuevo.",
     "reason": {
