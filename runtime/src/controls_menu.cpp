@@ -608,6 +608,7 @@ ControlsMenu::ControlsMenu(rex::ui::ImGuiDrawer* drawer, rex::input::InputSystem
   if (assignment_) {
     assignment_->SetBlocked(true);
   }
+  script::PlayMenuSound(script::MenuSound::kOpen);
 }
 
 const rex::input::DeviceInfo* ControlsMenu::ShownController() const {
@@ -1298,9 +1299,25 @@ void ControlsMenu::OnDraw(ImGuiIO& io) {
   // A new tab starts on its first row.
   const Actions actions = waiting_ ? Actions{} : ReadActions();
   if (!waiting_ && actions.back) {
+    script::PlayMenuSound(script::MenuSound::kBack);
     closing_ = true;
     return;
   }
+  // The game's own menu sounds for what this frame's input does (script_hooks.h): moving to
+  // another row, changing a value or the tab or the scheme, and choosing.
+  const int row_before = row_;
+  const bool waiting_before = waiting_;
+  // A bar (a sensitivity) moves with the Options' volume bars' sound, a list with its own.
+  const auto& settings = kind_ == Kind::kKeyboardMouse ? KeyboardSettings() : ControllerSettings();
+  const bool slider = tab_ == 1 && row_ < static_cast<int>(settings.size()) && settings[row_].slider;
+  if (actions.horizontal && slider) {
+    script::PlayMenuSound(actions.horizontal < 0 ? script::MenuSound::kSliderLeft : script::MenuSound::kSliderRight);
+  } else if (actions.tab || actions.scheme > 0 || actions.horizontal > 0) {
+    script::PlayMenuSound(script::MenuSound::kRight);
+  } else if (actions.scheme < 0 || actions.horizontal < 0) {
+    script::PlayMenuSound(script::MenuSound::kLeft);
+  }
+  if (actions.accept || actions.clear || actions.defaults) script::PlayMenuSound(script::MenuSound::kAccept);
   if (!waiting_ && actions.tab) {
     tab_ = (tab_ + 1) % 2;
     row_ = 0;
@@ -1322,6 +1339,9 @@ void ControlsMenu::OnDraw(ImGuiIO& io) {
   if (kind_ == Kind::kController && tab_ == 0 &&
       (kPadRows[row_].type != PadRow::kControl || !Remappable(kPadRows[row_].control))) {
     row_ = 0;  // LT, the first control a player can move
+  }
+  if (!actions.tab && !waiting_before && row_ != row_before) {
+    script::PlayMenuSound(row_ < row_before ? script::MenuSound::kUp : script::MenuSound::kDown);
   }
 
   const float fade = std::min(1.0f, std::chrono::duration<float>(Clock::now() - opened_).count() / kFadeSeconds);
@@ -1391,6 +1411,7 @@ void ControlsMenu::OnDraw(ImGuiIO& io) {
 }
 
 void ControlsMenu::OnClose() {
+  script::PlayMenuSound(script::MenuSound::kClose);
   if (assignment_) {
     assignment_->SetBlocked(false);
   }

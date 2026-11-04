@@ -47,13 +47,18 @@
 // scanning new GNames entries every so often until they appear.
 
 #include <algorithm>
+#include <bit>
+#include <deque>
 #include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <map>
+#include <set>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -84,6 +89,7 @@
 #include "menu/menu_patches.h"
 #include "menu/pc_options.h"
 #include "input/mouse_look.h"
+#include "input/player_activity.h"
 #include "input/player_assignment.h"
 
 REXCVAR_DEFINE_BOOL(script_trace, false, "Azura/Debug",
@@ -95,6 +101,14 @@ REXCVAR_DEFINE_STRING(script_dump_classes, "", "Azura/Debug",
                       "Comma-separated script classes whose functions and properties are logged once loaded");
 REXCVAR_DEFINE_BOOL(script_dump_code, false, "Azura/Debug",
                     "With script_dump_classes: also log a rough listing of each function's bytecode");
+REXCVAR_DEFINE_BOOL(host_migration, true, "Azura/Online",
+                    "When an online match's host leaves, the game's own host migration carries the match on "
+                    "with another player as its host (off: the match ends for everyone, as on Xbox Live "
+                    "without migration)");
+REXCVAR_DEFINE_STRING(alboria_join_code, "", "Azura/Online",
+                      "A room code to join once the main menu is up: the launcher passes it when the "
+                      "player joins a friend's room or accepts an invitation with the game closed");
+REXCVAR_DECLARE(std::string, user_data_root);
 REXCVAR_DECLARE(double, field_of_view);
 REXCVAR_DECLARE(bool, film_grain);
 REXCVAR_DECLARE(std::string, network_mode);
@@ -113,6 +127,11 @@ REXCVAR_DECLARE(double, mnk_run_turn_limit);
 extern "C" void __imp__sub_822DF4D0(PPCContext& __restrict ctx, uint8_t* base);
 extern "C" void __imp__sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base);
 extern "C" void __imp__sub_822B0E30(PPCContext& __restrict ctx, uint8_t* base);
+
+
+// Online play through Alboria, and whether its matches migrate their host (defined further down).
+bool LiveMode();
+bool HostMigration();
 
 namespace {
 
@@ -240,6 +259,16 @@ int32_t ParamOffset(const uint8_t* base, uint32_t function, const char* name) {
   return -1;
 }
 
+// The size in bytes of parameter `name` of `function` (its property's ElementSize), or 0.
+uint32_t ParamSize(const uint8_t* base, uint32_t function, const char* name) {
+  for (uint32_t prop = LoadU32(base, function + kStructChildren); prop; prop = LoadU32(base, prop + kFieldNext)) {
+    const uint64_t flags = (uint64_t(LoadU32(base, prop + kPropertyFlags)) << 32) | LoadU32(base, prop + kPropertyFlags + 4);
+    if (!(flags & kPropertyParm)) break;
+    if (ObjectName(base, prop) == name) return LoadU32(base, prop + kPropertyElementSize);
+  }
+  return 0;
+}
+
 // The value of the int or byte parameter `name` of the frame about to run `function`, or -1.
 int32_t SmallParam(const uint8_t* base, uint32_t function, uint32_t frame, const char* name) {
   for (uint32_t prop = LoadU32(base, function + kStructChildren); prop; prop = LoadU32(base, prop + kFieldNext)) {
@@ -261,6 +290,45 @@ std::function<void()> g_restart_handler;
 std::function<void()> g_local_coop_handler;
 // Opens the Alboria menu (SetConnectionHandler).
 std::function<void()> g_connection_handler;
+// Opens the Versus online menu (SetVersusOnlineHandler).
+std::function<void(int)> g_versus_online_handler;
+// The game whose online menu was opened last (0 Versus, 1 Horde, 2 Beast), to open it again when the
+// War Journal it opened closes.
+std::atomic<int> g_online_menu_game{0};
+// The failed join was into a matchmade match Alboria sent this player to (its match room): once
+// its party is Local, an online one is created again, as at start-up, and the online menu opens to
+// say the match could not be joined and to search again.
+std::atomic<bool> g_match_join_failed{false};
+// What the online menu opening next is to say (TakeOnlineMenuNotice): nothing, the match could not
+// be joined, or the matchmade lobby or match closed under the player.
+enum OnlineMenuNotice { kNoNotice, kJoinFailedNotice, kRoomClosedNotice };
+std::atomic<int> g_online_menu_notice{kNoNotice};
+// The game sent this player back to the main menu from a matchmade lobby or match it did not choose
+// to leave (its host went and the lobby has no host migration): once in the main menu, the match is
+// ended if Alboria made this player its host, and the online menu opens to search again.
+std::atomic<bool> g_matchmade_lobby_lost{false};
+// The player chose to leave the matchmade lobby (UIScene_PregameLobby.OnLeaveLobby_Confirmed).
+std::atomic<bool> g_left_lobby_by_choice{false};
+// The matchmade lobby's host is asking to leave it (OnLeaveGame running for it).
+std::atomic<bool> g_host_leaving_lobby{false};
+// The matchmade lobby's host confirmed leaving it: its game goes back to the main menu by itself on
+// the next player input frame (HostLeaveMatchmadeLobby), not through LeaveMatch.
+std::atomic<bool> g_host_leave_requested{false};
+// Horde (1) or Beast (2), as the player last chose one in the main menu (HandleHordeSelection,
+// HandleSiegeSelection): the two share their Standard / Private screen.
+std::atomic<int> g_horde_or_beast{0};
+
+// Opens the online menu of `game` (SetVersusOnlineHandler) from the script thread.
+void OpenOnlineMenu(int game) {
+  g_online_menu_game.store(game);
+  std::function<void(int)> handler;
+  {
+    std::lock_guard lock(g_quit_mutex);
+    handler = g_versus_online_handler;
+  }
+  if (handler) handler(game);
+}
+
 // Opens the Join by code screen (SetJoinByCodeHandler).
 std::function<void()> g_join_by_code_handler;
 // A join in a room on Alboria (JoinSystemLinkPartyInRoom, "Join by code" below): the System Link
@@ -336,6 +404,61 @@ enum WatchedName {
   kApplySensitivityScaling,  // GearPC: scales the look input by the profile's look sensitivity
   kViewAdhesion,             // GearPlayerInput: turns the view towards the target (aim assist)
   kGetAdjustedAimFor,        // GearPC: bends a shot towards the target (aim assist)
+  kNotifyInviteFailed,       // GearPC: an accepted invite could not be followed
+  kCancelPartyMatchmaking,   // GearPartyGame_Base: the player cancels matchmaking
+  kCreatePlayerVersusMatch,  // GearPartyGame_Base's PlayerMatch state: the party hosts a match (online)
+  kOnNoPartialPartyAvailable,  // the PlayerMatch state: a search found no match (online)
+  kPostBeginPlay,            // Actors: set up as the level starts (host migration, GearGRI's)
+  kContinueCreateMatch,      // UIScene_FrontEnd: a match is created (the matchmade one is a playlist match's)
+  kInitializeGameSelectionInternal,  // GearPreGameGRI: the lobby picks its games (LobbyPlaylist)
+  kUpdateCountdowns,         // GearPreGameGRI: the lobby moves between its states (online)
+  kInitializeMapSelectionInternal,  // GearPreGameGRI: the lobby picks its maps (online)
+  kGetTeamForCurrentPlayer,  // GearPlayerMatchBeaconHost: the team of a player's reservation (online)
+  kHandleGameSessionJIP,     // GearPersistentPartyBeaconHost: someone asks to join the game (online)
+  kInitializePreGameGameSettings,  // GearPreGameLobbyGame_Base: the lobby takes its settings (online)
+  kPreLogin,                 // GameInfo and subclasses: a player connects (online)
+  kPostLogin,                // GameInfo and subclasses: a player is in (online)
+  kSetNumBots,               // GearGameMP_Base: a match takes its number of bots (online)
+  kBeginMatch,               // GearPreGameLobbyGame_Base: the lobby starts the match (LobbyPlaylist)
+  kEndOfGameTransition,      // GearGameMP_Base.MatchOver: where players go after a match (online)
+  kGetNextMap,               // GameInfo and subclasses: the map a finished match travels to (online)
+  kCheckMapAgainstPlaylist,  // GearGRI: whether a map can be played in a playlist (online)
+  kGetNumberOfSupportedMaps,  // GearGRI.GetNumberOfSupportedMapsForPlaylist: how many it has (online)
+  kIsEpicDev,                // GearProfileSettings.IsEpicDev: whether the player starts Lambency
+  kInitGameReplicationInfo,  // GameInfo and subclasses: a match makes its GRI (host migration)
+  kUpdateGRI,                // GearGameHostMigrationManager: a migrated match restores its state (host migration)
+  kDelayedGameSessionDelete,  // the PlayerMatch state: deletes the search's game session after a cancel
+  kPlacePlayerOnSmallestTeam,  // GearGameMP_Base: a player goes to the smallest team (host migration)
+  kGetOccupiedTeamSize,      // GearPlayerMatchBeaconHost: how many players a team's reservations hold (online)
+  kGetGameSummaryFromProviderIndex,  // GearUIDataStore_GameResource: a game type's summary, for its name
+  kHandleHordeSelection,     // UIScene_FrontEnd: Horde is chosen in the main menu
+  kHandleSiegeSelection,     // UIScene_FrontEnd: Beast is chosen in the main menu
+  kHandleHordeAndSiegeMatchModeSelection,  // UIScene_FrontEnd: Horde's or Beast's Standard or Private
+  kUpdateNatType,            // UIWidget_MainMenu (and GearMenuGame): the menus' NAT type label
+  kUpdatePopulationNumbers,  // UIWidget_MainMenu: how many play each playlist, in its menus
+  kSetHostIcon,              // UIWidget_SmallPartyPanel: marks a player of the party panel as its host
+  kUpdatePlayerList,         // UIWidget_SmallPartyPanel: fills the party panel's slots from the players
+  kOnLeaveGame,              // UIScene_PregameLobby: a player asks to leave the pre-game lobby
+  kCanBackUpToMapSelect,     // UIScene_PregameLobby: whether the host may go back to choosing the map
+  kCanLeaveGame,             // UIScene_PregameLobby: whether the player may leave the lobby now
+  kIsOfficialMatch,          // GearGFxMoviePlayer: whether the menus' match is an official (playlist) one
+  kIsPlayerMatch,            // GearGFxMoviePlayer: whether the menus' match is a player (playlist) one
+  kOnLeaveLobbyConfirmed,    // UIScene_PregameLobby: a player confirmed leaving the pre-game lobby
+  kReturnToMainMenu,         // PlayerController and subclasses: the game sends the player to the main menu
+  kShowUIMessage,            // GearUIManager: opens one of the game's message boxes, by its tag
+  kClientWasKicked,          // GearPC: the host removed the player (for idling): the game's message, then the main menu
+  kProcessSoundEvent,        // UISoundTheme: plays a menu sound by its event name (Menu sounds)
+  // The menu sound events our menus play (MenuSound), in its order.
+  kSoundStepUp,
+  kSoundStepDown,
+  kSoundValueLeft,
+  kSoundValueRight,
+  kSoundAccept,
+  kSoundBack,
+  kSoundOpen,
+  kSoundClose,
+  kSoundSliderLeft,
+  kSoundSliderRight,
   kWatchedNameCount,
 };
 constexpr const char* kWatchedNames[kWatchedNameCount] = {
@@ -359,7 +482,10 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "Callback_Credits",      "Callback_ClientMenuOptionWasSelected", "ConditionalCreatePartySession",
     "GetPartyType",          "LocalPartyCreated",      "ClientSetHUD",       "OnCustomMapChanged",
     "ApplySensitivityScaling", "ViewAdhesion",
-    "GetAdjustedAimFor"};
+    "GetAdjustedAimFor",     "NotifyInviteFailed",     "CancelPartyMatchmaking", "CreatePlayerVersusMatch", "OnNoPartialPartyAvailable", "PostBeginPlay", "ContinueCreateMatch", "InitializeGameSelectionInternal", "UpdateCountdowns", "InitializeMapSelectionInternal", "GetTeamForCurrentPlayer", "HandleGameSessionJIP", "InitializePreGameGameSettings", "PreLogin", "PostLogin", "SetNumBots", "BeginMatch", "EndOfGameTransition", "GetNextMap", "CheckMapAgainstPlaylist", "GetNumberOfSupportedMapsForPlaylist", "IsEpicDev", "InitGameReplicationInfo", "UpdateGRI", "DelayedGameSessionDelete", "PlacePlayerOnSmallestTeam", "GetOccupiedTeamSize", "GetGameSummaryFromProviderIndex", "HandleHordeSelection", "HandleSiegeSelection", "HandleHordeAndSiegeMatchModeSelection", "UpdateNatType", "UpdatePopulationNumbers", "SetHostIcon", "UpdatePlayerList", "OnLeaveGame", "CanBackUpToMapSelect", "CanLeaveGame", "IsOfficialMatch", "IsPlayerMatch", "OnLeaveLobby_Confirmed", "ReturnToMainMenu", "ShowUIMessage", "ClientWasKicked",
+    "ProcessSoundEvent",     "Options_StepUp",         "Options_StepDown",   "ValueChangeLeft",
+    "ValueChangeRight",      "Options_AcceptButton",   "Options_BackButton", "Options_DetailsEnter",
+    "Options_DetailsLeave",  "Options_SliderLeft",     "Options_SliderRight"};
 
 // FName index of each watched name, -1 until found (0 is a valid index: None).
 std::atomic<int32_t> g_names[kWatchedNameCount];
@@ -663,6 +789,32 @@ bool IsQuitSelection(const uint8_t* base, uint32_t frame, int quit_option) {
          static_cast<int32_t>(LoadU32(base, locals + option)) == quit_option;
 }
 
+// A choice in Versus' menu (UIScene_FrontEnd.HandleMenuSelection on MAINMENUOP_VS_Competitiveness,
+// the frame about to run). With online play on, its Recreational and Competitive are one option,
+// Versus online (menu_patches.cpp), but the script handles the menu's choices by their original
+// position (0 Recreational, 1 Competitive, 2 Private): the options after Versus online are turned
+// into those, replayed (simulated) choices too, as the menu does when it goes back to its screens.
+// Returns whether the choice is Versus online, which the script does not know.
+bool VersusMenuChoice(uint8_t* base, uint32_t frame) {
+  const int online_option = azura::menu::VersusOnlineOption();
+  if (online_option < 0) return false;
+  const uint32_t function = LoadU32(base, frame + kFrameNode);
+  const uint32_t locals = LoadU32(base, frame + kFrameLocals);
+  const int32_t screen_at = ParamOffset(base, function, "ParentScreen");
+  const int32_t option_at = ParamOffset(base, function, "SelectedOption");
+  const int32_t simulating = ParamOffset(base, function, "bIsSimulating");
+  if (screen_at < 0 || option_at < 0 || base[locals + screen_at] != azura::menu::kVersusScreen) return false;
+  const int option = static_cast<int32_t>(LoadU32(base, locals + option_at));
+  const bool simulated = simulating >= 0 && LoadU32(base, locals + simulating) != 0;
+  if (option > online_option) {
+    // Recreational's place is Versus online's; Competitive's is gone.
+    StoreU32(base, locals + option_at, static_cast<uint32_t>(option + 1));
+    REXLOG_INFO("[Azura online] Versus' menu: option {} is the game's {}{}", option, option + 1, simulated ? " (replayed)" : "");
+    return false;
+  }
+  return option == online_option && !simulated;
+}
+
 void RequestQuit() {
   if (g_quit_requested.exchange(true)) return;
   std::function<void()> handler;
@@ -764,6 +916,387 @@ void LetListsShow(uint8_t* base, uint32_t function) {
     }
   }
   REXLOG_WARN("[Azura options] Callback_MenuOptionSelected does not skip 5 and 1 as expected");
+}
+
+// A playlist match's lobby (match mode 4) takes the map it was given instead of voting, in two
+// places of GearPreGameGRI, each a comparison of the local MatchModeIdx with 4 (a one-byte int
+// constant), which becomes 255, no match mode, so a playlist match votes as a custom one does:
+//   - UpdateCountdowns, once every player is in the lobby (its only such comparison):
+//       if (MatchModeIdx == 4) { SelectedMapName = PlayerMatchMapName; NextState = 5; }
+//     else it goes to the vote (state 3);
+//   - InitializeMapSelectionInternal, after picking three maps of the playlist (its last one):
+//       if (MatchModeIdx == 4) { one of the three at random; bGameVoteEnabled = false; }
+//     Its first one, which takes the playlist's maps in modes 1 and 4, stays.
+// Done once per function; the bytecode keeps its size.
+void LetPlaylistLobbyVote(uint8_t* base, uint32_t function, std::atomic<bool>& done, bool last) {
+  if (done.exchange(true)) return;
+  uint32_t match_mode = 0;
+  for (uint32_t field = LoadU32(base, function + kStructChildren); field; field = LoadU32(base, field + kFieldNext)) {
+    if (ObjectName(base, field) == "MatchModeIdx") match_mode = field;
+  }
+  const uint32_t code = LoadU32(base, function + kStructScript);
+  const uint32_t size = LoadU32(base, function + kStructScript + 4);
+  constexpr uint32_t kOperand = 2 + kScriptReferenceSize;  // after ==, the token and the reference
+  constexpr uint8_t kPlayerMatchMode = 4;
+  uint32_t found = 0;
+  for (uint32_t i = 0; match_mode && code && i + kOperand + 2 <= size; ++i) {
+    if (base[code + i] != kNativeEqualIntInt || !IsLocalVariable(base, code + i + 1, match_mode)) continue;
+    if (base[code + i + kOperand] == kTokenIntConstByte && base[code + i + kOperand + 1] == kPlayerMatchMode) {
+      found = code + i + kOperand + 1;
+      if (!last) break;
+    }
+  }
+  if (!found) {
+    REXLOG_WARN("[Azura online] {} does not compare the match mode with 4 as expected", ObjectName(base, function));
+    return;
+  }
+  base[found] = 0xFF;
+  REXLOG_INFO("[Azura online] {}: a playlist match's lobby votes", ObjectName(base, function));
+}
+
+uint32_t FindClassFunction(const uint8_t* base, uint32_t cls, const std::string& name);
+void RunInstead(PPCContext& ctx, uint8_t* base, uint32_t function, uint32_t locals);
+
+// RunInstead for a function called from a hook that has its own result (a ReturnValue): the
+// interpreter writes it where the frame's caller wanted the hooked function's result (r5), which
+// may be nowhere for a function without one, so it goes to a slot of ours instead.
+void RunInsteadWithResult(PPCContext& ctx, uint8_t* base, uint32_t function, uint32_t locals) {
+  static const uint32_t result = rex::system::kernel_state()->memory()->SystemHeapAlloc(16);
+  const uint32_t caller_result = ctx.r5.u32;
+  ctx.r5.u64 = result;
+  RunInstead(ctx, base, function, locals);
+  ctx.r5.u64 = caller_result;
+}
+
+uint32_t FindInheritedFunction(const uint8_t* base, uint32_t cls, const char* name);
+
+// The playlist of the lobby the host opened for Alboria's matchmaking (the party's, as the player
+// chose it), -1 when none: the lobby's games, maps and match come from it.
+std::atomic<int32_t> g_lobby_playlist{-1};
+
+// Set while the custom match OpenMatchmadeLobby launches is being created (ContinueCreateMatch's hook
+// makes its session a playlist match's).
+std::atomic<bool> g_matchmade_match{false};
+
+// The playlist the pre-game lobby plays: the matchmade one, or -1 (a private match).
+int32_t LobbyPlaylist() {
+  return g_lobby_playlist.load();
+}
+
+// Runs `function` (with `locals`) on `object` instead of the frame's own object, for one call from a
+// hook: the frame's Object and the call's this (r3) are `object`'s meanwhile.
+void RunOnObject(PPCContext& ctx, uint8_t* base, uint32_t object, uint32_t function, uint32_t locals) {
+  const uint32_t frame = ctx.r4.u32;
+  const uint64_t self = ctx.r3.u64;
+  const uint32_t own_object = LoadU32(base, frame + kFrameObject);
+  StoreU32(base, frame + kFrameObject, object);
+  ctx.r3.u64 = object;
+  RunInsteadWithResult(ctx, base, function, locals);
+  ctx.r4.u64 = frame;
+  ctx.r3.u64 = self;
+  StoreU32(base, frame + kFrameObject, own_object);
+}
+
+// Horde's and Beast's playlists (their Standard, which Alboria's matchmaking replaces).
+constexpr int32_t kHordePlaylist = 16;
+constexpr int32_t kBeastPlaylist = 17;
+
+// The game's team of Alboria's team `team` in the matchmade lobby or match this host plays. Alboria
+// numbers the teams of a mode from 0; Beast's one team is its players' side, the Locust, which is the
+// game's team 1 (its team 0, the humans, is the AI's). Horde's players are the COG, team 0.
+int32_t GameTeamOf(int32_t team) {
+  return LobbyPlaylist() == kBeastPlaylist ? team + 1 : team;
+}
+
+// Alboria's team of the game's team `team` (GameTeamOf the other way).
+int32_t AlboriaTeamOf(int32_t team) {
+  return LobbyPlaylist() == kBeastPlaylist ? team - 1 : team;
+}
+
+// Opens a playlist match's pre-game lobby of `playlist` for Alboria's matchmaking, from a hook's
+// frame (`ctx`) while the front end is up: the party game `party_game`'s match mode becomes 2
+// (custom) and the front end creates a custom match, as the menu would (HandleCustomMatchSelection,
+// LaunchCustomMatch), which the hooks make a playlist match's lobby of `playlist`: its session is
+// opened to Alboria once the lobby takes players, and the others come in as invited players. With
+// `cancel` (a function of the party game), the party's own matchmaking is cancelled first. Returns
+// whether it did.
+bool LaunchMatchmadeLobby(PPCContext& ctx, uint8_t* base, uint32_t party_game, int32_t playlist, uint32_t cancel) {
+  const uint32_t frame = ctx.r4.u32;
+  const uint32_t scene = g_front_end_scene.load();
+  const uint32_t party_class = party_game ? LoadU32(base, party_game + kObjectClass) : 0;
+  const int32_t mode = party_class ? ClassPropertyOffset(base, party_class, "CurrMatchMode") : -1;
+  const uint32_t scene_class = scene ? LoadU32(base, scene + kObjectClass) : 0;
+  const uint32_t select = scene_class ? FindInheritedFunction(base, scene_class, "HandleCustomMatchSelection") : 0;
+  const uint32_t launch = scene_class ? FindInheritedFunction(base, scene_class, "LaunchCustomMatch") : 0;
+  const int32_t selected = select ? ParamOffset(base, select, "SelectedGameMode") : -1;
+  if (mode < 0 || playlist < 0 || !launch || selected < 0) {
+    REXLOG_WARN("[Azura online] The matchmade lobby cannot be opened (the party game or front end is not as expected)");
+    return false;
+  }
+  g_lobby_playlist.store(playlist);
+  // Its session comes before its lobby can take players: Alboria sends nobody in until it can.
+  rex::system::xam::alboria::HoldNextMatch();
+  constexpr uint32_t kLocalsSize = 1024;
+  static uint32_t locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kLocalsSize);
+  if (cancel) {
+    std::memset(base + locals, 0, kLocalsSize);
+    RunInsteadWithResult(ctx, base, cancel, locals);
+    ctx.r4.u64 = frame;
+  }
+  constexpr uint8_t kCustomMatchMode = 2;
+  base[party_game + mode] = kCustomMatchMode;
+  // Horde's and Beast's lobbies are set up as their Private choice does: the game (Horde 2, Beast 7,
+  // from HandleHordeSelection or HandleSiegeSelection), then their Standard / Private screen's
+  // choice of Private (its second option), replayed so that it moves to no other screen. A Versus
+  // lobby is set up as Versus' custom match is.
+  const int32_t horde_or_beast = playlist == kHordePlaylist ? 1 : playlist == kBeastPlaylist ? 2 : 0;
+  const uint32_t game_select =
+      horde_or_beast ? FindInheritedFunction(base, scene_class, horde_or_beast == 1 ? "HandleHordeSelection" : "HandleSiegeSelection") : 0;
+  const uint32_t mode_select = horde_or_beast ? FindInheritedFunction(base, scene_class, "HandleHordeAndSiegeMatchModeSelection") : 0;
+  const int32_t option_at = mode_select ? ParamOffset(base, mode_select, "SelectedOption") : -1;
+  const int32_t simulating_at = mode_select ? ParamOffset(base, mode_select, "bIsSimulating") : -1;
+  if (horde_or_beast && game_select && option_at >= 0 && simulating_at >= 0) {
+    std::memset(base + locals, 0, kLocalsSize);
+    RunOnObject(ctx, base, scene, game_select, locals);
+    std::memset(base + locals, 0, kLocalsSize);
+    constexpr uint32_t kPrivateOption = 1;
+    StoreU32(base, locals + option_at, kPrivateOption);
+    StoreU32(base, locals + simulating_at, 1);
+    RunOnObject(ctx, base, scene, mode_select, locals);
+  } else {
+    if (horde_or_beast) REXLOG_WARN("[Azura online] Horde's and Beast's selection functions were not found: the lobby is set up as Versus'");
+    std::memset(base + locals, 0, kLocalsSize);
+    base[locals + selected] = 0;
+    RunOnObject(ctx, base, scene, select, locals);
+  }
+  std::memset(base + locals, 0, kLocalsSize);
+  g_matchmade_match.store(true);
+  RunOnObject(ctx, base, scene, launch, locals);
+  REXLOG_INFO("[Azura online] The party opens a matchmade lobby of playlist {}", playlist);
+  return true;
+}
+
+// Alboria's matchmaking told this player to host, and the party game is about to create a player
+// match (GearPartyGame_Base.CreatePlayerVersusMatch, `ctx`'s frame), which has no lobby. Instead,
+// the party's matchmaking is cancelled (CancelPartyMatchmaking: back to the party, state 1) and a
+// lobby of the party's playlist (GRI.PlaylistId) is opened (LaunchMatchmadeLobby). Returns whether
+// it did.
+bool OpenMatchmadeLobby(PPCContext& ctx, uint8_t* base) {
+  const uint32_t party_game = LoadU32(base, ctx.r4.u32 + kFrameObject);
+  const uint32_t party_class = LoadU32(base, party_game + kObjectClass);
+  const uint32_t cancel = FindInheritedFunction(base, party_class, "CancelPartyMatchmaking");
+  const int32_t gri_offset = ClassPropertyOffset(base, party_class, "GameReplicationInfo");
+  const uint32_t gri = gri_offset >= 0 ? LoadU32(base, party_game + gri_offset) : 0;
+  const int32_t playlist = gri ? ClassPropertyOffset(base, LoadU32(base, gri + kObjectClass), "PlaylistId") : -1;
+  if (!cancel || playlist < 0) {
+    REXLOG_WARN("[Azura online] The matchmade lobby cannot be opened (the party game is not as expected)");
+    return false;
+  }
+  REXLOG_INFO("[Azura online] Alboria said to host the party's matchmaking");
+  return LaunchMatchmadeLobby(ctx, base, party_game, static_cast<int32_t>(LoadU32(base, gri + playlist)), cancel);
+}
+
+// Azura's Versus online menu (versus_online_menu.cpp) searches through Alboria itself, with the
+// game's party idle in the front end, and asks for what the game does next: a lobby to open (the
+// playlist of the mode Alboria decided on, -1 when none) or the match's invite to take. Done on
+// player 1's next input frame (RunVersusOnlineRequests).
+std::atomic<int32_t> g_menu_lobby_request{-1};
+std::atomic<bool> g_menu_invite_request{false};
+// The Versus online menu asked for the War Journal (its stats and awards), as the main menu's
+// Journal opens it.
+std::atomic<bool> g_menu_journal_request{false};
+// The War Journal was opened from the Versus online menu: as it closes, the menu opens again over
+// Versus' menu.
+std::atomic<bool> g_journal_from_versus{false};
+// A matchmade match's invite the game dropped (NotifyInviteFailed) is taken again at this time
+// (steady clock ticks), 0 when none; how many times it was, for the match being joined.
+std::atomic<int64_t> g_invite_retry_at{0};
+std::atomic<int> g_invite_retries{0};
+constexpr int kInviteRetries = 3;
+constexpr auto kInviteRetryAfter = std::chrono::seconds(2);
+
+// The game (GameInfo) of the world a player input frame's object (`player_input`, whose outer is its
+// PlayerController) plays in: the controller's WorldInfo.Game, 0 on a client. With `kind`, only a
+// game whose class name has it.
+uint32_t WorldGame(const uint8_t* base, uint32_t player_input, const char* kind) {
+  const uint32_t controller = LoadU32(base, player_input + kObjectOuter);
+  if (!controller) return 0;
+  const int32_t world_at = ClassPropertyOffset(base, LoadU32(base, controller + kObjectClass), "WorldInfo");
+  const uint32_t world = world_at >= 0 ? LoadU32(base, controller + static_cast<uint32_t>(world_at)) : 0;
+  const int32_t game_at = world ? ClassPropertyOffset(base, LoadU32(base, world + kObjectClass), "Game") : -1;
+  const uint32_t game = game_at >= 0 ? LoadU32(base, world + static_cast<uint32_t>(game_at)) : 0;
+  if (!game || ObjectName(base, LoadU32(base, game + kObjectClass)).find(kind) == std::string::npos) return 0;
+  return game;
+}
+
+// The party game of the front end, from a player input frame's object (WorldGame).
+uint32_t FrontEndPartyGame(const uint8_t* base, uint32_t player_input) {
+  return WorldGame(base, player_input, "PartyGame");
+}
+
+// A playlist match from the pre-game lobby has ended and travels on
+// with its players; the travel goes back to the lobby instead of the next map (LobbyNextMapCode),
+// not seamless.
+std::atomic<bool> g_lobby_return_pending{false};
+
+// Sets the bool property `name` of `object` (found by name in its class) to `value`; returns what
+// it was, or -1 when the class has no such bool.
+int SetBoolField(uint8_t* base, uint32_t object, const char* name, bool value) {
+  for (uint32_t owner = LoadU32(base, object + kObjectClass); owner; owner = LoadU32(base, owner + kStructSuper)) {
+    for (uint32_t field = LoadU32(base, owner + kStructChildren); field; field = LoadU32(base, field + kFieldNext)) {
+      if (ObjectName(base, field) != name) continue;
+      const uint32_t mask = LoadU32(base, field + kBoolPropertyBitMask);
+      if (ObjectName(base, LoadU32(base, field + kObjectClass)) != "BoolProperty" || !mask || (mask & (mask - 1))) return -1;
+      const uint32_t at = object + LoadU32(base, field + kPropertyOffset);
+      const uint32_t word = LoadU32(base, at);
+      StoreU32(base, at, value ? (word | mask) : (word & ~mask));
+      return (word & mask) ? 1 : 0;
+    }
+  }
+  return -1;
+}
+
+// GearPreGameLobbyGame_Base.PreLogin turns away whoever comes from an invite (a join, not the
+// party travelling with its host), with ArbitrationMessage ("The session has already started."):
+//   if (HasOption(Options, "bIsFromInvite")) ErrorMessage = GameMessageClass.ArbitrationMessage;
+// The option's name (an ANSI string constant, token 0x1F) becomes "bIsFromInvitX", which no URL
+// has, so those Alboria sends into a playlist match's lobby get in. Done once; same size.
+void LetInvitesIntoLobby(uint8_t* base, uint32_t function) {
+  static std::atomic<bool> done{false};
+  if (done.exchange(true)) return;
+  constexpr uint8_t kTokenStringConst = 0x1F;
+  static constexpr char kOption[] = "bIsFromInvite";
+  const uint32_t code = LoadU32(base, function + kStructScript);
+  const uint32_t size = LoadU32(base, function + kStructScript + 4);
+  for (uint32_t i = 0; code && i + sizeof(kOption) + 1 <= size; ++i) {
+    if (base[code + i] != kTokenStringConst || std::memcmp(base + code + i + 1, kOption, sizeof(kOption)) != 0) continue;
+    base[code + i + sizeof(kOption) - 1] = 'X';
+    REXLOG_INFO("[Azura online] The lobby lets in those who join it");
+    return;
+  }
+  REXLOG_WARN("[Azura online] The lobby's PreLogin does not check bIsFromInvite as expected");
+}
+
+// The function `name` of class `cls` or of one of its super classes, or 0.
+uint32_t FindInheritedFunction(const uint8_t* base, uint32_t cls, const char* name) {
+  for (uint32_t owner = cls; owner; owner = LoadU32(base, owner + kStructSuper)) {
+    if (const uint32_t function = FindClassFunction(base, owner, name)) return function;
+  }
+  return 0;
+}
+
+// A player who joined the pre-game lobby by themselves (not with the party: the lobby gives
+// teams from the party's data, GearPartyGame_Base.UpdateTeamAndSkillData) has no team, so the
+// lobby's list, which shows the teams, leaves them out. `ctx`'s frame has just run a function of
+// the lobby's game (`game`) for the player controller `pc`: without a team, they join, with
+// ChangeTeam, the team with fewest players (GearGame.Teams, each TeamInfo's Size); ChangeTeam with
+// 255 would leave them without one.
+void GiveLobbyPlayerATeam(PPCContext& ctx, uint8_t* base, uint32_t game, uint32_t pc) {
+  const int32_t pri_offset = pc ? ClassPropertyOffset(base, LoadU32(base, pc + kObjectClass), "PlayerReplicationInfo") : -1;
+  const uint32_t pri = pri_offset >= 0 ? LoadU32(base, pc + pri_offset) : 0;
+  const int32_t team = pri ? ClassPropertyOffset(base, LoadU32(base, pri + kObjectClass), "Team") : -1;
+  if (team < 0 || LoadU32(base, pri + team)) return;
+  const uint32_t change_team = FindInheritedFunction(base, LoadU32(base, game + kObjectClass), "ChangeTeam");
+  const int32_t other = change_team ? ParamOffset(base, change_team, "Other") : -1;
+  const int32_t number = change_team ? ParamOffset(base, change_team, "N") : -1;
+  if (other < 0 || number < 0) {
+    REXLOG_WARN("[Azura online] ChangeTeam not found for a player who joined the lobby");
+    return;
+  }
+  const int32_t teams = ClassPropertyOffset(base, LoadU32(base, game + kObjectClass), "Teams");
+  const uint32_t team_data = teams >= 0 ? LoadU32(base, game + teams) : 0;
+  const uint32_t team_count = teams >= 0 ? LoadU32(base, game + teams + 4) : 0;
+  uint32_t smallest = 0;
+  int32_t smallest_size = INT32_MAX;
+  for (uint32_t i = 0; team_data && i < team_count; ++i) {
+    const uint32_t info = LoadU32(base, team_data + i * 4);
+    const int32_t size_offset = info ? ClassPropertyOffset(base, LoadU32(base, info + kObjectClass), "Size") : -1;
+    const int32_t size = size_offset >= 0 ? static_cast<int32_t>(LoadU32(base, info + size_offset)) : INT32_MAX;
+    if (size < smallest_size) {
+      smallest_size = size;
+      smallest = i;
+    }
+  }
+  constexpr uint32_t kLocalsSize = 256;
+  static uint32_t locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kLocalsSize);
+  std::memset(base + locals, 0, kLocalsSize);
+  StoreU32(base, locals + other, pc);
+  StoreU32(base, locals + number, smallest);
+  RunInsteadWithResult(ctx, base, change_team, locals);
+  // What the lobby's list needs (UIWidget_SmallPartyPanel.IsValidPRI): active, with a team, and in
+  // the game's PRIArray.
+  const int32_t inactive_offset = ClassPropertyOffset(base, LoadU32(base, pri + kObjectClass), "bIsInactive");
+  uint32_t inactive_mask = 0;
+  for (uint32_t owner = LoadU32(base, pri + kObjectClass); owner && !inactive_mask; owner = LoadU32(base, owner + kStructSuper)) {
+    for (uint32_t field = LoadU32(base, owner + kStructChildren); field; field = LoadU32(base, field + kFieldNext)) {
+      if (ObjectName(base, field) == "bIsInactive") inactive_mask = LoadU32(base, field + kBoolPropertyBitMask);
+    }
+  }
+  const bool inactive = inactive_offset >= 0 && (LoadU32(base, pri + inactive_offset) & inactive_mask);
+  const int32_t gri_offset = ClassPropertyOffset(base, LoadU32(base, game + kObjectClass), "GameReplicationInfo");
+  const uint32_t gri = gri_offset >= 0 ? LoadU32(base, game + gri_offset) : 0;
+  const int32_t pri_array = gri ? ClassPropertyOffset(base, LoadU32(base, gri + kObjectClass), "PRIArray") : -1;
+  bool listed = false;
+  for (uint32_t i = 0; pri_array >= 0 && i < LoadU32(base, gri + pri_array + 4); ++i) {
+    listed |= LoadU32(base, LoadU32(base, gri + pri_array) + i * 4) == pri;
+  }
+  REXLOG_INFO("[Azura online] A player who joined the lobby gets a team (team {:08X}, inactive {}, in PRIArray {})",
+              LoadU32(base, pri + team), inactive, listed);
+}
+
+// The pre-game lobby of a playlist match is joined by those Alboria sends in, through the host's
+// party beacon (GearPersistentPartyBeaconHost.HandleGameSessionJIP), which wants the party to allow
+// invites and the 'Game' session to allow joining in progress: both are turned on as the lobby
+// takes its settings (GearPreGameLobbyGame_Base.InitializePreGameGameSettings has just run on
+// `game`). A playlist match is also arbitrated (Xbox Live's ranked sessions), and once the lobby
+// has started arbitration GameInfo.PreLogin turns everyone away ("The session has already
+// started.", ArbitrationMessage): arbitration is turned off, in the game (bUsingArbitration) and
+// in the session's settings (bUsesArbitration).
+void LetLobbyBeJoined(uint8_t* base, uint32_t game) {
+  const uint32_t cls = LoadU32(base, game + kObjectClass);
+  const int32_t party = ClassPropertyOffset(base, cls, "PartySettings");
+  const int32_t pregame = ClassPropertyOffset(base, cls, "PreGameGameSettings");
+  const uint32_t party_settings = party >= 0 ? LoadU32(base, game + party) : 0;
+  const uint32_t game_settings = pregame >= 0 ? LoadU32(base, game + pregame) : 0;
+  const int invites = party_settings ? SetBoolField(base, party_settings, "bAllowInvites", true) : -2;
+  const int join = game_settings ? SetBoolField(base, game_settings, "bAllowJoinInProgress", true) : -2;
+  const int arbitrated = game_settings ? SetBoolField(base, game_settings, "bUsesArbitration", false) : -2;
+  const int arbitrating = SetBoolField(base, game, "bUsingArbitration", false);
+  REXLOG_INFO("[Azura online] The lobby can be joined (party invites were {}, join in progress was {}, "
+              "arbitration was {} in the settings and {} in the game)",
+              invites, join, arbitrated, arbitrating);
+}
+
+// GearPersistentPartyBeaconHost.HandleGameSessionJIP answers someone who joins the host while it is
+// in a game session (its pre-game lobby or a match): in match modes 1 and 4 it asks the playlist
+// match's reservation beacon (GearGameMP_Base.HostPlayerMatchBeacon), which the lobby has not got
+// and our matches do not fill, so the answer was no; in any other mode it lets them join the 'Game'
+// session (a custom match's way). Its compares of the local MatchMode with 4 (one-byte int
+// constants) become 255, so a playlist match from the pre-game lobby is joined as a custom one.
+// Done once; the bytecode keeps its size.
+void LetLobbyMatchBeJoined(uint8_t* base, uint32_t function) {
+  static std::atomic<bool> done{false};
+  if (done.exchange(true)) return;
+  uint32_t match_mode = 0;
+  for (uint32_t field = LoadU32(base, function + kStructChildren); field; field = LoadU32(base, field + kFieldNext)) {
+    if (ObjectName(base, field) == "MatchMode") match_mode = field;
+  }
+  const uint32_t code = LoadU32(base, function + kStructScript);
+  const uint32_t size = LoadU32(base, function + kStructScript + 4);
+  constexpr uint32_t kOperand = 2 + kScriptReferenceSize;  // after ==, the token and the reference
+  int patched = 0;
+  for (uint32_t i = 0; match_mode && code && i + kOperand + 2 <= size; ++i) {
+    if (base[code + i] != kNativeEqualIntInt || !IsLocalVariable(base, code + i + 1, match_mode)) continue;
+    if (base[code + i + kOperand] == kTokenIntConstByte && base[code + i + kOperand + 1] == 4) {
+      base[code + i + kOperand + 1] = 0xFF;
+      ++patched;
+    }
+  }
+  if (patched) {
+    REXLOG_INFO("[Azura online] A playlist match from the lobby is joined as a custom one ({} compares)", patched);
+  } else {
+    REXLOG_WARN("[Azura online] HandleGameSessionJIP does not compare the match mode with 4 as expected");
+  }
 }
 
 // Callback_ReturnToMain plays the "leave" sounds unless CurrentMode is Video (1) or no category
@@ -1447,6 +1980,95 @@ bool FillOwnValueNames(PPCContext& ctx, uint8_t* base, uint32_t function) {
   return true;
 }
 
+// Bytecode for a GetNextMap that answers the pre-game lobby's URL,
+// the one a custom match travels to from the party. Run in place of the game's own code
+// (frame's Code swapped for one call), so the virtual machine makes the returned string itself.
+uint32_t LobbyNextMapCode(uint8_t* base) {
+  static const uint32_t address = [base]() -> uint32_t {
+    static constexpr char kUrl[] = "gearstart?game=GearGameContent.GearPreGameLobbyGame?listen";
+    std::vector<uint8_t> code;
+    code.push_back(kTokenReturn);
+    // UTF-16, big-endian like the rest of the console's bytecode, zero-terminated.
+    code.push_back(kTokenUnicodeStringConst);
+    for (const char* c = kUrl; *c; ++c) {
+      code.push_back(0);
+      code.push_back(static_cast<uint8_t>(*c));
+    }
+    code.push_back(0);
+    code.push_back(0);
+    code.push_back(kTokenReturn);
+    code.push_back(kTokenNothing);
+    code.push_back(kTokenEndOfScript);
+    const uint32_t at = rex::system::kernel_state()->memory()->SystemHeapAlloc(static_cast<uint32_t>(code.size()));
+    if (at) std::memcpy(base + at, code.data(), code.size());
+    return at;
+  }();
+  return address;
+}
+
+// --- Map rotation of the pre-game lobby ---
+//
+// The lobby's vote (GearPreGameGRI.InitializeMapSelectionInternal) draws four different maps at
+// random (three to vote on and the one "random" gives), each checked with
+// GearGRI.CheckMapAgainstPlaylist(MapProviderIndex, PlaylistIdToCheck), which answers the index or
+// -1 for a map the playlist does not have. How many it draws depends on
+// GetNumberOfSupportedMapsForPlaylist, which counts the maps that check answers for, so its loops
+// always end. While the vote is drawn, the check also answers -1 for the maps of the lobby's last
+// two matches; the count then leaves them out too. When too few maps would be left to draw four,
+// the count gets them back (the maps the check left out while counting) and the rest of the draw
+// checks without leaving any out, so the vote may offer them.
+constexpr size_t kLobbyMapMemory = 2;  // matches whose maps the vote leaves out
+constexpr int32_t kVoteMaps = 4;       // maps the vote draws
+std::mutex g_lobby_maps_mutex;
+std::deque<std::string> g_lobby_maps;  // the lobby's last matches' maps, newest last, lower case
+std::atomic<bool> g_drawing_vote_maps{false};
+std::atomic<bool> g_vote_leaves_out_maps{false};
+std::atomic<int32_t> g_maps_left_out{0};  // by the check, since the count began
+
+std::string Lower(std::string text) {
+  for (char& c : text) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  return text;
+}
+
+// The text of the FString at `address` (UTF-16BE), with '?' for what is not ASCII.
+std::string FStringText(const uint8_t* base, uint32_t address) {
+  const uint32_t data = LoadU32(base, address);
+  const uint32_t count = LoadU32(base, address + 4);
+  std::string text;
+  for (uint32_t i = 0; data && i + 1 < count && i < 256; ++i) {
+    const uint16_t w = static_cast<uint16_t>(base[data + i * 2] << 8 | base[data + i * 2 + 1]);
+    text.push_back(w < 128 ? static_cast<char>(w) : '?');
+  }
+  return text;
+}
+
+// The offset of the parameter or local `name` in `function`'s locals, or -1.
+int32_t LocalOffset(const uint8_t* base, uint32_t function, const char* name) {
+  for (uint32_t prop = LoadU32(base, function + kStructChildren); prop; prop = LoadU32(base, prop + kFieldNext)) {
+    if (ObjectName(base, prop) == name) return static_cast<int32_t>(LoadU32(base, prop + kPropertyOffset));
+  }
+  return -1;
+}
+
+// Remembers `map` as the lobby's latest match, forgetting the oldest past kLobbyMapMemory.
+void RememberLobbyMap(const std::string& map) {
+  std::lock_guard lock(g_lobby_maps_mutex);
+  g_lobby_maps.push_back(Lower(map));
+  while (g_lobby_maps.size() > kLobbyMapMemory) g_lobby_maps.pop_front();
+}
+
+bool IsRecentLobbyMap(const std::string& map) {
+  std::lock_guard lock(g_lobby_maps_mutex);
+  return std::find(g_lobby_maps.begin(), g_lobby_maps.end(), Lower(map)) != g_lobby_maps.end();
+}
+
+std::string RecentLobbyMaps() {
+  std::lock_guard lock(g_lobby_maps_mutex);
+  std::string text;
+  for (const auto& map : g_lobby_maps) text += (text.empty() ? "" : ", ") + map;
+  return text.empty() ? "none" : text;
+}
+
 // --- Restart message box ---
 //
 // When the player leaves a category of the Options menu (from the main menu) with a new value for
@@ -1639,6 +2261,45 @@ std::atomic<bool> g_start_taken[4];
 std::atomic<int32_t> g_custom_map_id{-1};
 constexpr uint32_t kCustomMapLocalsSize = 16;  // MapId
 uint32_t g_custom_map_locals = 0;
+
+// Sets bool property `name` of `object`. Returns whether it found it.
+bool SetBoolProperty(uint8_t* base, uint32_t object, const char* name) {
+  for (uint32_t owner = LoadU32(base, object + kObjectClass); owner; owner = LoadU32(base, owner + kStructSuper)) {
+    for (uint32_t field = LoadU32(base, owner + kStructChildren); field; field = LoadU32(base, field + kFieldNext)) {
+      if (ObjectName(base, field) != name) continue;
+      const uint32_t mask = LoadU32(base, field + kBoolPropertyBitMask);
+      // A bool's mask has exactly one bit set; anything else means the layout is not the one read.
+      if (ObjectName(base, LoadU32(base, field + kObjectClass)) != "BoolProperty" || !mask || (mask & (mask - 1))) {
+        return false;
+      }
+      const uint32_t word = object + LoadU32(base, field + kPropertyOffset);
+      StoreU32(base, word, LoadU32(base, word) | mask);
+      return true;
+    }
+  }
+  return false;
+}
+
+// --- Lambency ---
+//
+// Lambency (achievement 49) spreads by execution in Versus (alboria-notes:azura/
+// reverse-engineering.md, "Lambency"). The game starts it from its developers: GearProfileSettings.IsEpicDev() answers yes
+// when bIsEpicDev is set, which the game never sets on Azura, or when the profile's setting 365 is,
+// and the first time bIsEpicDev is set it stores 365 in the profile. A developer's
+// GearPC.CheckViralAchievement unlocks the achievement, and their execution passes it on.
+//
+// An Alboria account that starts the contagion (alboria::Identity::lambency, which the admin tool
+// sets) gets bIsEpicDev on its profile right before IsEpicDev runs, so the game does the rest:
+// stores 365 (the profile stays a developer's, in System Link or offline too), unlocks the
+// achievement and spreads it.
+void MarkLambencySource(uint8_t* base, uint32_t profile_settings) {
+  static std::atomic<bool> logged{false};
+  if (!SetBoolProperty(base, profile_settings, "bIsEpicDev")) {
+    if (!logged.exchange(true)) REXLOG_WARN("[Azura online] GearProfileSettings.bIsEpicDev not found; no Lambency");
+    return;
+  }
+  if (!logged.exchange(true)) REXLOG_INFO("[Azura online] The Alboria account starts the Lambency contagion");
+}
 
 // Whether bool property `name` of `object` is set; false when it is not found.
 bool BoolPropertySet(const uint8_t* base, uint32_t object, const char* name) {
@@ -1973,6 +2634,280 @@ bool PatchTravelURL(uint8_t* base, uint32_t fstring_addr) {
   return true;
 }
 
+// --- Host migration (alboria-notes:azura/reverse-engineering.md, "Host migration") ---
+//
+// When an online match's host leaves, the game's own peer host migration hands the match to the
+// best of the other players: it reloads the map as the new host and the others travel to it. The
+// runtime turns the migration on for match maps (GearGRI.PostBeginPlay), starts it as soon as
+// Alboria says the host went silent (CloseSilentHost), and gives the new host what the migration
+// does not keep: its bots, each player's team and the round in play (SaveRound, ApplySavedRound).
+
+// The WorldInfo whose migration began (its round is saved once), 0 when none.
+std::atomic<uint32_t> g_migration_world{0};
+// The WorldInfo of the match map in play (GearGRI.PostBeginPlay), checked to still be one before
+// each use: a travel frees it.
+std::atomic<uint32_t> g_match_world{0};
+// Set while a match's InitGameReplicationInfo runs when the migration restored it (UpdateGRI).
+std::atomic<bool> g_migration_restored{false};
+// The new host has yet to give the saved round back (ApplySavedRound). The game's thread only.
+bool g_apply_saved_round = false;
+
+uint32_t WorldGri(const uint8_t* base, uint32_t world) {
+  const int32_t offset = ClassPropertyOffset(base, LoadU32(base, world + kObjectClass), "GRI");
+  const uint32_t gri = offset >= 0 ? LoadU32(base, world + offset) : 0;
+  return gri >= 0x10000 ? gri : 0;
+}
+
+// The matchmade invite waiting for the party's search session to be deleted (steady clock ticks
+// since it started waiting, 0 when none waits); see OnNoPartialPartyAvailable's hook.
+std::atomic<int64_t> g_invite_waits_since{0};
+constexpr auto kInviteWaitLimit = std::chrono::seconds(2);
+
+void DeliverWaitingInvite(const char* why) {
+  if (!g_invite_waits_since.exchange(0)) return;
+  rex::system::xam::alboria::DeliverMatchInvite();
+  REXLOG_INFO("[Azura online] The match's invite is delivered: {}", why);
+}
+
+// Delivers a waiting invite whose session cleanup never came.
+void DeliverLateInvite() {
+  const int64_t since = g_invite_waits_since.load();
+  if (!since) return;
+  const auto waited = std::chrono::steady_clock::now().time_since_epoch() - std::chrono::steady_clock::duration(since);
+  if (waited >= kInviteWaitLimit) DeliverWaitingInvite("no session cleanup came");
+}
+
+// A match's host that went silent on every Alboria path (alboria::TakeHostSilent) has gone, but the
+// game only closes its connection to the host after ConnectionTimeout without a packet (15 s
+// online, menu_patches.cpp), and only starts its host migration then. The engine closes a
+// connection once its net driver's time is ConnectionTimeout past the connection's LastReceiveTime,
+// so that is put far back on the host's connection: the game closes it on its next tick, the way it
+// would have. The engine's net driver is the global at 0x83429828, +292 (an IpNetDriverLive); its
+// time is a double at +320. A client's connection to the host is the driver's +4 (an
+// IpConnectionLive), whose LastReceiveTime is a double at +276; the connections to the other
+// players, in its array at +68, keep hearing from them and are left alone.
+constexpr uint32_t kEngineGlobal = 0x83429828;
+constexpr uint32_t kEngineNetDriver = 292;
+constexpr uint32_t kNetDriverTime = 320;
+constexpr uint32_t kNetDriverHostConnection = 4;
+constexpr uint32_t kConnectionLastReceiveTime = 276;
+
+double LoadF64(const uint8_t* base, uint32_t address) {
+  return std::bit_cast<double>(uint64_t(LoadU32(base, address)) << 32 | LoadU32(base, address + 4));
+}
+
+void CloseSilentHost(uint8_t* base) {
+  // Silent for a while, or gone from the match room on Alboria (an idle host removed, a host that
+  // left): both mean the host is gone, the second at once. A host gone from the room is looked for again on the next frames for a few seconds (kRetry)
+  // when the game's connection to it is not found at once.
+  using Clock = std::chrono::steady_clock;
+  constexpr auto kRetry = std::chrono::seconds(5);
+  static std::optional<Clock::time_point> moved_out_since;
+  const bool silent = rex::system::xam::alboria::TakeHostSilent();
+  if (rex::system::xam::alboria::TakeHostMovedOut()) moved_out_since = Clock::now();
+  const bool moved_out = moved_out_since.has_value();
+  if (!silent && !moved_out) return;
+  const uint32_t engine = LoadU32(base, kEngineGlobal);
+  const uint32_t driver = engine ? LoadU32(base, engine + kEngineNetDriver) : 0;
+  const uint32_t connection = driver ? LoadU32(base, driver + kNetDriverHostConnection) : 0;
+  const uint32_t connection_class = connection >= 0x10000 ? LoadU32(base, connection + kObjectClass) : 0;
+  if (connection_class < 0x10000 || ObjectName(base, connection_class).find("Connection") == std::string::npos) {
+    static int logged = 0;
+    if (logged++ < 3) REXLOG_WARN("[Azura online] The match's host is gone, but the game has no connection to it");
+    if (moved_out && Clock::now() - *moved_out_since > kRetry) moved_out_since.reset();
+    return;
+  }
+  moved_out_since.reset();
+  const double now = LoadF64(base, driver + kNetDriverTime);
+  const double heard = LoadF64(base, connection + kConnectionLastReceiveTime);
+  // Only a connection that has indeed been silent (the SDK waits 8 s), unless the host left the
+  // room on Alboria: the field is not touched otherwise.
+  if (!moved_out && !(now - heard >= 6.0 && now - heard <= 60.0)) {
+    REXLOG_WARN("[Azura online] The match's host is silent, but its connection heard it {:.1f} s ago", now - heard);
+    return;
+  }
+  const uint64_t bits = std::bit_cast<uint64_t>(now - 1000.0);
+  StoreU32(base, connection + kConnectionLastReceiveTime, static_cast<uint32_t>(bits >> 32));
+  StoreU32(base, connection + kConnectionLastReceiveTime + 4, static_cast<uint32_t>(bits));
+  REXLOG_INFO("[Azura online] The match's host is {} ({:.1f} s since heard): its connection closes now",
+              moved_out ? "gone from the match room on Alboria" : "silent", now - heard);
+}
+
+// Every Int, Float and Byte value of `object` its classes up to `stop`
+// declare, each element of a static array included, as (address, name, raw bits): to put back what a
+// call changed. Bools are left out: their bits share words.
+struct NumberSlot {
+  uint32_t address;
+  std::string name;
+  uint32_t bits;
+  bool byte;  // one byte wide (ByteProperty) rather than four
+};
+// UProperty's CPF_Net: the property is replicated, so every player has the host's value.
+constexpr uint32_t kPropertyNet = 0x20;
+
+std::vector<NumberSlot> SnapshotNumbers(const uint8_t* base, uint32_t object, const char* stop,
+                                        bool replicated_only = false) {
+  std::vector<NumberSlot> slots;
+  for (uint32_t owner = LoadU32(base, object + kObjectClass); owner; owner = LoadU32(base, owner + kStructSuper)) {
+    if (ObjectName(base, owner) == stop) break;
+    for (uint32_t field = LoadU32(base, owner + kStructChildren); field; field = LoadU32(base, field + kFieldNext)) {
+      const std::string type = ObjectName(base, LoadU32(base, field + kObjectClass));
+      const bool byte = type == "ByteProperty";
+      if (type != "IntProperty" && type != "FloatProperty" && !byte) continue;
+      // The low word of the 64-bit flags (big-endian: the second word).
+      if (replicated_only && !(LoadU32(base, field + kPropertyFlags + 4) & kPropertyNet)) continue;
+      const uint32_t dim = std::clamp<uint32_t>(LoadU32(base, field + 64), 1, 16);
+      const uint32_t size = byte ? 1 : 4;
+      for (uint32_t i = 0; i < dim; ++i) {
+        const uint32_t address = object + LoadU32(base, field + kPropertyOffset) + i * size;
+        const std::string name = dim > 1 ? fmt::format("{}[{}]", ObjectName(base, field), i) : ObjectName(base, field);
+        slots.push_back({address, name, byte ? base[address] : LoadU32(base, address), byte});
+      }
+    }
+  }
+  return slots;
+}
+
+// Puts back the values of `before` that changed, but those named in `keep`; logs each one.
+void RestoreNumbers(uint8_t* base, const std::vector<NumberSlot>& before, std::initializer_list<const char*> keep,
+                    const char* what) {
+  std::string changed;
+  for (const NumberSlot& slot : before) {
+    const uint32_t now = slot.byte ? base[slot.address] : LoadU32(base, slot.address);
+    if (now == slot.bits) continue;
+    const bool kept = std::any_of(keep.begin(), keep.end(), [&](const char* name) { return slot.name == name; });
+    changed += fmt::format(" {} {}->{}{};", slot.name, slot.bits, now, kept ? " (kept)" : "");
+    if (kept) continue;
+    if (slot.byte) {
+      base[slot.address] = static_cast<uint8_t>(slot.bits);
+    } else {
+      StoreU32(base, slot.address, slot.bits);
+    }
+  }
+  REXLOG_INFO("[Azura online] Host migration: {} changed (raw values, put back unless kept):{}", what,
+              changed.empty() ? " nothing" : changed);
+}
+
+// The match in play when a migration begins, as every player sees it: the replicated numbers of
+// the GRI and of each team (by TeamIndex), whatever the game mode keeps there (lives, points, round
+// time, rounds). The migration itself keeps the players' and the teams' scores, but its new host
+// starts the round over; once that round is in progress, the new host writes these back
+// (ApplySavedRound). Object references are not kept (the reloaded map's objects are new ones), nor
+// what the host never replicated. The game's thread only.
+struct SavedRound {
+  bool valid = false;
+  std::vector<NumberSlot> gri;
+  std::map<int32_t, std::vector<NumberSlot>> teams;  // by TeamIndex
+  // Each player's team, by player name (GRI.PRIArray): the migration's own record answers the
+  // same team for every player (GetTeamId), so players are put back on these instead.
+  std::map<std::string, int32_t> player_teams;
+};
+SavedRound g_saved_round;
+
+// The GRI's teams (GRI.Teams), by TeamIndex.
+std::map<int32_t, uint32_t> GriTeams(const uint8_t* base, uint32_t gri) {
+  std::map<int32_t, uint32_t> teams;
+  const uint32_t cls = LoadU32(base, gri + kObjectClass);
+  const int32_t offset = ClassPropertyOffset(base, cls, "Teams");
+  for (uint32_t i = 0; offset >= 0 && i < LoadU32(base, gri + offset + 4) && i < 8; ++i) {
+    const uint32_t team = LoadU32(base, LoadU32(base, gri + offset) + i * 4);
+    if (team < 0x10000) continue;
+    const int32_t index = ClassPropertyOffset(base, LoadU32(base, team + kObjectClass), "TeamIndex");
+    teams[index >= 0 ? static_cast<int32_t>(LoadU32(base, team + index)) : static_cast<int32_t>(i)] = team;
+  }
+  return teams;
+}
+
+void SaveRound(const uint8_t* base, uint32_t world) {
+  const uint32_t gri = WorldGri(base, world);
+  if (!gri) {
+    REXLOG_WARN("[Azura online] Host migration: no GRI, the round is not saved");
+    return;
+  }
+  g_saved_round = {};
+  g_saved_round.valid = true;
+  g_saved_round.gri = SnapshotNumbers(base, gri, "Info", true);
+  for (const auto& [index, team] : GriTeams(base, gri)) {
+    g_saved_round.teams[index] = SnapshotNumbers(base, team, "Info", true);
+  }
+  const uint32_t gri_class = LoadU32(base, gri + kObjectClass);
+  const int32_t players = ClassPropertyOffset(base, gri_class, "PRIArray");
+  std::string saved_teams;
+  for (uint32_t i = 0; players >= 0 && i < LoadU32(base, gri + players + 4) && i < 32; ++i) {
+    const uint32_t pri = LoadU32(base, LoadU32(base, gri + players) + i * 4);
+    if (pri < 0x10000) continue;
+    const uint32_t pri_class = LoadU32(base, pri + kObjectClass);
+    const int32_t name = ClassPropertyOffset(base, pri_class, "PlayerName");
+    const int32_t team = ClassPropertyOffset(base, pri_class, "Team");
+    const uint32_t info = team >= 0 ? LoadU32(base, pri + team) : 0;
+    const int32_t index = info >= 0x10000 ? ClassPropertyOffset(base, LoadU32(base, info + kObjectClass), "TeamIndex") : -1;
+    if (name < 0 || index < 0) continue;
+    const std::string player = FStringText(base, pri + name);
+    // TeamIndex is an int (4 bytes, big-endian).
+    const int32_t team_index = static_cast<int32_t>(LoadU32(base, info + index));
+    g_saved_round.player_teams[player] = team_index;
+    saved_teams += fmt::format(" {} {};", player, team_index);
+  }
+  REXLOG_INFO("[Azura online] Host migration: the round saved ({} values of the GRI, {} teams); players' teams:{}",
+              g_saved_round.gri.size(), g_saved_round.teams.size(), saved_teams);
+}
+
+// Writes the values of `saved` into `object`'s same-named ones, but `skip`; returns what changed.
+std::string WriteSavedNumbers(uint8_t* base, uint32_t object, const std::vector<NumberSlot>& saved) {
+  // The new host's own state machine and counts it keeps itself.
+  static const std::set<std::string> skip = {"GameStatus", "Size", "NumPlayersAliveOnTeam", "TeamIndex"};
+  std::string changed;
+  for (const NumberSlot& now : SnapshotNumbers(base, object, "Info", true)) {
+    if (skip.count(now.name.substr(0, now.name.find('[')))) continue;
+    const auto it = std::find_if(saved.begin(), saved.end(), [&](const NumberSlot& s) { return s.name == now.name; });
+    if (it == saved.end() || it->bits == now.bits) continue;
+    if (now.byte) {
+      base[now.address] = static_cast<uint8_t>(it->bits);
+    } else {
+      StoreU32(base, now.address, it->bits);
+    }
+    changed += fmt::format(" {} {:08X}->{:08X};", now.name, now.bits, it->bits);
+  }
+  return changed;
+}
+
+// The new host of a migration: once its new round has been in progress for a second (the game
+// sets the round up as it starts it), it gets the saved round back.
+void ApplySavedRound(uint8_t* base) {
+  static std::chrono::steady_clock::time_point in_progress_since{};
+  if (!g_apply_saved_round) return;
+  const uint32_t world = g_match_world.load();
+  if (!world) return;
+  const uint32_t world_class = LoadU32(base, world + kObjectClass);
+  if (world_class < 0x10000 || ObjectName(base, world_class) != "WorldInfo") return;
+  const uint32_t gri = WorldGri(base, world);
+  const int32_t status = gri ? ClassPropertyOffset(base, LoadU32(base, gri + kObjectClass), "GameStatus") : -1;
+  constexpr uint8_t kRoundInProgress = 3;
+  if (status < 0 || base[gri + status] != kRoundInProgress) {
+    in_progress_since = {};
+    return;
+  }
+  const auto now = std::chrono::steady_clock::now();
+  if (in_progress_since == std::chrono::steady_clock::time_point{}) in_progress_since = now;
+  if (now - in_progress_since < std::chrono::seconds(1)) return;
+  g_apply_saved_round = false;
+  in_progress_since = {};
+  if (!g_saved_round.valid) {
+    REXLOG_WARN("[Azura online] Host migration: no saved round to give back");
+    return;
+  }
+  const std::string gri_changed = WriteSavedNumbers(base, gri, g_saved_round.gri);
+  REXLOG_INFO("[Azura online] Host migration: the round given back, GRI:{}", gri_changed.empty() ? " nothing" : gri_changed);
+  for (const auto& [index, team] : GriTeams(base, gri)) {
+    const auto saved = g_saved_round.teams.find(index);
+    if (saved == g_saved_round.teams.end()) continue;
+    const std::string team_changed = WriteSavedNumbers(base, team, saved->second);
+    REXLOG_INFO("[Azura online] Host migration: the round given back, team {}:{}", index,
+                team_changed.empty() ? " nothing" : team_changed);
+  }
+  g_saved_round = {};
+}
+
 // --- Rows that depend on other rows ---
 //
 // Some rows of ours are only shown with certain values of others (the sharpness row only with an
@@ -2097,6 +3032,20 @@ extern "C" void sub_822DF4D0(PPCContext& __restrict ctx, uint8_t* base) {
     if (ctx.r6.u32) azura::script::NoteClass(LoadU32(base, ctx.r6.u32 + kObjectOuter));
     if (ctx.r3.u32) azura::script::NoteClass(LoadU32(base, ctx.r3.u32 + kObjectClass));
   }
+  // A host migration begins (WorldInfo.BeginHostMigration; the game calls it on every frame while
+  // the migration waits, and only the first counts): every player saves the round in play, which
+  // the one that becomes the host gives back. The game also sees a newer system for a minute: it
+  // migrates a Live session (XSessionMigrateHost) only on 0x200CE900 or later; elsewhere it keeps
+  // the oldest paths.
+  if (ctx.r6.u32 && HostMigration() && ObjectName(base, ctx.r6.u32) == "BeginHostMigration" &&
+      g_migration_world.load() != ctx.r3.u32) {
+    g_migration_world.store(ctx.r3.u32);
+    SaveRound(base, ctx.r3.u32);
+    constexpr uint32_t kMigratingSystemVersion = 0x200ED800;
+    constexpr int kMigrationSeconds = 60;
+    rex::system::xam::alboria::SetSystemVersionOverride(kMigratingSystemVersion, kMigrationSeconds);
+    REXLOG_INFO("[Azura online] Host migration begins");
+  }
   if (REXCVAR_GET(script_trace)) {
     const uint32_t function = ctx.r6.u32;
     bool first = false;
@@ -2132,6 +3081,35 @@ void SetLocalCoopHandler(std::function<void()> handler) {
 void SetConnectionHandler(std::function<void()> handler) {
   std::lock_guard lock(g_quit_mutex);
   g_connection_handler = std::move(handler);
+}
+
+const char* TakeOnlineMenuNotice() {
+  switch (g_online_menu_notice.exchange(kNoNotice)) {
+    case kJoinFailedNotice:
+      return "join_failed";
+    case kRoomClosedNotice:
+      return "room_closed";
+    default:
+      return nullptr;
+  }
+}
+
+void SetVersusOnlineHandler(std::function<void(int)> handler) {
+  std::lock_guard lock(g_quit_mutex);
+  g_versus_online_handler = std::move(handler);
+}
+
+
+void RequestMatchmadeLobby(int32_t playlist) {
+  g_menu_lobby_request.store(playlist);
+}
+
+void RequestMatchInvite() {
+  g_menu_invite_request.store(true);
+}
+
+void RequestWarJournal() {
+  g_menu_journal_request.store(true);
 }
 
 void JoinSystemLinkPartyInRoom() {
@@ -2312,6 +3290,23 @@ bool OnlineMode() {
   return REXCVAR_GET(network_mode) == "online" && !REXCVAR_GET(alboria_live);
 }
 
+// Online play through the game's own Xbox Live parties on Alboria (alboria_live, the default). The
+// SDK signs player 1 in to Live while Alboria answers and accepts the account
+// (alboria::LiveSignedIn), and the game then creates, changes and joins its Live parties by itself.
+// The runtime only offers Joinable and Invite only whatever the sign-in (AnswerCanPlayOnline), so
+// that choosing one tries Alboria again: the service is checked as the party options open, and a
+// choice made while still signed out gets the game's message, which says online play is not
+// possible on Alboria (menu_patches.cpp), and stays in the party the player had.
+bool LiveMode() {
+  return REXCVAR_GET(network_mode) == "online" && REXCVAR_GET(alboria_live);
+}
+
+// Whether a match's host leaving hands the match to another player (online only: System Link has
+// no Alboria to tell that the host went silent, and its migration is untested).
+bool HostMigration() {
+  return LiveMode() && REXCVAR_GET(host_migration);
+}
+
 // Answers CanAllPlayersPlayOnline with yes when online. The frame is about to run it; returns
 // whether it was answered.
 // The party the game creates when it leaves the title screen (UIScene_FrontEnd.
@@ -2351,7 +3346,7 @@ std::string TakeRefusalNotice() {
 std::atomic<bool> g_room_failed{false};
 
 bool AnswerCanPlayOnline(PPCContext& ctx, uint8_t* base) {
-  if (!OnlineMode()) return false;
+  if (!OnlineMode() && !LiveMode()) return false;
   if (ctx.r5.u32) StoreU32(base, ctx.r5.u32, 1);  // ReturnValue
   return true;
 }
@@ -2359,8 +3354,28 @@ bool AnswerCanPlayOnline(PPCContext& ctx, uint8_t* base) {
 // A party type chosen in the party options, about to be handled by Callback_DialogItemPress on the
 // front end scene in `ctx`. Returns whether it was handled here instead.
 bool ChooseOnlinePartyType(PPCContext& ctx, uint8_t* base, uint32_t dialog_item_press) {
-  if (!OnlineMode()) return false;
   namespace alboria = rex::system::xam::alboria;
+  if (LiveMode()) {
+    const int32_t item = SmallParam(base, dialog_item_press, ctx.r4.u32, "Idx");
+    if (item != kJoinableItem && item != kInviteOnlyItem) {
+      // System Link or Local: the game deletes its Live party, and the party leaves Alboria.
+      if (alboria::InRoom()) {
+        REXLOG_INFO("[Azura online] Leaving the Alboria room for another party type");
+        alboria::Leave();
+      }
+    } else if (!alboria::LiveSignedIn()) {
+      // Signed out of Live (Alboria did not answer, refused the account or a room failed): the
+      // script's message, and Alboria is checked again for the next choice. The room overlay names
+      // a refusal.
+      const std::string refusal = alboria::SignInRefusal();
+      REXLOG_INFO("[Azura online] Not signed in to Live on Alboria{}: no Live party",
+                  refusal.empty() ? std::string() : " (" + refusal + ")");
+      if (!refusal.empty()) NoticeRefusal(refusal);
+      alboria::CheckService();
+    }
+    return false;
+  }
+  if (!OnlineMode()) return false;
   const int32_t item = SmallParam(base, dialog_item_press, ctx.r4.u32, "Idx");
   // The player's choice is the party the game starts with next time (startup_party). A Local the
   // runtime forced at start-up ends here too.
@@ -2813,6 +3828,12 @@ constexpr uint32_t kReturnToMainMenuLocalsSize = 64;  // bReturnToStartScreen, b
 uint32_t g_return_to_menu_locals = 0;
 // The message box of a room that failed or ended is still to be shown in the main menu.
 std::atomic<bool> g_room_message_pending{false};
+// With Live parties, the game could not join the host's party of the room it joined (the session
+// Alboria brought as an accepted invite): GearPC.NotifyInviteFailed ran while this installation was
+// a member of that room. The runtime has left it, and the party in the main menu becomes Local, as
+// the game's message (the one of a failed room) says.
+std::atomic<bool> g_live_join_failed{false};
+void RecreateOnlinePartyAfterFailedMatch();
 
 // The function `name` of the player controller's class or one it extends; 0 when none has it.
 uint32_t FindControllerFunction(uint8_t* base, uint32_t controller, const char* name) {
@@ -2829,6 +3850,329 @@ bool InMainMenu(uint8_t* base) {
   const uint32_t scene = g_front_end_scene.load(std::memory_order_relaxed);
   return g_front_end.load(std::memory_order_relaxed) && scene &&
          !(LoadU32(base, scene + kFrontEndFlags) & kOnTitleScreenBit);
+}
+
+// The host of a matchmade pre-game lobby places its players on the teams Alboria decided: the lobby
+// gives its teams as a custom match does, balancing by numbers and knowing nothing of parties (a
+// playlist match took them from Xbox LIVE's reservations, which Alboria has none of). Alboria keeps
+// each party on one team and shares the players out (alboria::MatchTeams, kept fresh by NoteMatchPlayers);
+// every kPartyTeamsEvery on a player input frame (`ctx`) of the host in the lobby, each player not
+// on its team goes to it (ChangeTeam) while it has a place (kTeamPlaces). Players are matched by
+// name: the game's PlayerName is the Alboria name without its tag. Bots are on no Alboria team and
+// stay as the game placed them (and are not counted for the places).
+constexpr auto kPartyTeamsEvery = std::chrono::seconds(2);
+constexpr int kTeamPlaces = 5;
+std::chrono::steady_clock::time_point g_party_teams_checked{};
+
+void PlaceAlboriaTeams(PPCContext& ctx, uint8_t* base) {
+  namespace alboria = rex::system::xam::alboria;
+  if (g_lobby_playlist.load() < 0) return;
+  const auto now = std::chrono::steady_clock::now();
+  if (now - g_party_teams_checked < kPartyTeamsEvery) return;
+  g_party_teams_checked = now;
+  const alboria::Status status = alboria::GetStatus();
+  if (!status.in_match || !status.host) return;
+  const uint32_t game = WorldGame(base, ctx.r3.u32, "PreGameLobbyGame");
+  if (!game) return;
+  const auto teams = alboria::MatchTeams();
+  if (teams.empty()) return;
+  const uint32_t game_class = LoadU32(base, game + kObjectClass);
+  const uint32_t change_team = FindInheritedFunction(base, game_class, "ChangeTeam");
+  const int32_t other = change_team ? ParamOffset(base, change_team, "Other") : -1;
+  const int32_t number = change_team ? ParamOffset(base, change_team, "N") : -1;
+  const int32_t gri_offset = ClassPropertyOffset(base, game_class, "GameReplicationInfo");
+  const uint32_t gri = gri_offset >= 0 ? LoadU32(base, game + gri_offset) : 0;
+  const int32_t pri_array = gri ? ClassPropertyOffset(base, LoadU32(base, gri + kObjectClass), "PRIArray") : -1;
+  if (other < 0 || number < 0 || pri_array < 0) return;
+  // The lobby's players: name, controller and team index (-1 without a team), and each team's size.
+  struct Player {
+    std::string name;
+    uint32_t controller;
+    int32_t team;
+  };
+  std::vector<Player> players;
+  std::map<int32_t, int> sizes;
+  for (uint32_t i = 0; i < LoadU32(base, gri + pri_array + 4) && i < 32; ++i) {
+    const uint32_t pri = LoadU32(base, LoadU32(base, gri + pri_array) + i * 4);
+    if (pri < 0x10000) continue;
+    const uint32_t pri_class = LoadU32(base, pri + kObjectClass);
+    const int32_t name = ClassPropertyOffset(base, pri_class, "PlayerName");
+    const int32_t owner = ClassPropertyOffset(base, pri_class, "Owner");
+    const int32_t team = ClassPropertyOffset(base, pri_class, "Team");
+    const uint32_t info = team >= 0 ? LoadU32(base, pri + team) : 0;
+    const int32_t index = info >= 0x10000 ? ClassPropertyOffset(base, LoadU32(base, info + kObjectClass), "TeamIndex") : -1;
+    if (name < 0 || owner < 0) continue;
+    // TeamIndex is an int (4 bytes, big-endian).
+    const int32_t team_index = index >= 0 ? static_cast<int32_t>(LoadU32(base, info + index)) : -1;
+    players.push_back({FStringText(base, pri + name), LoadU32(base, pri + owner), team_index});
+  }
+  // Each team's players of Alboria's teams (bots, who take the places left, are not counted).
+  std::set<std::string> placed;
+  for (const auto& team : teams) {
+    for (const std::string& full : team) placed.insert(full.substr(0, full.rfind('#')));
+  }
+  for (const Player& player : players) {
+    if (player.team >= 0 && placed.count(player.name)) ++sizes[player.team];
+  }
+  constexpr uint32_t kLocalsSize = 128;
+  static uint32_t locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kLocalsSize);
+  for (size_t team = 0; team < teams.size(); ++team) {
+    const int32_t target = GameTeamOf(static_cast<int32_t>(team));
+    for (const std::string& full : teams[team]) {
+      const std::string name = full.substr(0, full.rfind('#'));
+      for (Player& player : players) {
+        if (player.name != name || player.controller < 0x10000 || player.team == target) continue;
+        if (sizes[target] >= kTeamPlaces) break;
+        std::memset(base + locals, 0, kLocalsSize);
+        StoreU32(base, locals + other, player.controller);
+        if (ParamSize(base, change_team, "N") == 1) {
+          base[locals + number] = static_cast<uint8_t>(target);
+        } else {
+          StoreU32(base, locals + number, static_cast<uint32_t>(target));
+        }
+        RunOnObject(ctx, base, game, change_team, locals);
+        if (player.team >= 0) --sizes[player.team];
+        ++sizes[target];
+        REXLOG_INFO("[Azura online] {} goes to team {} in the lobby, as Alboria placed them", player.name, target);
+        player.team = target;
+      }
+    }
+  }
+}
+
+// Clears bIsPartyHost in every slot of the party panel `panel` (UIWidget_SmallPartyPanel.SlotList, a
+// TArray of PartySlotData), so it marks nobody as the party's host. The struct's layout (each field's
+// offset, the bool's bit) is read from the game's own definition.
+void ClearPartyHostMarks(uint8_t* base, uint32_t panel) {
+  const uint32_t panel_class = LoadU32(base, panel + kObjectClass);
+  const int32_t slots_at = ClassPropertyOffset(base, panel_class, "SlotList");
+  if (slots_at < 0) return;
+  // The struct PartySlotData among the class's (or a super class's) fields.
+  uint32_t slot_struct = 0;
+  for (uint32_t owner = panel_class; owner && !slot_struct; owner = LoadU32(base, owner + kStructSuper)) {
+    for (uint32_t field = LoadU32(base, owner + kStructChildren); field; field = LoadU32(base, field + kFieldNext)) {
+      if (ObjectName(base, field) == "PartySlotData") slot_struct = field;
+    }
+  }
+  if (!slot_struct) return;
+  BoolField host;
+  uint32_t size = 0;  // the struct's size: past its last field, rounded up to 4 bytes
+  for (uint32_t field = LoadU32(base, slot_struct + kStructChildren); field; field = LoadU32(base, field + kFieldNext)) {
+    const uint32_t offset = LoadU32(base, field + kPropertyOffset);
+    const std::string type = ObjectName(base, LoadU32(base, field + kObjectClass));
+    const uint32_t field_size = type == "StrProperty" || type == "ArrayProperty" ? 12 : type == "ByteProperty" ? 1 : 4;
+    size = std::max(size, (offset + field_size + 3) & ~3u);
+    if (ObjectName(base, field) == "bIsPartyHost") {
+      host = {static_cast<int32_t>(offset), LoadU32(base, field + kBoolPropertyBitMask)};
+    }
+  }
+  if (host.offset < 0 || !size) return;
+  const uint32_t data = LoadU32(base, panel + static_cast<uint32_t>(slots_at));
+  const uint32_t count = LoadU32(base, panel + static_cast<uint32_t>(slots_at) + 4);
+  for (uint32_t i = 0; data && i < count && i < 32; ++i) {
+    const uint32_t at = data + i * size + static_cast<uint32_t>(host.offset);
+    StoreU32(base, at, LoadU32(base, at) & ~host.mask);
+  }
+}
+
+// Alboria answers the game's questions about a match's reservations. A playlist match (match type 4)
+// asks its reservation beacons (GearGameMP_Base.HostPlayerMatchBeacon in the match,
+// HostPregameLobbyPlayerMatchBeacon in the pre-game lobby, both GearPlayerMatchBeaconHost) for the
+// team of each player (GetTeamForCurrentPlayer: when it places someone, at each respawn wave for
+// those who joined in progress, when they change team, for whom they may spectate, at the start of
+// the match) and for how many players a team holds (GetOccupiedTeamSize: whether a party may
+// invite more). On Xbox LIVE matchmaking filled those reservations; Alboria's matches have none, so
+// the beacon's own answer is "no team" (-1), which sends a player who joins in progress back to the
+// menu at the first wave. The teams Alboria decided (alboria::MatchTeams, for the match's host)
+// answer instead, so the game's own way for a playlist match runs: each player is on its party's
+// team, and one who joins in progress takes the place of a bot of that team when it dies.
+//
+// The beacon asks by UniqueId (the player's online XUID), which Alboria does not know; NoteMatchPlayers
+// keeps which player's name goes with each UniqueId, from the match's players (the game's PlayerName
+// is the Alboria name without its tag), and an unknown UniqueId has them read again at once. A player Alboria has not placed yet (a team list older
+// than their arrival) goes to the team Alboria gave fewer players, so they are not turned away, and
+// the teams are read again.
+constexpr auto kMatchPlayersEvery = std::chrono::seconds(2);
+std::chrono::steady_clock::time_point g_match_players_noted{};
+std::mutex g_match_players_mutex;
+std::map<uint64_t, std::string> g_match_player_names;  // UniqueId → PlayerName
+
+// The world's game NoteMatchPlayers last saw (the lobby's or the match's), 0 when none.
+std::atomic<uint32_t> g_noted_game{0};
+
+// Notes the UniqueId and name of each player of `game` (a GameInfo); returns how many it has.
+int NotePlayersOf(uint8_t* base, uint32_t game) {
+  const int32_t gri_offset = ClassPropertyOffset(base, LoadU32(base, game + kObjectClass), "GameReplicationInfo");
+  const uint32_t gri = gri_offset >= 0 ? LoadU32(base, game + gri_offset) : 0;
+  const int32_t pri_array = gri >= 0x10000 ? ClassPropertyOffset(base, LoadU32(base, gri + kObjectClass), "PRIArray") : -1;
+  if (pri_array < 0) return 0;
+  int players = 0;
+  std::lock_guard lock(g_match_players_mutex);
+  for (uint32_t i = 0; i < LoadU32(base, gri + pri_array + 4) && i < 32; ++i) {
+    const uint32_t pri = LoadU32(base, LoadU32(base, gri + pri_array) + i * 4);
+    if (pri < 0x10000) continue;
+    const uint32_t pri_class = LoadU32(base, pri + kObjectClass);
+    const int32_t name = ClassPropertyOffset(base, pri_class, "PlayerName");
+    const int32_t unique_id = ClassPropertyOffset(base, pri_class, "UniqueId");
+    if (name < 0 || unique_id < 0) continue;
+    // UniqueNetId is a QWORD (8 bytes, big-endian); bots have none (0).
+    const uint64_t id = uint64_t(LoadU32(base, pri + unique_id)) << 32 | LoadU32(base, pri + unique_id + 4);
+    if (!id) continue;
+    ++players;
+    std::string text = FStringText(base, pri + name);
+    auto [it, added] = g_match_player_names.try_emplace(id, text);
+    if (added) {
+      REXLOG_INFO("[Azura online] Match player {} noted for Alboria's teams", text);
+    } else if (it->second != text) {
+      it->second = std::move(text);
+    }
+  }
+  return players;
+}
+
+// Every kMatchPlayersEvery on a player input frame (`ctx`) of a match room's host: reads Alboria's
+// teams again and notes the UniqueId and name of each player of the world's game (lobby or match).
+// Names noted stay (the match after the lobby has the same players, with the same UniqueIds).
+void NoteMatchPlayers(PPCContext& ctx, uint8_t* base) {
+  namespace alboria = rex::system::xam::alboria;
+  const auto now = std::chrono::steady_clock::now();
+  if (now - g_match_players_noted < kMatchPlayersEvery) return;
+  g_match_players_noted = now;
+  const alboria::Status status = alboria::GetStatus();
+  if (!status.in_match || !status.host) {
+    g_noted_game.store(0);
+    std::lock_guard lock(g_match_players_mutex);
+    g_match_player_names.clear();
+    return;
+  }
+  alboria::RefreshMatchTeams();
+  const uint32_t game = WorldGame(base, ctx.r3.u32, "");
+  g_noted_game.store(game);
+  if (game) NotePlayersOf(base, game);
+}
+
+// The frame (`ctx`) is about to run GearPlayerMatchBeaconHost's GetTeamForCurrentPlayer or
+// GetOccupiedTeamSize (`function`): runs it, then, for a match room's host with Alboria's teams,
+// replaces its answer (the frame's result, r5) with Alboria's.
+void AnswerReservationFromAlboria(PPCContext& ctx, uint8_t* base, uint32_t function) {
+  namespace alboria = rex::system::xam::alboria;
+  const uint32_t result = ctx.r5.u32;
+  const uint32_t locals = LoadU32(base, ctx.r4.u32 + kFrameLocals);
+  const bool team_of_player = Is(base, function, kGetTeamForCurrentPlayer);
+  const int32_t param = ParamOffset(base, function, team_of_player ? "PlayerID" : "TeamIdx");
+  const uint32_t at = locals + static_cast<uint32_t>(param);
+  // Read before the call: the function may reuse its locals.
+  const uint64_t player = team_of_player && param >= 0 ? uint64_t(LoadU32(base, at)) << 32 | LoadU32(base, at + 4) : 0;
+  const int32_t team_asked = !team_of_player && param >= 0 ? static_cast<int32_t>(LoadU32(base, at)) : -1;
+  __imp__sub_822DF9E0(ctx, base);
+  const auto teams = alboria::MatchTeams();
+  if (!result || param < 0 || teams.empty()) return;
+  const int32_t game_answer = static_cast<int32_t>(LoadU32(base, result));
+  // Each answer is logged when it changes (CanSpectate asks often).
+  static std::map<uint64_t, int32_t> logged;
+  auto changed = [](uint64_t key, int32_t answer) {
+    auto [it, added] = logged.try_emplace(key, answer);
+    if (added) return true;
+    if (it->second == answer) return false;
+    it->second = answer;
+    return true;
+  };
+  if (!team_of_player) {
+    const int32_t alboria_team = AlboriaTeamOf(team_asked);
+    if (alboria_team < 0 || alboria_team >= static_cast<int32_t>(teams.size())) return;
+    const auto size = static_cast<int32_t>(teams[static_cast<size_t>(alboria_team)].size());
+    StoreU32(base, result, static_cast<uint32_t>(size));
+    if (changed(static_cast<uint64_t>(team_asked), size)) REXLOG_INFO("[Azura online] Team {} holds {} players, as Alboria placed them (the beacon said {})", team_asked,
+                size, game_answer);
+    return;
+  }
+  if (!player) return;
+  // A player who has just come in (the game places them as they log in) may not be noted yet: the
+  // game's players are read again now (their PlayerReplicationInfo has its UniqueId by then).
+  auto name_of = [player] {
+    std::lock_guard lock(g_match_players_mutex);
+    const auto it = g_match_player_names.find(player);
+    return it != g_match_player_names.end() ? it->second : std::string();
+  };
+  std::string name = name_of();
+  if (name.empty()) {
+    const uint32_t game = g_noted_game.load();
+    if (game >= 0x10000 && ObjectName(base, LoadU32(base, game + kObjectClass)).find("Game") != std::string::npos) {
+      NotePlayersOf(base, game);
+      name = name_of();
+    }
+  }
+  int32_t team = -1;
+  for (size_t t = 0; t < teams.size() && team < 0 && !name.empty(); ++t) {
+    for (const std::string& full : teams[t]) {
+      if (full.substr(0, full.rfind('#')) == name) team = static_cast<int32_t>(t);
+    }
+  }
+  if (team < 0) {
+    // Not placed by Alboria yet: the team it gave fewer players (the first on a tie).
+    team = 0;
+    for (size_t t = 1; t < teams.size(); ++t) {
+      if (teams[t].size() < teams[static_cast<size_t>(team)].size()) team = static_cast<int32_t>(t);
+    }
+    alboria::RefreshMatchTeams();
+    if (changed(player, team + 100)) REXLOG_WARN("[Azura online] Alboria has no team for {} yet: team {}, the one with fewer players (the beacon said {})",
+                name.empty() ? fmt::format("player {:016X}", player) : name, GameTeamOf(team), game_answer);
+  } else if (changed(player, team)) {
+    REXLOG_INFO("[Azura online] {} is on team {}, as Alboria placed them (the beacon said {})", name, GameTeamOf(team), game_answer);
+  }
+  StoreU32(base, result, static_cast<uint32_t>(GameTeamOf(team)));
+}
+
+// On a player input frame (`ctx`, about to run PlayerInput) in the front end: does what the Versus
+// online menu asked for once Alboria decided. Told to host, the party opens the lobby of the
+// decided mode's playlist (LaunchMatchmadeLobby; its matchmaking is idle, nothing to cancel); sent
+// into a match, the match's invite is given to the game, which joins its lobby as an invited player
+// (the game is not searching, so it takes the invite at once).
+void RunVersusOnlineRequests(PPCContext& ctx, uint8_t* base) {
+  if (!InMainMenu(base)) return;
+  if (const int32_t playlist = g_menu_lobby_request.exchange(-1); playlist >= 0) {
+    const uint32_t party_game = FrontEndPartyGame(base, ctx.r3.u32);
+    if (!party_game || !LaunchMatchmadeLobby(ctx, base, party_game, playlist, 0)) {
+      REXLOG_WARN("[Azura online] Versus online: no party game to open the lobby with");
+    }
+  }
+  if (g_menu_journal_request.exchange(false)) {
+    // UIScene_FrontEnd.HandleOpenWarJournal, run on the front end scene with fresh locals in which a
+    // controller parameter, if it has one, is the controller that last pressed a button there.
+    const uint32_t scene = g_front_end_scene.load();
+    const uint32_t journal = scene ? FindInheritedFunction(base, LoadU32(base, scene + kObjectClass), "HandleOpenWarJournal") : 0;
+    if (journal) {
+      constexpr uint32_t kLocalsSize = 256;
+      static uint32_t locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kLocalsSize);
+      std::memset(base + locals, 0, kLocalsSize);
+      for (const char* name : {"ControllerId", "ControllerIdx", "ControllerIndex", "PlayerIndex"}) {
+        const int32_t at = ParamOffset(base, journal, name);
+        if (at < 0) continue;
+        if (ParamSize(base, journal, name) == 1) {
+          base[locals + at] = static_cast<uint8_t>(g_front_end_controller.load());
+        } else {
+          StoreU32(base, locals + at, static_cast<uint32_t>(g_front_end_controller.load()));
+        }
+      }
+      g_journal_from_versus.store(true);
+      RunOnObject(ctx, base, scene, journal, locals);
+      REXLOG_INFO("[Azura online] Versus online: the War Journal opens");
+    } else {
+      REXLOG_WARN("[Azura online] Versus online: HandleOpenWarJournal not found");
+    }
+  }
+  // A party member whose party went into another party's match takes its own invite to it.
+  if (rex::system::xam::alboria::TakeMemberMatchInvite()) g_menu_invite_request.store(true);
+  // A match's invite the game dropped is taken again (NotifyInviteFailed, below).
+  if (const int64_t at = g_invite_retry_at.load(); at && std::chrono::steady_clock::now().time_since_epoch().count() >= at) {
+    g_invite_retry_at.store(0);
+    rex::system::xam::alboria::RetryMatchInvite();
+  }
+  if (g_menu_invite_request.exchange(false)) {
+    const bool given = rex::system::xam::alboria::DeliverMatchInvite();
+    if (given) g_invite_retries.store(0);
+    REXLOG_INFO("[Azura online] Versus online: the match's invite {}", given ? "is given to the game" : "was not there");
+  }
 }
 
 // On a player input frame (`ctx`, about to run PlayerInput) in the main menu: shows the message box
@@ -2933,6 +4277,23 @@ bool DestroyPartyInFrontEnd(PPCContext& ctx, uint8_t* base, bool failed) {
 // when the room it was a member of ended, or when a room failed.
 void ReturnToMainMenuWhenRoomLost(PPCContext& ctx, uint8_t* base) {
   namespace alboria = rex::system::xam::alboria;
+  // With Live parties, a host that left is lost as on Xbox Live: the game's own party handles it. A
+  // room that failed signed the player out of Live, which Gears of War 3 ignores in the menus
+  // (GearPC.OnConnectionStatusChange only acts away from them, alboria-notes:azura/
+  // reverse-engineering.md): its party is replaced by a Local one as for a System Link party in a
+  // room.
+  if (LiveMode()) alboria::TakeLostRoom();
+  if (g_live_join_failed.load() && InMainMenu(base)) {
+    g_live_join_failed.store(false);
+    if (!g_return_to_menu_locals) {
+      g_return_to_menu_locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kReturnToMainMenuLocalsSize);
+      if (!g_return_to_menu_locals) return;
+    }
+    std::memset(base + g_return_to_menu_locals, 0, kReturnToMainMenuLocalsSize);
+    DestroyPartyInFrontEnd(ctx, base, true);  // the game has shown its message already
+    if (g_match_join_failed.exchange(false)) RecreateOnlinePartyAfterFailedMatch();
+    return;
+  }
   const bool failed = alboria::TakeFailedRoom();
   if (failed) {
     g_room_failed.store(true);
@@ -2955,6 +4316,34 @@ void ReturnToMainMenuWhenRoomLost(PPCContext& ctx, uint8_t* base) {
   if (DestroyPartyInFrontEnd(ctx, base, failed)) return;
   StoreU32(base, g_return_to_menu_locals + 4, 1);  // bClearMenuHistory; bReturnToStartScreen stays 0
   REXLOG_INFO("[Azura online] {}: back to the main menu", failed ? "The room failed" : "The room ended");
+  const uint32_t frame = ctx.r4.u32;
+  const uint32_t own_object = LoadU32(base, frame + kFrameObject);
+  const uint64_t own_r3 = ctx.r3.u64;
+  StoreU32(base, frame + kFrameObject, controller);
+  ctx.r3.u64 = controller;
+  RunInstead(ctx, base, return_to_menu, g_return_to_menu_locals);
+  StoreU32(base, frame + kFrameObject, own_object);
+  ctx.r3.u64 = own_r3;
+}
+
+// On a player input frame (`ctx`) after the matchmade lobby's host confirmed leaving it
+// (g_host_leave_requested): its game goes back to the main menu by itself (its controller's
+// ReturnToMainMenu), as a player leaving a match does.
+void HostLeaveMatchmadeLobby(PPCContext& ctx, uint8_t* base) {
+  if (!g_host_leave_requested.exchange(false)) return;
+  const uint32_t controller = LoadU32(base, ctx.r3.u32 + kObjectOuter);
+  const uint32_t return_to_menu = FindControllerFunction(base, controller, "ReturnToMainMenu");
+  if (!return_to_menu) {
+    REXLOG_WARN("[Azura online] The lobby's host leaves, but ReturnToMainMenu was not found on its controller");
+    return;
+  }
+  if (!g_return_to_menu_locals) {
+    g_return_to_menu_locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kReturnToMainMenuLocalsSize);
+    if (!g_return_to_menu_locals) return;
+  }
+  std::memset(base + g_return_to_menu_locals, 0, kReturnToMainMenuLocalsSize);
+  StoreU32(base, g_return_to_menu_locals + 4, 1);  // bClearMenuHistory; bReturnToStartScreen stays 0
+  REXLOG_INFO("[Azura online] The matchmade lobby's host leaves it: back to the main menu by itself");
   const uint32_t frame = ctx.r4.u32;
   const uint32_t own_object = LoadU32(base, frame + kFrameObject);
   const uint64_t own_r3 = ctx.r3.u64;
@@ -2994,7 +4383,7 @@ void JoinFoundParty(PPCContext& ctx, uint8_t* base, uint32_t find_complete) {
 }
 
 // Removes the Xbox LIVE friends' Invite and Join from Manage/Invite's button list (scene in
-// `scene`), before the bar is built from it.
+// `scene`), before the bar is built from it: System Link parties in a room have no friends list.
 void TrimManageInviteButtons(uint8_t* base, uint32_t scene) {
   const uint32_t data = LoadU32(base, scene + kManageInviteButtonList);
   const uint32_t count = LoadU32(base, scene + kManageInviteButtonList + 4);
@@ -3127,6 +4516,125 @@ void CreatePendingStartupParty(PPCContext& ctx, uint8_t* base) {
   g_creating_startup_party.store(false);
   StoreU32(base, frame + kFrameObject, own_object);
   ctx.r3.u64 = own_r3;
+  // After a matchmade match that could not be joined: the online menu says so, to search again.
+  if (g_online_menu_notice.load() == kJoinFailedNotice) {
+    REXLOG_INFO("[Azura online] The online party is back after a failed match: the online menu opens to search again");
+    OpenOnlineMenu(g_online_menu_game.load());
+  }
+}
+
+// On a player input frame in the main menu, after the game sent the player back from a matchmade
+// lobby or match it did not choose to leave (g_matchmade_lobby_lost): the match room still stands on
+// Alboria, waiting for a host migration the lobby does not do. Each party's leader takes its party
+// back, whole, to a room of its own (alboria::EndMatch), and its online menu opens to say the room
+// closed and to search again; a member goes back with its leader and follows its search as usual.
+void HandleMatchmadeLobbyLost(uint8_t* base) {
+  namespace alboria = rex::system::xam::alboria;
+  if (!g_matchmade_lobby_lost.load(std::memory_order_relaxed) || !InMainMenu(base)) return;
+  g_matchmade_lobby_lost.store(false);
+  const alboria::Status status = alboria::GetStatus();
+  if (status.in_match && status.party_leader) alboria::EndMatch();
+  if (status.party_leader) {
+    REXLOG_INFO("[Azura online] Back in the main menu after the matchmade lobby closed: the online menu opens to search again");
+    g_online_menu_notice.store(kRoomClosedNotice);
+    OpenOnlineMenu(g_online_menu_game.load());
+  }
+}
+
+// A matchmade match could not be joined and the party became Local (ReturnToMainMenuWhenRoomLost):
+// an online party is created over it in the main menu, as at start-up (CreatePendingStartupParty),
+// which then opens the online menu with the notice (TakeMatchJoinFailed).
+void RecreateOnlinePartyAfterFailedMatch() {
+  g_online_menu_notice.store(kJoinFailedNotice);
+  g_pending_startup_party.store(kBootOnline);
+  REXLOG_INFO("[Azura online] The matchmade match could not be joined: an online party is created again");
+}
+
+// Joining a room the launcher asked for (a friend's room, or an invitation's). Its code comes with
+// the game's start (alboria_join_code) or, with the game already running, in a file the launcher
+// writes in the user data folder (kJoinRequestFile), read about once a second and then deleted.
+// The join waits for the main menu and the start-up party, then goes as Join by code does: once
+// the room is joined, the System Link browser opens and the game joins the host's party.
+constexpr const char* kJoinRequestFile = "alboria-join-request.txt";
+// Player input frames between two looks for the launcher's file: about a second.
+constexpr uint32_t kJoinRequestPollFrames = 60;
+std::mutex g_launcher_join_mutex;
+std::string g_launcher_join_code;
+// The room the launcher's join went to, until the game is connected in it (or the join failed).
+std::string g_launcher_joining;
+std::atomic<bool> g_launcher_join_cvar_read{false};
+std::atomic<uint32_t> g_launcher_join_polls{0};
+
+// Takes a room code the launcher left: the start option once, then its request file.
+void ReadLauncherJoinRequest() {
+  namespace alboria = rex::system::xam::alboria;
+  std::string code;
+  if (!g_launcher_join_cvar_read.exchange(true)) code = REXCVAR_GET(alboria_join_code);
+  if (code.empty() && g_launcher_join_polls.fetch_add(1, std::memory_order_relaxed) % kJoinRequestPollFrames == 0) {
+    const std::string root = REXCVAR_GET(user_data_root);
+    std::error_code error;
+    const std::filesystem::path path = std::filesystem::path(root) / kJoinRequestFile;
+    if (!root.empty() && std::filesystem::exists(path, error)) {
+      std::ifstream file(path);
+      std::getline(file, code);
+      file.close();
+      std::filesystem::remove(path, error);
+    }
+  }
+  if (code.empty()) return;
+  code = alboria::NormalizeCode(code);
+  if (!alboria::IsValidCode(code)) {
+    REXLOG_WARN("[Azura online] The launcher's room code is not a valid code; nothing to join");
+    return;
+  }
+  std::lock_guard lock(g_launcher_join_mutex);
+  g_launcher_join_code = code;
+}
+
+// On a player input frame (`ctx`): joins the room the launcher asked for, in Join by code's two steps.
+// First, once the main menu is up and the start-up party's own room is connected, the game moves to
+// the room (joining while the start-up party is still being made leaves the game hosting that party
+// inside the room it joined). Then, once it is connected there, the System Link browser opens and
+// finds the host's party, as Join by code does when its room connects.
+void JoinRoomFromLauncher(uint8_t* base) {
+  namespace alboria = rex::system::xam::alboria;
+  ReadLauncherJoinRequest();
+  std::string code;
+  {
+    std::lock_guard lock(g_launcher_join_mutex);
+    if (!g_launcher_joining.empty()) {
+      const alboria::Status status = alboria::GetStatus();
+      if (status.state == alboria::State::kConnected && alboria::NormalizeCode(status.code) == g_launcher_joining) {
+        g_launcher_joining.clear();
+        REXLOG_INFO("[Azura online] In the room the launcher asked for: looking for the host's party");
+        azura::script::JoinSystemLinkPartyInRoom();
+      } else if (status.state == alboria::State::kFailed || status.state == alboria::State::kOffline) {
+        REXLOG_WARN("[Azura online] Joining the room the launcher asked for failed ({})", status.error);
+        g_launcher_joining.clear();
+      }
+      return;
+    }
+    if (g_launcher_join_code.empty()) return;
+    if (!InMainMenu(base) || g_pending_startup_party.load(std::memory_order_relaxed) != kBootNone ||
+        g_creating_startup_party.load(std::memory_order_relaxed) || !alboria::ServiceReachable() ||
+        !alboria::Connected()) {
+      return;
+    }
+    code = std::move(g_launcher_join_code);
+    g_launcher_join_code.clear();
+    g_launcher_joining = code;
+  }
+  REXLOG_INFO("[Azura online] Joining the room the launcher asked for");
+  if (const std::string refused = alboria::JoinGame(code); !refused.empty()) {
+    // The player's party could not come along (alboria-notes:alboria-server/online-rules.md,
+    // section 5): the player stays in it, and the overlay's notices say why.
+    REXLOG_WARN("[Azura online] Not joining the room the launcher asked for: {}", refused);
+    {
+      std::lock_guard lock(g_launcher_join_mutex);
+      g_launcher_joining.clear();
+    }
+    alboria::TellJoinRefused(refused);
+  }
 }
 
 // GearProfileSettings.GetPartyType (`ctx`, about to run), with online play on: the party the game
@@ -3143,6 +4651,200 @@ void AnswerPartyType(PPCContext& ctx, uint8_t* base) {
   if (result && startup >= 0 && !rex::system::xam::alboria::InRoom()) base[result] = static_cast<uint8_t>(startup);
 }
 
+// --- Menu sounds ---
+//
+// Every sound of the game's menus goes through UISoundTheme.ProcessSoundEvent(SoundEventName,
+// SoundOwner): Flash calls it for moving and changing values, the script through
+// GFxMoviePlayer.PlaySoundFromTheme for the rest. The theme maps the event's name to a SoundCue in
+// its SoundEventBindings and the owner (the player's controller) plays it. Our own menus over the
+// game play the same events: the theme is kept as the game uses it (the title screen already plays
+// one), and each sound a menu asks for (PlayMenuSound) runs ProcessSoundEvent on the next player
+// input frame, borrowing that frame as the System Link join does. A sound asked for before the
+// theme is known, or while no input runs, is dropped rather than played late.
+
+using azura::script::MenuSound;
+
+// The sound theme as the game last used it, and its ProcessSoundEvent.
+std::atomic<uint32_t> g_sound_theme{0};
+uint32_t g_sound_event_function = 0;  // the script thread only
+// The sounds our menus asked for since the last input frame, in order.
+std::mutex g_menu_sounds_mutex;
+std::vector<MenuSound> g_menu_sounds;
+// The most sounds kept for one frame: more than that is a held key, and the rest would only stack.
+constexpr size_t kMaxMenuSounds = 4;
+// Guest memory for ProcessSoundEvent's locals: its two parameters and its own locals, with room.
+constexpr uint32_t kSoundLocalsSize = 256;
+uint32_t g_sound_locals = 0;
+
+WatchedName SoundEventName(MenuSound sound) {
+  return static_cast<WatchedName>(kSoundStepUp + static_cast<int>(sound));
+}
+
+// Whether `object`'s class is UISoundTheme or one of its subclasses.
+bool IsSoundTheme(const uint8_t* base, uint32_t object) {
+  for (uint32_t cls = LoadU32(base, object + kObjectClass); cls; cls = LoadU32(base, cls + kStructSuper)) {
+    if (ObjectName(base, cls) == "UISoundTheme") return true;
+  }
+  return false;
+}
+
+// On player 1's input frame (`ctx`, about to run PlayerInput): plays the sounds our menus asked for
+// through the game's sound theme, with player 1's controller as their owner.
+void PlayQueuedMenuSounds(PPCContext& ctx, uint8_t* base) {
+  std::vector<MenuSound> sounds;
+  {
+    std::lock_guard lock(g_menu_sounds_mutex);
+    if (g_menu_sounds.empty()) return;
+    sounds.swap(g_menu_sounds);
+  }
+  const uint32_t theme = g_sound_theme.load(std::memory_order_relaxed);
+  const uint32_t controller = LoadU32(base, ctx.r3.u32 + kObjectOuter);
+  if (!theme || !controller || controller != g_player_controllers[0].load(std::memory_order_relaxed)) return;
+  // The theme is an object of the game's: once it is gone (its memory reused), it is forgotten
+  // until the game plays a sound again.
+  if (!IsSoundTheme(base, theme)) {
+    g_sound_theme.store(0);
+    return;
+  }
+  if (!g_sound_event_function) {
+    for (uint32_t cls = LoadU32(base, theme + kObjectClass); cls && !g_sound_event_function;
+         cls = LoadU32(base, cls + kStructSuper)) {
+      g_sound_event_function = FindClassFunction(base, cls, "ProcessSoundEvent");
+    }
+    if (!g_sound_event_function) return;
+  }
+  const int32_t name_at = ParamOffset(base, g_sound_event_function, "SoundEventName");
+  const int32_t owner_at = ParamOffset(base, g_sound_event_function, "SoundOwner");
+  if (name_at < 0 || owner_at < 0) return;
+  if (!g_sound_locals) g_sound_locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kSoundLocalsSize);
+  if (!g_sound_locals) return;
+  const uint32_t frame = ctx.r4.u32;
+  const uint32_t own_object = LoadU32(base, frame + kFrameObject);
+  const uint64_t own_r3 = ctx.r3.u64;
+  for (const MenuSound sound : sounds) {
+    const int32_t name = g_names[SoundEventName(sound)].load(std::memory_order_relaxed);
+    if (name < 0) continue;
+    std::memset(base + g_sound_locals, 0, kSoundLocalsSize);
+    // An FName: its index in GNames, then its number (0, no suffix).
+    StoreU32(base, g_sound_locals + static_cast<uint32_t>(name_at), static_cast<uint32_t>(name));
+    StoreU32(base, g_sound_locals + static_cast<uint32_t>(owner_at), controller);
+    StoreU32(base, frame + kFrameObject, theme);
+    ctx.r3.u64 = theme;
+    RunInstead(ctx, base, g_sound_event_function, g_sound_locals);
+  }
+  StoreU32(base, frame + kFrameObject, own_object);
+  ctx.r3.u64 = own_r3;
+}
+
+namespace azura::script {
+void PlayMenuSound(MenuSound sound) {
+  std::lock_guard lock(g_menu_sounds_mutex);
+  if (g_menu_sounds.size() < kMaxMenuSounds) g_menu_sounds.push_back(sound);
+}
+}  // namespace azura::script
+
+// How long before being removed the idle host's coming removal is logged (the game shows its idle
+// players no warning either).
+constexpr float kIdleWarningSeconds = 15.0f;
+// How long after leaving the match on Alboria the idle host's game is removed from it.
+constexpr auto kIdleKickAfterLeaving = std::chrono::milliseconds(1500);
+
+// On a player input frame (`ctx`) of a matchmade match's host: the game removes idle players
+// (KickIdler, past its MaxIdleTime: 120 seconds in a matchmade match, 0 in the pre-game lobby), but
+// never its own host, whose game is the match's: an idle host would keep everyone waiting. Alboria's
+// runtime applies the same time to it, from what player 1 does (player_activity.h: the game's own
+// LastActiveTime only follows moves that reach the host over the network). Logged
+// kIdleWarningSeconds before, it is then removed in two steps:
+// 1. it leaves the match on Alboria (LeaveMatch): out of the match room, which Alboria hands to
+//    another party's leader, and out of its party (online-rules.md, section 3);
+// 2. kIdleKickAfterLeaving later, the game's GearPC.ClientWasKicked runs on its own controller, as on
+//    a client the host removed: the game's message ("removed for not participating"), then the main
+//    menu. Its game's goodbye then reaches nobody: the others see their host gone silent and migrate
+//    it, as when a host's game dies (a goodbye would end the match for them).
+void KickIdleHost(PPCContext& ctx, uint8_t* base) {
+  namespace alboria = rex::system::xam::alboria;
+  using Clock = std::chrono::steady_clock;
+  // Watching while hosting a match; then left on Alboria (at `left_at`); then removed.
+  enum class Phase { kWatching, kLeft, kRemoved };
+  static Phase phase = Phase::kWatching;
+  static Clock::time_point left_at;
+  static bool warned = false;
+  // When this match was first seen hosted: idle time before it does not count.
+  static std::optional<Clock::time_point> hosting_since;
+  const uint32_t controller = LoadU32(base, ctx.r3.u32 + kObjectOuter);
+  if (phase == Phase::kLeft) {
+    if (Clock::now() - left_at < kIdleKickAfterLeaving) return;
+    phase = Phase::kRemoved;
+    const uint32_t kick = controller ? FindControllerFunction(base, controller, "ClientWasKicked") : 0;
+    if (!kick) {
+      REXLOG_WARN("[Azura online] ClientWasKicked not found; the idle host's game is not removed from the match");
+      return;
+    }
+    if (!g_return_to_menu_locals) {
+      g_return_to_menu_locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kReturnToMainMenuLocalsSize);
+    }
+    if (!g_return_to_menu_locals) return;
+    REXLOG_INFO("[Azura online] The idle host's game is removed from the match (ClientWasKicked)");
+    g_left_lobby_by_choice.store(true);
+    std::memset(base + g_return_to_menu_locals, 0, kReturnToMainMenuLocalsSize);
+    const uint32_t frame = ctx.r4.u32;
+    const uint32_t own_object = LoadU32(base, frame + kFrameObject);
+    const uint64_t own_r3 = ctx.r3.u64;
+    StoreU32(base, frame + kFrameObject, controller);
+    ctx.r3.u64 = controller;
+    RunInstead(ctx, base, kick, g_return_to_menu_locals);
+    StoreU32(base, frame + kFrameObject, own_object);
+    ctx.r3.u64 = own_r3;
+    return;
+  }
+  const alboria::Status status = alboria::GetStatus();
+  const auto stop_watching = [] {
+    phase = Phase::kWatching;
+    warned = false;
+    hosting_since.reset();
+  };
+  if (!LiveMode() || !status.in_match || !status.host || !controller) {
+    stop_watching();
+    return;
+  }
+  const uint32_t controller_class = LoadU32(base, controller + kObjectClass);
+  if (ObjectName(base, controller_class).find("_MP") == std::string::npos) {
+    stop_watching();
+    return;
+  }
+  const int32_t world_at = ClassPropertyOffset(base, controller_class, "WorldInfo");
+  const uint32_t world = world_at >= 0 ? LoadU32(base, controller + static_cast<uint32_t>(world_at)) : 0;
+  const int32_t game_at = world ? ClassPropertyOffset(base, LoadU32(base, world + kObjectClass), "Game") : -1;
+  const uint32_t game = game_at >= 0 ? LoadU32(base, world + static_cast<uint32_t>(game_at)) : 0;
+  const int32_t max_idle_at = game ? ClassPropertyOffset(base, LoadU32(base, game + kObjectClass), "MaxIdleTime") : -1;
+  const float max_idle = max_idle_at >= 0 ? LoadF32(base, game + static_cast<uint32_t>(max_idle_at)) : 0.0f;
+  if (max_idle <= 0.0f) {
+    stop_watching();
+    return;
+  }
+  const Clock::time_point now = Clock::now();
+  if (!hosting_since) {
+    hosting_since = now;
+    REXLOG_INFO("[Azura online] Hosting a matchmade match: idle after {:.0f} s with nothing done", max_idle);
+  }
+  const double idle =
+      std::min(azura::input::SecondsSinceActivity(), std::chrono::duration<double>(now - *hosting_since).count());
+  if (idle < max_idle - kIdleWarningSeconds) {
+    if (warned) REXLOG_INFO("[Azura online] The idle host is back ({:.0f} s idle)", idle);
+    warned = false;
+    return;
+  }
+  if (!warned) {
+    warned = true;
+    REXLOG_INFO("[Azura online] The match's host has done nothing for {:.0f} s of {:.0f}: warned", idle, max_idle);
+  }
+  if (idle < max_idle) return;
+  REXLOG_INFO("[Azura online] The match's host has done nothing for {:.0f} s: it leaves the match on Alboria, then the game", idle);
+  phase = Phase::kLeft;
+  left_at = now;
+  alboria::LeaveMatch();
+}
+
 extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   if (g_names_missing.load(std::memory_order_relaxed) > 0 &&
       (g_calls.fetch_add(1, std::memory_order_relaxed) & 0x3FF) == 0) {
@@ -3151,9 +4853,22 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   const uint32_t function = LoadU32(base, ctx.r4.u32 + kFrameNode);
   // Before it runs: it reads aMouseX and aMouseY.
   if (function && IsEnginePlayerInput(base, function)) {
+    PlayQueuedMenuSounds(ctx, base);
     if (g_open_browser.load(std::memory_order_relaxed)) OpenSystemLinkBrowserForJoin(ctx, base);
     ReturnToMainMenuWhenRoomLost(ctx, base);
+    HandleMatchmadeLobbyLost(base);
+    HostLeaveMatchmadeLobby(ctx, base);
+    DeliverLateInvite();
+    if (HostMigration()) {
+      CloseSilentHost(base);
+      ApplySavedRound(base);
+    }
     CreatePendingStartupParty(ctx, base);
+    RunVersusOnlineRequests(ctx, base);
+    NoteMatchPlayers(ctx, base);
+    PlaceAlboriaTeams(ctx, base);
+    JoinRoomFromLauncher(base);
+    KickIdleHost(ctx, base);
     ShowRoomMessage(ctx, base);
     RefreshPartyPanelTitle(ctx, base);
     const uint32_t player_input = ctx.r3.u32;
@@ -3237,6 +4952,22 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     }
     return;
   }
+  // The lobby's history of maps: a match it starts (its own ProcessServerTravel, to the voted map)
+  // is remembered; a travel to the party closes the lobby, and its history goes with it.
+  if (Is(base, function, kProcessServerTravel) && LiveMode()) {
+    const int32_t url_offset = ParamOffset(base, function, "URL");
+    const std::string url = url_offset >= 0
+                                ? FStringText(base, LoadU32(base, ctx.r4.u32 + kFrameLocals) + static_cast<uint32_t>(url_offset))
+                                : std::string();
+    const std::string outer = ObjectName(base, LoadU32(base, function + kObjectOuter));
+    if (outer == "GearPreGameLobbyGame_Base" && !url.empty() && Lower(url).rfind("gearstart", 0) != 0) {
+      RememberLobbyMap(url.substr(0, url.find('?')));
+      REXLOG_INFO("[Azura online] The lobby's last maps: {}", RecentLobbyMaps());
+    } else if (Lower(url).find("gearpartygame") != std::string::npos) {
+      std::lock_guard lock(g_lobby_maps_mutex);
+      g_lobby_maps.clear();
+    }
+  }
   if (Is(base, function, kServerTravel) || Is(base, function, kProcessServerTravel)) {
     const uint32_t locals = LoadU32(base, ctx.r4.u32 + kFrameLocals);
     const int32_t url_offset = ParamOffset(base, function, "URL");
@@ -3249,6 +4980,15 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
       !rex::system::xam::alboria::InRoom() && !g_creating_startup_party.load()) {
     CreateStartupParty(ctx, base);
     return;
+  }
+  // The theme the game plays its menu sounds with, for ours.
+  if (Is(base, function, kProcessSoundEvent) && IsSoundTheme(base, ctx.r3.u32)) {
+    g_sound_theme.store(ctx.r3.u32, std::memory_order_relaxed);
+  }
+  // Before it runs: an Alboria account that starts Lambency is a developer to the game.
+  if (Is(base, function, kIsEpicDev) && ObjectName(base, LoadU32(base, function + kObjectOuter)) == "GearProfileSettings" &&
+      rex::system::xam::alboria::GetIdentity().lambency) {
+    MarkLambencySource(base, ctx.r3.u32);
   }
   if (Is(base, function, kGetPartyType) && OnlineMode() &&
       ObjectName(base, LoadU32(base, function + kObjectOuter)) == "GearProfileSettings") {
@@ -3266,7 +5006,579 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     JoinFoundParty(ctx, base, function);
     return;
   }
-  if (Is(base, function, kOpenPartyOptions) && OnlineMode()) rex::system::xam::alboria::CheckService();
+  if (Is(base, function, kOpenPartyOptions) && (OnlineMode() || LiveMode())) rex::system::xam::alboria::CheckService();
+  // With Live parties, the game could not follow the host's session a joined room brought: the room
+  // is left (the player's own party no longer has one), and the party becomes Local (g_live_join_failed).
+  if (Is(base, function, kNotifyInviteFailed) && LiveMode()) {
+    namespace alboria = rex::system::xam::alboria;
+    // A matchmade match's invite the game dropped (seen right as a match's lobby opened): the party
+    // stays in the match's room and the invite is taken again a moment later, a few times, before
+    // the room is left as below.
+    const alboria::Status status = alboria::GetStatus();
+    if (status.in_match && !status.host && g_invite_retries.fetch_add(1) < kInviteRetries) {
+      g_invite_retry_at.store((std::chrono::steady_clock::now() + kInviteRetryAfter).time_since_epoch().count());
+      REXLOG_INFO("[Azura online] The game dropped the match's invite: it is taken again in a moment");
+      return;
+    }
+    g_invite_retries.store(0);
+    if (alboria::InRoom() && !alboria::GetStatus().host) {
+      const bool matchmade = status.in_match;
+      REXLOG_INFO("[Azura online] The host's Live party could not be joined: leaving its room{}",
+                  matchmade ? " (a matchmade match: an online party follows, and the menu to search again)" : "");
+      alboria::Leave();
+      g_live_join_failed.store(true);
+      g_match_join_failed.store(matchmade);
+    }
+  }
+  // With Live parties, the player cancels matchmaking: the game waits for its pending search
+  // (XSessionSearch) to end without cancelling it, and starts no other until it has, so Alboria's
+  // search is stopped, which ends it.
+  // Told by Alboria to host: a lobby instead of a player match (OpenMatchmadeLobby). Done where a
+  // search has just found no match (OnNoPartialPartyAvailable, which otherwise counts its searches
+  // and only creates the player match after several rounds), or else where the player match is
+  // created; that one's result (whether creating it started) is true: the party has gone on to the
+  // lobby. (Functions of the party game's PlayerMatch state: their outer is the state, their object
+  // the game.)
+  if ((Is(base, function, kOnNoPartialPartyAvailable) || Is(base, function, kCreatePlayerVersusMatch)) &&
+      LiveMode() && ObjectName(base, LoadU32(base, function + kObjectOuter)) == "PlayerMatch") {
+    namespace alboria = rex::system::xam::alboria;
+    const auto status = alboria::GetStatus();
+    // Only CreatePlayerVersusMatch has a result; OnNoPartialPartyAvailable has none to write.
+    const uint32_t result = ctx.r5.u32;
+    if (status.in_match && status.host && OpenMatchmadeLobby(ctx, base)) {
+      if (result && Is(base, function, kCreatePlayerVersusMatch)) StoreU32(base, result, 1);
+      return;
+    }
+    // Sent into another player's match: its search was answered with no match so that the party
+    // leaves its matchmaking here (a party still searching drops an invite), and then the match's
+    // lobby is joined as an accepted invite.
+    if (status.in_match && !status.host && alboria::HasPendingMatchInvite()) {
+      const uint32_t frame = ctx.r4.u32;
+      const uint32_t party_game = LoadU32(base, frame + kFrameObject);
+      const uint32_t cancel = FindInheritedFunction(base, LoadU32(base, party_game + kObjectClass), "CancelPartyMatchmaking");
+      if (cancel) {
+        constexpr uint32_t kLocalsSize = 64;
+        static uint32_t locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kLocalsSize);
+        std::memset(base + locals, 0, kLocalsSize);
+        RunInsteadWithResult(ctx, base, cancel, locals);
+        ctx.r4.u64 = frame;
+        // The cancel also starts a short timer (DelayedGameSessionDelete) that deletes the game
+        // session: the invite is delivered once it has run (DeliverInviteAfterSessionDelete), or the
+        // match's session the invite creates would be the one deleted, and the join would fail.
+        g_invite_waits_since.store(std::chrono::steady_clock::now().time_since_epoch().count());
+        REXLOG_INFO("[Azura online] Sent into a match: the party left its matchmaking; the invite follows its session cleanup");
+        if (result && Is(base, function, kCreatePlayerVersusMatch)) StoreU32(base, result, 1);
+        return;
+      }
+    }
+  }
+  // Host migration: a player who comes back to the migrated match is placed on the smallest team,
+  // and so is everyone the migration's own record (GearGameHostMigrationManager.GetTeamId) puts
+  // back: it answers team 0 for every player, so who goes where depends on the order they come
+  // back in. Each placement puts the player on the team saved for that name instead (ChangeTeam).
+  if (Is(base, function, kPlacePlayerOnSmallestTeam) && HostMigration() &&
+      !g_saved_round.player_teams.empty()) {
+    const uint32_t frame = ctx.r4.u32;
+    const uint32_t game = LoadU32(base, frame + kFrameObject);
+    const uint32_t change_team = FindInheritedFunction(base, LoadU32(base, game + kObjectClass), "ChangeTeam");
+    const int32_t new_player = ParamOffset(base, function, "NewPlayer");
+    const int32_t other = change_team ? ParamOffset(base, change_team, "Other") : -1;
+    const int32_t number = change_team ? ParamOffset(base, change_team, "N") : -1;
+    const uint32_t player = new_player >= 0 ? LoadU32(base, LoadU32(base, frame + kFrameLocals) + new_player) : 0;
+    // The player's name: its Controller's PlayerReplicationInfo.PlayerName.
+    const int32_t pri_offset = player ? ClassPropertyOffset(base, LoadU32(base, player + kObjectClass), "PlayerReplicationInfo") : -1;
+    const uint32_t pri = pri_offset >= 0 ? LoadU32(base, player + pri_offset) : 0;
+    const int32_t name_offset = pri >= 0x10000 ? ClassPropertyOffset(base, LoadU32(base, pri + kObjectClass), "PlayerName") : -1;
+    const std::string name = name_offset >= 0 ? FStringText(base, pri + name_offset) : std::string();
+    const auto saved = g_saved_round.player_teams.find(name);
+    if (saved != g_saved_round.player_teams.end() && other >= 0 && number >= 0) {
+      const int32_t team = saved->second;
+      constexpr uint32_t kLocalsSize = 128;
+      static uint32_t locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kLocalsSize);
+      std::memset(base + locals, 0, kLocalsSize);
+      StoreU32(base, locals + other, player);
+      if (ParamSize(base, change_team, "N") == 1) {
+        base[locals + number] = static_cast<uint8_t>(team);
+      } else {
+        StoreU32(base, locals + number, static_cast<uint32_t>(team));
+      }
+      RunOnObject(ctx, base, game, change_team, locals);
+      REXLOG_INFO("[Azura online] Host migration: {} goes back to team {}", name, team);
+      return;
+    }
+    REXLOG_INFO("[Azura online] Host migration: no saved team for '{}': the smallest team", name);
+  }
+  if (Is(base, function, kDelayedGameSessionDelete) && g_invite_waits_since.load()) {
+    __imp__sub_822DF9E0(ctx, base);
+    DeliverWaitingInvite("its session cleanup has run");
+    return;
+  }
+  // GearGRI.PostBeginPlay turns host migration off on every map but the menu's
+  // (WorldInfo.ToggleHostMigration(false)), and nothing in the game's script turns it on: after it,
+  // a match's map turns it on again: WorldInfo's PeerHostMigration.bHostMigrationEnabled (+1760,
+  // the top bit, as AWorldInfo's C++ reads it). A new map also ends the migration that led to it.
+  if (Is(base, function, kPostBeginPlay) && HostMigration() &&
+      ObjectName(base, LoadU32(base, function + kObjectOuter)) == "GearGRI") {
+    const uint32_t gri = LoadU32(base, ctx.r4.u32 + kFrameObject);
+    __imp__sub_822DF9E0(ctx, base);
+    const int32_t world_offset = ClassPropertyOffset(base, LoadU32(base, gri + kObjectClass), "WorldInfo");
+    const uint32_t world = world_offset >= 0 ? LoadU32(base, gri + world_offset) : 0;
+    // The map: the package the WorldInfo is in (its outermost object).
+    uint32_t package = world;
+    while (package && LoadU32(base, package + kObjectOuter)) package = LoadU32(base, package + kObjectOuter);
+    const std::string map = package ? ObjectName(base, package) : std::string();
+    if (world && ObjectName(base, LoadU32(base, world + kObjectClass)) == "WorldInfo" && map.rfind("MP_", 0) == 0) {
+      constexpr uint32_t kHostMigrationEnabled = 1760;
+      StoreU32(base, world + kHostMigrationEnabled, LoadU32(base, world + kHostMigrationEnabled) | 0x80000000u);
+      REXLOG_INFO("[Azura online] Host migration turned on for {}", map);
+      g_match_world.store(world);
+    }
+    g_migration_world.store(0);
+    return;
+  }
+  if (Is(base, function, kCancelPartyMatchmaking) && LiveMode()) {
+    REXLOG_INFO("[Azura online] Matchmaking cancelled: stopping Alboria's search");
+    rex::system::xam::alboria::StopMatchmaking();
+  }
+  if (Is(base, function, kUpdateCountdowns) && LiveMode() &&
+      ObjectName(base, LoadU32(base, function + kObjectOuter)) == "GearPreGameGRI") {
+    static std::atomic<bool> done{false};
+    LetPlaylistLobbyVote(base, function, done, false);
+  }
+  if (Is(base, function, kInitializeMapSelectionInternal) && LiveMode() &&
+      ObjectName(base, LoadU32(base, function + kObjectOuter)) == "GearPreGameGRI") {
+    static std::atomic<bool> done{false};
+    LetPlaylistLobbyVote(base, function, done, true);
+    g_vote_leaves_out_maps.store(true);
+    g_drawing_vote_maps.store(true);
+    // The frame and result registers do not survive the call.
+    const uint32_t gri = LoadU32(base, ctx.r4.u32 + kFrameObject);
+    __imp__sub_822DF9E0(ctx, base);
+    g_drawing_vote_maps.store(false);
+    const uint32_t cls = LoadU32(base, gri + kObjectClass);
+    std::string drawn;
+    for (const char* name : {"FirstMapName", "SecondMapName", "ThirdMapName", "RandomMapName"}) {
+      const int32_t offset = ClassPropertyOffset(base, cls, name);
+      drawn += (drawn.empty() ? "" : ", ") + (offset >= 0 ? FStringText(base, gri + offset) : std::string("?"));
+    }
+    REXLOG_INFO("[Azura online] The vote's maps: {} (last maps {}, {})", drawn, RecentLobbyMaps(),
+                g_vote_leaves_out_maps.load() ? "left out" : "too few maps to leave them out");
+    return;
+  }
+  // While the vote draws its maps: the count of a playlist's maps leaves out the recent ones, unless
+  // fewer than the vote's four would be left; then it counts them again (a frame cannot run twice:
+  // its code has been read to the end).
+  if (Is(base, function, kGetNumberOfSupportedMaps) && g_drawing_vote_maps.load()) {
+    const uint32_t result = ctx.r5.u32;
+    g_maps_left_out.store(0);
+    __imp__sub_822DF9E0(ctx, base);
+    const int32_t left_out = g_maps_left_out.load();
+    if (result && left_out && static_cast<int32_t>(LoadU32(base, result)) < kVoteMaps &&
+        g_vote_leaves_out_maps.exchange(false)) {
+      StoreU32(base, result, LoadU32(base, result) + static_cast<uint32_t>(left_out));
+    }
+    if (result) REXLOG_INFO("[Azura online] The playlist has {} maps for the vote", static_cast<int32_t>(LoadU32(base, result)));
+    return;
+  }
+  // ...and the check of a map answers -1 for a recent one (its MapData local, the map's provider,
+  // holds its MapName).
+  if (Is(base, function, kCheckMapAgainstPlaylist) && g_drawing_vote_maps.load() && g_vote_leaves_out_maps.load()) {
+    const uint32_t result = ctx.r5.u32;
+    const uint32_t locals = LoadU32(base, ctx.r4.u32 + kFrameLocals);
+    __imp__sub_822DF9E0(ctx, base);
+    const int32_t map_data = LocalOffset(base, function, "MapData");
+    const uint32_t provider = map_data >= 0 ? LoadU32(base, locals + map_data) : 0;
+    const int32_t name = provider ? ClassPropertyOffset(base, LoadU32(base, provider + kObjectClass), "MapName") : -1;
+    if (result && static_cast<int32_t>(LoadU32(base, result)) != -1 && name >= 0 &&
+        IsRecentLobbyMap(FStringText(base, provider + name))) {
+      StoreU32(base, result, static_cast<uint32_t>(-1));
+      g_maps_left_out.fetch_add(1);
+    }
+    return;
+  }
+  // Host migration: the new host loads the match's map again,
+  // and restores the match from what the migration kept (GearGameHostMigrationManager.UpdateGRI,
+  // from InitGameReplicationInfo) instead of setting the game's rules, which is where a match takes
+  // its bots (InitGame's SetGameRules, SetNumBots): it would go on without any. SetGameRules runs
+  // once InitGameReplicationInfo is done, so the bots come back (with no score, as theirs is not
+  // kept); it also sets the playlist's team size, which SetNumBots needs.
+  if (Is(base, function, kUpdateGRI) && HostMigration()) {
+    g_migration_restored.store(true);
+    REXLOG_INFO("[Azura online] Host migration: the new host restores the match");
+  }
+  if (Is(base, function, kInitGameReplicationInfo) && HostMigration() &&
+      ObjectName(base, LoadU32(base, function + kObjectOuter)) == "GearGameMP_Base") {
+    const uint32_t game = LoadU32(base, ctx.r4.u32 + kFrameObject);
+    g_migration_restored.store(false);
+    __imp__sub_822DF9E0(ctx, base);
+    if (!g_migration_restored.exchange(false)) {
+      // A match that is not a migrated one: what a past migration saved (as a client that did not
+      // become the host) must not reach it.
+      g_saved_round = {};
+      return;
+    }
+    const uint32_t game_class = LoadU32(base, game + kObjectClass);
+    const uint32_t set_rules = FindInheritedFunction(base, game_class, "SetGameRules");
+    if (!set_rules) {
+      REXLOG_WARN("[Azura online] Host migration: no SetGameRules, the match goes on without bots");
+      return;
+    }
+    // SetGameRules also sets the rules from this player's own settings (a custom match's, not the
+    // playlist's: GoalScore 5 for 2): everything it changes but the bots is put back, in the game
+    // and in its GRI, which the migration has just restored.
+    const int32_t gri_offset = ClassPropertyOffset(base, game_class, "GameReplicationInfo");
+    const uint32_t gri = gri_offset >= 0 ? LoadU32(base, game + gri_offset) : 0;
+    const auto game_before = SnapshotNumbers(base, game, "Info");
+    const auto gri_before = gri >= 0x10000 ? SnapshotNumbers(base, gri, "Info") : std::vector<NumberSlot>{};
+    constexpr uint32_t kLocalsSize = 512;
+    static uint32_t locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kLocalsSize);
+    std::memset(base + locals, 0, kLocalsSize);
+    RunOnObject(ctx, base, game, set_rules, locals);
+    RestoreNumbers(base, game_before, {"RequestedBots", "NumBots", "PlaylistTeamSize", "PlaylistTeamCount"},
+                   "SetGameRules (game)");
+    RestoreNumbers(base, gri_before, {}, "SetGameRules (GRI)");
+    g_apply_saved_round = true;
+    return;
+  }
+  // A playlist match (MatchType 4) gets its bots from matchmaking's reservations, not from its
+  // settings' bot count (SetNumBots, setting 17), so one that came from the pre-game lobby has
+  // none: it asks for one per place left (KickExtraBots removes any too many when it starts).
+  if (Is(base, function, kSetNumBots) && LiveMode()) {
+    __imp__sub_822DF9E0(ctx, base);
+    const uint32_t game = LoadU32(base, ctx.r4.u32 + kFrameObject);
+    const uint32_t cls = LoadU32(base, game + kObjectClass);
+    const int32_t match_type = ClassPropertyOffset(base, cls, "MatchType");
+    const int32_t bots = ClassPropertyOffset(base, cls, "RequestedBots");
+    const int32_t team_size = ClassPropertyOffset(base, cls, "PlaylistTeamSize");
+    const int32_t team_count = ClassPropertyOffset(base, cls, "PlaylistTeamCount");
+    const int32_t players = ClassPropertyOffset(base, cls, "NumPlayers");
+    if (match_type >= 0 && bots >= 0 && team_size >= 0 && team_count >= 0 && players >= 0 &&
+        base[game + match_type] == 4 && LoadU32(base, game + bots) == 0) {
+      const int32_t places = static_cast<int32_t>(LoadU32(base, game + team_size) * LoadU32(base, game + team_count)) -
+                             static_cast<int32_t>(LoadU32(base, game + players));
+      StoreU32(base, game + bots, static_cast<uint32_t>(std::max(0, places)));
+      REXLOG_INFO("[Azura online] A playlist match from the lobby asks for {} bots", std::max(0, places));
+    }
+    return;
+  }
+  // GearGameMP_Base's MatchOver.EndOfGameTransition sends a match with a map cycle (a playlist
+  // match's, from its playlist) on to the next map of the cycle with all its players
+  // (EndOfGameMapCycleTransition: seamless travel, RestartGame, GetNextMap, ServerTravel), and one
+  // without (a custom match) back to the host's party in the main menu. A playlist match from the
+  // pre-game lobby takes the first way, so its players stay together, but GetNextMap answers the
+  // lobby: they vote again, and nobody ends up in a stranger's party. The travel is not seamless:
+  // the lobby sets itself up as players log in (its PostLogin: teams from the party's data, and the
+  // vote's games and maps once the host's player is in), which players arriving by seamless travel
+  // skip. The host loads the lobby afresh and the clients connect to it again (ClientTravel).
+  if (Is(base, function, kEndOfGameTransition) && LiveMode() &&
+      ObjectName(base, LoadU32(base, function + kObjectOuter)) == "MatchOver") {
+    const uint32_t game = LoadU32(base, ctx.r4.u32 + kFrameObject);
+    const int32_t map_cycle = ClassPropertyOffset(base, LoadU32(base, game + kObjectClass), "MapCycle");
+    if (map_cycle >= 0 && LoadU32(base, game + map_cycle + 4)) {
+      g_lobby_return_pending.store(true);
+      REXLOG_INFO("[Azura online] A playlist match from the lobby goes back to the lobby when it ends");
+    }
+  }
+  if (Is(base, function, kGetNextMap) && g_lobby_return_pending.exchange(false)) {
+    if (const uint32_t code = LobbyNextMapCode(base)) {
+      // The frame register does not survive the call.
+      const uint32_t frame = ctx.r4.u32;
+      SetBoolField(base, LoadU32(base, frame + kFrameObject), "bUseSeamlessTravel", false);
+      const uint32_t own_code = LoadU32(base, frame + kFrameCode);
+      StoreU32(base, frame + kFrameCode, code);
+      __imp__sub_822DF9E0(ctx, base);
+      StoreU32(base, frame + kFrameCode, own_code);
+      REXLOG_INFO("[Azura online] The match travels back to the pre-game lobby");
+      return;
+    }
+  }
+  if (Is(base, function, kInitializePreGameGameSettings) && LiveMode()) {
+    const uint32_t lobby = LoadU32(base, ctx.r4.u32 + kFrameObject);  // the register does not survive the call
+    __imp__sub_822DF9E0(ctx, base);
+    LetLobbyBeJoined(base, lobby);
+    // The lobby takes players now: a matchmade one is open to Alboria's searchers from here.
+    rex::system::xam::alboria::MatchLobbyReady();
+    return;
+  }
+  // GearPreGameLobbyGame_Base.PreLogin turns away whoever comes once every player was present
+  // (GearPreGameGRI.bAllPlayerArePresentForDisplay), unless the party is of type 3, and
+  // GameInfo.PreLogin once the lobby has started arbitration at its vote (bUsingArbitration and
+  // bHasArbitratedHandshakeBegun: "The session has already started."): a custom match's lobby only
+  // takes players while it forms. A playlist match's lobby takes those Alboria sends in at any
+  // time, so those flags are off while it lets one in.
+  if (Is(base, function, kPreLogin) && LiveMode() &&
+      ObjectName(base, LoadU32(base, function + kObjectOuter)) == "GearPreGameLobbyGame_Base") {
+    const uint32_t game = LoadU32(base, ctx.r4.u32 + kFrameObject);
+    const int32_t gri_offset = ClassPropertyOffset(base, LoadU32(base, game + kObjectClass), "GameReplicationInfo");
+    const uint32_t gri = gri_offset >= 0 ? LoadU32(base, game + gri_offset) : 0;
+    BoolField present;
+    for (uint32_t owner = gri ? LoadU32(base, gri + kObjectClass) : 0; owner && present.offset < 0;
+         owner = LoadU32(base, owner + kStructSuper)) {
+      for (uint32_t field = LoadU32(base, owner + kStructChildren); field; field = LoadU32(base, field + kFieldNext)) {
+        if (ObjectName(base, field) != "bAllPlayerArePresentForDisplay") continue;
+        present = {static_cast<int32_t>(LoadU32(base, field + kPropertyOffset)), LoadU32(base, field + kBoolPropertyBitMask)};
+        break;
+      }
+    }
+    const uint32_t word = present.offset >= 0 ? LoadU32(base, gri + present.offset) : 0;
+    const bool was_present = present.offset >= 0 && (word & present.mask);
+    if (was_present) StoreU32(base, gri + present.offset, word & ~present.mask);
+    LetInvitesIntoLobby(base, function);
+    const int arbitrating = SetBoolField(base, game, "bUsingArbitration", false);
+    const int handshake = SetBoolField(base, game, "bHasArbitratedHandshakeBegun", false);
+    __imp__sub_822DF9E0(ctx, base);
+    if (arbitrating == 1) SetBoolField(base, game, "bUsingArbitration", true);
+    if (handshake == 1) SetBoolField(base, game, "bHasArbitratedHandshakeBegun", true);
+    if (was_present) {
+      StoreU32(base, gri + present.offset, LoadU32(base, gri + present.offset) | present.mask);
+      REXLOG_INFO("[Azura online] A player joins the lobby after it formed (arbitration {}, handshake {})",
+                  arbitrating, handshake);
+    }
+    // What PreLogin answered (ErrorMessage, an FString of UTF-16BE characters; empty lets them in).
+    const int32_t error = ParamOffset(base, function, "ErrorMessage");
+    if (error >= 0) {
+      const uint32_t at = LoadU32(base, ctx.r4.u32 + kFrameLocals) + static_cast<uint32_t>(error);
+      const uint32_t data = LoadU32(base, at);
+      const uint32_t count = LoadU32(base, at + 4);
+      std::string text;
+      for (uint32_t i = 0; data && i + 1 < count && i < 200; ++i) {
+        const uint16_t w = static_cast<uint16_t>(base[data + i * 2] << 8 | base[data + i * 2 + 1]);
+        text.push_back(w < 128 ? static_cast<char>(w) : '?');
+      }
+      REXLOG_INFO("[Azura online] The lobby's PreLogin answered \"{}\"", text);
+    }
+    return;
+  }
+  if (Is(base, function, kPostLogin) && LiveMode() &&
+      ObjectName(base, LoadU32(base, function + kObjectOuter)) == "GearPreGameLobbyGame_Base") {
+    const uint32_t frame = ctx.r4.u32;  // the register does not survive the call
+    __imp__sub_822DF9E0(ctx, base);
+    ctx.r4.u64 = frame;  // GiveLobbyPlayerATeam runs ChangeTeam on this frame
+    const int32_t new_player = ParamOffset(base, function, "NewPlayer");
+    if (new_player >= 0) {
+      GiveLobbyPlayerATeam(ctx, base, LoadU32(base, frame + kFrameObject),
+                           LoadU32(base, LoadU32(base, frame + kFrameLocals) + new_player));
+    }
+    return;
+  }
+  // The lobby's button bar offers its host "back to the map selection" (CanBackUpToMapSelect: a custom
+  // match's host chooses the map) in the place of leaving, which a matchmade lobby has no use for (it
+  // votes): there it answers no, so its host is offered to leave as everyone else.
+  if (Is(base, function, kCanBackUpToMapSelect) && LiveMode() && rex::system::xam::alboria::GetStatus().in_match) {
+    const uint32_t result = ctx.r5.u32;
+    __imp__sub_822DF9E0(ctx, base);
+    if (result) StoreU32(base, result, 0);
+    return;
+  }
+  // CanLeaveGame decides whether the lobby offers to leave ("Back to the lobby"), which in an official
+  // or player match's lobby its host is not (the network's authority): in a matchmade lobby it may,
+  // as everyone else. What the game answered is logged when it changes.
+  if (Is(base, function, kCanLeaveGame) && LiveMode() && rex::system::xam::alboria::GetStatus().in_match) {
+    const uint32_t result = ctx.r5.u32;
+    __imp__sub_822DF9E0(ctx, base);
+    static int last = -1;
+    const int answer = result ? static_cast<int>(LoadU32(base, result) != 0) : -1;
+    if (answer != last) {
+      last = answer;
+      REXLOG_INFO("[Azura online] CanLeaveGame answered {} in the matchmade lobby{}", answer,
+                  rex::system::xam::alboria::GetStatus().host ? " (the match room's host): yes" : "");
+    }
+    if (result && rex::system::xam::alboria::GetStatus().host) StoreU32(base, result, 1);
+    return;
+  }
+  // Leaving confirmed. A matchmade lobby's host does not run it: its LeaveMatch ends the lobby as a
+  // custom match's host does, taking everyone into its own party. Its game goes back to the main menu
+  // by itself instead (HostLeaveMatchmadeLobby), and the others' lobby closes under them, so each
+  // party goes back whole to a room of its own (HandleMatchmadeLobbyLost).
+  if (Is(base, function, kOnLeaveLobbyConfirmed) && LiveMode()) {
+    const int32_t alias_at = ParamOffset(base, function, "SelectedInputAlias");
+    const uint32_t locals = LoadU32(base, ctx.r4.u32 + kFrameLocals);
+    const bool accepted = alias_at >= 0 && NameText(base, LoadU32(base, locals + static_cast<uint32_t>(alias_at))) == "AcceptLeave";
+    const rex::system::xam::alboria::Status status = rex::system::xam::alboria::GetStatus();
+    if (accepted) {
+      g_left_lobby_by_choice.store(true);
+      REXLOG_INFO("[Azura online] The player chose to leave the lobby");
+    }
+    if (accepted && status.in_match && status.host) {
+      g_host_leave_requested.store(true);
+      return;
+    }
+  }
+  // The host removed the player from the match for idling (GearGameMP_Base.KickIdler, past the
+  // game's MaxIdleTime: 120 seconds in a matchmade match): GearPC.ClientWasKicked shows the game's
+  // own message ("removed from the session for not participating") and sends the player to the
+  // main menu. On Alboria that is leaving the match (alboria-notes:alboria-server/online-rules.md,
+  // section 3): the player leaves its party too, as the match session's deletion does, and the
+  // online menu does not cover the game's message with "the lobby closed".
+  if (Is(base, function, kClientWasKicked) && LiveMode()) {
+    const rex::system::xam::alboria::Status status = rex::system::xam::alboria::GetStatus();
+    REXLOG_INFO("[Azura online] ClientWasKicked: the player is removed from the match (in a match: {}, hosting: {})",
+                status.in_match, status.host);
+    if (status.in_match) g_left_lobby_by_choice.store(true);
+  }
+  // The game's "connection lost" message box (GearGameViewportClient.NotifyConnectionError, tag
+  // ConfirmNetworkLost) as a matchmade lobby or match is lost under a party's leader (its host went,
+  // and the lobby has no host migration, or no one was left to migrate it to): the online menu says
+  // it in its place once in the main menu (HandleMatchmadeLobbyLost: "the room closed", the party
+  // still online, search again), so the player is not told twice. A member keeps the game's box (its
+  // leader's menu says it), and so does a player who chose to leave or was removed for idling (its
+  // box has another tag, ConnectionError).
+  if (Is(base, function, kShowUIMessage) && LiveMode()) {
+    const rex::system::xam::alboria::Status status = rex::system::xam::alboria::GetStatus();
+    const int32_t tag_at = ParamOffset(base, function, "SceneTag");
+    const uint32_t locals = LoadU32(base, ctx.r4.u32 + kFrameLocals);
+    const std::string tag = tag_at >= 0 ? NameText(base, LoadU32(base, locals + static_cast<uint32_t>(tag_at))) : "";
+    if (tag == "ConfirmNetworkLost" && status.in_match && status.party_leader && !g_left_lobby_by_choice.load()) {
+      REXLOG_INFO("[Azura online] The game's \"connection lost\" box is left out: the online menu says the room closed");
+      return;
+    }
+  }
+  // The game sends the player to the main menu from a matchmade lobby or match it did not choose to
+  // leave: the lobby closed under it (its host went; a lobby has no host migration).
+  // Only a controller of the lobby or the match (GearPreGamePC, GearPC_MP): the front end's own
+  // (GearMenuPC) also goes to the main menu as a party member follows its leader into a match.
+  if (Is(base, function, kReturnToMainMenu) && LiveMode()) {
+    const rex::system::xam::alboria::Status status = rex::system::xam::alboria::GetStatus();
+    const uint32_t controller = LoadU32(base, ctx.r4.u32 + kFrameObject);
+    const std::string controller_class = controller >= 0x10000 ? ObjectName(base, LoadU32(base, controller + kObjectClass)) : "";
+    const bool in_lobby_or_match =
+        controller_class.find("PreGame") != std::string::npos || controller_class.find("_MP") != std::string::npos;
+    const bool chosen = in_lobby_or_match && g_left_lobby_by_choice.exchange(false);
+    if (in_lobby_or_match && status.in_match && !chosen && !g_room_message_pending.load() &&
+        !g_matchmade_lobby_lost.exchange(true)) {
+      REXLOG_INFO("[Azura online] The game sends the player back to the main menu from a matchmade lobby or match");
+      // Before the match session's deletion would leave the match room (and the party with it).
+      rex::system::xam::alboria::MatchLost();
+    }
+  }
+  // UIScene_PregameLobby.OnLeaveGame lets a player leave the pre-game lobby: in an official or player
+  // match's lobby (IsOfficialMatch, IsPlayerMatch; a matchmade lobby is a player match's) only one
+  // that is not the network's authority, so its host never could (on Xbox LIVE the lobby went with
+  // its host); otherwise as CanLeaveGame says. In a matchmade lobby its host may leave as everyone
+  // else: while OnLeaveGame runs for it, both answer no, so CanLeaveGame decides (yes for it, above).
+  if (Is(base, function, kOnLeaveGame) && LiveMode() && rex::system::xam::alboria::GetStatus().in_match) {
+    const bool host = rex::system::xam::alboria::GetStatus().host;
+    REXLOG_INFO("[Azura online] A player asks to leave the matchmade lobby{}", host ? " (the match room's host)" : "");
+    if (host) {
+      g_host_leaving_lobby.store(true);
+      __imp__sub_822DF9E0(ctx, base);
+      g_host_leaving_lobby.store(false);
+      return;
+    }
+  }
+  if ((Is(base, function, kIsOfficialMatch) || Is(base, function, kIsPlayerMatch)) && g_host_leaving_lobby.load()) {
+    const uint32_t result = ctx.r5.u32;
+    __imp__sub_822DF9E0(ctx, base);
+    if (result) StoreU32(base, result, 0);
+    return;
+  }
+  if (Is(base, function, kHandleGameSessionJIP) && LiveMode()) {
+    LetLobbyMatchBeJoined(base, function);
+  }
+  if ((Is(base, function, kGetTeamForCurrentPlayer) || Is(base, function, kGetOccupiedTeamSize)) && LiveMode()) {
+    AnswerReservationFromAlboria(ctx, base, function);
+    return;
+  }
+  // The match the lobby starts is one of that playlist too (LobbyPlaylist): its
+  // session's settings (the lobby's PreGameGameSettings, an OnlineGameSettings) get the playlist's
+  // ID in their PlaylistId property (0x1000000B), which the match reads in InitGame for its teams,
+  // map cycle and leaderboards. Settings.Properties is a TArray of SettingsProperty (20 bytes:
+  // PropertyId, then SettingsData: Type, Value1, Value2, then AdvertisementType).
+  if (Is(base, function, kBeginMatch) && LobbyPlaylist() >= 0 &&
+      ObjectName(base, LoadU32(base, function + kObjectOuter)) == "GearPreGameLobbyGame_Base") {
+    const uint32_t game = LoadU32(base, ctx.r4.u32 + kFrameObject);
+    const int32_t settings_offset = ClassPropertyOffset(base, LoadU32(base, game + kObjectClass), "PreGameGameSettings");
+    const uint32_t settings = settings_offset >= 0 ? LoadU32(base, game + settings_offset) : 0;
+    const int32_t properties = settings ? ClassPropertyOffset(base, LoadU32(base, settings + kObjectClass), "Properties") : -1;
+    constexpr uint32_t kPlaylistIdProperty = 0x1000000B;
+    constexpr uint32_t kSettingsPropertySize = 20;
+    constexpr uint32_t kSettingsValue1 = 8;
+    bool written = false;
+    if (properties >= 0) {
+      const uint32_t data = LoadU32(base, settings + properties);
+      const uint32_t count = LoadU32(base, settings + properties + 4);
+      for (uint32_t i = 0; data && i < count; ++i) {
+        const uint32_t entry = data + i * kSettingsPropertySize;
+        if (LoadU32(base, entry) != kPlaylistIdProperty) continue;
+        StoreU32(base, entry + kSettingsValue1, static_cast<uint32_t>(LobbyPlaylist()));
+        written = true;
+      }
+    }
+    if (written) {
+      REXLOG_INFO("[Azura online] The match is one of playlist {}", LobbyPlaylist());
+    } else {
+      REXLOG_WARN("[Azura online] The lobby's session settings have no PlaylistId property");
+    }
+  }
+  // GearUIDataStore_GameResource.GetGameSummaryFromProviderIndex(ProvIdx, MatchMode) finds a game
+  // type by its index in the playlists' game types (PlaylistGameTypes) when MatchMode is a playlist
+  // match's (1 or 4), and in the custom matches' (GameTypes, in another order) otherwise. The
+  // matchmade lobby's vote holds indexes of its playlist's game types, but the lobby's session is a
+  // custom match's on the players who join it (the host's has the playlist's match mode), so their
+  // lobby would name the game by the custom list (Team Deathmatch's index there is Beast's). In a
+  // matchmade lobby or match (the host's LobbyPlaylist, or Alboria's match room for anyone in it) the
+  // function is asked as for a playlist match (MatchMode 4).
+  if (Is(base, function, kGetGameSummaryFromProviderIndex) && LiveMode() &&
+      (LobbyPlaylist() >= 0 || rex::system::xam::alboria::GetStatus().in_match)) {
+    const int32_t offset = ParamOffset(base, function, "MatchMode");
+    const uint32_t at = LoadU32(base, ctx.r4.u32 + kFrameLocals) + static_cast<uint32_t>(offset);
+    constexpr uint8_t kPlaylistMatchMode = 4;
+    if (offset >= 0 && base[at] != 1 && base[at] != kPlaylistMatchMode) {
+      static std::atomic<bool> said{false};
+      if (!said.exchange(true)) {
+        REXLOG_INFO("[Azura online] The matchmade lobby names its games from the playlist's game types (match mode was {})",
+                    base[at]);
+      }
+      base[at] = kPlaylistMatchMode;
+    }
+  }
+  // The matchmade lobby picks its games and maps from its playlist (LobbyPlaylist).
+  if (Is(base, function, kInitializeGameSelectionInternal) && LobbyPlaylist() >= 0) {
+    const int32_t offset = ParamOffset(base, function, "CurrPlaylistId");
+    const uint32_t at = LoadU32(base, ctx.r4.u32 + kFrameLocals) + static_cast<uint32_t>(offset);
+    if (offset >= 0 && LoadU32(base, at) == 0) {
+      StoreU32(base, at, static_cast<uint32_t>(LobbyPlaylist()));
+      REXLOG_INFO("[Azura online] The lobby's playlist is {}", LobbyPlaylist());
+    }
+    // The games the vote offers (GearPreGameGRI's First/Second/Third/RandomGameIndex, game type
+    // provider indexes) and how many the playlist has (the GameCount local), for the vote's labels.
+    const uint32_t gri = LoadU32(base, ctx.r4.u32 + kFrameObject);
+    const uint32_t locals = LoadU32(base, ctx.r4.u32 + kFrameLocals);
+    const int32_t count_at = LocalOffset(base, function, "GameCount");
+    __imp__sub_822DF9E0(ctx, base);
+    const uint32_t gri_class = LoadU32(base, gri + kObjectClass);
+    std::string games;
+    for (const char* name : {"FirstGameIndex", "SecondGameIndex", "ThirdGameIndex", "RandomGameIndex"}) {
+      const int32_t index = ClassPropertyOffset(base, gri_class, name);
+      games += fmt::format(" {}={}", name, index >= 0 ? std::to_string(base[gri + index]) : "?");
+    }
+    REXLOG_INFO("[Azura online] The lobby's game vote: {} game types in the playlist;{}",
+                count_at >= 0 ? std::to_string(static_cast<int32_t>(LoadU32(base, locals + count_at))) : "?", games);
+    return;
+  }
+  // The custom match Alboria's matchmaking had this player open (OpenMatchmadeLobby) is a playlist
+  // match's (match mode 4), so its pre-game lobby is the matchmade one. ContinueCreateMatch has the
+  // party game take the custom match's path (StartPartyMatchmaking reads the mode then); the session
+  // is created a moment later from the menu's settings, so UpdateMatchMode writes mode 4 into them
+  // right after it. A custom match the player creates from the menu is a private one: it has no
+  // playlist.
+  if (Is(base, function, kContinueCreateMatch) && !g_matchmade_match.load()) g_lobby_playlist.store(-1);
+  if (Is(base, function, kContinueCreateMatch) && g_matchmade_match.exchange(false)) {
+    const uint32_t cls = LoadU32(base, function + kObjectOuter);
+    const uint32_t update = FindClassFunction(base, cls, "UpdateMatchMode");
+    const int32_t offset = update ? ParamOffset(base, update, "MatchMode") : -1;
+    __imp__sub_822DF9E0(ctx, base);
+    if (offset >= 0) {
+      constexpr uint32_t kUpdateLocalsSize = 256;
+      static uint32_t locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kUpdateLocalsSize);
+      std::memset(base + locals, 0, kUpdateLocalsSize);
+      constexpr uint8_t kPlaylistMatchMode = 4;
+      base[locals + offset] = kPlaylistMatchMode;
+      RunInstead(ctx, base, update, locals);
+      REXLOG_INFO("[Azura online] The matchmade match's session is a playlist match's");
+    }
+    return;
+  }
   if (Is(base, function, kUpdatePanelTitle)) {
     g_party_panel.store(LoadU32(base, ctx.r4.u32 + kFrameObject));
     g_party_panel_title_type.store(-1);
@@ -3281,7 +5593,8 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
       ObjectName(base, LoadU32(base, function + kObjectOuter)) == "UIScene_WhatsUp") {
     namespace alboria = rex::system::xam::alboria;
     if (Is(base, function, kWidgetInitialized)) PrepareManageInviteHeading(ctx, base, function);
-    if (Is(base, function, kRefreshManageInviteBar)) TrimManageInviteButtons(base, ctx.r3.u32);
+    // The friends' Invite and Join stay with Live parties, whose friends are Alboria's.
+    if (Is(base, function, kRefreshManageInviteBar) && OnlineMode()) TrimManageInviteButtons(base, ctx.r3.u32);
     if (Is(base, function, kCanInviteGearsPlayers)) {
       if (ctx.r5.u32) StoreU32(base, ctx.r5.u32, alboria::Connected() ? 1 : 0);
       return;
@@ -3322,6 +5635,78 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     OpenOptionsFromMainMenu(ctx, base, function);
     return;
   }
+  // Versus online opens Azura's own matchmaking menu (the script, which does not know the option,
+  // does not run).
+  if (Is(base, function, kHandleMenuSelection) && VersusMenuChoice(base, ctx.r4.u32)) {
+    REXLOG_INFO("[Azura online] Opening the Versus online menu");
+    OpenOnlineMenu(0);
+    return;
+  }
+  // The party panel (UIWidget_SmallPartyPanel, in the pre-game lobby, the match and Manage/Invite)
+  // marks the player whose UniqueId is the party's owner (PartyOwnerUniqueId), SetHostIcon(Idx,
+  // bIsHost): in a matchmade lobby that is the lobby's host for everyone. Nothing may say who hosts a
+  // matchmade match (alboria-notes:alboria-server/online-rules.md): in Alboria's match rooms nobody
+  // is marked. A private room among friends keeps the mark.
+  if (Is(base, function, kSetHostIcon) && LiveMode() && rex::system::xam::alboria::GetStatus().in_match) {
+    const int32_t host_at = ParamOffset(base, function, "bIsHost");
+    if (host_at >= 0) StoreU32(base, LoadU32(base, ctx.r4.u32 + kFrameLocals) + static_cast<uint32_t>(host_at), 0);
+  }
+  // The panel's slots (SlotList, PartySlotData) carry the same mark, bIsPartyHost, which
+  // UpdatePlayerList sets and the list's data for Flash shows as its crown: in Alboria's match rooms
+  // it is cleared from every slot once they are filled.
+  if (Is(base, function, kUpdatePlayerList) && LiveMode() && rex::system::xam::alboria::GetStatus().in_match) {
+    const uint32_t panel = LoadU32(base, ctx.r4.u32 + kFrameObject);
+    __imp__sub_822DF9E0(ctx, base);
+    ClearPartyHostMarks(base, panel);
+    return;
+  }
+  // The front end's menus show the party's NAT type (UIWidget_MainMenu.UpdateNatType: NATTypeLabel,
+  // "NAT type: Open") and, by Horde's, Beast's, the playlists' and the campaign's options, how many
+  // play them in the player's region and the world (UpdatePopulationNumbers, from Xbox LIVE's
+  // playlist population). With Alboria neither means anything: there are no counts, and Alboria's
+  // relay and rooms do not depend on the NAT type. The counts are not set, and the NAT label is
+  // written empty (its texts, NATTypeString, HostNATTypeString and the NATTypeNames array, are empty
+  // while it runs: an FString or TArray whose count is 0).
+  if (Is(base, function, kUpdatePopulationNumbers) && LiveMode()) return;
+  if (Is(base, function, kUpdateNatType) && LiveMode() &&
+      ObjectName(base, LoadU32(base, function + kObjectOuter)) == "UIWidget_MainMenu") {
+    const uint32_t widget = LoadU32(base, ctx.r4.u32 + kFrameObject);
+    const uint32_t widget_class = LoadU32(base, widget + kObjectClass);
+    std::vector<std::pair<uint32_t, uint32_t>> counts;  // address of each array's count, its value
+    for (const char* name : {"NATTypeString", "HostNATTypeString", "NATTypeNames"}) {
+      const int32_t offset = ClassPropertyOffset(base, widget_class, name);
+      if (offset < 0) continue;
+      const uint32_t count_at = widget + static_cast<uint32_t>(offset) + 4;  // TArray: data, count, max
+      counts.emplace_back(count_at, LoadU32(base, count_at));
+      StoreU32(base, count_at, 0);
+    }
+    __imp__sub_822DF9E0(ctx, base);
+    for (const auto& [count_at, count] : counts) StoreU32(base, count_at, count);
+    static std::atomic<bool> said{false};
+    if (!said.exchange(true)) REXLOG_INFO("[Azura online] The menus show no NAT type nor playlist counts");
+    return;
+  }
+  // Horde and Beast share their Standard / Private screen (UIScene_FrontEnd.
+  // HandleHordeAndSiegeMatchModeSelection, which knows the game from the main menu's choice). With
+  // online play on, their Standard is their online option (menu_patches.cpp), in its place: chosen,
+  // it opens Azura's matchmaking menu for that game instead of Xbox LIVE's matchmaking
+  // (LaunchPlaylistMatch). A replayed (simulated) choice runs as the script has it.
+  if (Is(base, function, kHandleHordeSelection)) g_horde_or_beast.store(1);
+  if (Is(base, function, kHandleSiegeSelection)) g_horde_or_beast.store(2);
+  if (Is(base, function, kHandleHordeAndSiegeMatchModeSelection) && LiveMode()) {
+    const int game = g_horde_or_beast.load();
+    const int online_option = game == 1 ? azura::menu::HordeOnlineOption() : game == 2 ? azura::menu::BeastOnlineOption() : -1;
+    const uint32_t locals = LoadU32(base, ctx.r4.u32 + kFrameLocals);
+    const int32_t option_at = ParamOffset(base, function, "SelectedOption");
+    const int32_t simulating_at = ParamOffset(base, function, "bIsSimulating");
+    const bool simulated = simulating_at >= 0 && LoadU32(base, locals + simulating_at) != 0;
+    if (online_option >= 0 && option_at >= 0 && !simulated &&
+        static_cast<int32_t>(LoadU32(base, locals + option_at)) == online_option) {
+      REXLOG_INFO("[Azura online] Opening the {} online menu", game == 1 ? "Horde" : "Beast");
+      OpenOnlineMenu(game);
+      return;
+    }
+  }
   const int quit_option = azura::menu::MainMenuQuitOption();
   if (quit_option >= 0 && Is(base, function, kHandleMenuSelection) && IsQuitSelection(base, ctx.r4.u32, quit_option)) {
     RequestQuit();
@@ -3333,6 +5718,15 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   // binds it to a function of its own (the main menu's OptionsMenuClosed).
   if (Is(base, function, kOnClose) && ObjectName(base, LoadU32(base, function + kObjectOuter)) == "UIScene_Options") {
     g_options_open.store(false, std::memory_order_relaxed);
+  }
+  // The War Journal opened from the Versus online menu closes: the menu opens again over Versus'.
+  if (Is(base, function, kOnClose) && g_journal_from_versus.load()) {
+    const std::string scene = ObjectName(base, LoadU32(base, function + kObjectOuter));
+    REXLOG_INFO("[Azura online] {} closes while the War Journal from Versus online is open", scene);
+    if (scene.find("Journal") != std::string::npos) {
+      g_journal_from_versus.store(false);
+      OpenOnlineMenu(g_online_menu_game.load());
+    }
   }
   // Manage/Invite closed while the Join by code screen was open over it: nothing to close later.
   if (Is(base, function, kOnClose)) {

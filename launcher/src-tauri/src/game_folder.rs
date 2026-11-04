@@ -13,6 +13,11 @@
 //! 3. the SHA-256 of the whole executable must match a known build, because recompiled code and
 //!    patches only fit the exact executable they were made from.
 //!
+//! For a build the project does not know, the result also carries the SHA-256 of the executable's
+//! image (every byte after the header), so the player can report the edition. Two editions whose
+//! image hashes match differ only in the header (signature, media ID, region) and run the same
+//! code (see the comment at the end of `versions.toml`).
+//!
 //! The game languages present are found from the engine's per-language config bundles,
 //! `GearGame/CookedXbox360/Coalesced_<LANG>.bin` (INT, FRA, RUS, ...).
 
@@ -38,6 +43,9 @@ const XEX2_MAGIC: u32 = 0x5845_5832;
 /// Key of the optional header that holds the execution info (title ID, media ID, ...).
 const EXECUTION_INFO_KEY: u32 = 0x0004_0006;
 
+/// Offset of the field that holds where the image starts, that is, the size of the header.
+const IMAGE_OFFSET_FIELD: usize = 0x08;
+
 /// Offset of the optional header table, right after the fixed part of the XEX2 header.
 const OPT_HEADER_TABLE_OFFSET: usize = 0x18;
 
@@ -50,6 +58,9 @@ const MAX_HEADER_BYTES: u64 = 1024 * 1024;
 pub struct XexInfo {
     pub title_id: u32,
     pub media_id: u32,
+    /// Where the image (the encrypted, compressed code and data) starts; everything before it is
+    /// the header.
+    pub image_offset: u32,
 }
 
 /// Why an executable could not be read as a game executable.
@@ -83,13 +94,17 @@ pub enum FolderCheck {
         version_name: String,
         languages: Vec<String>,
     },
-    /// The game, but a build the project has no manifest for yet.
+    /// The game, but a build the project has no manifest for yet. The two hashes are what the
+    /// player reports so the edition can be added: `xex_sha256` of the whole executable (the key
+    /// in `versions.toml`) and `image_sha256` of the bytes after its header.
     #[serde(rename_all = "camelCase")]
     UnsupportedVersion {
         folder: String,
         title_id: String,
         media_id: String,
         languages: Vec<String>,
+        xex_sha256: String,
+        image_sha256: String,
     },
     /// A valid Xbox 360 executable of another game.
     #[serde(rename_all = "camelCase")]
@@ -115,14 +130,15 @@ fn read_be_u32(bytes: &[u8], offset: usize) -> Result<u32, XexError> {
 
 /// Parses the start of an XEX2 file and returns the build identity.
 ///
-/// Layout used: magic at 0x00, optional header count at 0x14, then `count` entries of
-/// (key, value) at 0x18. For the execution info key the value is an offset from the start of the
+/// Layout used: magic at 0x00, image offset at 0x08, optional header count at 0x14, then `count`
+/// entries of (key, value) at 0x18. For the execution info key the value is an offset from the start of the
 /// file to a structure whose media ID is at +0x0 and title ID at +0xC.
 pub fn parse_xex_header(bytes: &[u8]) -> Result<XexInfo, XexError> {
     if read_be_u32(bytes, 0)? != XEX2_MAGIC {
         return Err(XexError::BadMagic);
     }
 
+    let image_offset = read_be_u32(bytes, IMAGE_OFFSET_FIELD)?;
     let header_count = read_be_u32(bytes, 0x14)? as usize;
     for index in 0..header_count {
         let entry = OPT_HEADER_TABLE_OFFSET + index * 8;
@@ -133,6 +149,7 @@ pub fn parse_xex_header(bytes: &[u8]) -> Result<XexInfo, XexError> {
         return Ok(XexInfo {
             media_id: read_be_u32(bytes, info)?,
             title_id: read_be_u32(bytes, info + 0xC)?,
+            image_offset,
         });
     }
     Err(XexError::NoExecutionInfo)
@@ -149,11 +166,51 @@ fn read_xex_info(path: &Path) -> Option<XexInfo> {
     parse_xex_header(&bytes).ok()
 }
 
-/// SHA-256 of a whole file, as lowercase hex. Streams the file, so its size does not matter.
-fn sha256_file(path: &Path) -> io::Result<String> {
-    let mut hasher = Sha256::new();
-    io::copy(&mut File::open(path)?, &mut hasher)?;
-    Ok(hex(&hasher.finalize()))
+/// SHA-256 digests of an executable, as lowercase hex.
+#[derive(Debug, PartialEq, Eq)]
+struct XexHashes {
+    /// The whole file: what `versions.toml` identifies a build by.
+    whole: String,
+    /// The bytes from the image offset on, leaving out the header.
+    image: String,
+}
+
+/// A writer that feeds every byte to the whole-file hasher and the bytes from `image_offset` on to
+/// the image hasher, so one read of the executable gives both digests.
+struct XexHasher {
+    whole: Sha256,
+    image: Sha256,
+    /// Header bytes still to skip before the image hasher starts.
+    header_left: u64,
+}
+
+impl io::Write for XexHasher {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.whole.update(buf);
+        let skipped = buf.len().min(usize::try_from(self.header_left).unwrap_or(usize::MAX));
+        self.header_left -= skipped as u64;
+        self.image.update(&buf[skipped..]);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Hashes an executable read from `reader`, whose image starts at `image_offset`. Streams it, so
+/// its size does not matter.
+fn hash_xex(mut reader: impl Read, image_offset: u32) -> io::Result<XexHashes> {
+    let mut hasher = XexHasher {
+        whole: Sha256::new(),
+        image: Sha256::new(),
+        header_left: u64::from(image_offset),
+    };
+    io::copy(&mut reader, &mut hasher)?;
+    Ok(XexHashes {
+        whole: hex(&hasher.whole.finalize()),
+        image: hex(&hasher.image.finalize()),
+    })
 }
 
 /// Bytes as lowercase hex.
@@ -215,7 +272,8 @@ pub fn check_folder(dir: &Path, registry: &Registry) -> FolderCheck {
     };
     let xex_path = game_folder.join(XEX_FILE_NAME);
     let languages = find_languages(&game_folder);
-    identify(display(&game_folder), read_xex_info(&xex_path), languages, || sha256_file(&xex_path), registry)
+    let hash = |image_offset| hash_xex(File::open(&xex_path)?, image_offset);
+    identify(display(&game_folder), read_xex_info(&xex_path), languages, hash, registry)
 }
 
 /// Checks a disc image: the same checks as a folder's, on the files read from the image.
@@ -240,11 +298,7 @@ fn check_disc_image(path: &Path, registry: &Registry) -> FolderCheck {
         _ => Vec::new(),
     };
     let languages = languages_of(cooked.into_iter().map(|entry| entry.name));
-    let hash = || -> io::Result<String> {
-        let mut hasher = Sha256::new();
-        io::copy(&mut image.open_file(&xex)?, &mut hasher)?;
-        Ok(hex(&hasher.finalize()))
-    };
+    let hash = |image_offset| hash_xex(image.open_file(&xex)?, image_offset);
     identify(folder, info, languages, hash, registry)
 }
 
@@ -262,13 +316,13 @@ pub fn copy_xex_from_image(image: &Path, destination: &Path) -> io::Result<()> {
 }
 
 /// The checks after `default.xex` was found, the same for a folder and a disc image: its header
-/// (`info`), the title ID, then the hash (`hash`, read only for the game's own title ID, since it
-/// reads the whole executable) against the known builds.
+/// (`info`), the title ID, then the hashes (`hash`, given the image offset and read only for the
+/// game's own title ID, since it reads the whole executable) against the known builds.
 fn identify(
     folder: String,
     info: Option<XexInfo>,
     languages: Vec<String>,
-    hash: impl FnOnce() -> io::Result<String>,
+    hash: impl FnOnce(u32) -> io::Result<XexHashes>,
     registry: &Registry,
 ) -> FolderCheck {
     let Some(info) = info else {
@@ -281,10 +335,10 @@ fn identify(
     }
 
     let media_id = format!("{:08X}", info.media_id);
-    let Ok(hash) = hash() else {
+    let Ok(hashes) = hash(info.image_offset) else {
         return FolderCheck::InvalidXex { folder };
     };
-    match registry.find_by_hash(&hash) {
+    match registry.find_by_hash(&hashes.whole) {
         Some(version) => FolderCheck::Ok {
             folder,
             title_id,
@@ -298,6 +352,8 @@ fn identify(
             title_id,
             media_id,
             languages,
+            xex_sha256: hashes.whole,
+            image_sha256: hashes.image,
         },
     }
 }
@@ -309,10 +365,12 @@ mod tests {
 
     const TEST_TITLE_ID: u32 = 0x4D53_08AB;
 
-    /// Builds a minimal XEX2 header with one execution info entry pointing at offset 0x40.
+    /// Builds a minimal XEX2 header with one execution info entry pointing at offset 0x40, and an
+    /// image from 0x50 on.
     fn sample_header(title_id: u32, media_id: u32) -> Vec<u8> {
         let mut bytes = vec![0u8; 0x60];
         bytes[0..4].copy_from_slice(&XEX2_MAGIC.to_be_bytes());
+        bytes[0x08..0x0C].copy_from_slice(&0x50u32.to_be_bytes());
         bytes[0x14..0x18].copy_from_slice(&2u32.to_be_bytes());
         // First entry: an unrelated header, which must be skipped.
         bytes[0x18..0x1C].copy_from_slice(&0x0001_0100u32.to_be_bytes());
@@ -321,12 +379,18 @@ mod tests {
         bytes[0x24..0x28].copy_from_slice(&0x40u32.to_be_bytes());
         bytes[0x40..0x44].copy_from_slice(&media_id.to_be_bytes());
         bytes[0x4C..0x50].copy_from_slice(&title_id.to_be_bytes());
+        bytes[0x50..].fill(0xA5);
         bytes
+    }
+
+    /// SHA-256 of `bytes` as lowercase hex.
+    fn sha256_hex(bytes: &[u8]) -> String {
+        hex(&Sha256::digest(bytes))
     }
 
     /// A registry that knows exactly one executable: `xex`.
     fn registry_for(xex: &[u8]) -> Registry {
-        let hash: String = Sha256::digest(xex).iter().map(|b| format!("{b:02x}")).collect();
+        let hash = sha256_hex(xex);
         Registry::parse(&format!(
             r#"
             title_id = "4D5308AB"
@@ -349,7 +413,7 @@ mod tests {
     #[test]
     fn reads_title_and_media_id() {
         let info = parse_xex_header(&sample_header(0x1234_5678, 0x9ABC_DEF0)).unwrap();
-        assert_eq!(info, XexInfo { title_id: 0x1234_5678, media_id: 0x9ABC_DEF0 });
+        assert_eq!(info, XexInfo { title_id: 0x1234_5678, media_id: 0x9ABC_DEF0, image_offset: 0x50 });
     }
 
     #[test]
@@ -448,7 +512,8 @@ mod tests {
     #[test]
     fn an_unknown_build_of_the_game_is_unsupported() {
         let dir = temp_folder("unknown");
-        std::fs::write(dir.join(XEX_FILE_NAME), sample_header(TEST_TITLE_ID, 0x0000_0002)).unwrap();
+        let xex = sample_header(TEST_TITLE_ID, 0x0000_0002);
+        std::fs::write(dir.join(XEX_FILE_NAME), &xex).unwrap();
         let registry = registry_for(b"some other executable");
         assert_eq!(
             check_folder(&dir, &registry),
@@ -457,8 +522,53 @@ mod tests {
                 title_id: "4D5308AB".into(),
                 media_id: "00000002".into(),
                 languages: vec![],
+                xex_sha256: sha256_hex(&xex),
+                image_sha256: sha256_hex(&xex[0x50..]),
             }
         );
+    }
+
+    #[test]
+    fn an_unknown_build_in_a_disc_image_reports_its_hashes() {
+        use crate::disc_image::test_image::{write, Node};
+        let dir = temp_folder("unknown-image");
+        let xex = sample_header(TEST_TITLE_ID, 0x52AC_485A);
+        let image = dir.join("Gears of War 3.iso");
+        write(&image, 0, &[Node::File("default.xex", xex.clone())]);
+        assert_eq!(
+            check_folder(&image, &registry_for(b"some other executable")),
+            FolderCheck::UnsupportedVersion {
+                folder: image.to_string_lossy().into_owned(),
+                title_id: "4D5308AB".into(),
+                media_id: "52AC485A".into(),
+                languages: vec![],
+                xex_sha256: sha256_hex(&xex),
+                image_sha256: sha256_hex(&xex[0x50..]),
+            }
+        );
+    }
+
+    #[test]
+    fn editions_that_differ_only_in_the_header_share_the_image_hash() {
+        // A header the size of the game's (0x4000) and an image longer than one copy buffer, so
+        // the header ends inside a write.
+        let mut first = vec![0u8; 0x4000 + 0x5000];
+        first.iter_mut().enumerate().for_each(|(index, byte)| *byte = index as u8);
+        let mut second = first.clone();
+        second[0x100] ^= 0xFF;
+        let first_hashes = hash_xex(first.as_slice(), 0x4000).unwrap();
+        let second_hashes = hash_xex(second.as_slice(), 0x4000).unwrap();
+        assert_eq!(first_hashes.whole, sha256_hex(&first));
+        assert_eq!(first_hashes.image, sha256_hex(&first[0x4000..]));
+        assert_ne!(first_hashes.whole, second_hashes.whole);
+        assert_eq!(first_hashes.image, second_hashes.image);
+    }
+
+    #[test]
+    fn an_image_offset_past_the_end_hashes_an_empty_image() {
+        let hashes = hash_xex(&b"short"[..], 0x4000).unwrap();
+        assert_eq!(hashes.whole, sha256_hex(b"short"));
+        assert_eq!(hashes.image, sha256_hex(b""));
     }
 
     #[test]

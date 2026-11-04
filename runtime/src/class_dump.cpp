@@ -281,9 +281,21 @@ void DumpFields(const GuestReader& mem, uint32_t owner, const std::string& inden
         }
         REXLOG_INFO("[Azura dump] {}  locals:{}", indent, locals);
         DumpCode(mem, field, indent);
+        // Words of the function object that point into the game's code (0x82000000 to
+        // 0x84000000): a native function's C++ (UFunction::Func) is among them.
+        std::string natives;
+        for (uint32_t offset = 0; offset < 0xC0; offset += 4) {
+          const uint32_t word = mem.U32(field + offset);
+          if (word >= 0x82000000 && word < 0x84000000) natives += fmt::format(" +{:X}={:08X}", offset, word);
+        }
+        if (!natives.empty()) REXLOG_INFO("[Azura dump] {}  code pointers:{}", indent, natives);
       }
     } else if (type == "ScriptStruct") {
       REXLOG_INFO("[Azura dump] {}struct {}", indent, mem.ObjectName(field));
+      DumpFields(mem, field, indent + "  ");
+    } else if (type == "State") {
+      // A state's functions replace the class's own while the object is in that state.
+      REXLOG_INFO("[Azura dump] {}state {}", indent, mem.ObjectName(field));
       DumpFields(mem, field, indent + "  ");
     } else if (type == "Enum") {
       REXLOG_INFO("[Azura dump] {}enum {} {{{}}}", indent, mem.ObjectName(field), EnumValues(mem, field));

@@ -16,8 +16,14 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
-/// Folder for saves when the player has not chosen one, relative to the home folder.
-const DEFAULT_SAVES: &str = "Documents/Games Saves/Gears3-Azura";
+/// Folder for saves when the player has not chosen one, relative to the home folder. The
+/// development launcher has its own, so it never touches the published launcher's saves or its
+/// Alboria identity (which lives in the saves folder).
+const DEFAULT_SAVES: &str = if cfg!(feature = "dev") {
+    "Documents/Games Saves/Gears3-Azura (DEV)"
+} else {
+    "Documents/Games Saves/Gears3-Azura"
+};
 
 /// Where the runtime kept its data before the launcher chose the folder, relative to home.
 const LEGACY_USER_DATA: &str = ".local/share/azura";
@@ -165,12 +171,34 @@ pub fn move_saves(from: &Path, to: &Path, replace: bool) -> Result<usize, SavesE
     Ok(entries.len())
 }
 
+/// Backs up the saves a move from `from` to `to` would touch, before it touches them: those in
+/// `from` always, and those already in `to` when `replace` lets the move overwrite them. A move
+/// that would do nothing or that `move_saves` refuses (same or nested folders, nothing to move, a
+/// destination with saves and no `replace`) makes no backup. A backup that fails stops the move.
+pub fn backup_before_move(app: &AppHandle, from: &Path, to: &Path, replace: bool) -> Result<Vec<BackupInfo>, SavesError> {
+    backups_before_move(&backups_dir(app)?, from, to, replace)
+}
+
+fn backups_before_move(backups: &Path, from: &Path, to: &Path, replace: bool) -> Result<Vec<BackupInfo>, SavesError> {
+    let (from_c, to_c) = (canonical(from), canonical(to));
+    let refused = from_c == to_c || to_c.starts_with(&from_c) || from_c.starts_with(&to_c);
+    if refused || !has_saves(from) || (has_saves(to) && !replace) {
+        return Ok(Vec::new());
+    }
+    let mut made = vec![create_backup(backups, &find_gears3_content_dir(from), BackupKind::BeforeMove)?];
+    if has_saves(to) {
+        made.push(create_backup(backups, &find_gears3_content_dir(to), BackupKind::BeforeReplace)?);
+    }
+    Ok(made)
+}
+
 /// Gets `saves` ready before the game starts: creates it and, the first time, brings over the
 /// saves the runtime wrote to its old folder and moves that folder's shader cache to `cache`.
 /// Nothing is replaced: when both folders hold saves, the old ones stay where they are.
 pub fn prepare(saves: &Path, cache: &Path) -> Result<(), SavesError> {
     let legacy = legacy_folder();
-    if has_saves(&legacy) && !has_saves(saves) {
+    // The runtime's old folder belongs to the published launcher: the development one leaves it.
+    if !cfg!(feature = "dev") && has_saves(&legacy) && !has_saves(saves) {
         move_saves(&legacy, saves, false)?;
     }
     let legacy_cache = legacy.join(CACHE_ENTRY);
@@ -195,6 +223,10 @@ pub enum BackupKind {
     Manual,
     BeforeRepair,
     BeforeReset,
+    /// The saves being moved to another folder, made before they leave.
+    BeforeMove,
+    /// The saves already in the folder a move replaces, made before they are overwritten.
+    BeforeReplace,
 }
 
 impl BackupKind {
@@ -203,11 +235,15 @@ impl BackupKind {
             BackupKind::Manual => "manual",
             BackupKind::BeforeRepair => "auto_before_repair",
             BackupKind::BeforeReset => "auto_before_reset",
+            BackupKind::BeforeMove => "auto_before_move",
+            BackupKind::BeforeReplace => "auto_before_replace",
         }
     }
 
     fn from_tag(tag: &str) -> Option<Self> {
-        [BackupKind::Manual, BackupKind::BeforeRepair, BackupKind::BeforeReset].into_iter().find(|kind| kind.tag() == tag)
+        [BackupKind::Manual, BackupKind::BeforeRepair, BackupKind::BeforeReset, BackupKind::BeforeMove, BackupKind::BeforeReplace]
+            .into_iter()
+            .find(|kind| kind.tag() == tag)
     }
 }
 
@@ -279,65 +315,62 @@ fn millis(time: std::time::SystemTime) -> Option<u64> {
     time.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_millis() as u64)
 }
 
+/// What the saves folder holds: whether there is anything at all, the checkpoint files with data,
+/// whether a save is broken, and when a checkpoint was last written.
+struct SavesScan {
+    has_saves: bool,
+    checkpoint_count: usize,
+    is_corrupted: bool,
+    latest_time: Option<std::time::SystemTime>,
+}
+
+/// Looks through the content packages and headers in `content_dir`.
+///
+/// The game makes a profile's checkpoint slots as empty (0-byte) files when the profile is first
+/// used and fills them when it saves, so an empty file is a free slot, not damage. A save is
+/// broken only when a header has no package with files behind it, which is what keeps the game
+/// from loading it and what repairing removes (see orphaned_headers).
+fn scan_saves(content_dir: &Path) -> SavesScan {
+    let headers_dir = content_dir.join("Headers").join("00000001");
+    let packages_dir = content_dir.join("00000001");
+    let mut scan = SavesScan { has_saves: false, checkpoint_count: 0, is_corrupted: false, latest_time: None };
+
+    if let Ok(entries) = fs::read_dir(&headers_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            scan.has_saves = true;
+            if let Ok(mtime) = path.metadata().and_then(|meta| meta.modified()) {
+                scan.latest_time = Some(scan.latest_time.map_or(mtime, |prev| prev.max(mtime)));
+            }
+        }
+    }
+    scan.is_corrupted = !orphaned_headers(&headers_dir, &packages_dir).is_empty();
+
+    if let Ok(entries) = fs::read_dir(&packages_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            scan.has_saves = true;
+            if let Ok(files) = fs::read_dir(&path) {
+                scan.checkpoint_count += files
+                    .flatten()
+                    .filter(|file| file.metadata().map(|meta| meta.len() > 0).unwrap_or(false))
+                    .count();
+            }
+        }
+    }
+    scan
+}
+
 /// Inspects the current state of saved games.
 pub fn inspect_saves(app: &AppHandle, saves_dir: &Path) -> SaveStatus {
     let content_dir = find_gears3_content_dir(saves_dir);
-    let mut has_saves = false;
-    let mut checkpoint_count = 0;
-    let mut is_corrupted = false;
-    let mut latest_time: Option<std::time::SystemTime> = None;
-
-    let headers_dir = content_dir.join("Headers").join("00000001");
-    let packages_dir = content_dir.join("00000001");
-
-    if headers_dir.is_dir() {
-        if let Ok(entries) = fs::read_dir(&headers_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_file() {
-                    has_saves = true;
-                    if let Ok(meta) = path.metadata() {
-                        if let Ok(mtime) = meta.modified() {
-                            latest_time = match latest_time {
-                                Some(prev) => Some(std::cmp::max(prev, mtime)),
-                                None => Some(mtime),
-                            };
-                        }
-                    }
-                    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                    let pkg_dir = packages_dir.join(stem);
-                    if !pkg_dir.exists() {
-                        is_corrupted = true;
-                    }
-                }
-            }
-        }
-    }
-
-    if packages_dir.is_dir() {
-        if let Ok(entries) = fs::read_dir(&packages_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    has_saves = true;
-                    let mut valid_package = false;
-                    if let Ok(pkg_entries) = fs::read_dir(&path) {
-                        let count = pkg_entries
-                            .flatten()
-                            .filter(|e| e.metadata().map(|m| m.len() > 0).unwrap_or(false))
-                            .count();
-                        if count > 0 {
-                            valid_package = true;
-                            checkpoint_count += count;
-                        }
-                    }
-                    if !valid_package {
-                        is_corrupted = true;
-                    }
-                }
-            }
-        }
-    }
+    let SavesScan { has_saves, checkpoint_count, is_corrupted, latest_time } = scan_saves(&content_dir);
 
     let status = if is_corrupted {
         "corrupted"
@@ -553,6 +586,33 @@ mod tests {
     }
 
     #[test]
+    fn empty_checkpoint_slots_are_not_broken_saves() {
+        let dir = TempFolder::new("saves-scan");
+        let content = dir.join("content");
+        // A profile that never saved the campaign: its header, its package, and the three slots the
+        // game makes empty.
+        fs::create_dir_all(content.join("Headers/00000001")).unwrap();
+        fs::write(content.join("Headers/00000001/GearsCheckpoint.header"), b"header").unwrap();
+        fs::create_dir_all(content.join("00000001/GearsCheckpoint")).unwrap();
+        for slot in 0..3 {
+            fs::write(content.join(format!("00000001/GearsCheckpoint/GearsCheckpoint{slot}.sav")), b"").unwrap();
+        }
+        let scan = scan_saves(&content);
+        assert!(scan.has_saves && !scan.is_corrupted);
+        assert_eq!(scan.checkpoint_count, 0);
+
+        // Once the game saves, the slot counts as a checkpoint.
+        fs::write(content.join("00000001/GearsCheckpoint/GearsCheckpoint0.sav"), b"save").unwrap();
+        let scan = scan_saves(&content);
+        assert!(!scan.is_corrupted);
+        assert_eq!(scan.checkpoint_count, 1);
+
+        // A header whose package is gone is broken, as repairing sees it.
+        fs::write(content.join("Headers/00000001/PlayerStorage.dat.header"), b"header").unwrap();
+        assert!(scan_saves(&content).is_corrupted);
+    }
+
+    #[test]
     fn moves_saves_but_not_the_cache() {
         let from = TempFolder::new("saves-from");
         let to = TempFolder::new("saves-to");
@@ -609,6 +669,60 @@ mod tests {
         // Newest first; a folder without a date goes last.
         assert_eq!(listed[0].id, made.id);
         assert_eq!(listed.last().unwrap().id, "something_else");
+    }
+
+    #[test]
+    fn moving_backs_up_the_saves_that_leave() {
+        let dir = TempFolder::new("backup-move");
+        let (backups, from, to) = (dir.join("backups"), dir.join("from"), dir.join("to"));
+        fake_user_data(&from);
+        let made = backups_before_move(&backups, &from, &to, false).unwrap();
+        assert_eq!(made.iter().map(|b| b.kind).collect::<Vec<_>>(), vec![Some(BackupKind::BeforeMove)]);
+        assert!(backups.join(&made[0].id).join("00000001/PlayerStorage.dat").is_file());
+        // The backup leaves the saves where they are: moving them is still move_saves's job.
+        assert!(has_saves(&from));
+    }
+
+    #[test]
+    fn replacing_also_backs_up_the_saves_it_overwrites() {
+        let dir = TempFolder::new("backup-replace");
+        let (backups, from, to) = (dir.join("backups"), dir.join("from"), dir.join("to"));
+        fake_user_data(&from);
+        fake_user_data(&to);
+        fs::write(to.join("B13EBABEBABEBABE/4D5308AB/00000001/PlayerStorage.dat"), b"older save").unwrap();
+        let made = backups_before_move(&backups, &from, &to, true).unwrap();
+        let kinds: Vec<_> = made.iter().map(|b| b.kind).collect();
+        assert_eq!(kinds, vec![Some(BackupKind::BeforeMove), Some(BackupKind::BeforeReplace)]);
+        let replaced = backups.join(&made[1].id).join("00000001/PlayerStorage.dat");
+        assert_eq!(fs::read(replaced).unwrap(), b"older save");
+    }
+
+    #[test]
+    fn a_move_that_does_nothing_or_is_refused_makes_no_backup() {
+        let dir = TempFolder::new("backup-none");
+        let (backups, from, to, empty) = (dir.join("backups"), dir.join("from"), dir.join("to"), dir.join("empty"));
+        fake_user_data(&from);
+        fake_user_data(&to);
+        // A destination with saves and no replace: move_saves will ask first.
+        assert!(backups_before_move(&backups, &from, &to, false).unwrap().is_empty());
+        // The same folder, nested folders and nothing to move.
+        assert!(backups_before_move(&backups, &from, &from, true).unwrap().is_empty());
+        assert!(backups_before_move(&backups, &from, &from.join("inner"), true).unwrap().is_empty());
+        assert!(backups_before_move(&backups, &empty, &to, true).unwrap().is_empty());
+        assert!(!backups.exists() || fs::read_dir(&backups).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn a_failed_backup_stops_before_anything_moves() {
+        let dir = TempFolder::new("backup-fails");
+        let (from, to) = (dir.join("from"), dir.join("to"));
+        fake_user_data(&from);
+        // A file where the backups folder should be: the backup cannot be made.
+        let backups = dir.join("backups");
+        fs::write(&backups, b"not a folder").unwrap();
+        assert!(backups_before_move(&backups, &from, &to, false).is_err());
+        assert!(has_saves(&from));
+        assert!(!to.exists());
     }
 
     #[test]

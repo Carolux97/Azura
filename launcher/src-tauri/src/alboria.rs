@@ -33,7 +33,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 /// The service's address.
-const DEFAULT_API_URL: &str = "https://api.alboria.org";
+pub const DEFAULT_API_URL: &str = "https://api.alboria.org";
 /// Gears of War 3's title ID: the game a device of this launcher plays.
 pub const TITLE_ID: &str = "4D5308AB";
 /// The identity's file name, in the saves folder (the SDK's `kPlayerIdentityFileName`).
@@ -44,6 +44,9 @@ const AUTH_CONTEXT: &[u8] = b"alboria-auth-v1";
 const MACHINE_CONTEXT: &[u8] = b"alboria-machine-v1";
 /// How long a request may take before the service counts as unreachable.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long the events channel may stay silent: the service sends a ping every 25 seconds, so a
+/// longer silence means the connection is gone.
+const EVENTS_SILENCE: Duration = Duration::from_secs(60);
 
 // --- identity.toml ---------------------------------------------------------------------------
 
@@ -322,17 +325,85 @@ pub struct CodeSent {
     pub code_needed: bool,
 }
 
-/// What the service says about itself (`/v1/status`): whether it sends codes now.
+/// What the service says about itself (`/v1/status`, alboria-notes:azura/alboria-relay.md section
+/// 4.1): whether it sends codes now, its maintenance and notice for everyone, the asking game's own
+/// state, and the scheduled actions to warn about. The interface words and shows it
+/// (alboriaService.js).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
     pub email_codes: bool,
+    pub maintenance: bool,
+    /// When the service's maintenance ends by itself, ISO 8601; None while it lasts until turned off.
+    pub maintenance_until: Option<String>,
+    /// The notice for every player, as HTML the interface rebuilds from an allowlist; None for none.
+    pub motd: Option<String>,
+    /// The asking game's state, when the request named a game the service knows.
+    pub game: Option<GameStatus>,
+    pub warnings: Vec<Warning>,
+}
+
+/// A game's own state on the service.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GameStatus {
+    /// Whether its online play is on; off, its rooms are closed.
+    pub online: bool,
+    pub maintenance: bool,
+    pub maintenance_until: Option<String>,
+    pub motd: Option<String>,
+    /// The oldest launcher that may play it online, such as "0.6.0".
+    pub min_launcher: Option<String>,
+}
+
+/// A scheduled action about to happen: `maint_on`, `restart`, `game_off`, `close_rooms` and the
+/// like, for the whole service (`all`) or the asking game (`game`), at `at` (ISO 8601).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Warning {
+    pub action: String,
+    pub scope: String,
+    pub at: String,
+}
+
+/// The status from `/v1/status`'s answer. A server from before codes could be off always sends
+/// them, and one from before the console has no maintenance, notices or warnings.
+fn status_from(answer: &Value) -> Status {
+    let text = |value: &Value, key: &str| value.get(key).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string);
+    let flag = |value: &Value, key: &str| value.get(key).and_then(Value::as_bool).unwrap_or(false);
+    Status {
+        email_codes: answer.get("email_codes").and_then(Value::as_bool).unwrap_or(true),
+        maintenance: flag(answer, "maintenance"),
+        maintenance_until: text(answer, "maintenance_until"),
+        motd: text(answer, "motd"),
+        game: answer.get("game").filter(|game| game.is_object()).map(|game| GameStatus {
+            online: game.get("online").and_then(Value::as_bool).unwrap_or(true),
+            maintenance: flag(game, "maintenance"),
+            maintenance_until: text(game, "maintenance_until"),
+            motd: text(game, "motd"),
+            min_launcher: text(game, "min_launcher"),
+        }),
+        warnings: answer
+            .get("warnings")
+            .and_then(Value::as_array)
+            .map(|list| {
+                list.iter()
+                    .filter_map(|warning| {
+                        Some(Warning { action: text(warning, "action")?, scope: text(warning, "scope")?, at: text(warning, "at")? })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+    }
 }
 
 /// The connection to the service, and the token of this device while it is signed in.
 pub struct Alboria {
     http: Option<reqwest::Client>,
-    base: String,
+    /// For the events channel, which stays open: no overall time limit, only for silence.
+    events_http: Option<reqwest::Client>,
+    /// The service's address: production, or for the development launcher the server it chose.
+    base: Mutex<String>,
     client: String,
     token: Mutex<Option<String>>,
 }
@@ -342,9 +413,12 @@ impl Default for Alboria {
         // The updater installs the same provider; whichever comes first wins, which is fine.
         let _ = rustls::crypto::ring::default_provider().install_default();
         let http = reqwest::Client::builder().timeout(REQUEST_TIMEOUT).build().ok();
+        let events_http =
+            reqwest::Client::builder().connect_timeout(REQUEST_TIMEOUT).read_timeout(EVENTS_SILENCE).build().ok();
         Self {
             http,
-            base: std::env::var("ALBORIA_API_URL").unwrap_or_else(|_| DEFAULT_API_URL.into()),
+            events_http,
+            base: Mutex::new(std::env::var("ALBORIA_API_URL").unwrap_or_else(|_| DEFAULT_API_URL.into())),
             client: format!("azura-launcher/{}", env!("CARGO_PKG_VERSION")),
             token: Mutex::new(None),
         }
@@ -355,7 +429,7 @@ impl Alboria {
     /// POSTs `body` to `path`, with the token when `signed_in`; the answer's JSON, or why it failed.
     async fn post(&self, path: &str, body: Value, token: Option<String>) -> Result<Value, AlboriaError> {
         let http = self.http.as_ref().ok_or_else(|| AlboriaError::local("network", "No HTTPS client"))?;
-        let mut request = http.post(format!("{}{path}", self.base)).json(&body);
+        let mut request = http.post(format!("{}{path}", self.base())).json(&body);
         if let Some(token) = token {
             request = request.bearer_auth(token);
         }
@@ -402,11 +476,11 @@ impl Alboria {
         session_from(answer)
     }
 
-    /// Whether the service is up, and whether it sends codes now.
-    pub async fn status(&self) -> Result<Status, AlboriaError> {
-        let answer = self.post("/v1/status", json!({}), None).await?;
-        // A server from before codes could be off always sends them.
-        Ok(Status { email_codes: answer.get("email_codes").and_then(Value::as_bool).unwrap_or(true) })
+    /// Whether the service is up and how it is, for the game `title_id` when given (its own
+    /// maintenance, notice and minimum launcher come only then).
+    pub async fn status(&self, title_id: Option<&str>) -> Result<Status, AlboriaError> {
+        let body = title_id.map_or_else(|| json!({}), |title_id| json!({ "title_id": title_id }));
+        Ok(status_from(&self.post("/v1/status", body, None).await?))
     }
 
     /// Signs this device in with `gamertag`, which the account takes on (keeping its tag when it
@@ -489,9 +563,95 @@ impl Alboria {
         self.post(path, body, token).await
     }
 
+    /// Opens the events channel (`GET /v1/events`, section 4.7), signing in first when there is no
+    /// token or it ran out. The answer's body is the stream of events (read it with `EventStream`).
+    pub async fn open_events(&self, identity: &Identity, gamertag: &str) -> Result<reqwest::Response, AlboriaError> {
+        let http = self.events_http.as_ref().ok_or_else(|| AlboriaError::local("network", "No HTTPS client"))?;
+        for attempt in 0..2 {
+            if attempt == 1 || self.token.lock().unwrap().is_none() {
+                self.sign_in(identity, gamertag).await?;
+            }
+            let token = self.token.lock().unwrap().clone().unwrap_or_default();
+            let response = http
+                .get(format!("{}/v1/events", self.base()))
+                .bearer_auth(token)
+                .send()
+                .await
+                .map_err(|e| AlboriaError::local("network", e.to_string()))?;
+            match response.status().as_u16() {
+                200 => return Ok(response),
+                401 if attempt == 0 => continue,
+                status => {
+                    return Err(AlboriaError {
+                        status,
+                        error: "events".into(),
+                        message: response.text().await.unwrap_or_default(),
+                        retry_in: None,
+                        attempts_left: None,
+                    })
+                }
+            }
+        }
+        Err(AlboriaError::local("events", "The events channel did not open"))
+    }
+
+    /// The service's address, such as `https://api.alboria.org`.
+    pub fn base(&self) -> String {
+        self.base.lock().unwrap().clone()
+    }
+
+    /// Talks to the service at `base` from now on, signed out: each server has its own accounts.
+    pub fn set_base(&self, base: String) {
+        *self.base.lock().unwrap() = base;
+        self.forget_token();
+    }
+
     /// Forgets the token: the device signed out, or was removed from the account.
     pub fn forget_token(&self) {
         *self.token.lock().unwrap() = None;
+    }
+}
+
+/// An event from the events channel: its name and its data, parsed as JSON (Null when it is not).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ServiceEvent {
+    pub event: String,
+    pub data: Value,
+}
+
+/// Reads Server-Sent Events from chunks of the channel as they arrive: an event is its `event:`
+/// and `data:` lines, ended by a blank line. Comment lines (`: ping`) only keep the channel alive.
+#[derive(Default)]
+pub struct EventStream {
+    buffer: String,
+}
+
+impl EventStream {
+    /// Adds a chunk and returns the events it completed.
+    pub fn push(&mut self, chunk: &[u8]) -> Vec<ServiceEvent> {
+        self.buffer.push_str(&String::from_utf8_lossy(chunk));
+        // Lines may end in \r\n or \n; one form is enough to find the blank lines between events.
+        if self.buffer.contains('\r') {
+            self.buffer = self.buffer.replace("\r\n", "\n");
+        }
+        let mut events = Vec::new();
+        while let Some(end) = self.buffer.find("\n\n") {
+            let block: String = self.buffer.drain(..end + 2).collect();
+            let mut name = String::from("message");
+            let mut data = Vec::new();
+            for line in block.lines() {
+                if let Some(value) = line.strip_prefix("event:") {
+                    name = value.trim().to_string();
+                } else if let Some(value) = line.strip_prefix("data:") {
+                    data.push(value.strip_prefix(' ').unwrap_or(value).to_string());
+                }
+            }
+            if !data.is_empty() {
+                let text = data.join("\n");
+                events.push(ServiceEvent { event: name, data: serde_json::from_str(&text).unwrap_or(Value::Null) });
+            }
+        }
+        events
     }
 }
 
@@ -535,6 +695,51 @@ mod tests {
         xuid = \"E0007A75AC144039\"\n\
         machine_id = \"e22c2af621f6\"\n\
         key_seed = \"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\"\n";
+
+    #[test]
+    fn reads_events_split_anyhow_across_chunks() {
+        let mut stream = EventStream::default();
+        assert!(stream.push(b": open\n\n").is_empty());
+        assert!(stream.push(b"event: presence\ndata: {\"id\":7,").is_empty());
+        let events = stream.push(b"\"presence\":{\"status\":\"online\"}}\n\n: ping\n\nevent: friends\r\ndata: {}\r\n\r\n");
+        assert_eq!(
+            events,
+            vec![
+                ServiceEvent { event: "presence".into(), data: json!({ "id": 7, "presence": { "status": "online" } }) },
+                ServiceEvent { event: "friends".into(), data: json!({}) },
+            ]
+        );
+        // Data that is not JSON still arrives, as Null.
+        assert_eq!(stream.push(b"event: odd\ndata: not json\n\n")[0].data, Value::Null);
+    }
+
+    #[test]
+    fn reads_the_service_state_notices_and_warnings() {
+        let status = status_from(&json!({
+            "status": "ok", "email_codes": false, "maintenance": true, "maintenance_until": "2026-11-01T18:00:00.000Z",
+            "motd": "<b>Hoy</b> mantenimiento",
+            "game": { "online": false, "maintenance": false, "maintenance_until": null, "motd": null, "min_launcher": "0.6.0" },
+            "warnings": [{ "action": "restart", "scope": "all", "at": "2026-11-01T17:30:00.000Z" }, { "scope": "game" }]
+        }));
+        assert!(!status.email_codes && status.maintenance);
+        assert_eq!(status.maintenance_until.as_deref(), Some("2026-11-01T18:00:00.000Z"));
+        assert_eq!(status.motd.as_deref(), Some("<b>Hoy</b> mantenimiento"));
+        let game = status.game.unwrap();
+        assert!(!game.online && game.motd.is_none());
+        assert_eq!(game.min_launcher.as_deref(), Some("0.6.0"));
+        // A warning missing a field is left out.
+        assert_eq!(status.warnings.len(), 1);
+        assert_eq!((status.warnings[0].action.as_str(), status.warnings[0].scope.as_str()), ("restart", "all"));
+    }
+
+    #[test]
+    fn a_server_from_before_the_console_has_no_notices() {
+        let status = status_from(&json!({ "status": "ok" }));
+        assert!(status.email_codes && !status.maintenance && status.motd.is_none() && status.game.is_none());
+        assert!(status.warnings.is_empty());
+        // An empty notice is no notice.
+        assert!(status_from(&json!({ "motd": "" })).motd.is_none());
+    }
 
     #[test]
     fn reads_whether_a_code_is_needed_and_the_email_verified() {

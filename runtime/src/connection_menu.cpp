@@ -15,6 +15,7 @@
 #include "coop_ui.h"
 #include "input/player_assignment.h"
 #include "menu/pc_options.h"
+#include "script_hooks.h"
 
 REXCVAR_DECLARE(bool, alboria_direct);
 REXCVAR_DECLARE(bool, latency_overlay);
@@ -50,9 +51,38 @@ struct Texts {
   const char* locked;  // why Direct connection cannot change now
 };
 
-// Fonts carry Latin-1 only, so the languages written in other scripts use the English texts.
+// In the game's languages; the runtime loads the Cyrillic and CJK fonts each one needs.
 Texts LocalizedTexts(uint32_t language) {
   switch (language) {
+    case 2:  // Japanese
+      return {"ALBORIA", "アカウント", "サインイン中…", "Alboria に接続できません", "直接接続",
+              "ネットワークが許す場合、ルームの他のプレイヤーと直接つなぎ、だめならリレーを使います。遅延は減りますが、"
+              "他のプレイヤーにこのコンピューターの公開 IP アドレスが知られる可能性があります。次のルームから適用されます。",
+              "レイテンシーを表示",
+              "オンラインルームで、ホストとの往復時間と、接続が直接かリレー経由かをパフォーマンス表示の隅に表示します。",
+              "オン", "オフ", "変更", "戻る", "Enter", "ルームに他のプレイヤーがいる間は変更できません"};
+    case 7:  // Korean
+      return {"ALBORIA", "계정", "로그인 중…", "Alboria에 연결할 수 없습니다", "직접 연결",
+              "네트워크가 허용하면 방의 다른 플레이어와 직접 연결하고, 안 되면 릴레이를 사용합니다. 지연은 줄지만 다른 "
+              "플레이어가 이 컴퓨터의 공용 IP 주소를 알 수 있습니다. 다음 방부터 적용됩니다.",
+              "지연 시간 표시",
+              "온라인 방에서 호스트까지의 왕복 시간과, 연결이 직접인지 릴레이를 거치는지를 성능 표시 구석에 보여 줍니다.",
+              "켜짐", "꺼짐", "변경", "뒤로", "Enter", "방에 플레이어가 있는 동안에는 바꿀 수 없습니다"};
+    case 8:  // Traditional Chinese
+      return {"ALBORIA", "帳號", "正在登入…", "無法連線到 Alboria", "直接連線",
+              "網路允許時，直接連線到房間裡的其他玩家，否則改用中繼。延遲較低，但其他玩家可能得知這台電腦的公用 IP "
+              "位址。從下一個房間開始生效。",
+              "顯示延遲", "在線上房間中，於效能顯示的角落顯示與主持人之間的往返時間，以及連線是直接還是經由中繼。",
+              "開啟", "關閉", "變更", "返回", "Enter", "房間裡有玩家時無法變更"};
+    case 12:  // Russian
+      return {"ALBORIA", "АККАУНТ", "Вход…", "Нет связи с Alboria", "ПРЯМОЕ ПОДКЛЮЧЕНИЕ",
+              "Соединяет вас напрямую с другими игроками комнаты, когда сеть это позволяет, с ретранслятором в "
+              "запасе. Меньше задержка, но другие игроки могут узнать публичный IP-адрес этого компьютера. "
+              "Действует со следующей комнаты.",
+              "ПОКАЗЫВАТЬ ЗАДЕРЖКУ",
+              "В онлайн-комнате показывает задержку до хоста в углу индикатора производительности и то, прямое ли "
+              "соединение или через ретранслятор.",
+              "Вкл.", "Выкл.", "Изменить", "Назад", "Enter", "Нельзя изменить, пока в комнате есть игроки"};
     case 3:  // German
       return {"ALBORIA", "KONTO", "Anmeldung l\xC3\xA4uft\xE2\x80\xA6", "Keine Verbindung zu Alboria",
               "DIREKTE VERBINDUNG",
@@ -172,6 +202,7 @@ ConnectionMenu::ConnectionMenu(rex::ui::ImGuiDrawer* drawer, rex::input::InputSy
   // The tag only comes from a sign-in: ask now (or reuse the session's), so the menu shows it once
   // Alboria answers.
   alboria::RefreshIdentity();
+  script::PlayMenuSound(script::MenuSound::kOpen);
 }
 
 void ConnectionMenu::Toggle(int row) {
@@ -217,8 +248,15 @@ bool ConnectionMenu::HandleInput() {
     toggle = true;
   }
   if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) close = true;
-  if (move) focus_ = (focus_ + move + kRows) % kRows;
-  if (toggle && !close) Toggle(focus_);
+  if (move) {
+    script::PlayMenuSound(move < 0 ? script::MenuSound::kUp : script::MenuSound::kDown);
+    focus_ = (focus_ + move + kRows) % kRows;
+  }
+  if (toggle && !close) {
+    script::PlayMenuSound(script::MenuSound::kAccept);
+    Toggle(focus_);
+  }
+  if (close) script::PlayMenuSound(script::MenuSound::kBack);
   return close;
 }
 
@@ -344,6 +382,7 @@ void ConnectionMenu::OnDraw(ImGuiIO& io) {
 }
 
 void ConnectionMenu::OnClose() {
+  script::PlayMenuSound(script::MenuSound::kClose);
   if (assignment_) assignment_->SetBlocked(false);
   if (owner_) *owner_ = nullptr;
 }

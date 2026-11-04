@@ -303,14 +303,33 @@ async fn show_build_log(app: tauri::AppHandle, path: String) -> Result<(), Strin
 
 /// Starts the game with the chosen saves folder. Its output and its end arrive as `game-output`
 /// and `game-exit` events.
+/// With `join_code` (a friend's room or an invitation's), the game joins that room once its main
+/// menu is up (`alboria_join_code`, script_hooks.cpp).
 #[tauri::command]
 async fn launch_game(
     app: tauri::AppHandle,
     process: tauri::State<'_, GameProcess>,
+    join_code: Option<String>,
 ) -> Result<(), LaunchError> {
-    start_runtime(app.clone(), &process, &[])?;
-    // Minimized, the launcher's window is not drawn while the game runs; it comes back when the
-    // game ends (GameEvents::exit in runtime.rs).
+    match join_code {
+        Some(code) if !room_code_valid(&code) => Err(LaunchError::StartFailed(format!("not a room code: {code}"))),
+        Some(code) => play(app, &process, &[&format!("--alboria_join_code={code}")]),
+        None => play(app, &process, &[]),
+    }
+}
+
+/// Starts the game with `extra` arguments, then minimizes the launcher when the player asked for
+/// that: minimized, its window is not drawn while the game runs, and it comes back when the game
+/// ends (GameEvents::exit in runtime.rs).
+fn play(app: tauri::AppHandle, process: &GameProcess, extra: &[&str]) -> Result<(), LaunchError> {
+    // The development launcher sends the game to the Alboria it chose (dev_server); the published
+    // one leaves the game on production, its default.
+    let api_url = format!("--alboria_api_url={}", app.state::<Alboria>().base());
+    let mut args: Vec<&str> = extra.to_vec();
+    if cfg!(feature = "dev") {
+        args.push(&api_url);
+    }
+    start_runtime(app.clone(), process, &args)?;
     let minimize = settings_paths(&app).and_then(|paths| paths.load()).is_ok_and(|settings| settings.minimize_while_playing);
     if minimize {
         if let Some(window) = app.get_webview_window("main") {
@@ -318,6 +337,205 @@ async fn launch_game(
         }
     }
     Ok(())
+}
+
+// --- The development launcher's Alboria server ------------------------------------------------
+
+/// The Alboria server `npm run local` starts (alboria-server, scripts/local.ts).
+const LOCAL_API_URL: &str = "http://127.0.0.1:8080";
+/// Where the development launcher keeps its choice, in its app data folder: `local`, `production`
+/// or an address. Its own file, apart from the settings the interface saves.
+const DEV_SERVER_FILE: &str = "alboria-server.txt";
+
+/// The Alboria server the development launcher talks to: its choice and the address it means.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DevServer {
+    /// Whether this is the development launcher; the published one has no choice.
+    dev: bool,
+    /// `local`, `production` or `other`.
+    choice: String,
+    url: String,
+}
+
+/// The server `saved` (the file's contents, or nothing) chooses: Local by default.
+fn dev_server_from(saved: Option<&str>) -> DevServer {
+    let saved = saved.map(str::trim).unwrap_or_default();
+    let (choice, url) = match saved {
+        "production" => ("production", alboria::DEFAULT_API_URL.to_string()),
+        url if server_url_valid(url) => ("other", url.trim_end_matches('/').to_string()),
+        _ => ("local", LOCAL_API_URL.to_string()),
+    };
+    DevServer { dev: true, choice: choice.into(), url }
+}
+
+/// Whether `url` can be a server's address: http or https, a host, no spaces.
+fn server_url_valid(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    (lower.starts_with("http://") || lower.starts_with("https://"))
+        && url.len() <= 200
+        && url.split("://").nth(1).is_some_and(|rest| !rest.is_empty())
+        && !url.chars().any(char::is_whitespace)
+}
+
+fn dev_server_file(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    Ok(app.path().app_data_dir().map_err(|e| e.to_string())?.join(DEV_SERVER_FILE))
+}
+
+/// The Alboria server this launcher talks to (Account › Development in the development launcher).
+#[tauri::command]
+fn alboria_server(app: tauri::AppHandle, alboria: tauri::State<'_, Alboria>) -> DevServer {
+    if !cfg!(feature = "dev") {
+        return DevServer { dev: false, choice: "production".into(), url: alboria.base() };
+    }
+    let saved = dev_server_file(&app).ok().and_then(|file| std::fs::read_to_string(file).ok());
+    dev_server_from(saved.as_deref())
+}
+
+/// Development launcher only: talks to `choice` (`local`, `production` or an address) from now on,
+/// signed out, and remembers it. The game gets the same server the next time it starts.
+#[tauri::command]
+fn alboria_server_set(app: tauri::AppHandle, alboria: tauri::State<'_, Alboria>, choice: String) -> Result<DevServer, String> {
+    if !cfg!(feature = "dev") {
+        return Err("only the development launcher chooses its Alboria server".into());
+    }
+    let choice = choice.trim();
+    if !["local", "production"].contains(&choice) && !server_url_valid(choice) {
+        return Err(format!("not a server: {choice}"));
+    }
+    let file = dev_server_file(&app)?;
+    if let Some(dir) = file.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&file, choice).map_err(|e| e.to_string())?;
+    let server = dev_server_from(Some(choice));
+    alboria.set_base(server.url.clone());
+    Ok(server)
+}
+
+/// The file in the saves folder (the runtime's user data) where the launcher leaves a room code
+/// for a running game to join; the runtime reads and deletes it (script_hooks.cpp).
+const JOIN_REQUEST_FILE: &str = "alboria-join-request.txt";
+
+/// Whether `code` looks like a room code: 8 to 16 letters, digits and dashes.
+fn room_code_valid(code: &str) -> bool {
+    (8..=16).contains(&code.len()) && code.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+/// Asks the running game to join the room `code` (a friend's room, or an invitation's, from
+/// Alboria): the code is left in the saves folder, and the game joins once it is at its main menu.
+/// Joining is the game's own: the launcher takes no place in the room. With the game closed,
+/// launch_game takes the code instead.
+#[tauri::command]
+async fn join_room(app: tauri::AppHandle, process: tauri::State<'_, GameProcess>, code: String) -> Result<(), LaunchError> {
+    if !room_code_valid(&code) {
+        return Err(LaunchError::StartFailed(format!("not a room code: {code}")));
+    }
+    if !process.is_running() {
+        return Err(LaunchError::StartFailed("the game is not running".into()));
+    }
+    let saves = settings_paths(&app).and_then(|paths| paths.saves_folder()).map_err(LaunchError::SavesUnavailable)?;
+    // Written whole and then renamed, so the game never reads half a code.
+    let partial = saves.join(format!("{JOIN_REQUEST_FILE}.part"));
+    std::fs::write(&partial, &code)
+        .and_then(|()| std::fs::rename(&partial, saves.join(JOIN_REQUEST_FILE)))
+        .map_err(|e| LaunchError::StartFailed(e.to_string()))
+}
+
+/// The friends' requests the interface may send (alboria-notes:azura/alboria-relay.md, section
+/// 4.7), and the report one: any other path is refused, so the interface reaches nothing else of
+/// the account.
+const FRIENDS_PATHS: &[&str] = &[
+    "/v1/friends",
+    "/v1/friends/request",
+    "/v1/friends/accept",
+    "/v1/friends/decline",
+    "/v1/friends/cancel",
+    "/v1/friends/remove",
+    "/v1/friends/favourite",
+    "/v1/friends/block",
+    "/v1/friends/unblock",
+    "/v1/friends/room",
+    "/v1/invitations",
+    "/v1/invitations/room",
+    "/v1/invitations/decline",
+    "/v1/reports",
+];
+
+/// A friends' request (`path` one of FRIENDS_PATHS) of the signed-in account; the service's answer.
+#[tauri::command]
+async fn alboria_friends(
+    app: tauri::AppHandle,
+    alboria: tauri::State<'_, Alboria>,
+    path: String,
+    body: serde_json::Value,
+) -> Result<serde_json::Value, AlboriaError> {
+    if !FRIENDS_PATHS.contains(&path.as_str()) {
+        return Err(AlboriaError::local_error("bad_request", format!("not a friends request: {path}")));
+    }
+    alboria_account_request(&app, &alboria, &path, body).await
+}
+
+/// The events channel's task: which run is current, so a stopped one ends and a new one starts clean.
+#[derive(Default)]
+struct AlboriaEvents {
+    run: std::sync::atomic::AtomicU64,
+}
+
+/// The event the interface hears each service event on (`{ event, data }`), and whether the
+/// channel is open (`{ connected }`).
+const SERVICE_EVENT: &str = "alboria-event";
+const SERVICE_EVENTS_STATE: &str = "alboria-events-state";
+
+/// Opens Alboria's events channel and keeps it open (section 4.7): each event goes to the interface
+/// as `alboria-event`. When it closes (the token ran out, the network dropped, the service
+/// restarted) it opens again, waiting longer each time it fails, up to a minute. Starting again
+/// replaces the running one; alboria_events_stop ends it.
+#[tauri::command]
+fn alboria_events_start(app: tauri::AppHandle, events: tauri::State<'_, AlboriaEvents>) {
+    use std::sync::atomic::Ordering;
+    let run = events.run.fetch_add(1, Ordering::SeqCst) + 1;
+    tauri::async_runtime::spawn(async move {
+        let current = || app.state::<AlboriaEvents>().run.load(Ordering::SeqCst) == run;
+        let mut wait = std::time::Duration::from_secs(2);
+        while current() {
+            let opened = match (alboria_identity(&app), alboria_gamertag(&app)) {
+                (Ok(identity), Ok(gamertag)) => app.state::<Alboria>().open_events(&identity, &gamertag).await,
+                (Err(error), _) | (_, Err(error)) => Err(error),
+            };
+            match opened {
+                Ok(mut response) => {
+                    let _ = app.emit(SERVICE_EVENTS_STATE, serde_json::json!({ "connected": true }));
+                    wait = std::time::Duration::from_secs(2);
+                    let mut stream = alboria::EventStream::default();
+                    while current() {
+                        match response.chunk().await {
+                            Ok(Some(chunk)) => {
+                                for event in stream.push(&chunk) {
+                                    let _ = app.emit(SERVICE_EVENT, event);
+                                }
+                            }
+                            _ => break,
+                        }
+                    }
+                    let _ = app.emit(SERVICE_EVENTS_STATE, serde_json::json!({ "connected": false }));
+                }
+                Err(error) => {
+                    log::info!("Alboria's events channel did not open: {} {}", error.error, error.message);
+                    wait = (wait * 2).min(std::time::Duration::from_secs(60));
+                }
+            }
+            if current() {
+                tokio::time::sleep(wait).await;
+            }
+        }
+    });
+}
+
+/// Ends the events channel (the player signed out or chose a local account).
+#[tauri::command]
+fn alboria_events_stop(events: tauri::State<'_, AlboriaEvents>) {
+    events.run.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 }
 
 /// Prepares the stored shaders before playing: starts the runtime in a window with
@@ -406,6 +624,13 @@ async fn install_dlc(app: tauri::AppHandle, package: String) -> Result<String, S
         return Err("the runtime needs its update first (Play installs it)".into());
     }
     dlc::install(&runtime, &game, &saves, std::path::Path::new(&package))
+}
+
+/// Removes an installed downloadable content of the catalogue (only the folder its package made).
+#[tauri::command]
+async fn remove_dlc(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let saves = settings_paths(&app)?.saves_folder()?;
+    dlc::remove(&saves, &id)
 }
 
 /// Event sent when the chosen graphics card is not in the computer any more, before the game starts
@@ -497,6 +722,8 @@ async fn change_saves_folder(
     let target = std::path::PathBuf::from(&folder);
     // Saves still in the runtime's old folder count as the current ones.
     let source = if saves::has_saves(&current) { current } else { saves::legacy_folder() };
+    // Backups first (the saves that leave, and those a replace overwrites): no backup, no move.
+    saves::backup_before_move(&app, &source, &target, replace)?;
     saves::move_saves(&source, &target, replace)?;
     std::fs::create_dir_all(&target).map_err(|e| SavesError::Io(e.to_string()))?;
     paths.set_saves_folder(&target).map_err(SavesError::Io)?;
@@ -577,10 +804,11 @@ async fn alboria_verify(
     alboria.verify(&identity, &purpose, &email, code, gamertag, language.as_deref().unwrap_or("en")).await
 }
 
-/// Whether the service sends codes now (false while accounts are made unverified).
+/// How the service is (alboria.rs, Status): whether it sends codes now, maintenance, notices and
+/// warnings, with the game `title_id`'s own state when given.
 #[tauri::command]
-async fn alboria_status(alboria: tauri::State<'_, Alboria>) -> Result<alboria::Status, AlboriaError> {
-    alboria.status().await
+async fn alboria_status(alboria: tauri::State<'_, Alboria>, title_id: Option<String>) -> Result<alboria::Status, AlboriaError> {
+    alboria.status(title_id.as_deref()).await
 }
 
 /// Asks for a code to verify the email of an account made while the service sent no codes.
@@ -720,6 +948,35 @@ fn open_alboria_site(app: tauri::AppHandle) -> Result<(), String> {
     app.opener().open_url(ALBORIA_SITE, None::<&str>).map_err(|e| e.to_string())
 }
 
+/// Where players report an edition of the game the launcher does not support yet: a new issue on the
+/// project's repository.
+const EDITION_REPORT_PAGE: &str = "https://github.com/Carolux97/Azura/issues/new";
+
+/// Opens the page to report an unsupported edition in the system browser. The address is fixed
+/// here, like Alboria's site; the details to paste are copied by the interface.
+#[tauri::command]
+fn open_edition_report(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener().open_url(EDITION_REPORT_PAGE, None::<&str>).map_err(|e| e.to_string())
+}
+
+/// Opens a link of an Alboria notice in the system's browser (or mail app). Only `https:` and
+/// `mailto:` links open: a notice is written by people, and nothing else may leave the launcher.
+#[tauri::command]
+fn open_notice_link(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    if !notice_link_allowed(&url) {
+        return Err(format!("not an https or mailto link: {url}"));
+    }
+    app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string())
+}
+
+/// Whether a notice's link may open: `https:` or `mailto:`, in any case, with something after it.
+fn notice_link_allowed(url: &str) -> bool {
+    let lower = url.trim().to_ascii_lowercase();
+    ["https://", "mailto:"].iter().any(|scheme| lower.starts_with(scheme) && lower.len() > scheme.len())
+}
+
 /// Whether there is a working C++ compiler to build the runtime with, and how to install one
 /// otherwise (see `toolchain.rs`). `async`: it compiles a small test program.
 #[tauri::command]
@@ -753,9 +1010,13 @@ async fn check_for_update(app: tauri::AppHandle) -> Result<Option<UpdateInfo>, S
     updater::check(&app).await
 }
 
-/// Installs the newer launcher version and restarts into it.
+/// Installs the newer launcher version and restarts into it. Restarting would leave the game
+/// without its launcher, so it waits until the game is closed.
 #[tauri::command]
-async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+async fn install_update(app: tauri::AppHandle, process: tauri::State<'_, GameProcess>) -> Result<(), String> {
+    if process.is_running() {
+        return Err("the game is running: close it to update the launcher".into());
+    }
     updater::install(app).await
 }
 
@@ -768,6 +1029,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(GameProcess::default())
         .manage(Alboria::default())
+        .manage(AlboriaEvents::default())
         .invoke_handler(tauri::generate_handler![
             pick_game_folder,
             pick_game_image,
@@ -779,6 +1041,7 @@ pub fn run() {
             list_gpus,
             dlc_state,
             install_dlc,
+            remove_dlc,
             pick_dlc_package,
             get_runtime_status,
             install_runtime,
@@ -812,9 +1075,22 @@ pub fn run() {
             alboria_export,
             alboria_delete_code,
             alboria_delete,
-            open_alboria_site
+            open_alboria_site,
+            open_edition_report,
+            open_notice_link,
+            join_room,
+            alboria_friends,
+            alboria_events_start,
+            alboria_events_stop,
+            alboria_server,
+            alboria_server_set
         ])
         .setup(|app| {
+            // The development launcher talks to the Alboria server it chose (Local by default).
+            if cfg!(feature = "dev") {
+                let saved = dev_server_file(app.handle()).ok().and_then(|file| std::fs::read_to_string(file).ok());
+                app.state::<Alboria>().set_base(dev_server_from(saved.as_deref()).url);
+            }
             // Controllers navigate the interface (gamepad.rs).
             gamepad::spawn(app.handle().clone());
             // A runtime install the launcher was closed in the middle of is finished first.
@@ -833,4 +1109,45 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running the Azura launcher");
+}
+
+#[cfg(test)]
+mod notice_link_tests {
+    use super::{notice_link_allowed, room_code_valid, FRIENDS_PATHS};
+
+    #[test]
+    fn the_development_launcher_chooses_its_server() {
+        use super::{dev_server_from, server_url_valid, LOCAL_API_URL};
+        assert_eq!(dev_server_from(None).url, LOCAL_API_URL);
+        assert_eq!(dev_server_from(Some("local\n")).choice, "local");
+        assert_eq!(dev_server_from(Some("production")).url, crate::alboria::DEFAULT_API_URL);
+        let other = dev_server_from(Some("http://192.168.1.20:8080/"));
+        assert_eq!((other.choice.as_str(), other.url.as_str()), ("other", "http://192.168.1.20:8080"));
+        // Anything else falls back to Local.
+        assert_eq!(dev_server_from(Some("ftp://x")).choice, "local");
+        assert!(!server_url_valid("http://"));
+        assert!(!server_url_valid("https://a b"));
+    }
+
+    #[test]
+    fn only_room_codes_and_friends_paths_pass() {
+        assert!(room_code_valid("K7QM-2XPA"));
+        assert!(room_code_valid("K7QM2XPA"));
+        assert!(!room_code_valid("K7Q"));
+        assert!(!room_code_valid("K7QM 2XPA; rm"));
+        assert!(!room_code_valid("--alboria_api_url=x"));
+        assert!(FRIENDS_PATHS.contains(&"/v1/friends/room"));
+        assert!(!FRIENDS_PATHS.contains(&"/v1/account/delete"));
+    }
+
+    #[test]
+    fn only_https_and_mailto_links_open() {
+        assert!(notice_link_allowed("https://alboria.org/estado"));
+        assert!(notice_link_allowed("HTTPS://alboria.org"));
+        assert!(notice_link_allowed("mailto:hola@alboria.org"));
+        assert!(!notice_link_allowed("http://alboria.org"));
+        assert!(!notice_link_allowed("javascript:alert(1)"));
+        assert!(!notice_link_allowed("file:///etc/passwd"));
+        assert!(!notice_link_allowed("https://"));
+    }
 }

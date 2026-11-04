@@ -16,7 +16,14 @@
 //! add-on, and before starting the game when it is missing. With the add-on installed and the patch
 //! made, the game starts with the patch as its update volume and with the campaign menu's DLC
 //! option enabled.
+//!
+//! The multiplayer map packs (Horde Command Pack, Fenix Rising, Forces of Nature and the Versus
+//! Booster Pack) are recognised by their package's header, before anything is installed: its title
+//! ID and content type must be Gears of War 3's downloadable content, and its content ID names the
+//! pack. The folder the runtime makes for a pack is recorded in `dlc-packages.json` beside the
+//! saves, so the pack is listed and can be removed again by deleting only that folder.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -68,9 +75,8 @@ pub enum DlcStatus {
     NeedsRuntime,
     /// Installed, but its patch could not be made from these game files.
     Unsupported,
-    /// A multiplayer pack: Azura does not play them yet, nor tells whether one is installed (the
-    /// packages are not identified; the Horde Command Pack's maps are even on the disc).
-    Multiplayer,
+    /// A multiplayer pack that is installed. Its maps are listed by the game itself.
+    Installed,
 }
 
 /// A downloadable content of the catalogue and where it stands.
@@ -96,6 +102,30 @@ pub struct DlcState {
     /// RAAM's Shadow can be played: it is installed, and its patch is made for these game files.
     pub raams_shadow_playable: bool,
 }
+
+/// The multiplayer map packs and the content ID (lowercase hex) in their package's header, which
+/// Microsoft gave each piece of content.
+const MAP_PACKS: [(&str, &str); 4] = [
+    ("hordeCommandPack", "a88137aa80ac7cc1560e7f1e820c090c21509a83"),
+    ("fenixRising", "34585bdddf18cf96034199dc9145a0f3e5a099a5"),
+    ("forcesOfNature", "60db9e7e25775023069d0847a251f91c6ae031db"),
+    ("versusBooster", "85f354e7ea1059d615958a024b01349eed30b6c3"),
+];
+
+/// Where the packages' header (the first bytes of the file, laid out as the console's content
+/// metadata) keeps what identifies a package.
+const HEADER_LEN: usize = 0x364;
+const CONTENT_ID_OFFSET: usize = 0x32C;
+const CONTENT_ID_LEN: usize = 20;
+const CONTENT_TYPE_OFFSET: usize = 0x344;
+const TITLE_ID_OFFSET: usize = 0x360;
+
+/// Content type of Marketplace content, and Gears of War 3's title ID.
+const MARKETPLACE_CONTENT: u32 = 0x2;
+const GEARS_OF_WAR_3: u32 = 0x4D5308AB;
+
+/// Beside the saves: the folder each installed map pack was installed into, by the pack's key.
+const PACKS_REGISTRY: &str = "dlc-packages.json";
 
 /// What the runtime prints after installing a package or making the patch.
 #[derive(Debug, Deserialize)]
@@ -260,13 +290,27 @@ pub fn state(runtime: &Path, game: Option<&Path>, saves: &Path, runtime_current:
         (Some(_), Some(game)) if prepare_patch(runtime, game).is_ok() => DlcStatus::Ready,
         (Some(_), _) => DlcStatus::Unsupported,
     };
+    let pack_folders: Vec<(&str, PathBuf)> =
+        MAP_PACKS.iter().filter_map(|&(id, _)| pack_folder(saves, id).map(|folder| (id, folder))).collect();
     let entries = CATALOG
         .iter()
-        .map(|&id| DlcEntry { id, status: if id == "raamsShadow" { raams_status } else { DlcStatus::Multiplayer } })
+        .map(|&id| DlcEntry {
+            id,
+            status: if id == "raamsShadow" {
+                raams_status
+            } else if pack_folders.iter().any(|(pack, _)| *pack == id) {
+                DlcStatus::Installed
+            } else {
+                DlcStatus::NotInstalled
+            },
+        })
         .collect();
+    let recognised = |package: &PathBuf| {
+        Some(package) == raams_package.as_ref() || pack_folders.iter().any(|(_, folder)| folder == package)
+    };
     DlcState {
         entries,
-        other_packages: packages.iter().filter(|p| Some(*p) != raams_package.as_ref()).count(),
+        other_packages: packages.iter().filter(|p| !recognised(p)).count(),
         packages: packages.iter().filter_map(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).collect(),
         raams_shadow: raams_package.is_some(),
         raams_shadow_playable: raams_status == DlcStatus::Ready,
@@ -327,6 +371,92 @@ fn extract_package_from_zip(archive: &Path, folder: &Path) -> Result<PathBuf, St
     Err("the .zip has no Xbox 360 content package".into())
 }
 
+/// What a package is, from its header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Package {
+    /// One of the multiplayer map packs, by its key in the catalogue.
+    MapPack(&'static str),
+    /// Other downloadable content of the game (RAAM's Shadow, skins, ...).
+    Other,
+}
+
+/// Tells what `package` is from its header, without installing it. Refuses a file that is not an Xbox
+/// 360 content package, one cut short, and content that is not Gears of War 3's downloadable content.
+fn identify(package: &Path) -> Result<Package, String> {
+    let mut header = Vec::with_capacity(HEADER_LEN);
+    fs::File::open(package)
+        .and_then(|file| file.take(HEADER_LEN as u64).read_to_end(&mut header))
+        .map_err(|e| format!("cannot read {}: {e}", package.display()))?;
+    if header.len() < 4 || !PACKAGE_MAGICS.iter().any(|magic| header[..4] == magic[..]) {
+        return Err("it is not an Xbox 360 content package".into());
+    }
+    if header.len() < HEADER_LEN {
+        return Err("the package is damaged: its header is cut short".into());
+    }
+    let word = |offset: usize| u32::from_be_bytes(header[offset..offset + 4].try_into().expect("four bytes"));
+    if word(TITLE_ID_OFFSET) != GEARS_OF_WAR_3 {
+        return Err("it is not content for Gears of War 3".into());
+    }
+    if word(CONTENT_TYPE_OFFSET) != MARKETPLACE_CONTENT {
+        return Err("it is not downloadable content (a Marketplace package)".into());
+    }
+    let content_id: String =
+        header[CONTENT_ID_OFFSET..CONTENT_ID_OFFSET + CONTENT_ID_LEN].iter().map(|b| format!("{b:02x}")).collect();
+    Ok(MAP_PACKS.iter().find(|(_, id)| *id == content_id).map_or(Package::Other, |&(key, _)| Package::MapPack(key)))
+}
+
+fn load_registry(saves: &Path) -> BTreeMap<String, String> {
+    fs::read(saves.join(PACKS_REGISTRY)).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default()
+}
+
+fn save_registry(saves: &Path, registry: &BTreeMap<String, String>) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(registry).map_err(|e| e.to_string())?;
+    fs::write(saves.join(PACKS_REGISTRY), json).map_err(|e| format!("cannot write {PACKS_REGISTRY}: {e}"))
+}
+
+/// Remembers the folder a map pack was installed into.
+fn record_pack(saves: &Path, id: &str, folder: &str) -> Result<(), String> {
+    let mut registry = load_registry(saves);
+    registry.insert(id.to_owned(), folder.to_owned());
+    save_registry(saves, &registry)
+}
+
+/// The installed folder of a map pack: the one recorded when it was installed, or else one named
+/// after the pack's content ID (how its package file is named when shared as the console had it).
+fn pack_folder(saves: &Path, id: &str) -> Option<PathBuf> {
+    let content = content_dir(saves);
+    let recorded = load_registry(saves).get(id).filter(|name| is_plain_name(name)).map(|name| content.join(name));
+    if let Some(folder) = recorded.filter(|folder| folder.is_dir()) {
+        return Some(folder);
+    }
+    let (_, content_id) = MAP_PACKS.iter().find(|(key, _)| *key == id)?;
+    installed_packages(saves).into_iter().find(|package| {
+        package.file_name().is_some_and(|name| name.to_string_lossy().to_lowercase().starts_with(content_id))
+    })
+}
+
+/// A single folder or file name: no separators and no `..`, so joining it stays inside its parent.
+fn is_plain_name(name: &str) -> bool {
+    let mut parts = Path::new(name).components();
+    matches!((parts.next(), parts.next()), (Some(std::path::Component::Normal(_)), None))
+}
+
+/// Removes an installed downloadable content of the catalogue: only the folder the runtime made for
+/// its package, and its record.
+pub fn remove(saves: &Path, id: &str) -> Result<(), String> {
+    let folder = match id {
+        "raamsShadow" => raams_shadow(saves),
+        _ => pack_folder(saves, id),
+    }
+    .ok_or("it is not installed")?;
+    fs::remove_dir_all(&folder).map_err(|e| format!("cannot remove {}: {e}", folder.display()))?;
+    let mut registry = load_registry(saves);
+    if registry.remove(id).is_some() {
+        save_registry(saves, &registry)?;
+    }
+    Ok(())
+}
+
 /// Installs `package` into the saves folder with the runtime, and makes RAAM's Shadow's patch when
 /// the package is that add-on. Returns the package's name. A .zip holding the package (as packages
 /// are often shared) is extracted first.
@@ -343,6 +473,7 @@ pub fn install(runtime: &Path, game: &Path, saves: &Path, package: &Path) -> Res
 }
 
 fn install_package(runtime: &Path, game: &Path, saves: &Path, package: &Path) -> Result<String, String> {
+    let kind = identify(package)?;
     let report = run_tool(
         runtime,
         &[
@@ -355,6 +486,9 @@ fn install_package(runtime: &Path, game: &Path, saves: &Path, package: &Path) ->
     .map_err(|e| if e == "the runtime did not finish" { "the runtime did not finish the installation".into() } else { e })?;
     if !report.ok {
         return Err(report.error);
+    }
+    if let (Package::MapPack(id), Some(folder)) = (kind, package.file_name()) {
+        record_pack(saves, id, &folder.to_string_lossy())?;
     }
     if raams_shadow(saves).is_some() {
         prepare_patch(runtime, game)?;
@@ -452,10 +586,98 @@ mod tests {
         let listed = state(&runtime, Some(&game), &saves, true);
         assert!(listed.raams_shadow_playable);
         assert_eq!(listed.entries[0], DlcEntry { id: "raamsShadow", status: DlcStatus::Ready });
-        assert!(listed.entries[1..].iter().all(|entry| entry.status == DlcStatus::Multiplayer));
+        assert!(listed.entries[1..].iter().all(|entry| entry.status == DlcStatus::NotInstalled));
         assert_eq!(listed.other_packages, 0);
         // An older runtime is not asked to make the patch.
         assert_eq!(state(&runtime, Some(&game), &saves, false).entries[0].status, DlcStatus::NeedsRuntime);
         let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A package's header as the console writes it: magic, content ID, content type and title ID.
+    fn header(magic: &[u8; 4], content_id: &str, content_type: u32, title_id: u32) -> Vec<u8> {
+        let mut bytes = vec![0u8; HEADER_LEN];
+        bytes[..4].copy_from_slice(magic);
+        for (i, pair) in content_id.as_bytes().chunks(2).enumerate() {
+            bytes[CONTENT_ID_OFFSET + i] = u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap();
+        }
+        bytes[CONTENT_TYPE_OFFSET..CONTENT_TYPE_OFFSET + 4].copy_from_slice(&content_type.to_be_bytes());
+        bytes[TITLE_ID_OFFSET..TITLE_ID_OFFSET + 4].copy_from_slice(&title_id.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn recognises_each_map_pack_by_its_content_id() {
+        let root = temp("identify");
+        for (key, content_id) in MAP_PACKS {
+            let package = root.join(key);
+            fs::write(&package, header(b"LIVE", content_id, MARKETPLACE_CONTENT, GEARS_OF_WAR_3)).unwrap();
+            assert_eq!(identify(&package), Ok(Package::MapPack(key)));
+        }
+        // Other downloadable content of the game (RAAM's Shadow, skins) installs but is no map pack.
+        let other = root.join("other");
+        fs::write(&other, header(b"PIRS", &"11".repeat(20), MARKETPLACE_CONTENT, GEARS_OF_WAR_3)).unwrap();
+        assert_eq!(identify(&other), Ok(Package::Other));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn refuses_a_wrong_or_damaged_package() {
+        let root = temp("refuse");
+        let (_, pack) = MAP_PACKS[0];
+        let check = |name: &str, bytes: Vec<u8>| {
+            let path = root.join(name);
+            fs::write(&path, bytes).unwrap();
+            identify(&path).unwrap_err()
+        };
+        assert!(check("text", b"just some text".to_vec()).contains("not an Xbox 360 content package"));
+        assert!(check("empty", Vec::new()).contains("not an Xbox 360 content package"));
+        assert!(check("cut", header(b"LIVE", pack, MARKETPLACE_CONTENT, GEARS_OF_WAR_3)[..100].to_vec())
+            .contains("damaged"));
+        assert!(check("game", header(b"LIVE", pack, MARKETPLACE_CONTENT, 0x4D5307E6)).contains("Gears of War 3"));
+        assert!(check("kind", header(b"LIVE", pack, 0x1, GEARS_OF_WAR_3)).contains("downloadable content"));
+        assert!(identify(&root.join("missing")).is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn lists_and_removes_only_the_folder_of_a_map_pack() {
+        let saves = temp("remove");
+        let content = content_dir(&saves);
+        // One pack recorded at install time under any name, another found by its content ID.
+        let recorded = content.join("renamed-by-the-player");
+        let by_name = content.join(format!("{}4D", MAP_PACKS[1].1.to_uppercase()));
+        let unrelated = content.join("SOMETHING-ELSE");
+        for folder in [&recorded, &by_name, &unrelated] {
+            fs::create_dir_all(folder).unwrap();
+            fs::write(folder.join("file"), b"data").unwrap();
+        }
+        record_pack(&saves, MAP_PACKS[0].0, "renamed-by-the-player").unwrap();
+        let listed = state(&saves, None, &saves, true);
+        let status = |id: &str| listed.entries.iter().find(|entry| entry.id == id).unwrap().status;
+        assert_eq!(status("hordeCommandPack"), DlcStatus::Installed);
+        assert_eq!(status("fenixRising"), DlcStatus::Installed);
+        assert_eq!(status("forcesOfNature"), DlcStatus::NotInstalled);
+        assert_eq!(listed.other_packages, 1);
+        remove(&saves, "hordeCommandPack").unwrap();
+        assert!(!recorded.exists() && by_name.exists() && unrelated.exists());
+        assert!(load_registry(&saves).is_empty());
+        remove(&saves, "fenixRising").unwrap();
+        assert!(!by_name.exists() && unrelated.exists());
+        assert!(remove(&saves, "fenixRising").is_err());
+        assert!(remove(&saves, "not-a-pack").is_err());
+        let _ = fs::remove_dir_all(&saves);
+    }
+
+    #[test]
+    fn a_recorded_folder_name_cannot_leave_the_content_folder() {
+        let saves = temp("escape");
+        let outside = saves.join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::create_dir_all(content_dir(&saves)).unwrap();
+        record_pack(&saves, MAP_PACKS[0].0, "../../../../outside").unwrap();
+        assert!(pack_folder(&saves, MAP_PACKS[0].0).is_none());
+        assert!(remove(&saves, MAP_PACKS[0].0).is_err());
+        assert!(outside.exists());
+        let _ = fs::remove_dir_all(&saves);
     }
 }

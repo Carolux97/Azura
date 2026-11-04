@@ -78,7 +78,7 @@ index 0000000..d9d2d1a
 +}  // namespace rex::ppc
 diff --git a/include/rex/system/ppc_interpreter.h b/include/rex/system/ppc_interpreter.h
 new file mode 100644
-index 0000000..9d7c34a
+index 0000000..7d93dec
 --- /dev/null
 +++ b/include/rex/system/ppc_interpreter.h
 @@ -0,0 +1,66 @@
@@ -89,7 +89,7 @@ index 0000000..9d7c34a
 + * The recompiled code covers the functions the code generator found ahead of time. A call to any
 + * other guest code (a pointer to a function the analysis never saw) is run here, from the original
 + * instructions in guest memory, with the same semantics and calling convention as the recompiled
-+ * code. See docs/ppc-interpreter-design.md in the project for the design.
++ * code. See alboria-notes:azura/ppc-interpreter-design.md for the design.
 + *
 + * @license     BSD 3-Clause License
 + *              See LICENSE file in the project root for full license text.

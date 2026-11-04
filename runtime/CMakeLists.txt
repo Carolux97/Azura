@@ -22,6 +22,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # build without any game files.
 set(AZURA_REXGLUE_CMAKE ${CMAKE_CURRENT_SOURCE_DIR}/generated/rexglue.cmake)
 option(AZURA_KIT_PROBE "Configure the probes the player kit records its build commands from (scripts/build-kit.sh)" OFF)
+# The SDK's developer keys (F3 debug overlay, F4 settings overlay, F7 achievements overlay, the
+# backtick console): off unless a build asks for them, so the player kit (scripts/build-kit.sh), and
+# what players run, never has them; scripts/build.sh turns them on for development builds.
+option(AZURA_DEV_KEYS "Keep the SDK's developer keys (F3, F4, F7 and the console) working; development builds only" OFF)
 option(AZURA_PM4_TRACE "Trace which guest functions write PM4 commands (src/hle_gfx/pm4_trace.h); debug builds only" OFF)
 if(AZURA_KIT_PROBE)
     # The player kit is built against the patched SDK as installed, the form it ships in, and
@@ -47,6 +51,7 @@ set(AZURA_SOURCES
     src/achievement_toast.cpp
     src/hooks.cpp
     src/script_hooks.cpp
+    src/host_migration.cpp
     src/class_dump.cpp
     src/dlc/bytecode.cpp
     src/dlc/class_fixups.cpp
@@ -68,7 +73,13 @@ set(AZURA_SOURCES
     src/shader_compile_overlay.cpp
     src/online_room_overlay.cpp
     src/join_by_code_menu.cpp
+    src/alboria_overlay.cpp
+    src/alboria_notices.cpp
+    src/alboria_sound_synth.cpp
+    src/alboria_sounds.cpp
+    src/alboria_style.cpp
     src/connection_menu.cpp
+    src/versus_online_menu.cpp
     src/shader_precompile.cpp
     src/system_settings.cpp
     src/window_icon.cpp
@@ -79,6 +90,8 @@ set(AZURA_SOURCES
     src/menu/coalesced.cpp
     src/input/install_player_assignment.cpp
     src/input/mouse_look.cpp
+    src/input/overlay_input.cpp
+    src/input/player_activity.cpp
     src/input/player_assignment.cpp
     src/input/scripted_pad.cpp
     src/menu/menu_patches.cpp
@@ -121,6 +134,9 @@ add_compile_options(-fmacro-prefix-map=${CMAKE_SOURCE_DIR}=. -ffile-prefix-map=$
 add_library(azura_host OBJECT ${AZURA_SOURCES})
 target_include_directories(azura_host PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(azura_host PRIVATE rex::runtime)
+if(AZURA_DEV_KEYS)
+    target_compile_definitions(azura_host PRIVATE AZURA_DEV_KEYS=1)
+endif()
 rexglue_add_host_sources(azura_host)
 
 # With the SDK built from source (preset mac-arm64-sdk-source), the SDK's public headers include
@@ -249,6 +265,9 @@ function(azura_configure_runtime target)
         COMMAND ${CMAKE_COMMAND} -E copy_directory
                 ${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts
                 $<TARGET_FILE_DIR:${target}>/assets/fonts
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                ${CMAKE_CURRENT_SOURCE_DIR}/assets/alboria
+                $<TARGET_FILE_DIR:${target}>/assets/alboria
         COMMENT "Installing azura.default.toml, gamecontrollerdb.txt and assets beside the executable")
     if(APPLE)
         add_custom_command(TARGET ${target} POST_BUILD

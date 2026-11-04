@@ -337,7 +337,7 @@ index 2cf24c4..0eb568b 100644
  
  #if REX_HAS_VULKAN
 diff --git a/include/rex/graphics/graphics_system.h b/include/rex/graphics/graphics_system.h
-index ac6b056..8ef1ee8 100644
+index ac6b056..1c40e89 100644
 --- a/include/rex/graphics/graphics_system.h
 +++ b/include/rex/graphics/graphics_system.h
 @@ -90,6 +90,12 @@ class GraphicsSystem : public system::IGraphicsSystem {
@@ -353,7 +353,20 @@ index ac6b056..8ef1ee8 100644
   protected:
    GraphicsSystem();
  
-@@ -130,6 +136,10 @@ class GraphicsSystem : public system::IGraphicsSystem {
+@@ -107,6 +113,12 @@ class GraphicsSystem : public system::IGraphicsSystem {
+   void WriteRegister(uint32_t addr, uint32_t value);
+ 
+   void MarkVblank();
++  // With vsync_follow_display, the host time (Clock::QueryHostTickCount ticks)
++  // of the next guest vblank on the grid of display refreshes, after the one at
++  // last_vblank (0 when there was none yet). 0 when the vblanks cannot follow
++  // the display: the presenter does not know its refreshes, or the guest
++  // vblank rate is not a whole multiple or divisor of the refresh rate.
++  uint64_t NextDisplayVblank(double vblank_rate_hz, uint64_t last_vblank) const;
+ 
+   memory::Memory* memory_ = nullptr;
+   runtime::FunctionDispatcher* function_dispatcher_ = nullptr;
+@@ -130,6 +142,10 @@ class GraphicsSystem : public system::IGraphicsSystem {
    std::unique_ptr<::rex::ui::Presenter> presenter_;
  
    std::atomic_flag host_gpu_loss_reported_;
@@ -1690,11 +1703,28 @@ index 52116f1..6113066 100644
      is_active_callback_ = is_active_callback;
    }
 diff --git a/include/rex/input/input_system.h b/include/rex/input/input_system.h
-index d48df09..208dbf4 100644
+index d48df09..0f8479c 100644
 --- a/include/rex/input/input_system.h
 +++ b/include/rex/input/input_system.h
-@@ -46,6 +46,13 @@ class InputSystem : public system::IInputSystem {
+@@ -12,6 +12,7 @@
  
+ #include <array>
+ #include <atomic>
++#include <functional>
+ #include <memory>
+ #include <vector>
+ 
+@@ -44,8 +45,22 @@ class InputSystem : public system::IInputSystem {
+   /// Replaces any previous assignment. Call before the guest starts polling.
+   void SetDeviceAssignment(std::unique_ptr<DeviceAssignment> assignment);
+ 
++  /// Changes the state the guest reads for a user once its devices are merged, for host UI that
++  /// takes buttons for itself (an overlay opened by holding one) or keeps the guest from playing
++  /// while it is open, without the guest seeing the controller disconnected. It runs on the
++  /// guest's thread with the input lock held, so it must not call back into the input system.
++  using StateFilter = std::function<void(uint32_t user_index, X_INPUT_STATE& state)>;
++  void SetStateFilter(StateFilter filter);
++
    X_RESULT GetCapabilities(uint32_t user_index, uint32_t flags, X_INPUT_CAPABILITIES* out_caps);
    X_RESULT GetState(uint32_t user_index, X_INPUT_STATE* out_state);
 +  /// The state of one device, whichever user it feeds: for host UI that reads each device on its
@@ -1706,6 +1736,14 @@ index d48df09..208dbf4 100644
 +  bool TakeMouseLook(uint32_t user_index, InputDriver::MouseLook& look);
    X_RESULT SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration);
    X_RESULT GetKeystroke(uint32_t user_index, uint32_t flags, X_INPUT_KEYSTROKE* out_keystroke);
+ 
+@@ -71,6 +86,7 @@ class InputSystem : public system::IInputSystem {
+   std::vector<std::unique_ptr<InputDriver>> drivers_;
+ 
+   std::unique_ptr<DeviceAssignment> assignment_;
++  StateFilter state_filter_;
+   ActiveDeviceTracker active_devices_;
+   std::array<std::atomic<uint8_t>, kMaxGuestUsers> active_kind_ = {};
  
 diff --git a/include/rex/input/mnk/mnk_input_driver.h b/include/rex/input/mnk/mnk_input_driver.h
 index c8751b7..7620729 100644
@@ -2176,6 +2214,23 @@ index 9b9cf9e..a87ae8c 100644
  
    rex::thread::global_critical_region global_critical_region_;
  
+diff --git a/include/rex/system/xam/app_manager.h b/include/rex/system/xam/app_manager.h
+index 84be3e4..7718d5f 100644
+--- a/include/rex/system/xam/app_manager.h
++++ b/include/rex/system/xam/app_manager.h
+@@ -47,6 +47,12 @@ class App {
+   uint32_t app_id_;
+ };
+ 
++// The XOVERLAPPED of the asynchronous request (XMsgStartIORequest) being dispatched on this thread, 0
++// for a synchronous one. A message handler that completes the request later itself, from another
++// thread, returns X_ERROR_IO_PENDING; the overlapped is then left pending for it.
++uint32_t CurrentRequestOverlapped();
++void SetCurrentRequestOverlapped(uint32_t overlapped_ptr);
++
+ class AppManager {
+  public:
+   void RegisterApp(std::unique_ptr<App> app);
 diff --git a/include/rex/system/xam/content_manager.h b/include/rex/system/xam/content_manager.h
 index 949d185..5337bf1 100644
 --- a/include/rex/system/xam/content_manager.h
@@ -2284,10 +2339,10 @@ index 0000000..1d7d7fb
 +}  // namespace rex::system::xam
 diff --git a/include/rex/system/xam/system_link.h b/include/rex/system/xam/system_link.h
 new file mode 100644
-index 0000000..eeaab48
+index 0000000..1ec5eaf
 --- /dev/null
 +++ b/include/rex/system/xam/system_link.h
-@@ -0,0 +1,127 @@
+@@ -0,0 +1,135 @@
 +/**
 + * @file        system/xam/system_link.h
 + * @brief       System Link: the local network as XNet and the session services show it to a title
@@ -2390,13 +2445,21 @@ index 0000000..eeaab48
 +  XnKey key{};
 +  XnAddrBytes host{};
 +  bool hosting = false;  // this installation is its host
++  bool live = false;     // an Xbox Live session played in an Alboria room (alboria_live)
++  bool match = false;    // a public match it hosts, open to Alboria's matchmaking
++  int capacity = 0;      // the match's players, public and private slots
 +};
 +
 +// The session the title knows by `handle` (its session object), until RemoveSession.
 +void AddSession(uint32_t handle, const SystemLinkSession& session);
 +void RemoveSession(uint32_t handle);
++// The session the title knows by `handle`, if any.
++std::optional<SystemLinkSession> FindSession(uint32_t handle);
 +// Whether this installation hosts a System Link session now.
 +bool HostingSystemLinkSession();
++// Whether the title still knows a session with the ID `kid` (a title can hold the same session in
++// more than one session object while it joins it).
++bool HasSessionWithKid(const XnKid& kid);
 +// The ID of the session whose host has IP address `ip`, or of any session when none matches.
 +std::optional<XnKid> FindSessionKid(uint32_t ip);
 +
@@ -2498,6 +2561,26 @@ index a1b4443..bb69cc9 100644
  
    std::unique_ptr<rex::thread::Event> event_;
    std::mutex incoming_packet_mutex_;
+diff --git a/include/rex/ui/flags.h b/include/rex/ui/flags.h
+index fa2ef60..fd8db27 100644
+--- a/include/rex/ui/flags.h
++++ b/include/rex/ui/flags.h
+@@ -26,6 +26,7 @@ REXCVAR_DECLARE(std::string, present_fsr_quality_mode);
+ REXCVAR_DECLARE(bool, present_dither);
+ REXCVAR_DECLARE(bool, present_allow_overscan_cutoff);
+ REXCVAR_DECLARE(bool, host_present_from_non_ui_thread);
++REXCVAR_DECLARE(bool, vsync_follow_display);
+ REXCVAR_DECLARE(int32_t, window_width);
+ REXCVAR_DECLARE(int32_t, window_height);
+ REXCVAR_DECLARE(bool, fullscreen);
+@@ -52,6 +53,7 @@ REXCVAR_DECLARE(bool, vulkan_log_debug_messages);
+ REXCVAR_DECLARE(bool, vulkan_allow_present_mode_immediate);
+ REXCVAR_DECLARE(bool, vulkan_allow_present_mode_mailbox);
+ REXCVAR_DECLARE(bool, vulkan_allow_present_mode_fifo_relaxed);
++REXCVAR_DECLARE(std::string, vulkan_display_refresh_source);
+ REXCVAR_DECLARE(bool, vulkan_validation_enabled);
+ REXCVAR_DECLARE(int32_t, vulkan_device);
+ REXCVAR_DECLARE(bool, vulkan_prefer_geometry_shader);
 diff --git a/include/rex/ui/imgui_dialog.h b/include/rex/ui/imgui_dialog.h
 index a7ab6b3..f4425b8 100644
 --- a/include/rex/ui/imgui_dialog.h
@@ -2539,7 +2622,7 @@ index 7642601..b93550d 100644
    AchievementIconCache icon_cache_;
  };
 diff --git a/include/rex/ui/presenter.h b/include/rex/ui/presenter.h
-index afb4a30..e9be74f 100644
+index afb4a30..ec4e5c3 100644
 --- a/include/rex/ui/presenter.h
 +++ b/include/rex/ui/presenter.h
 @@ -22,6 +22,7 @@
@@ -2644,7 +2727,32 @@ index afb4a30..e9be74f 100644
  
    void AddUIDrawerFromUIThread(UIDrawer* drawer, size_t z_order);
    void RemoveUIDrawerFromUIThread(UIDrawer* drawer);
-@@ -427,7 +449,6 @@ class Presenter {
+@@ -374,7 +396,24 @@ class Presenter {
+   // Requests (re)painting with the UI if there's UI to draw.
+   void RequestUIPaintFromUIThread();
+ 
++  // The display refreshes as the presenter last saw them: the host time (in
++  // Clock::QueryHostTickCount ticks) of a refresh that showed a painted frame,
++  // and the refresh period in host ticks. valid is false until the backend has
++  // reported enough refreshes to know the period, and on backends that do not
++  // report them. Callable from any thread.
++  struct DisplayRefreshTiming {
++    bool valid = false;
++    uint64_t last_refresh_host_ticks = 0;
++    double period_host_ticks = 0.0;
++  };
++  DisplayRefreshTiming GetDisplayRefreshTiming() const;
++
+  protected:
++  // For the backend, from any thread: a painted frame reached the display at
++  // this host time (Clock::QueryHostTickCount ticks). The period is estimated
++  // from the gaps between these reports, which are whole refresh periods.
++  void ReportDisplayRefresh(uint64_t host_ticks);
++
+   enum class PaintResult {
+     kPresented,
+     kPresentedSuboptimal,
+@@ -427,7 +466,6 @@ class Presenter {
    enum class GuestOutputPaintEffect {
      kBilinear,
      kBilinearDither,
@@ -2652,7 +2760,7 @@ index afb4a30..e9be74f 100644
      kCasSharpen,
      kCasSharpenDither,
      kCasResample,
-@@ -435,7 +456,6 @@ class Presenter {
+@@ -435,7 +473,6 @@ class Presenter {
      kFsrEasu,
      kFsrRcas,
      kFsrRcasDither,
@@ -2660,7 +2768,7 @@ index afb4a30..e9be74f 100644
  
      kCount,
    };
-@@ -446,11 +466,9 @@ class Presenter {
+@@ -446,11 +483,9 @@ class Presenter {
        // Dithering is never performed in intermediate passes because it may be
        // interpreted as features by the subsequent passes.
        case GuestOutputPaintEffect::kBilinearDither:
@@ -2672,7 +2780,7 @@ index afb4a30..e9be74f 100644
          return false;
        default:
          // The result of any other effect can be stretched with bilinear
-@@ -461,16 +479,13 @@ class Presenter {
+@@ -461,16 +496,13 @@ class Presenter {
  
    static constexpr bool CanGuestOutputPaintEffectBeFinal(GuestOutputPaintEffect effect) {
      switch (effect) {
@@ -2689,7 +2797,7 @@ index afb4a30..e9be74f 100644
    // The longest path is kFsrMaxUpscalingPassesMax + optionally RCAS +
    // optionally bilinear, when upscaling by more than
    // 2^kFsrMaxUpscalingPassesMax along any direction.
-@@ -478,10 +493,6 @@ class Presenter {
+@@ -478,10 +510,6 @@ class Presenter {
    // more than 2 along any direction) CAS followed by bilinear.
    static constexpr size_t kMaxGuestOutputPaintEffects =
        GuestOutputPaintConfig::kFsrMaxUpscalingPassesMax + 2;
@@ -2700,7 +2808,7 @@ index afb4a30..e9be74f 100644
  
    struct GuestOutputPaintFlow {
      // Letterbox on up to 4 sides.
-@@ -548,7 +559,6 @@ class Presenter {
+@@ -548,7 +576,6 @@ class Presenter {
      }
    };
  
@@ -2708,7 +2816,7 @@ index afb4a30..e9be74f 100644
    static constexpr float CalculateCasPostSetupSharpness(float sharpness) {
      // CasSetup const1.x.
      return -1.0f / (8.0f - 3.0f * sharpness);
-@@ -615,7 +625,6 @@ class Presenter {
+@@ -615,7 +642,6 @@ class Presenter {
        sharpness_post_setup = CalculatePostSetupSharpness(config.GetFsrSharpnessReduction());
      }
    };
@@ -2716,6 +2824,53 @@ index afb4a30..e9be74f 100644
  
    explicit Presenter(HostGpuLossCallback host_gpu_loss_callback)
        : host_gpu_loss_callback_(host_gpu_loss_callback) {}
+@@ -972,6 +998,18 @@ class Presenter {
+   // happens as part of painting.
+   std::mutex guest_output_mailbox_consumer_mutex_;
+ 
++  // Written by ReportDisplayRefresh, read by GetDisplayRefreshTiming.
++  mutable std::mutex display_refresh_mutex_;
++  DisplayRefreshTiming display_refresh_timing_;
++  // Refresh gaps seen while the period is not known yet, for the first period
++  // estimate.
++  static constexpr uint32_t kDisplayRefreshGapsForEstimate = 30;
++  std::array<uint64_t, kDisplayRefreshGapsForEstimate> display_refresh_gaps_;
++  uint32_t display_refresh_gaps_seen_ = 0;
++  // Reports in a row that fell off the grid of refreshes, once the period is
++  // known.
++  uint32_t display_refresh_off_grid_ = 0;
++
+   std::array<GuestOutputProperties, kGuestOutputMailboxSize> guest_output_properties_;
+   // Accessible only by refreshing, whether the last refresh contained an image
+   // rather than being blank.
+@@ -1005,9 +1043,13 @@ class Presenter {
+ #if REX_PLATFORM_WIN32
+   static Microsoft::WRL::ComPtr<IDXGIOutput> GetDXGIOutputForMonitor(IDXGIFactory1* factory,
+                                                                      HMONITOR monitor);
++  // The thread also waits for every vertical blank while the guest's vblanks
++  // follow the display (vsync_follow_display): each one is reported as a
++  // display refresh, which DXGI presentation does not report otherwise.
+   bool AreDXGIUITicksWaitable(
+       [[maybe_unused]] const std::unique_lock<std::mutex>& dxgi_ui_tick_lock) {
+-    return dxgi_ui_ticks_needed_ && !dxgi_ui_tick_thread_shutdown_ && dxgi_ui_tick_output_;
++    return (dxgi_ui_ticks_needed_ || REXCVAR_GET(vsync_follow_display)) &&
++           !dxgi_ui_tick_thread_shutdown_ && dxgi_ui_tick_output_;
+   }
+   void DXGIUITickThread();
+ 
+@@ -1036,9 +1078,9 @@ class Presenter {
+   // was removed from a connected monitor.
+   Microsoft::WRL::ComPtr<IDXGIOutput> dxgi_ui_tick_output_;
+   // To avoid allocating processing resources to the thread when nothing needs
+-  // the ticks (not drawing the UI), the thread waits for vertical blanking
+-  // intervals only when the UI drawing ticks are needed, and sleeping waiting
+-  // for the control condition variable signals otherwise. Modifiable only from
++  // the ticks (not drawing the UI, and not following the display), the thread
++  // waits for vertical blanking intervals only when they are needed, and sleeps
++  // waiting for the control condition variable signals otherwise. Modifiable only from
+   // the UI thread, so readable by it without locking the mutex.
+   bool dxgi_ui_ticks_needed_ = false;
+   // The shutdown flag is modifiable only from the UI thread.
 diff --git a/include/rex/ui/virtual_key.h b/include/rex/ui/virtual_key.h
 index 3e1b948..5e1857b 100644
 --- a/include/rex/ui/virtual_key.h
@@ -2733,7 +2888,7 @@ index 3e1b948..5e1857b 100644
    kControl = 0x11,  // Ctrl.
    kMenu = 0x12,     // Alt.
 diff --git a/include/rex/ui/vulkan/device.h b/include/rex/ui/vulkan/device.h
-index 947817f..69b7522 100644
+index 947817f..abec7cc 100644
 --- a/include/rex/ui/vulkan/device.h
 +++ b/include/rex/ui/vulkan/device.h
 @@ -93,6 +93,10 @@ class VulkanDevice {
@@ -2758,17 +2913,36 @@ index 947817f..69b7522 100644
      // VK_KHR_portability_subset (#164)
  
      bool constantAlphaColorBlendFactors = false;
-@@ -199,6 +207,9 @@ class VulkanDevice {
+@@ -168,6 +176,12 @@ class VulkanDevice {
+     // VK_EXT_robustness2
+ 
+     bool nullDescriptor = false;
++
++    // VK_KHR_present_id (#295) and VK_KHR_present_wait (#249), requested only
++    // with a swapchain.
++
++    bool presentId = false;
++    bool presentWait = false;
+   };
+ 
+   // Properties of the core API and enabled extensions, and enabled features.
+@@ -199,6 +213,15 @@ class VulkanDevice {
      bool ext_1_3_KHR_maintenance4 = false;  // #414
      // Has optional features not implied by this being true.
      bool ext_1_3_KHR_dynamic_rendering = false;  // #55
 +    // GPU hang diagnostics, requested only with vulkan_gpu_checkpoints.
 +    bool ext_AMD_buffer_marker = false;                 // #180
 +    bool ext_NV_device_diagnostic_checkpoints = false;  // #207
++    // Times when presented images reached the display, requested only with a
++    // swapchain.
++    bool ext_GOOGLE_display_timing = false;  // #93
++    // Have optional features not implied by these being true.
++    bool ext_KHR_present_wait = false;  // #249
++    bool ext_KHR_present_id = false;    // #295
    };
  
    const Extensions& extensions() const { return extensions_; }
-@@ -216,10 +227,16 @@ class VulkanDevice {
+@@ -216,10 +239,20 @@ class VulkanDevice {
  #include <rex/ui/vulkan/functions/device_1_1_khr_get_memory_requirements2.inc>
      // VK_KHR_bind_memory2 (#158, promoted to 1.1)
  #include <rex/ui/vulkan/functions/device_1_1_khr_bind_memory2.inc>
@@ -2782,6 +2956,10 @@ index 947817f..69b7522 100644
 +#include <rex/ui/vulkan/functions/device_amd_buffer_marker.inc>
 +    // VK_NV_device_diagnostic_checkpoints (#207)
 +#include <rex/ui/vulkan/functions/device_nv_device_diagnostic_checkpoints.inc>
++    // VK_GOOGLE_display_timing (#93)
++#include <rex/ui/vulkan/functions/device_google_display_timing.inc>
++    // VK_KHR_present_wait (#249)
++#include <rex/ui/vulkan/functions/device_khr_present_wait.inc>
  #undef XE_UI_VULKAN_FUNCTION_PROMOTED
  #undef XE_UI_VULKAN_FUNCTION
    };
@@ -2822,6 +3000,23 @@ index 0000000..9cadd5d
 @@ -0,0 +1,2 @@
 +// VK_AMD_buffer_marker functions used for GPU hang diagnostics.
 +XE_UI_VULKAN_FUNCTION(vkCmdWriteBufferMarkerAMD)
+diff --git a/include/rex/ui/vulkan/functions/device_google_display_timing.inc b/include/rex/ui/vulkan/functions/device_google_display_timing.inc
+new file mode 100644
+index 0000000..aafdc33
+--- /dev/null
++++ b/include/rex/ui/vulkan/functions/device_google_display_timing.inc
+@@ -0,0 +1,3 @@
++// VK_GOOGLE_display_timing functions used to time the guest's vertical blanks by the display.
++XE_UI_VULKAN_FUNCTION(vkGetPastPresentationTimingGOOGLE)
++XE_UI_VULKAN_FUNCTION(vkGetRefreshCycleDurationGOOGLE)
+diff --git a/include/rex/ui/vulkan/functions/device_khr_present_wait.inc b/include/rex/ui/vulkan/functions/device_khr_present_wait.inc
+new file mode 100644
+index 0000000..bc360ac
+--- /dev/null
++++ b/include/rex/ui/vulkan/functions/device_khr_present_wait.inc
+@@ -0,0 +1,2 @@
++// VK_KHR_present_wait functions used to time the guest's vertical blanks by the display.
++XE_UI_VULKAN_FUNCTION(vkWaitForPresentKHR)
 diff --git a/include/rex/ui/vulkan/functions/device_nv_device_diagnostic_checkpoints.inc b/include/rex/ui/vulkan/functions/device_nv_device_diagnostic_checkpoints.inc
 new file mode 100644
 index 0000000..b73d2c1
@@ -2832,10 +3027,24 @@ index 0000000..b73d2c1
 +XE_UI_VULKAN_FUNCTION(vkCmdSetCheckpointNV)
 +XE_UI_VULKAN_FUNCTION(vkGetQueueCheckpointDataNV)
 diff --git a/include/rex/ui/vulkan/presenter.h b/include/rex/ui/vulkan/presenter.h
-index 56ee43b..91a38aa 100644
+index 56ee43b..1d3fe23 100644
 --- a/include/rex/ui/vulkan/presenter.h
 +++ b/include/rex/ui/vulkan/presenter.h
-@@ -127,6 +127,21 @@ class VulkanPresenter final : public Presenter {
+@@ -12,9 +12,13 @@
+ 
+ #include <algorithm>
+ #include <array>
++#include <atomic>
++#include <condition_variable>
+ #include <cstddef>
+ #include <cstdint>
+ #include <memory>
++#include <mutex>
++#include <thread>
+ #include <utility>
+ #include <vector>
+ 
+@@ -127,6 +131,21 @@ class VulkanPresenter final : public Presenter {
    static Surface::TypeFlags GetSurfaceTypesSupportedByInstance(
        const VulkanInstance::Extensions& instance_extensions);
    Surface::TypeFlags GetSupportedSurfaceTypes() const override;
@@ -2857,7 +3066,7 @@ index 56ee43b..91a38aa 100644
  
    bool CaptureGuestOutput(RawImage& image_out) override;
  
-@@ -230,12 +245,10 @@ class VulkanPresenter final : public Presenter {
+@@ -230,12 +249,10 @@ class VulkanPresenter final : public Presenter {
  
    enum GuestOutputPaintPipelineLayoutIndex : size_t {
      kGuestOutputPaintPipelineLayoutIndexBilinear,
@@ -2870,7 +3079,7 @@ index 56ee43b..91a38aa 100644
  
      kGuestOutputPaintPipelineLayoutCount,
    };
-@@ -246,7 +259,6 @@ class VulkanPresenter final : public Presenter {
+@@ -246,7 +263,6 @@ class VulkanPresenter final : public Presenter {
        case GuestOutputPaintEffect::kBilinear:
        case GuestOutputPaintEffect::kBilinearDither:
          return kGuestOutputPaintPipelineLayoutIndexBilinear;
@@ -2878,7 +3087,7 @@ index 56ee43b..91a38aa 100644
        case GuestOutputPaintEffect::kCasSharpen:
        case GuestOutputPaintEffect::kCasSharpenDither:
          return kGuestOutputPaintPipelineLayoutIndexCasSharpen;
-@@ -258,7 +270,6 @@ class VulkanPresenter final : public Presenter {
+@@ -258,13 +274,75 @@ class VulkanPresenter final : public Presenter {
        case GuestOutputPaintEffect::kFsrRcas:
        case GuestOutputPaintEffect::kFsrRcasDither:
          return kGuestOutputPaintPipelineLayoutIndexFsrRcas;
@@ -2886,6 +3095,110 @@ index 56ee43b..91a38aa 100644
        default:
          assert_unhandled_case(effect);
          return kGuestOutputPaintPipelineLayoutCount;
+     }
+   }
+ 
++  // Where the presenter learns when its images reached the display, to report
++  // the display's refreshes (Presenter::ReportDisplayRefresh), from
++  // vulkan_display_refresh_source and what the device supports.
++  enum class DisplayRefreshSource {
++    // The guest's vertical blanks stay on their timer.
++    kNone,
++    // VK_GOOGLE_display_timing: the time each image was shown, read back after
++    // presenting.
++    kDisplayTiming,
++    // VK_KHR_present_wait: the time a wait for a present returns, on the
++    // present waiter's thread.
++    kPresentWait,
++  };
++  static DisplayRefreshSource GetDisplayRefreshSource(const VulkanDevice* vulkan_device);
++
++  // Waits for presents on its own thread (VK_KHR_present_wait) and reports the
++  // moment each wait returns as a display refresh. vkWaitForPresentKHR needs
++  // the swapchain externally synchronized, like acquiring and presenting, so
++  // the thread waits in short slices under the mutex and lets painting take it
++  // between them.
++  class PresentWaiter {
++   public:
++    // Holds the mutex for painting's use of the swapchain (acquiring,
++    // presenting, retiring), ahead of the waiting thread.
++    class PaintLock {
++     public:
++      explicit PaintLock(PresentWaiter* waiter);
++      ~PaintLock();
++      PaintLock(const PaintLock&) = delete;
++      PaintLock& operator=(const PaintLock&) = delete;
++
++     private:
++      PresentWaiter* waiter_;
++    };
++
++    PresentWaiter(VulkanPresenter& presenter, const VulkanDevice* vulkan_device);
++    ~PresentWaiter();
++    PresentWaiter(const PresentWaiter&) = delete;
++    PresentWaiter& operator=(const PresentWaiter&) = delete;
++
++    // With a PaintLock held: the swapchain presents are waited on, or
++    // VK_NULL_HANDLE before it is retired or destroyed.
++    void SetSwapchainUnderPaintLock(VkSwapchainKHR swapchain);
++    // With a PaintLock held, after a successful present with this id.
++    void PresentedUnderPaintLock(uint64_t present_id);
++
++   private:
++    void Thread();
++
++    VulkanPresenter& presenter_;
++    const VulkanDevice* vulkan_device_;
++    std::mutex mutex_;
++    std::condition_variable condition_;
++    // Painting threads waiting for the mutex: the waiting thread stays out of
++    // it until they have taken it.
++    std::atomic<uint32_t> paint_lock_requests_{0};
++    VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
++    uint64_t last_present_id_ = 0;
++    uint64_t last_waited_present_id_ = 0;
++    bool shutdown_ = false;
++    std::thread thread_;
++  };
++
+   struct PaintContext {
+     class Submission {
+      public:
+@@ -416,6 +494,10 @@ class VulkanPresenter final : public Presenter {
+     bool swapchain_is_fifo = false;
+     std::vector<VkImage> swapchain_images;
+     std::vector<SwapchainFramebuffer> swapchain_framebuffers;
++
++    // Owned by the presenter, set while the display refresh source is
++    // kPresentWait. Told about the swapchain while painting and retiring it.
++    PresentWaiter* present_waiter = nullptr;
+   };
+ 
+   explicit VulkanPresenter(HostGpuLossCallback host_gpu_loss_callback,
+@@ -431,6 +513,9 @@ class VulkanPresenter final : public Presenter {
+   }
+ 
+   bool InitializeSurfaceIndependent();
++  // With the kDisplayTiming source, from painting after a present: reports
++  // the refreshes that showed the presents whose timing became known.
++  void ReportPastPresentationTimings();
+ 
+   [[nodiscard]] VkPipeline CreateGuestOutputPaintPipeline(GuestOutputPaintEffect effect,
+                                                           VkRenderPass render_pass);
+@@ -481,6 +566,13 @@ class VulkanPresenter final : public Presenter {
+   // well as by presenter initialization and shutdown.
+   PaintContext paint_context_;
+ 
++  // Display refresh reporting, chosen at initialization. The present ids and
++  // the display timing read-back are accessible only by painting.
++  DisplayRefreshSource display_refresh_source_ = DisplayRefreshSource::kNone;
++  std::unique_ptr<PresentWaiter> present_waiter_;
++  uint64_t last_present_id_ = 0;
++  std::vector<VkPastPresentationTimingGOOGLE> past_presentation_timings_;
++
+ #if defined(REX_HAS_FIDELITYFX_RUNTIME) && REX_HAS_FIDELITYFX_RUNTIME
+   void* temporal_upscaler_context_ = nullptr;
+   uint32_t temporal_upscaler_max_render_width_ = 0;
 diff --git a/include/rex/ui/vulkan/provider.h b/include/rex/ui/vulkan/provider.h
 index 3d603f5..0a68fcc 100644
 --- a/include/rex/ui/vulkan/provider.h
@@ -3765,10 +4078,26 @@ index e2983a4..535e2d2 100644
                      "Use approximate compare for alpha test values to prevent "
                      "flickering on NVIDIA graphics cards");
 diff --git a/src/graphics/graphics_system.cpp b/src/graphics/graphics_system.cpp
-index 8f2fcb0..b0f3cb4 100644
+index 8f2fcb0..2f60d10 100644
 --- a/src/graphics/graphics_system.cpp
 +++ b/src/graphics/graphics_system.cpp
-@@ -35,6 +35,10 @@ REXCVAR_DEFINE_STRING(swap_post_effect, "none", "GPU", "Swap post effect: none,
+@@ -13,6 +13,7 @@
+ 
+ #include <algorithm>
+ #include <cctype>
++#include <cmath>
+ #include <cstdint>
+ #include <functional>
+ #include <memory>
+@@ -27,6 +28,7 @@
+ #include <rex/stream.h>
+ #include <rex/system/kernel_state.h>
+ #include <rex/system/xthread.h>
++#include <rex/ui/flags.h>
+ #include <rex/ui/graphics_provider.h>
+ #include <rex/ui/window.h>
+ #include <rex/ui/windowed_app_context.h>
+@@ -35,6 +37,10 @@ REXCVAR_DEFINE_STRING(swap_post_effect, "none", "GPU", "Swap post effect: none,
      .allowed({"none", "fxaa", "fxaa_extreme"})
      .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
  
@@ -3779,7 +4108,7 @@ index 8f2fcb0..b0f3cb4 100644
  REXCVAR_DEFINE_BOOL(store_shaders, true, "GPU",
                      "Store shaders persistently and load them when loading games to avoid "
                      "runtime spikes and freezes when playing the game not for the first time.");
-@@ -76,6 +80,45 @@ GraphicsSystem::GraphicsSystem() : vsync_worker_running_(false) {}
+@@ -76,6 +82,45 @@ GraphicsSystem::GraphicsSystem() : vsync_worker_running_(false) {}
  
  GraphicsSystem::~GraphicsSystem() = default;
  
@@ -3825,7 +4154,7 @@ index 8f2fcb0..b0f3cb4 100644
  X_STATUS GraphicsSystem::SetupPresentation(ui::WindowedAppContext* app_context) {
    if (presenter_) {
      return X_STATUS_SUCCESS;
-@@ -154,12 +197,15 @@ X_STATUS GraphicsSystem::SetupGuestGpu(runtime::FunctionDispatcher* function_dis
+@@ -154,12 +199,51 @@ X_STATUS GraphicsSystem::SetupGuestGpu(runtime::FunctionDispatcher* function_dis
          kernel::xboxkrnl::VdQueryVideoMode(&video_mode);
          double refresh_rate_hz = std::max(1.0, double(float(video_mode.refresh_rate)));
          uint64_t guest_tick_frequency = chrono::Clock::guest_tick_frequency();
@@ -3833,17 +4162,53 @@ index 8f2fcb0..b0f3cb4 100644
 -            std::max(uint64_t(1), uint64_t(double(guest_tick_frequency) / refresh_rate_hz));
          uint64_t no_vsync_interval_ticks = std::max(uint64_t(1), guest_tick_frequency / 1000);
          uint64_t last_frame_time = chrono::Clock::QueryGuestTickCount();
++        // Host time of the last vblank while following the display, 0 while on
++        // the timer.
++        uint64_t last_display_vblank = 0;
          while (vsync_worker_running_) {
-           uint64_t current_time = chrono::Clock::QueryGuestTickCount();
 +          // Read every time, so a change of guest_vblank_rate applies at once.
 +          int32_t vblank_rate = REXCVAR_GET(guest_vblank_rate);
 +          double vblank_rate_hz = vblank_rate > 0 ? double(vblank_rate) : refresh_rate_hz;
++
++          uint64_t display_vblank = 0;
++          if (REXCVAR_GET(vsync)) {
++            display_vblank = NextDisplayVblank(vblank_rate_hz, last_display_vblank);
++          }
++          if (display_vblank) {
++            uint64_t now = chrono::Clock::QueryHostTickCount();
++            if (!last_display_vblank) {
++              // Starting to follow the display: the next refresh is the first
++              // vblank.
++              last_display_vblank = now;
++              continue;
++            }
++            if (now >= display_vblank) {
++              MarkVblank();
++              last_display_vblank = display_vblank;
++              continue;
++            }
++            // Sleep until the vblank, in steps short enough to notice a new
++            // refresh rate or the presenter stopping its reports.
++            uint64_t wait_ticks = display_vblank - now;
++            uint64_t max_wait_ticks = chrono::Clock::QueryHostTickFrequency() / 500;
++            rex::thread::Sleep(std::chrono::microseconds(
++                std::min(wait_ticks, max_wait_ticks) * 1000000 /
++                chrono::Clock::QueryHostTickFrequency()));
++            continue;
++          }
++          if (last_display_vblank) {
++            // Back on the timer: it counts from now.
++            last_display_vblank = 0;
++            last_frame_time = chrono::Clock::QueryGuestTickCount();
++          }
++
+           uint64_t current_time = chrono::Clock::QueryGuestTickCount();
 +          uint64_t vsync_interval_ticks =
 +              std::max(uint64_t(1), uint64_t(double(guest_tick_frequency) / vblank_rate_hz));
            uint64_t interval_ticks =
                REXCVAR_GET(vsync) ? vsync_interval_ticks : no_vsync_interval_ticks;
            while (current_time - last_frame_time >= interval_ticks) {
-@@ -217,6 +263,9 @@ void GraphicsSystem::OnHostGpuLossFromAnyThread([[maybe_unused]] bool is_respons
+@@ -217,6 +301,9 @@ void GraphicsSystem::OnHostGpuLossFromAnyThread([[maybe_unused]] bool is_respons
    if (host_gpu_loss_reported_.test_and_set(std::memory_order_relaxed)) {
      return;
    }
@@ -3853,6 +4218,66 @@ index 8f2fcb0..b0f3cb4 100644
    rex::FatalError("Graphics device lost (probably due to an internal error)");
  }
  
+@@ -316,6 +403,59 @@ void GraphicsSystem::DispatchInterruptCallback(uint32_t source, uint32_t cpu) {
+                                          rex::countof(args));
+ }
+ 
++uint64_t GraphicsSystem::NextDisplayVblank(double vblank_rate_hz, uint64_t last_vblank) const {
++  // How close the vblank rate must be to a whole multiple or divisor of the
++  // refresh rate (a 60 Hz rate on a 59.94 Hz display still follows it).
++  constexpr double kRatioTolerance = 0.02;
++
++  if (!REXCVAR_GET(vsync_follow_display) || !presenter_ ||
++      chrono::Clock::guest_time_scalar() != 1.0) {
++    return 0;
++  }
++  ::rex::ui::Presenter::DisplayRefreshTiming timing = presenter_->GetDisplayRefreshTiming();
++  if (!timing.valid) {
++    return 0;
++  }
++  uint64_t now = chrono::Clock::QueryHostTickCount();
++  double host_tick_frequency = double(chrono::Clock::QueryHostTickFrequency());
++  // Nothing painted reached the display for a while (the window is hidden or
++  // the game stopped presenting): its refreshes are no longer known.
++  if (now > timing.last_refresh_host_ticks + uint64_t(host_tick_frequency / 4)) {
++    return 0;
++  }
++
++  double period = timing.period_host_ticks;
++  double vblanks_per_refresh = vblank_rate_hz * period / host_tick_frequency;
++  // The vblank interval, and the step of the grid the vblanks fall on: each
++  // refresh, or each fraction of it when there are several vblanks per refresh.
++  double interval, grid_step;
++  if (vblanks_per_refresh >= 1.0) {
++    double vblanks = std::round(vblanks_per_refresh);
++    if (std::abs(vblanks_per_refresh - vblanks) > vblanks * kRatioTolerance) {
++      return 0;
++    }
++    interval = period / vblanks;
++    grid_step = interval;
++  } else {
++    double refreshes = std::round(1.0 / vblanks_per_refresh);
++    if (std::abs(1.0 / vblanks_per_refresh - refreshes) > refreshes * kRatioTolerance) {
++      return 0;
++    }
++    interval = period * refreshes;
++    grid_step = period;
++  }
++
++  // The first grid point at least three quarters of an interval after the last
++  // vblank. After a stall, vblanks that were missed are skipped rather than
++  // sent in a burst. The grid sits half a step after the refreshes: the
++  // presenter picks up the guest's latest frame right after a refresh frees a
++  // drawable, so a frame the guest swaps in midway between refreshes is never
++  // in a race with that pickup.
++  double earliest = std::max(double(last_vblank) + interval * 0.75, double(now) - grid_step * 0.5);
++  double anchor = double(timing.last_refresh_host_ticks) + grid_step * 0.5;
++  return uint64_t(anchor + std::ceil((earliest - anchor) / grid_step) * grid_step);
++}
++
+ void GraphicsSystem::MarkVblank() {
+   // TODO: Enable profiling once ported
+   // SCOPE_profile_cpu_f("gpu");
 diff --git a/src/graphics/metal/metal_command_processor.h b/src/graphics/metal/metal_command_processor.h
 new file mode 100644
 index 0000000..2c8c69c
@@ -8934,10 +9359,10 @@ index 0000000..ba2837c
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_presenter.h b/src/graphics/metal/metal_presenter.h
 new file mode 100644
-index 0000000..a8a50f0
+index 0000000..1740dd2
 --- /dev/null
 +++ b/src/graphics/metal/metal_presenter.h
-@@ -0,0 +1,111 @@
+@@ -0,0 +1,124 @@
 +/**
 + * @file        graphics/metal/metal_presenter.h
 + * @brief       Presents the guest output to a CAMetalLayer with Metal
@@ -8951,6 +9376,7 @@ index 0000000..a8a50f0
 +#include <array>
 +#include <cstdint>
 +#include <memory>
++#include <mutex>
 +
 +#include <rex/ui/presenter.h>
 +
@@ -9012,7 +9438,9 @@ index 0000000..a8a50f0
 + private:
 +  MetalPresenter(HostGpuLossCallback host_gpu_loss_callback, id<MTLDevice> device,
 +                 id<MTLCommandQueue> queue)
-+      : Presenter(host_gpu_loss_callback), device_(device), queue_(queue) {}
++      : Presenter(host_gpu_loss_callback), device_(device), queue_(queue) {
++    presented_handler_target_->presenter = this;
++  }
 +  bool InitializeSurfaceIndependent();
 +  // The AMD CAS pipelines (the SDK's prebuilt shaders converted to MSL), nil if unavailable.
 +  bool InitializeCas(id<MTLLibrary> paint_library);
@@ -9046,15 +9474,25 @@ index 0000000..a8a50f0
 +  CAMetalLayer* layer_ = nil;
 +  uint32_t layer_width_ = 0;
 +  uint32_t layer_height_ = 0;
++
++  // Shared with the presented handlers of the drawables, which Metal may call
++  // after the presenter is gone: the destructor clears the pointer, and the
++  // handlers report a refresh only while it is set.
++  struct PresentedHandlerTarget {
++    std::mutex mutex;
++    MetalPresenter* presenter = nullptr;
++  };
++  std::shared_ptr<PresentedHandlerTarget> presented_handler_target_ =
++      std::make_shared<PresentedHandlerTarget>();
 +};
 +
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_presenter.mm b/src/graphics/metal/metal_presenter.mm
 new file mode 100644
-index 0000000..32d3696
+index 0000000..1afddb9
 --- /dev/null
 +++ b/src/graphics/metal/metal_presenter.mm
-@@ -0,0 +1,469 @@
+@@ -0,0 +1,489 @@
 +/**
 + * @file        graphics/metal/metal_presenter.mm
 + * @brief       Presents the guest output to a CAMetalLayer with Metal
@@ -9074,6 +9512,7 @@ index 0000000..32d3696
 +#include <vector>
 +
 +#include <rex/assert.h>
++#include <rex/chrono/clock.h>
 +#include <rex/logging.h>
 +#include <rex/ui/surface_mac.h>
 +
@@ -9127,7 +9566,10 @@ index 0000000..32d3696
 +  return presenter;
 +}
 +
-+MetalPresenter::~MetalPresenter() = default;
++MetalPresenter::~MetalPresenter() {
++  std::lock_guard<std::mutex> lock(presented_handler_target_->mutex);
++  presented_handler_target_->presenter = nullptr;
++}
 +
 +bool MetalPresenter::InitializeSurfaceIndependent() {
 +  NSError* error = nil;
@@ -9517,6 +9959,22 @@ index 0000000..32d3696
 +      ExecuteUIDrawersFromUIThread(ui_draw_context);
 +    }
 +    [encoder endEncoding];
++    // When the frame reaches the display, its refresh times the guest's vblanks
++    // (vsync_follow_display). presentedTime is in CACurrentMediaTime seconds,
++    // which count mach_absolute_time like the host clock. A drawable that was
++    // never shown has 0.
++    std::shared_ptr<PresentedHandlerTarget> handler_target = presented_handler_target_;
++    [drawable addPresentedHandler:^(id<MTLDrawable> presented) {
++      CFTimeInterval presented_time = presented.presentedTime;
++      if (presented_time <= 0.0) {
++        return;
++      }
++      std::lock_guard<std::mutex> lock(handler_target->mutex);
++      if (handler_target->presenter) {
++        handler_target->presenter->ReportDisplayRefresh(uint64_t(
++            presented_time * double(chrono::Clock::QueryHostTickFrequency())));
++      }
++    }];
 +    [command_buffer presentDrawable:drawable];
 +    [command_buffer commit];
 +    return PaintResult::kPresented;
@@ -25182,7 +25640,7 @@ index 3ea3535..edb6ec4 100644
      nop/nop_input_driver.cpp
  )
 diff --git a/src/input/input_system.cpp b/src/input/input_system.cpp
-index c9f7ed6..6431a26 100644
+index c9f7ed6..3147845 100644
 --- a/src/input/input_system.cpp
 +++ b/src/input/input_system.cpp
 @@ -20,6 +20,7 @@
@@ -25213,7 +25671,7 @@ index c9f7ed6..6431a26 100644
      active_devices_.Observe(user_index, id, state.gamepad);
      if (!any) {
        merged = state;
-@@ -255,6 +262,7 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
+@@ -255,17 +262,52 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
    if (user_index < kMaxGuestUsers) {
      active_kind_[user_index].store(static_cast<uint8_t>(KindOf(active_devices_.Active(user_index))),
                                     std::memory_order_relaxed);
@@ -25221,10 +25679,22 @@ index c9f7ed6..6431a26 100644
    }
  
    if (!any) {
-@@ -266,6 +274,32 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
+     return X_ERROR_DEVICE_NOT_CONNECTED;
+   }
++  if (state_filter_) {
++    state_filter_(user_index, merged);
++  }
+   if (out_state) {
+     *out_state = merged;
+   }
    return X_ERROR_SUCCESS;
  }
  
++void InputSystem::SetStateFilter(StateFilter filter) {
++  std::lock_guard<std::mutex> lock(g_devices_mutex);
++  state_filter_ = std::move(filter);
++}
++
 +bool InputSystem::TakeMouseLook(uint32_t user_index, InputDriver::MouseLook& look) {
 +  std::lock_guard<std::mutex> lock(g_devices_mutex);
 +  if (!assignment_) {
@@ -25254,7 +25724,7 @@ index c9f7ed6..6431a26 100644
  ActiveDeviceKind InputSystem::KindOf(DeviceId id) const {
    const DeviceInfo* info = DeviceInfoFor(id);
    if (!info) {
-@@ -298,6 +332,14 @@ X_RESULT InputSystem::SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration
+@@ -298,6 +340,14 @@ X_RESULT InputSystem::SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration
    std::vector<DeviceId> ids;
    assignment_->DevicesForUser(user_index, ids);
  
@@ -25879,10 +26349,10 @@ index 82a252c..3dcec80 100644
    if (event.gbutton.down) {
      if (xbutton == X_INPUT_GAMEPAD_GUIDE && !REXCVAR_GET(guide_button)) {
 diff --git a/src/kernel/xam/apps/xgi_app.cpp b/src/kernel/xam/apps/xgi_app.cpp
-index 2b222da..fdbee90 100644
+index 2b222da..abfd16d 100644
 --- a/src/kernel/xam/apps/xgi_app.cpp
 +++ b/src/kernel/xam/apps/xgi_app.cpp
-@@ -10,6 +10,18 @@
+@@ -10,7 +10,21 @@
   */
  
  #include <rex/kernel/xam/apps/xgi_app.h>
@@ -25890,6 +26360,7 @@ index 2b222da..fdbee90 100644
 +#include <algorithm>
 +#include <array>
 +#include <cstring>
++#include <thread>
 +#include <random>
 +#include <string>
 +
@@ -25899,9 +26370,11 @@ index 2b222da..fdbee90 100644
 +#include <rex/system/xam/alboria.h>
 +#include <rex/system/xam/system_link.h>
  #include <rex/logging.h>
++#include <rex/string/utf8.h>
  #include <rex/thread.h>
  
-@@ -23,6 +35,28 @@ using namespace rex::system;
+ namespace rex {
+@@ -23,6 +37,30 @@ using namespace rex::system;
  
  XgiApp::XgiApp(KernelState* kernel_state) : App(kernel_state, 0xFB) {}
  
@@ -25914,6 +26387,8 @@ index 2b222da..fdbee90 100644
 +constexpr uint32_t kXSessionCreateUsesMatchmaking = 0x00000008;
 +constexpr uint32_t kXSessionCreateUsesArbitration = 0x00000010;
 +constexpr uint32_t kXSessionCreateUsesPeerNetwork = 0x00000020;
++// Players cannot join through the host's presence, only by invite: an Invite only party.
++constexpr uint32_t kXSessionCreateJoinViaPresenceDisabled = 0x00000200;
 +// A System Link session uses the peer network and none of the Xbox Live services.
 +constexpr uint32_t kXSessionCreateLiveServices = kXSessionCreateUsesPresence |
 +                                                 kXSessionCreateUsesStats |
@@ -25930,7 +26405,7 @@ index 2b222da..fdbee90 100644
  // http://mb.mirage.org/bugzilla/xliveless/main.c
  
  X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
-@@ -83,9 +117,14 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -83,9 +121,14 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
          }
          auto* base = memory_->TranslateVirtual(achievements_ptr);
          for (uint32_t i = 0; i < achievement_count; ++i) {
@@ -25947,7 +26422,7 @@ index 2b222da..fdbee90 100644
          }
        } else {
          REXKRNL_INFO("XGIUserWriteAchievements: skipped (count={} ptr={:08X})", achievement_count,
-@@ -113,6 +152,81 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -113,6 +156,93 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
            "{:08X})",
            session_ptr, flags, num_slots_public, num_slots_private, user_xuid, session_info_ptr,
            nonce_ptr);
@@ -25956,8 +26431,9 @@ index 2b222da..fdbee90 100644
 +      const bool system_link_session = (flags & kXSessionCreateUsesPeerNetwork) &&
 +                                       !(flags & kXSessionCreateLiveServices);
 +      // An Xbox Live session while signed in to Live through Alboria (alboria_live): it is played in
-+      // an Alboria room, which a hosted one creates (Joinable with public slots, Invite only with
-+      // private ones only), and handled as a System Link session in that room. The host's
++      // an Alboria room, which a hosted one creates, and handled as a System Link session in that
++      // room. The room's party type follows the session's flags: Invite only when joining through
++      // presence is disabled, Joinable otherwise (XSessionModify changes it later). The host's
 +      // XSESSION_INFO goes to Alboria, so that who joins by code gets it as an accepted invite.
 +      const bool live_session = alboria::LiveSignedIn() && (flags & kXSessionCreateUsesPeerNetwork) &&
 +                                (flags & kXSessionCreateLiveServices);
@@ -25965,11 +26441,15 @@ index 2b222da..fdbee90 100644
 +        auto info = memory_->TranslateVirtual(session_info_ptr);
 +        SystemLinkSession session;
 +        session.hosting = flags & kXSessionCreateHost;
++        session.live = true;
 +        if (session.hosting) {
++          const auto party_type = (flags & kXSessionCreateJoinViaPresenceDisabled) ? alboria::PartyType::kInviteOnly
++                                                                                   : alboria::PartyType::kJoinable;
 +          if (!alboria::InRoom()) {
 +            alboria::HostGame(kernel_state_->title_id(), std::clamp<int>(num_slots_public + num_slots_private, 2, 10),
-+                              num_slots_public == 0 && num_slots_private > 0 ? alboria::PartyType::kInviteOnly
-+                                                                             : alboria::PartyType::kJoinable);
++                              party_type);
++          } else {
++            alboria::SetPartyType(party_type);
 +          }
 +          std::random_device random;
 +          session.kid = MakeOnlinePeerKid(random);
@@ -25981,6 +26461,13 @@ index 2b222da..fdbee90 100644
 +          alboria::SessionInfo published;
 +          std::memcpy(published.data(), info, published.size());
 +          alboria::PublishSession(published);
++          // A public match (statistics, no presence: what the title hosts when matchmaking finds
++          // nobody) is open to Alboria's matchmaking, which sends the next searchers into it.
++          if ((flags & kXSessionCreateUsesStats) && !(flags & kXSessionCreateUsesPresence)) {
++            session.match = true;
++            session.capacity = static_cast<int>(num_slots_public + num_slots_private);
++            alboria::OpenMatch(session.capacity, false, published);
++          }
 +        } else {
 +          std::memcpy(session.kid.data(), info + kSessionInfoKidOffset, session.kid.size());
 +          std::memcpy(session.host.data(), info + kSessionInfoHostOffset, session.host.size());
@@ -26029,15 +26516,149 @@ index 2b222da..fdbee90 100644
        return X_E_SUCCESS;
      }
      case 0x000B0011: {
-@@ -123,6 +237,7 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -123,6 +253,13 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
        uint64_t session_nonce = memory::load_and_swap<uint64_t>(buffer + 8);
  
        REXKRNL_DEBUG("XGISessionDelete({:08X}, {:08X}, {:016X})", obj_ptr, flags, session_nonce);
++      const auto session = FindSession(obj_ptr);
++      if (session && session->match && session->hosting) alboria::CloseMatch();
 +      RemoveSession(obj_ptr);
++      // The match played through matchmaking ends for this installation once the title holds it in
++      // no session object any more (joining it, the title makes and deletes more than one): its
++      // party leaves the match's room (section 4.9).
++      if (session && session->live && !HasSessionWithKid(session->kid)) alboria::MatchSessionDeleted(session->kid);
  
        return X_E_SUCCESS;
      }
-@@ -288,6 +403,34 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -148,6 +285,10 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+       uint64_t session_nonce = memory::load_and_swap<uint64_t>(buffer + 8);
+ 
+       REXKRNL_DEBUG("XSessionStart({:08X}, {:08X}, {:016X})", obj_ptr, flags, session_nonce);
++      // The hosted match is being played: searchers still join it, in a bot's place.
++      if (const auto session = FindSession(obj_ptr); session && session->match && session->hosting) {
++        alboria::OpenMatch(session->capacity, true);
++      }
+ 
+       return X_STATUS_SUCCESS;
+     }
+@@ -179,6 +320,67 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+       REXKRNL_DEBUG("XSessionSearch({}, {}, {}, {}, {}, {:08X}, {:08X}, {}, {:08X})", proc_index,
+                     user_index, num_results, num_props, num_ctx, props_ptr, ctx_ptr,
+                     results_buffer_size, search_results_ptr);
++      // Matchmaking through Alboria (alboria::Matchmake): the search is answered when Alboria
++      // decides, on a worker, while the title waits on its overlapped (searching). Its mode is the
++      // search's query and contexts (XUSER_CONTEXT: ID, value); the properties (skill, level)
++      // differ between players and are left out. The answer: the match Alboria sent this player
++      // into (one XSESSION_SEARCHRESULT with its host's session), or none, so the title hosts.
++      // The result carries one property, an owner's gamertag (0x40008109, a string), "Alboria":
++      // Gears of War 3 takes it as the match's owner and drops a result without one (**verified**
++      // in its code: the property is read at 0x82985668, the empty owner dropped at 0x829844B0).
++      // The rest of what it checks (nonce, owner's ID, build) comes from the host's QoS data.
++      const uint32_t overlapped = CurrentRequestOverlapped();
++      constexpr uint32_t kHeaderSize = 8;
++      constexpr uint32_t kResultSize = 92;
++      constexpr uint32_t kPropertySize = 24;
++      constexpr uint32_t kMaxNameChars = 16;  // 15 and the terminator
++      constexpr uint32_t kNeeded = kHeaderSize + kResultSize + kPropertySize + kMaxNameChars * 2;
++      if (alboria::LiveSignedIn() && overlapped && search_results_ptr && results_buffer_size >= kNeeded) {
++        std::string mode = fmt::format("q{}", proc_index);
++        for (uint32_t i = 0; ctx_ptr && i < num_ctx; ++i) {
++          auto context = memory_->TranslateVirtual(ctx_ptr + i * 8);
++          mode += fmt::format(":{:X}={:X}", memory::load_and_swap<uint32_t>(context),
++                              memory::load_and_swap<uint32_t>(context + 4));
++        }
++        alboria::SetSearchRequest(overlapped);
++        std::thread([this, mode, overlapped, search_results_ptr] {
++          const alboria::MatchFound found = alboria::Matchmake(mode);
++          alboria::SetSearchRequest(0);
++          auto* results = memory_->TranslateVirtual(search_results_ptr);
++          std::memset(results, 0, kHeaderSize);
++          if (found.outcome == alboria::MatchOutcome::kJoin) {
++            std::memset(results + kHeaderSize, 0, kResultSize);
++            memory::store_and_swap<uint32_t>(results + 0, 1);
++            memory::store_and_swap<uint32_t>(results + 4, search_results_ptr + kHeaderSize);
++            uint8_t* result = results + kHeaderSize;
++            std::memcpy(result, found.session.data(), found.session.size());
++            memory::store_and_swap<uint32_t>(result + 60, 9);  // open public slots
++            memory::store_and_swap<uint32_t>(result + 68, 1);  // filled public slots
++            // The owner's name: an XUSER_PROPERTY (ID, then XUSER_DATA: type, and the string's
++            // size in bytes and address at +16), with the UTF-16 big-endian text after it.
++            constexpr uint32_t kPropertyGamertag = 0x40008109;
++            constexpr uint8_t kXUserDataTypeUnicode = 4;
++            const uint32_t property_ptr = search_results_ptr + kHeaderSize + kResultSize;
++            const uint32_t text_ptr = property_ptr + kPropertySize;
++            uint8_t* property = memory_->TranslateVirtual(property_ptr);
++            std::memset(property, 0, kPropertySize + kMaxNameChars * 2);
++            // Never the host's own name (alboria-notes:alboria-server/online-rules.md).
++            const std::u16string name = u"Alboria";
++            const uint32_t chars = std::min<uint32_t>(static_cast<uint32_t>(name.size()), kMaxNameChars - 1);
++            for (uint32_t i = 0; i < chars; ++i) {
++              memory::store_and_swap<uint16_t>(memory_->TranslateVirtual(text_ptr + i * 2), name[i]);
++            }
++            memory::store_and_swap<uint32_t>(property + 0, kPropertyGamertag);
++            property[8] = kXUserDataTypeUnicode;
++            memory::store_and_swap<uint32_t>(property + 16, (chars + 1) * 2);
++            memory::store_and_swap<uint32_t>(property + 20, text_ptr);
++            memory::store_and_swap<uint32_t>(result + 76, 1);  // properties
++            memory::store_and_swap<uint32_t>(result + 84, property_ptr);
++          }
++          kernel_state_->CompleteOverlappedEx(overlapped, X_ERROR_SUCCESS, 0, 0);
++        }).detach();
++        return X_ERROR_IO_PENDING;
++      }
+       return X_E_SUCCESS;
+     }
+     case 0x000B0018: {
+@@ -191,6 +393,21 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+ 
+       REXKRNL_DEBUG("XSessionModify({:08X}, {:08X}, {:08X}, {:08X})", obj_ptr, flags,
+                     maxPublicSlots, maxPrivateSlots);
++      // The host of a Live party on Alboria changes who may join (Joinable or Invite only): the room
++      // follows, and Alboria tells its members and the host's friends.
++      if (const auto session = FindSession(obj_ptr); session && session->live && session->hosting) {
++        REXKRNL_INFO("Alboria: Live session {:08X} modified (flags {:08X})", obj_ptr, flags);
++        if (session->match) {
++          // The match's size changed (the title shrinks it to its party, then opens places).
++          auto updated = *session;
++          updated.capacity = static_cast<int>(maxPublicSlots + maxPrivateSlots);
++          AddSession(obj_ptr, updated);
++          alboria::OpenMatch(updated.capacity);
++        } else {
++          alboria::SetPartyType((flags & kXSessionCreateJoinViaPresenceDisabled) ? alboria::PartyType::kInviteOnly
++                                                                                : alboria::PartyType::kJoinable);
++        }
++      }
+ 
+       return X_E_SUCCESS;
+     }
+@@ -243,7 +460,25 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+ 
+       REXKRNL_DEBUG("XSessionMigrateHost({:08X}, {:08X}, {}, {}, {}, {})", obj_ptr,
+                     session_info_ptr, user_index, reserved1, reserved2, reserved3);
+-
++      // Research (host migration): the new host (a user index) gets the session's XSESSION_INFO
++      // with its own address and hosts it from now on; the others (XUSER_INDEX_NONE, 254) pass the
++      // new host's, which their copy of the session takes. The session ID and key stay.
++      constexpr uint32_t kUserIndexNone = 254;
++      if (auto session = FindSession(obj_ptr); session && session_info_ptr) {
++        auto info = memory_->TranslateVirtual(session_info_ptr);
++        if (user_index != kUserIndexNone) {
++          session->hosting = true;
++          session->host = MakeXnAddr(LinkAddress(), kernel_state_->player_identity().machine_id);
++          std::memcpy(info + kSessionInfoKidOffset, session->kid.data(), session->kid.size());
++          std::memcpy(info + kSessionInfoHostOffset, session->host.data(), session->host.size());
++          std::memcpy(info + kSessionInfoKeyOffset, session->key.data(), session->key.size());
++          REXKRNL_INFO("Alboria: hosting the migrated session {:08X}", obj_ptr);
++        } else {
++          std::memcpy(session->host.data(), info + kSessionInfoHostOffset, session->host.size());
++          REXKRNL_INFO("Alboria: the session {:08X} migrated to a new host", obj_ptr);
++        }
++        AddSession(obj_ptr, *session);
++      }
+       return X_E_SUCCESS;
+     }
+     case 0x000B0019: {
+@@ -288,6 +523,37 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
        REXKRNL_DEBUG("XSessionSearchByID({}, {:08X}, {:08X}, {:08X}, {:08X}, {}, {}, {})",
                      user_index, num_session_ids, session_ids_ptr, results_buffer_size,
                      search_results_ptr, reserved1, reserved2, reserved3);
@@ -26050,7 +26671,10 @@ index 2b222da..fdbee90 100644
 +      if (alboria::LiveSignedIn() && search_results_ptr) {
 +        std::array<uint8_t, 8> kid;
 +        std::memcpy(kid.data(), buffer + 4, kid.size());
-+        const auto session = alboria::KnownSession(kid);
++        // A friend's stand-in session ID (from their presence): their room is joined now, and its
++        // host's session is the result.
++        const auto friend_id = alboria::FriendOfSessionKid(kid);
++        const auto session = friend_id ? alboria::JoinFriendSession(*friend_id) : alboria::KnownSession(kid);
 +        auto* results = memory_->TranslateVirtual(search_results_ptr);
 +        constexpr uint32_t kHeaderSize = 8;
 +        constexpr uint32_t kResultSize = 92;
@@ -26072,25 +26696,170 @@ index 2b222da..fdbee90 100644
  
        return X_E_SUCCESS;
      }
+@@ -329,7 +595,30 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+ 
+       REXKRNL_DEBUG("XUserReadStats({}, {}, {:08X}, {}, {:08X}, {}, {:08X})", title_id, xuids_count,
+                     xuids_ptr, specs_count, specs_ptr, results_size, results_ptr);
+-
++      // Each spec (XUSER_STATS_SPEC): its view, its number of columns, then the column IDs (16 bits).
++      for (uint32_t i = 0; specs_ptr && i < specs_count; ++i) {
++        auto spec = memory_->TranslateVirtual(specs_ptr + i * 136);
++        const uint32_t view = memory::load_and_swap<uint32_t>(spec);
++        const uint32_t columns = memory::load_and_swap<uint32_t>(spec + 4);
++        std::string ids;
++        for (uint32_t c = 0; c < columns && c < 64; ++c) {
++          ids += fmt::format(" {}", memory::load_and_swap<uint16_t>(spec + 8 + c * 2));
++        }
++        REXKRNL_DEBUG("XUserReadStats spec {}: view {}, {} column(s):{}", i, view, columns, ids);
++      }
++      // No leaderboards yet: an answer the title can read, each view it asked for with no rows (a
++      // player with no stats). XUSER_STATS_READ_RESULTS: the number of views and a pointer to them,
++      // then the views (XUSER_STATS_VIEW: ID, total rows, rows, pointer to the rows).
++      if (results_ptr && results_size >= 8 + specs_count * 16) {
++        auto results = memory_->TranslateVirtual(results_ptr);
++        std::memset(results, 0, results_size);
++        memory::store_and_swap<uint32_t>(results + 0, specs_count);
++        memory::store_and_swap<uint32_t>(results + 4, specs_count ? results_ptr + 8 : 0);
++        for (uint32_t i = 0; i < specs_count; ++i) {
++          auto spec = memory_->TranslateVirtual(specs_ptr + i * 136);
++          memory::store_and_swap<uint32_t>(results + 8 + i * 16, memory::load_and_swap<uint32_t>(spec));
++        }
++      }
+       return X_E_SUCCESS;
+     }
+     case 0x000B0025: {
 diff --git a/src/kernel/xam/apps/xlivebase_app.cpp b/src/kernel/xam/apps/xlivebase_app.cpp
-index 3593403..2091df0 100644
+index 3593403..c5786f5 100644
 --- a/src/kernel/xam/apps/xlivebase_app.cpp
 +++ b/src/kernel/xam/apps/xlivebase_app.cpp
-@@ -10,7 +10,12 @@
+@@ -10,7 +10,15 @@
   */
  
  #include <rex/kernel/xam/apps/xlivebase_app.h>
++#include <algorithm>
++#include <cstring>
 +#include <string>
 +
 +#include <fmt/format.h>
  #include <rex/logging.h>
 +#include <rex/system/kernel_state.h>
 +#include <rex/system/xam/alboria.h>
++#include <rex/system/xenumerator.h>
  #include <rex/thread.h>
  
  namespace rex {
-@@ -60,11 +65,39 @@ X_HRESULT XLiveBaseApp::DispatchMessageSync(uint32_t message, uint32_t buffer_pt
-       return X_E_FAIL;
+@@ -23,6 +31,66 @@ using namespace rex::system;
+ 
+ XLiveBaseApp::XLiveBaseApp(KernelState* kernel_state) : App(kernel_state, 0xFC) {}
+ 
++namespace {
++
++// XONLINE_FRIEND: XUID (8), gamertag (16 chars), friend state (4), session ID (8), title ID (4),
++// user time (8), invite session ID (8), invite time (8), rich presence length (4) and text (64
++// UTF-16 chars).
++constexpr uint32_t kOnlineFriendSize = 196;
++// XONLINE_FRIENDSTATE flags: online, playing a title, and in a session friends may join.
++constexpr uint32_t kFriendStateOnline = 0x00000001;
++constexpr uint32_t kFriendStatePlaying = 0x00000002;
++constexpr uint32_t kFriendStateJoinable = 0x00000010;
++
++// XONLINE_PRESENCE: XUID (8), state (4), session ID (8), title ID (4), user time (8), rich presence
++// length (4) and text (64 UTF-16 chars). The state takes the XONLINE_FRIENDSTATE flags.
++constexpr uint32_t kOnlinePresenceSize = 164;
++
++// The friend state flags of `f` (XONLINE_FRIENDSTATE).
++uint32_t FriendState(const rex::system::xam::alboria::Friend& f) {
++  uint32_t state = 0;
++  if (f.online) state |= kFriendStateOnline;
++  if (f.playing) state |= kFriendStatePlaying;
++  if (f.joinable) state |= kFriendStateJoinable;
++  return state;
++}
++
++// Writes the presence of the player with `xuid` as an XONLINE_PRESENCE (big-endian) at `item`: the
++// Alboria friend's when `xuid` is one (alboria::FriendXuid), offline otherwise.
++void WriteOnlinePresence(uint8_t* item, uint64_t xuid,
++                         const std::vector<rex::system::xam::alboria::Friend>& friends) {
++  namespace alboria = rex::system::xam::alboria;
++  std::memset(item, 0, kOnlinePresenceSize);
++  memory::store_and_swap<uint64_t>(item + 0, xuid);
++  for (const auto& f : friends) {
++    if (alboria::FriendXuid(f.id) != xuid) continue;
++    memory::store_and_swap<uint32_t>(item + 8, FriendState(f));
++    if (f.joinable) {
++      const auto kid = alboria::FriendSessionKid(f.id);
++      std::memcpy(item + 12, kid.data(), kid.size());
++    }
++    memory::store_and_swap<uint32_t>(item + 20, f.title_id);
++    break;
++  }
++}
++
++// Writes `f` as an XONLINE_FRIEND (big-endian) at `item`.
++void WriteOnlineFriend(uint8_t* item, const rex::system::xam::alboria::Friend& f) {
++  namespace alboria = rex::system::xam::alboria;
++  std::memset(item, 0, kOnlineFriendSize);
++  memory::store_and_swap<uint64_t>(item + 0, alboria::FriendXuid(f.id));
++  std::memcpy(item + 8, f.gamertag.data(), std::min<size_t>(f.gamertag.size(), 15));
++  memory::store_and_swap<uint32_t>(item + 24, FriendState(f));
++  // A Joinable room's stand-in session ID, which XSessionSearchByID turns into the room's session.
++  if (f.joinable) {
++    const auto kid = alboria::FriendSessionKid(f.id);
++    std::memcpy(item + 28, kid.data(), kid.size());
++  }
++  memory::store_and_swap<uint32_t>(item + 36, f.title_id);
++}
++
++}  // namespace
++
+ // http://mb.mirage.org/bugzilla/xliveless/main.c
+ 
+ X_HRESULT XLiveBaseApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -51,20 +119,152 @@ X_HRESULT XLiveBaseApp::DispatchMessageSync(uint32_t message, uint32_t buffer_pt
+       return 0x80151802;  // ERROR_CONNECTION_INVALID
+     }
+     case 0x00058020: {
+-      // 0x00058004 is called right before this.
+-      // We should create a XamEnumerate-able empty list here, but I'm not
+-      // sure of the format.
+-      // buffer_length seems to be the same ptr sent to 0x00058004.
+-      REXKRNL_DEBUG("CXLiveFriends::Enumerate({:08X}, {:08X}) unimplemented", buffer_ptr,
+-                    buffer_length);
+-      return X_E_FAIL;
++      // XFriendsCreateEnumerator(user index, starting index, friends to return, &buffer size,
++      // &handle). The message's second argument is its parameter list, 16 bytes per parameter
++      // ({4, padding, an 8-byte address}), each the address of the value (**verified** in Gears of
++      // War 3's wrapper at 0x82B0B5D8, which Unreal Engine 3's friends reader calls with 100).
++      // Signed in to Live through Alboria (alboria_live), the enumerator holds the account's
++      // Alboria friends as XONLINE_FRIEND items; otherwise the title has no friends.
++      namespace alboria = rex::system::xam::alboria;
++      constexpr uint32_t kParameterSize = 16;
++      const uint32_t parameters = buffer_length;
++      if (!parameters) return X_E_FAIL;
++      auto parameter = [&](uint32_t index) {
++        return uint32_t(memory::load_and_swap<uint64_t>(memory_->TranslateVirtual(parameters) +
++                                                        index * kParameterSize + 8));
++      };
++      const uint32_t user_index = memory::load_and_swap<uint32_t>(memory_->TranslateVirtual(parameter(0)));
++      const uint32_t starting_index = memory::load_and_swap<uint32_t>(memory_->TranslateVirtual(parameter(1)));
++      const uint32_t count = memory::load_and_swap<uint32_t>(memory_->TranslateVirtual(parameter(2)));
++      const uint32_t buffer_size_ptr = parameter(3);
++      const uint32_t handle_ptr = parameter(4);
++      if (!buffer_size_ptr || !handle_ptr || !count || count > 100) return X_E_INVALIDARG;
++      if (user_index != 0 || !alboria::LiveSignedIn()) return X_E_FAIL;
++
++      auto e = make_object<XStaticUntypedEnumerator>(kernel_state_, count, kOnlineFriendSize);
++      const auto result = e->Initialize(user_index, app_id(), 0x00058020, 0, 0);
++      if (XFAILED(result)) return result;
++      const auto friends = alboria::Friends();
++      for (size_t i = starting_index; i < friends.size() && i < size_t(starting_index) + count; ++i) {
++        WriteOnlineFriend(e->AppendItem(), friends[i]);
++      }
++      memory::store_and_swap<uint32_t>(memory_->TranslateVirtual(buffer_size_ptr), count * kOnlineFriendSize);
++      memory::store_and_swap<uint32_t>(memory_->TranslateVirtual(handle_ptr), e->handle());
++      REXKRNL_INFO("XFriendsCreateEnumerator(user {}, from {}, {}): {} Alboria friends", user_index,
++                   starting_index, count, e->item_count());
++      return X_E_SUCCESS;
      }
      case 0x00058023: {
 -      REXKRNL_DEBUG(
@@ -26126,6 +26895,83 @@ index 3593403..2091df0 100644
 +      alboria::ClearAcceptedInvite();
 +      return X_E_SUCCESS;
 +    }
++    case 0x0005801E: {
++      // XPresenceSubscribe(user index, count, XUIDs), asked by Unreal Engine 3 titles for the
++      // friends they just enumerated (**verified** in Gears of War 3's wrapper at 0x82B0BE10).
++      // Alboria's friends list carries the presence, read again every few seconds: nothing to do.
++      REXKRNL_DEBUG("XPresenceSubscribe({:08X}, {:08X})", buffer_ptr, buffer_length);
++      return X_E_SUCCESS;
++    }
++    case 0x00058019: {
++      // XPresenceCreateEnumerator(user index, count, XUIDs, starting index, peers to return,
++      // &buffer size, &handle): the parameter list as for 0x58020, each the address of the value
++      // except the XUIDs', which is the array itself (**verified** in Gears of War 3's wrapper at
++      // 0x82B0BB58). Signed in to Live through Alboria, an XONLINE_PRESENCE item for each XUID asked,
++      // from the Alboria friends list.
++      namespace alboria = rex::system::xam::alboria;
++      constexpr uint32_t kParameterSize = 16;
++      const uint32_t parameters = buffer_length;
++      if (!parameters) return X_E_FAIL;
++      auto parameter = [&](uint32_t index) {
++        return uint32_t(memory::load_and_swap<uint64_t>(memory_->TranslateVirtual(parameters) +
++                                                        index * kParameterSize + 8));
++      };
++      auto value = [&](uint32_t index) { return memory::load_and_swap<uint32_t>(memory_->TranslateVirtual(parameter(index))); };
++      const uint32_t user_index = value(0);
++      const uint32_t peer_count = value(1);
++      const uint32_t xuids_ptr = parameter(2);
++      const uint32_t starting_index = value(3);
++      const uint32_t count = value(4);
++      const uint32_t buffer_size_ptr = parameter(5);
++      const uint32_t handle_ptr = parameter(6);
++      if (!buffer_size_ptr || !handle_ptr || !count || count > 100 || (peer_count && !xuids_ptr)) {
++        return X_E_INVALIDARG;
++      }
++      if (user_index != 0 || !alboria::LiveSignedIn()) return X_E_FAIL;
++
++      auto e = make_object<XStaticUntypedEnumerator>(kernel_state_, count, kOnlinePresenceSize);
++      const auto result = e->Initialize(user_index, app_id(), 0x00058019, 0, 0);
++      if (XFAILED(result)) return result;
++      const auto friends = alboria::Friends();
++      const auto* xuids = memory_->TranslateVirtual(xuids_ptr);
++      for (uint32_t i = starting_index; i < peer_count && i < starting_index + count; ++i) {
++        WriteOnlinePresence(e->AppendItem(), memory::load_and_swap<uint64_t>(xuids + i * 8), friends);
++      }
++      memory::store_and_swap<uint32_t>(memory_->TranslateVirtual(buffer_size_ptr), count * kOnlinePresenceSize);
++      memory::store_and_swap<uint32_t>(memory_->TranslateVirtual(handle_ptr), e->handle());
++      REXKRNL_INFO("XPresenceCreateEnumerator(user {}, {} players, from {}, {}): {} items", user_index,
++                   peer_count, starting_index, count, e->item_count());
++      return X_E_SUCCESS;
++    }
++    case 0x00050002: {
++      // XInviteSend(user index, invitee count, invitee XUIDs, text, ...), from Unreal Engine 3's
++      // SendGameInviteToFriend (Gears of War 3's Invite in Manage/Invite). The 40-byte message only
++      // names the request; the wrapper (0x82B0C748) builds its parameter list 48 bytes above it in
++      // the same frame, 16 bytes per parameter ({4, padding, the value's address}) (**verified** on
++      // 1 November 2026: the second points to the count, the third to the XUIDs). Signed in to Live
++      // through Alboria, each invitee who is an Alboria friend gets an Alboria invitation to the
++      // room.
++      namespace alboria = rex::system::xam::alboria;
++      constexpr uint32_t kParameterSize = 16;
++      constexpr uint32_t kParametersAbove = 0x30;
++      if (!alboria::LiveSignedIn() || !buffer_ptr) return X_E_SUCCESS;
++      const auto* list = memory_->TranslateVirtual(buffer_ptr + kParametersAbove);
++      auto address = [&](uint32_t index) {
++        return uint32_t(memory::load_and_swap<uint64_t>(list + index * kParameterSize + 8));
++      };
++      if (memory::load_and_swap<uint32_t>(list + 1 * kParameterSize) != 4 || !address(1) || !address(2)) {
++        REXKRNL_WARN("XInviteSend: no parameter list where expected");
++        return X_E_SUCCESS;
++      }
++      const uint32_t count = memory::load_and_swap<uint32_t>(memory_->TranslateVirtual(address(1)));
++      const auto* xuids = memory_->TranslateVirtual(address(2));
++      for (uint32_t i = 0; i < std::min<uint32_t>(count, 100); ++i) {
++        if (const auto id = alboria::FriendOfXuid(memory::load_and_swap<uint64_t>(xuids + i * 8))) {
++          alboria::InviteFriend(*id);
++        }
++      }
++      return X_E_SUCCESS;
++    }
 +    case 0x0005800E: {
 +      // Asked by Gears of War 3 with Xbox Live parties on Alboria, around joining a party. Believed
 +      // to be XUserMuteListQuery (not verified): success with nothing written, so nobody is muted.
@@ -26134,6 +26980,31 @@ index 3593403..2091df0 100644
      }
      case 0x00058046: {
        // Required to be successful for 4D530910 to detect signed-in profile
+@@ -73,6 +273,24 @@ X_HRESULT XLiveBaseApp::DispatchMessageSync(uint32_t message, uint32_t buffer_pt
+       REXKRNL_DEBUG("XLiveBaseUnk58046({:08X}, {:08X}) unimplemented", buffer_ptr, buffer_length);
+       return X_E_SUCCESS;
+     }
++    case 0x00058009: {
++      // Asked by Gears of War 3 right after it creates an Xbox Live party (alboria_live), through
++      // XMsgStartIORequest: a wrapper (0x82B0E0F0) that needs player 1 signed in to Live and a
++      // result of at least 8 bytes, which it zeroes, and passes the user index, two values and the
++      // result's address. Its shape matches XContentGetMarketplaceCounts (new and total offers;
++      // not verified). There is no Marketplace behind Alboria: success, with the counts left at 0.
++      REXKRNL_DEBUG("XLiveBase 00058009({:08X}, {:08X}): no Marketplace offers", buffer_ptr, buffer_length);
++      return X_E_SUCCESS;
++    }
++    case 0x00058035: {
++      // Asked by Gears of War 3 as it creates an Xbox Live party (alboria_live), through
++      // XMsgInProcessCall with no buffer size, from two wrappers (0x82B0DCD0 and 0x82B0DD68) whose
++      // parameters start with a privilege (254, multiplayer sessions) or 0, and a 64-bit value,
++      // probably a XUID. What it asks is not known; failing it changes nothing the game shows, so
++      // it keeps failing, without the error of an unknown message.
++      REXKRNL_DEBUG("XLiveBase 00058035({:08X}, {:08X}): not known, failed", buffer_ptr, buffer_length);
++      return X_E_FAIL;
++    }
+     case 0x00058037: {
+       REXKRNL_DEBUG("XPresenceInitialize({:08X}, {:08X})", buffer_ptr, buffer_length);
+       return X_E_SUCCESS;
 diff --git a/src/kernel/xam/xam_content.cpp b/src/kernel/xam/xam_content.cpp
 index 72a50cb..2a724c5 100644
 --- a/src/kernel/xam/xam_content.cpp
@@ -26206,6 +27077,34 @@ index 72a50cb..2a724c5 100644
    XCONTENT_AGGREGATE_DATA content_data = *content_data_ptr.as<XCONTENT_DATA*>();
  
    auto result = REX_KERNEL_STATE()->content_manager()->DeleteContent(xuid, content_data);
+diff --git a/src/kernel/xam/xam_info.cpp b/src/kernel/xam/xam_info.cpp
+index 1944372..a524eda 100644
+--- a/src/kernel/xam/xam_info.cpp
++++ b/src/kernel/xam/xam_info.cpp
+@@ -19,6 +19,11 @@
+ #include <rex/system/kernel_state.h>
+ #include <rex/system/user_module.h>
+ #include <rex/system/xenumerator.h>
++#include <rex/cvar.h>
++#include <rex/system/xam/alboria.h>
++
++REXCVAR_DEFINE_UINT32(xam_system_version, 0, "Kernel",
++                      "Research: the system version XamGetSystemVersion answers (0: the oldest)");
+ #include <rex/system/xthread.h>
+ #include <rex/system/xtypes.h>
+ 
+@@ -158,7 +163,10 @@ u32 XamGetSystemVersion_entry() {
+   // we pretend to be old we have less to worry with implementing.
+   // 0x200A3200
+   // 0x20096B00
+-  return 0;
++  // Research (xam_system_version): Gears of War 3 migrates a session's host (XSessionMigrateHost)
++  // only on 0x200CE900 or later, and checks 0x20096B00, 0x200A3200 and 0x200ED800 elsewhere.
++  if (const uint32_t version = rex::system::xam::alboria::SystemVersionOverride()) return version;
++  return REXCVAR_GET(xam_system_version);
+ }
+ 
+ void XCustomRegisterDynamicActions_entry() {
 diff --git a/src/kernel/xam/xam_misc.cpp b/src/kernel/xam/xam_misc.cpp
 index ff6cb56..46f05f5 100644
 --- a/src/kernel/xam/xam_misc.cpp
@@ -26218,8 +27117,51 @@ index ff6cb56..46f05f5 100644
  REX_EXPORT_STUB(__imp__XNetLogonGetTitleVersion);
  REX_EXPORT_STUB(__imp__XNetLogonGetUserPrivileges);
  REX_EXPORT_STUB(__imp__XNetLogonInitOverrideInfo);
+diff --git a/src/kernel/xam/xam_msg.cpp b/src/kernel/xam/xam_msg.cpp
+index 704eb0c..441685a 100644
+--- a/src/kernel/xam/xam_msg.cpp
++++ b/src/kernel/xam/xam_msg.cpp
+@@ -18,6 +18,8 @@
+ #include <rex/hook.h>
+ #include <rex/types.h>
+ #include <rex/system/kernel_state.h>
++#include <rex/system/xam/alboria.h>
++#include <rex/system/xam/app_manager.h>
+ #include <rex/system/xevent.h>
+ #include <rex/system/xio.h>
+ #include <rex/system/xthread.h>
+@@ -54,8 +56,20 @@ struct XMSGSTARTIOREQUEST_UNKNOWNARG {
+ X_HRESULT xeXMsgStartIORequestEx(uint32_t app, uint32_t message, uint32_t overlapped_ptr,
+                                  uint32_t buffer_ptr, uint32_t buffer_length,
+                                  XMSGSTARTIOREQUEST_UNKNOWNARG* unknown) {
++  // Pending before the handler runs: a handler that completes it on a worker (an Alboria
++  // matchmaking search) may finish before it returns, and its result must not be overwritten.
++  if (overlapped_ptr) {
++    XOverlappedSetResult(REX_KERNEL_MEMORY()->TranslateVirtual(overlapped_ptr), X_ERROR_IO_PENDING);
++  }
++  SetCurrentRequestOverlapped(overlapped_ptr);
+   auto result = REX_KERNEL_STATE()->app_manager()->DispatchMessageAsync(app, message, buffer_ptr,
+                                                                         buffer_length);
++  SetCurrentRequestOverlapped(0);
++  // The handler completes it later itself: leave it as it is.
++  if (overlapped_ptr && result == X_ERROR_IO_PENDING) {
++    XThread::SetLastError(0);
++    return X_ERROR_IO_PENDING;
++  }
+   if (result == X_E_NOTFOUND) {
+     REXKRNL_ERROR("XMsgStartIORequestEx: app {:08X} undefined", app);
+     result = X_E_INVALIDARG;
+@@ -85,6 +99,8 @@ u32 XMsgStartIORequest_entry(u32 app, u32 message, ppc_ptr_t<XAM_OVERLAPPED> ove
+ }
+ 
+ u32 XMsgCancelIORequest_entry(ppc_ptr_t<XAM_OVERLAPPED> overlapped_ptr, u32 wait) {
++  // A matchmaking search the title gives up: Alboria stops it, and its worker completes it.
++  rex::system::xam::alboria::CancelSearchRequest(overlapped_ptr.guest_address());
+   X_HANDLE event_handle = XOverlappedGetEvent(overlapped_ptr);
+   if (event_handle && wait) {
+     auto ev = REX_KERNEL_OBJECTS()->LookupObject<XEvent>(event_handle);
 diff --git a/src/kernel/xam/xam_net.cpp b/src/kernel/xam/xam_net.cpp
-index a1a3758..2407293 100644
+index a1a3758..451957b 100644
 --- a/src/kernel/xam/xam_net.cpp
 +++ b/src/kernel/xam/xam_net.cpp
 @@ -12,7 +12,13 @@
@@ -26425,7 +27367,7 @@ index a1a3758..2407293 100644
  }
  
  u32 NetDll_XNetDnsLookup_entry(u32 caller, mapped_string host, u32 event_handle, mapped_u32 pdns) {
-@@ -553,6 +637,63 @@ u32 NetDll_XNetQosServiceLookup_entry(u32 caller, u32 flags, u32 event_handle, m
+@@ -553,6 +637,72 @@ u32 NetDll_XNetQosServiceLookup_entry(u32 caller, u32 flags, u32 event_handle, m
    return 0;
  }
  
@@ -26437,8 +27379,8 @@ index a1a3758..2407293 100644
 +// addresses), before joining a session. With Xbox Live parties on Alboria the consoles are the
 +// room's members, reached through the relay or directly: each one is reported as contacted, with
 +// the latency Alboria measures (or 30 ms before the first measure), and 10 Mbit/s each way, with
-+// the data the host's title listens with (alboria::HostQosData): Gears of War 3 reads the party's
-+// settings from it before joining (**verified** in its code at 0x8297EC18; without data it drops
++// the data the host's title listens with for the session looked up (alboria::HostQosData): Gears of
++// War 3 reads the party's or match's settings from it before joining (**verified** in its code at 0x8297EC18; without data it drops
 +// the session). The data follows the XNQOSINFO array in the same allocation, which XNetQosRelease
 +// frees. Without Alboria, nothing is reached.
 +u32 NetDll_XNetQosLookup_entry(u32 caller, u32 cxna, u32 apxna, u32 apxnkid, u32 apxnkey, u32 cina, u32 aina,
@@ -26447,7 +27389,14 @@ index a1a3758..2407293 100644
 +  const bool reachable = alboria::LiveSignedIn() && alboria::Connected();
 +  const uint32_t count = cxna + cina;
 +  if (pqos) {
-+    const auto host_data = reachable ? alboria::HostQosData() : std::nullopt;
++    // The data of the session the title looks up (the first console's XNKID): a host in a party
++    // that plays a public match listens for both.
++    std::optional<std::span<const uint8_t, 8>> kid;
++    if (cxna && apxnkid) {
++      const uint32_t kid_ptr = memory::load_and_swap<uint32_t>(REX_KERNEL_MEMORY()->TranslateVirtual(apxnkid));
++      if (kid_ptr) kid.emplace(REX_KERNEL_MEMORY()->TranslateVirtual<const uint8_t*>(kid_ptr), 8);
++    }
++    const auto host_data = reachable ? alboria::HostQosData(kid) : std::nullopt;
 +    const uint32_t data_len = host_data ? uint32_t(std::min<size_t>(host_data->size(), 0xFFFF)) : 0;
 +    const uint32_t infos_size = sizeof(XNQOS) + sizeof(XNQOSINFO) * (count ? count - 1 : 0);
 +    const uint32_t size = infos_size + data_len;
@@ -26478,7 +27427,9 @@ index a1a3758..2407293 100644
 +  }
 +  REXKRNL_INFO("XNetQosLookup({} consoles, {} servers): {}{}", cxna, cina,
 +               reachable ? "the room's members are reachable" : "nothing reachable",
-+               reachable && alboria::HostQosData() ? ", with the host's data" : "");
++               pqos && reachable && *pqos && REX_KERNEL_MEMORY()->TranslateVirtual<XNQOS*>(*pqos)->info[0].data_len
++                   ? ", with the host's data"
++                   : "");
 +  if (event_handle) {
 +    auto ev = REX_KERNEL_OBJECTS()->LookupObject<XEvent>(event_handle);
 +    if (ev) ev->Set(0, false);
@@ -26489,7 +27440,7 @@ index a1a3758..2407293 100644
  u32 NetDll_XNetQosRelease_entry(u32 caller, ppc_ptr_t<XNQOS> qos) {
    if (!qos) {
      return X_STATUS_INVALID_PARAMETER;
-@@ -561,9 +702,24 @@ u32 NetDll_XNetQosRelease_entry(u32 caller, ppc_ptr_t<XNQOS> qos) {
+@@ -561,9 +711,26 @@ u32 NetDll_XNetQosRelease_entry(u32 caller, ppc_ptr_t<XNQOS> qos) {
    return 0;
  }
  
@@ -26499,15 +27450,17 @@ index a1a3758..2407293 100644
 +
 +// A host answers quality of service probes for its session. The probes are not emulated: with
 +// System Link, listening only succeeds; with Xbox Live parties on Alboria, the data the title sets
-+// is published with the room (alboria::PublishQosData), for the members' XNetQosLookup.
++// is published with the room for the session it listens for (`id`, its XNKID), for the members'
++// XNetQosLookup (alboria::PublishQosData).
  u32 NetDll_XNetQosListen_entry(u32 caller, mapped_void id, mapped_void data, u32 data_size, u32 r7,
                                 u32 flags) {
 -  return X_ERROR_FUNCTION_FAILED;
 +  if (alboria::LiveSignedIn()) {
 +    REXKRNL_DEBUG("XNetQosListen(flags {:02X}, {} bytes)", flags, data_size);
-+    if ((flags & kQosListenSetData) && data && data_size) {
++    if ((flags & kQosListenSetData) && id && data && data_size) {
 +      const auto* bytes = static_cast<const uint8_t*>(data.host_address());
-+      alboria::PublishQosData(std::vector<uint8_t>(bytes, bytes + data_size));
++      alboria::PublishQosData(std::span<const uint8_t, 8>(static_cast<const uint8_t*>(id.host_address()), 8),
++                              std::vector<uint8_t>(bytes, bytes + data_size));
 +    }
 +    return 0;
 +  }
@@ -26515,7 +27468,7 @@ index a1a3758..2407293 100644
  }
  
  u32 NetDll_inet_addr_entry(mapped_string addr_ptr) {
-@@ -720,7 +876,8 @@ u32 NetDll_listen_entry(u32 caller, u32 socket_handle, i32 backlog) {
+@@ -720,7 +887,8 @@ u32 NetDll_listen_entry(u32 caller, u32 socket_handle, i32 backlog) {
  
  u32 NetDll_accept_entry(u32 caller, u32 socket_handle, ppc_ptr_t<XSOCKADDR> addr_ptr,
                          mapped_u32 addrlen_ptr) {
@@ -26525,7 +27478,7 @@ index a1a3758..2407293 100644
      // WSAEFAULT
      XThread::SetLastError(0x271E);
      return -1;
-@@ -733,13 +890,17 @@ u32 NetDll_accept_entry(u32 caller, u32 socket_handle, ppc_ptr_t<XSOCKADDR> addr
+@@ -733,13 +901,17 @@ u32 NetDll_accept_entry(u32 caller, u32 socket_handle, ppc_ptr_t<XSOCKADDR> addr
      return -1;
    }
  
@@ -26548,7 +27501,7 @@ index a1a3758..2407293 100644
  
      return new_socket->handle();
    } else {
-@@ -787,6 +948,15 @@ struct host_set {
+@@ -787,6 +959,15 @@ struct host_set {
      }
    }
  
@@ -26564,7 +27517,7 @@ index a1a3758..2407293 100644
    void UpdateFrom(fd_set* native_set) {
      uint32_t new_count = 0;
      for (uint32_t i = 0; i < this->count; ++i) {
-@@ -829,8 +999,18 @@ i32 NetDll_select_entry(i32 caller, i32 nfds, ppc_ptr_t<x_fd_set> readfds,
+@@ -829,8 +1010,18 @@ i32 NetDll_select_entry(i32 caller, i32 nfds, ppc_ptr_t<x_fd_set> readfds,
                                               reinterpret_cast<int32_t*>(&timeout.tv_usec));
      timeout_in = &timeout;
    }
@@ -26585,7 +27538,7 @@ index a1a3758..2407293 100644
    if (readfds) {
      host_readfds.UpdateFrom(&native_readfds);
      host_readfds.Store(readfds);
-@@ -848,6 +1028,67 @@ i32 NetDll_select_entry(i32 caller, i32 nfds, ppc_ptr_t<x_fd_set> readfds,
+@@ -848,6 +1039,67 @@ i32 NetDll_select_entry(i32 caller, i32 nfds, ppc_ptr_t<x_fd_set> readfds,
    return ret;
  }
  
@@ -26653,7 +27606,7 @@ index a1a3758..2407293 100644
  u32 NetDll_recv_entry(u32 caller, u32 socket_handle, mapped_void buf_ptr, u32 buf_len, u32 flags) {
    auto socket = REX_KERNEL_OBJECTS()->LookupObject<XSocket>(socket_handle);
    if (!socket) {
-@@ -856,7 +1097,9 @@ u32 NetDll_recv_entry(u32 caller, u32 socket_handle, mapped_void buf_ptr, u32 bu
+@@ -856,7 +1108,9 @@ u32 NetDll_recv_entry(u32 caller, u32 socket_handle, mapped_void buf_ptr, u32 bu
      return -1;
    }
  
@@ -26664,7 +27617,7 @@ index a1a3758..2407293 100644
  }
  
  u32 NetDll_recvfrom_entry(u32 caller, u32 socket_handle, mapped_void buf_ptr, u32 buf_len,
-@@ -907,7 +1150,9 @@ u32 NetDll_send_entry(u32 caller, u32 socket_handle, mapped_void buf_ptr, u32 bu
+@@ -907,7 +1161,9 @@ u32 NetDll_send_entry(u32 caller, u32 socket_handle, mapped_void buf_ptr, u32 bu
      return -1;
    }
  
@@ -26675,7 +27628,7 @@ index a1a3758..2407293 100644
  }
  
  u32 NetDll_sendto_entry(u32 caller, u32 socket_handle, mapped_void buf_ptr, u32 buf_len, u32 flags,
-@@ -923,6 +1168,57 @@ u32 NetDll_sendto_entry(u32 caller, u32 socket_handle, mapped_void buf_ptr, u32
+@@ -923,6 +1179,57 @@ u32 NetDll_sendto_entry(u32 caller, u32 socket_handle, mapped_void buf_ptr, u32
    return socket->SendTo(buf_ptr, buf_len, flags, &native_to, to_len);
  }
  
@@ -26733,7 +27686,7 @@ index a1a3758..2407293 100644
  u32 NetDll___WSAFDIsSet_entry(u32 socket_handle, ppc_ptr_t<x_fd_set> fd_set) {
    const uint8_t max_fd_count = std::min((uint32_t)fd_set->fd_count, uint32_t(64));
    for (uint8_t i = 0; i < max_fd_count; i++) {
-@@ -970,8 +1266,16 @@ REX_EXPORT(__imp__NetDll_XNetGetEthernetLinkStatus,
+@@ -970,8 +1277,16 @@ REX_EXPORT(__imp__NetDll_XNetGetEthernetLinkStatus,
  REX_EXPORT(__imp__NetDll_XNetDnsLookup, rex::kernel::xam::NetDll_XNetDnsLookup_entry)
  REX_EXPORT(__imp__NetDll_XNetDnsRelease, rex::kernel::xam::NetDll_XNetDnsRelease_entry)
  REX_EXPORT(__imp__NetDll_XNetQosServiceLookup, rex::kernel::xam::NetDll_XNetQosServiceLookup_entry)
@@ -26750,7 +27703,7 @@ index a1a3758..2407293 100644
  REX_EXPORT(__imp__NetDll_inet_addr, rex::kernel::xam::NetDll_inet_addr_entry)
  REX_EXPORT(__imp__NetDll_socket, rex::kernel::xam::NetDll_socket_entry)
  REX_EXPORT(__imp__NetDll_closesocket, rex::kernel::xam::NetDll_closesocket_entry)
-@@ -988,6 +1292,8 @@ REX_EXPORT(__imp__NetDll_recvfrom, rex::kernel::xam::NetDll_recvfrom_entry)
+@@ -988,6 +1303,8 @@ REX_EXPORT(__imp__NetDll_recvfrom, rex::kernel::xam::NetDll_recvfrom_entry)
  REX_EXPORT(__imp__NetDll_send, rex::kernel::xam::NetDll_send_entry)
  REX_EXPORT(__imp__NetDll_sendto, rex::kernel::xam::NetDll_sendto_entry)
  REX_EXPORT(__imp__NetDll___WSAFDIsSet, rex::kernel::xam::NetDll___WSAFDIsSet_entry)
@@ -26759,7 +27712,7 @@ index a1a3758..2407293 100644
  REX_EXPORT(__imp__NetDll_WSASetLastError, rex::kernel::xam::NetDll_WSASetLastError_entry)
  
  REX_EXPORT_STUB(__imp__NetDll_UpnpActionCalculateWorkBufferSize);
-@@ -1034,25 +1340,19 @@ REX_EXPORT_STUB(__imp__NetDll_XHttpSetStatusCallback);
+@@ -1034,25 +1351,19 @@ REX_EXPORT_STUB(__imp__NetDll_XHttpSetStatusCallback);
  REX_EXPORT_STUB(__imp__NetDll_XHttpShutdown);
  REX_EXPORT_STUB(__imp__NetDll_XHttpStartup);
  REX_EXPORT_STUB(__imp__NetDll_XHttpWriteData);
@@ -26786,12 +27739,78 @@ index a1a3758..2407293 100644
  REX_EXPORT_STUB(__imp__NetDll_XmlDownloadContinue);
  REX_EXPORT_STUB(__imp__NetDll_XmlDownloadGetParseTime);
  REX_EXPORT_STUB(__imp__NetDll_XmlDownloadGetReceivedDataSize);
-@@ -1102,5 +1402,3 @@ REX_EXPORT_STUB(__imp__NetDll_XnpToolSetCallbacks);
+@@ -1102,5 +1413,3 @@ REX_EXPORT_STUB(__imp__NetDll_XnpToolSetCallbacks);
  REX_EXPORT_STUB(__imp__NetDll_XnpUnregisterKeyForCallerType);
  REX_EXPORT_STUB(__imp__NetDll_XnpUpdateConfigParams);
  REX_EXPORT_STUB(__imp__NetDll_getpeername);
 -REX_EXPORT_STUB(__imp__NetDll_getsockname);
 -REX_EXPORT_STUB(__imp__NetDll_getsockopt);
+diff --git a/src/kernel/xam/xam_ui.cpp b/src/kernel/xam/xam_ui.cpp
+index 5a572ce..605107e 100644
+--- a/src/kernel/xam/xam_ui.cpp
++++ b/src/kernel/xam/xam_ui.cpp
+@@ -14,6 +14,7 @@
+ #include <rex/string.h>
+ #include <rex/system/flags.h>
+ #include <rex/system/kernel_state.h>
++#include <rex/system/xam/alboria.h>
+ 
+ #include <imgui.h>
+ 
+@@ -205,7 +206,7 @@ X_RESULT xeXamDispatchHeadlessEx(std::function<X_RESULT(uint32_t&, uint32_t&)> r
+ }
+ 
+ u32 XamIsUIActive_entry() {
+-  return xeXamIsUIActive();
++  return xeXamIsUIActive() || rex::system::xam::alboria::OverlayShown();
+ }
+ 
+ class MessageBoxDialog : public XamDialog {
+@@ -542,6 +543,25 @@ void XamShowDirtyDiscErrorUI_entry(u32 user_index) {
+   exit(1);
+ }
+ 
++// The Guide's friends list and game invite screens: with Xbox Live on Alboria (alboria_live), the
++// host's Alboria overlay opens on its Friends page, as the Guide opened over the title. It answers
++// at once; the overlay tells the title it is open with XN_SYS_UI.
++u32 XamShowFriendsUI_entry(u32 user_index) {
++  namespace alboria = rex::system::xam::alboria;
++  if (!alboria::LiveSignedIn() || !alboria::ShowOverlay(alboria::OverlayPage::kFriends)) {
++    return X_ERROR_FUNCTION_FAILED;
++  }
++  return X_ERROR_SUCCESS;
++}
++
++u32 XamShowGameInviteUI_entry(u32 user_index, u32 recipients_ptr, u32 recipient_count, u32 text_ptr) {
++  namespace alboria = rex::system::xam::alboria;
++  if (!alboria::LiveSignedIn() || !alboria::ShowOverlay(alboria::OverlayPage::kFriends)) {
++    return X_ERROR_FUNCTION_FAILED;
++  }
++  return X_ERROR_SUCCESS;
++}
++
+ u32 XamShowPartyUI_entry(u32 r3, u32 r4) {
+   return X_ERROR_FUNCTION_FAILED;
+ }
+@@ -570,6 +590,8 @@ REX_EXPORT(__imp__XamShowKeyboardUI, rex::kernel::xam::XamShowKeyboardUI_entry)
+ REX_EXPORT(__imp__XamShowDeviceSelectorUI, rex::kernel::xam::XamShowDeviceSelectorUI_entry)
+ REX_EXPORT(__imp__XamShowDirtyDiscErrorUI, rex::kernel::xam::XamShowDirtyDiscErrorUI_entry)
+ REX_EXPORT(__imp__XamShowPartyUI, rex::kernel::xam::XamShowPartyUI_entry)
++REX_EXPORT(__imp__XamShowFriendsUI, rex::kernel::xam::XamShowFriendsUI_entry)
++REX_EXPORT(__imp__XamShowGameInviteUI, rex::kernel::xam::XamShowGameInviteUI_entry)
+ REX_EXPORT(__imp__XamShowCommunitySessionsUI, rex::kernel::xam::XamShowCommunitySessionsUI_entry)
+ REX_EXPORT(__imp__XamShowMessageBoxUIEx, rex::kernel::xam::XamShowMessageBoxUIEx_entry)
+ 
+@@ -609,9 +631,7 @@ REX_EXPORT_STUB(__imp__XamShowFitnessWarnAboutTimeUI);
+ REX_EXPORT_STUB(__imp__XamShowFofUI);
+ REX_EXPORT_STUB(__imp__XamShowForcedNameChangeUI);
+ REX_EXPORT_STUB(__imp__XamShowFriendRequestUI);
+-REX_EXPORT_STUB(__imp__XamShowFriendsUI);
+ REX_EXPORT_STUB(__imp__XamShowFriendsUIp);
+-REX_EXPORT_STUB(__imp__XamShowGameInviteUI);
+ REX_EXPORT_STUB(__imp__XamShowGameVoiceChannelUI);
+ REX_EXPORT_STUB(__imp__XamShowGamerCardUI);
+ REX_EXPORT_STUB(__imp__XamShowGamerCardUIForXUID);
 diff --git a/src/kernel/xam/xam_user.cpp b/src/kernel/xam/xam_user.cpp
 index 94468e6..0a194b1 100644
 --- a/src/kernel/xam/xam_user.cpp
@@ -27219,6 +28238,29 @@ index c10694c..2225156 100644
      return false;
    }
    REXSYS_DEBUG("  Mounted {} at {}", abs_game_root.string(), mount_path);
+diff --git a/src/system/xam/app_manager.cpp b/src/system/xam/app_manager.cpp
+index 9b882af..063b92a 100644
+--- a/src/system/xam/app_manager.cpp
++++ b/src/system/xam/app_manager.cpp
+@@ -38,6 +38,18 @@ X_HRESULT AppManager::DispatchMessageSync(uint32_t app_id, uint32_t message, uin
+   return app->DispatchMessageSync(message, buffer_ptr, buffer_length);
+ }
+ 
++namespace {
++thread_local uint32_t current_request_overlapped = 0;
++}  // namespace
++
++uint32_t CurrentRequestOverlapped() {
++  return current_request_overlapped;
++}
++
++void SetCurrentRequestOverlapped(uint32_t overlapped_ptr) {
++  current_request_overlapped = overlapped_ptr;
++}
++
+ X_HRESULT AppManager::DispatchMessageAsync(uint32_t app_id, uint32_t message, uint32_t buffer_ptr,
+                                            uint32_t buffer_length) {
+   App* app;
 diff --git a/src/system/xam/content_manager.cpp b/src/system/xam/content_manager.cpp
 index 5f44a44..1dd7abd 100644
 --- a/src/system/xam/content_manager.cpp
@@ -27467,10 +28509,10 @@ index 0000000..1cfbf15
 +}  // namespace rex::system::xam
 diff --git a/src/system/xam/system_link.cpp b/src/system/xam/system_link.cpp
 new file mode 100644
-index 0000000..2583865
+index 0000000..dea3b5a
 --- /dev/null
 +++ b/src/system/xam/system_link.cpp
-@@ -0,0 +1,390 @@
+@@ -0,0 +1,405 @@
 +/**
 + * @file        system/xam/system_link.cpp
 + * @brief       System Link: the local network as XNet and the session services show it to a title
@@ -27830,10 +28872,25 @@ index 0000000..2583865
 +  g_sessions.erase(handle);
 +}
 +
++std::optional<SystemLinkSession> FindSession(uint32_t handle) {
++  std::lock_guard<std::mutex> lock(g_mutex);
++  const auto it = g_sessions.find(handle);
++  if (it == g_sessions.end()) return std::nullopt;
++  return it->second;
++}
++
 +bool HostingSystemLinkSession() {
 +  std::lock_guard<std::mutex> lock(g_mutex);
 +  for (const auto& [handle, session] : g_sessions) {
 +    if (session.hosting) return true;
++  }
++  return false;
++}
++
++bool HasSessionWithKid(const XnKid& kid) {
++  std::lock_guard<std::mutex> lock(g_mutex);
++  for (const auto& [handle, session] : g_sessions) {
++    if (session.kid == kid) return true;
 +  }
 +  return false;
 +}
@@ -27934,6 +28991,39 @@ index 7ed67aa..d5c61f0 100644
      std::filesystem::create_directories(content_dir);
      auto setting_id = fmt::format("{:08X}", setting->setting_id);
      auto file_path = content_dir / setting_id;
+diff --git a/src/system/xmemory.cpp b/src/system/xmemory.cpp
+index 76cc877..1a3bd5c 100644
+--- a/src/system/xmemory.cpp
++++ b/src/system/xmemory.cpp
+@@ -9,6 +9,7 @@
+  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
+  */
+ 
++#include <atomic>
+ #include <algorithm>
+ #include <cstring>
+ #include <utility>
+@@ -543,10 +544,16 @@ bool Memory::AccessViolationCallback(std::unique_lock<std::recursive_mutex> glob
+   uint32_t virtual_address = HostToGuestVirtual(host_address);
+   BaseHeap* heap = LookupHeap(virtual_address);
+   if (!heap || heap->heap_type() != memory::HeapType::kGuestPhysical) {
+-    REXSYS_ERROR(
+-        "Unhandled guest access violation: {} of guest 0x{:08X} (host 0x{:016X}) on thread 0x{:X}",
+-        is_write ? "write" : "read", virtual_address, reinterpret_cast<uintptr_t>(host_address),
+-        rex::thread::current_thread_id());
++    // A fault the title keeps hitting would otherwise fill every log with this line and push out
++    // what led to it: the first ones are logged, then only a note now and then.
++    static std::atomic<uint64_t> unhandled{0};
++    const uint64_t count = unhandled.fetch_add(1) + 1;
++    if (count <= 20 || (count & (count - 1)) == 0) {
++      REXSYS_ERROR(
++          "Unhandled guest access violation #{}: {} of guest 0x{:08X} (host 0x{:016X}) on thread 0x{:X}", count,
++          is_write ? "write" : "read", virtual_address, reinterpret_cast<uintptr_t>(host_address),
++          rex::thread::current_thread_id());
++    }
+     return false;
+   }
+ 
 diff --git a/src/system/xsocket.cpp b/src/system/xsocket.cpp
 index 2d13ac8..7aea83e 100644
 --- a/src/system/xsocket.cpp
@@ -28543,10 +29633,43 @@ index 53b8c0b..33ae38c 100644
    auto now = std::chrono::steady_clock::now();
  
 diff --git a/src/ui/presenter.cpp b/src/ui/presenter.cpp
-index 7360ed9..d4fe4c3 100644
+index 7360ed9..d009b00 100644
 --- a/src/ui/presenter.cpp
 +++ b/src/ui/presenter.cpp
-@@ -40,18 +40,28 @@ REXCVAR_DEFINE_INT32(present_safe_area_y, 90, "UI/Presenter",
+@@ -12,12 +12,15 @@
+ #include <algorithm>
+ #include <atomic>
+ #include <cctype>
++#include <cmath>
+ #include <utility>
+ 
+ #include <rex/assert.h>
++#include <rex/chrono/clock.h>
+ #include <rex/cvar.h>
+ #include <rex/logging.h>
+ #include <rex/platform.h>
++#include <rex/ui/flags.h>
+ #include <rex/ui/presenter.h>
+ #include <rex/ui/window.h>
+ 
+@@ -26,6 +29,16 @@
+ #include <ffx_api/ffx_upscale.h>
+ #endif
+ 
++// Read by the graphics system's vsync worker, and by the presenters that
++// change how they present while it is on.
++REXCVAR_DEFINE_BOOL(vsync_follow_display, true, "GPU",
++                    "With vsync on, time the guest's vertical blanks by the display's refreshes "
++                    "when the presenter reports them and the vblank rate is a whole multiple or "
++                    "divisor of the refresh rate (Vulkan then presents without tearing). A "
++                    "separate timer that runs a little faster or slower than the display makes "
++                    "frames show unevenly for a few seconds every time the two drift through "
++                    "each other");
++
+ REXCVAR_DEFINE_BOOL(host_present_from_non_ui_thread, true, "UI/Presenter",
+                     "Allow presentation from non-UI thread");
+ 
+@@ -40,18 +53,28 @@ REXCVAR_DEFINE_INT32(present_safe_area_y, 90, "UI/Presenter",
                       "Vertical safe area percentage (0-100)")
      .range(0, 100);
  
@@ -28580,7 +29703,7 @@ index 7360ed9..d4fe4c3 100644
  
  REXCVAR_DEFINE_INT32(present_fsr_max_upsampling_passes,
                       rex::ui::Presenter::GuestOutputPaintConfig::kFsrMaxUpscalingPassesMax,
-@@ -63,18 +73,14 @@ REXCVAR_DEFINE_DOUBLE(present_fsr_sharpness_reduction,
+@@ -63,18 +86,14 @@ REXCVAR_DEFINE_DOUBLE(present_fsr_sharpness_reduction,
                        rex::ui::Presenter::GuestOutputPaintConfig::kFsrSharpnessReductionDefault,
                        "UI/Presenter", "FSR RCAS sharpness reduction in stops")
      .range(rex::ui::Presenter::GuestOutputPaintConfig::kFsrSharpnessReductionMin,
@@ -28601,7 +29724,7 @@ index 7360ed9..d4fe4c3 100644
  #endif
  
  REXCVAR_DEFINE_BOOL(present_dither, false, "UI/Presenter",
-@@ -85,28 +91,39 @@ REXCVAR_DEFINE_BOOL(present_allow_overscan_cutoff, false, "UI/Presenter",
+@@ -85,28 +104,39 @@ REXCVAR_DEFINE_BOOL(present_allow_overscan_cutoff, false, "UI/Presenter",
                      "Allow overscan cutoff based on safe area settings")
      .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
  
@@ -28659,7 +29782,7 @@ index 7360ed9..d4fe4c3 100644
  }
  
  #if defined(REX_HAS_FIDELITYFX_SDK)
-@@ -261,11 +278,11 @@ GuestOutputPaintConfig BuildGuestOutputPaintConfigFromCVar() {
+@@ -261,11 +291,11 @@ GuestOutputPaintConfig BuildGuestOutputPaintConfigFromCVar() {
  #endif
    config.SetAllowOverscanCutoff(REXCVAR_GET(present_allow_overscan_cutoff));
    config.SetEffect(parsed_effect);
@@ -28672,7 +29795,7 @@ index 7360ed9..d4fe4c3 100644
    config.SetFsrQualityMode(ParsePresentFsrQualityMode(REXCVAR_GET(present_fsr_quality_mode)));
  #endif
    config.SetDither(REXCVAR_GET(present_dither));
-@@ -659,27 +676,32 @@ void Presenter::SetGuestOutputPaintConfigFromUIThread(const GuestOutputPaintConf
+@@ -659,27 +689,32 @@ void Presenter::SetGuestOutputPaintConfigFromUIThread(const GuestOutputPaintConf
      modified = true;
      request_repaint = true;
    }
@@ -28713,7 +29836,7 @@ index 7360ed9..d4fe4c3 100644
    if (guest_output_paint_config_.GetDither() != new_config.GetDither()) {
      modified = true;
      request_repaint = true;
-@@ -713,6 +735,13 @@ void Presenter::SetGuestOutputPaintConfigFromUIThread(const GuestOutputPaintConf
+@@ -713,6 +748,13 @@ void Presenter::SetGuestOutputPaintConfigFromUIThread(const GuestOutputPaintConf
    }
  }
  
@@ -28727,7 +29850,104 @@ index 7360ed9..d4fe4c3 100644
  void Presenter::AddUIDrawerFromUIThread(UIDrawer* drawer, size_t z_order) {
    assert_not_null(drawer);
    // Obtain whether the iterator list was empty before erasing in case of
-@@ -789,6 +818,15 @@ bool Presenter::InitializeCommonSurfaceIndependent() {
+@@ -766,6 +808,96 @@ void Presenter::RemoveUIDrawerFromUIThread(UIDrawer* drawer) {
+   }
+ }
+ 
++Presenter::DisplayRefreshTiming Presenter::GetDisplayRefreshTiming() const {
++  std::lock_guard<std::mutex> lock(display_refresh_mutex_);
++  return display_refresh_timing_;
++}
++
++void Presenter::ReportDisplayRefresh(uint64_t host_ticks) {
++  // How close two gaps must be to count as the same number of refreshes.
++  constexpr double kSameGapTolerance = 0.05;
++  // How many of the gaps for the first estimate must be a single refresh. A
++  // backend may report two presents in the same refresh now and then (MoltenVK
++  // does, 1 to 2 ms apart): such a gap is rare and never repeats like this.
++  constexpr uint32_t kSingleRefreshGapsForEstimate = 3;
++  // How far from a whole number of refreshes a gap may be and still be on the
++  // grid of refreshes.
++  constexpr double kGridTolerance = 0.25;
++  // Reports in a row off the grid after which the display is taken to have
++  // changed its refresh rate (another monitor, a variable refresh rate).
++  constexpr uint32_t kOffGridForRateChange = 8;
++  // Gaps longer than this many refreshes (nothing was painted for a while) say
++  // little about the period: they only move the grid.
++  constexpr double kMaxRefreshesForPeriod = 8.0;
++  // How much each gap corrects the estimate. Refresh timestamps are precise,
++  // so a slow average only smooths their small jitter.
++  constexpr double kPeriodSmoothing = 1.0 / 64.0;
++
++  std::lock_guard<std::mutex> lock(display_refresh_mutex_);
++  DisplayRefreshTiming& timing = display_refresh_timing_;
++  uint64_t last_refresh = timing.last_refresh_host_ticks;
++  if (last_refresh && host_ticks <= last_refresh) {
++    // Out of order: the next report moves the grid on.
++    return;
++  }
++
++  if (!timing.valid) {
++    timing.last_refresh_host_ticks = host_ticks;
++    if (!last_refresh) {
++      return;
++    }
++    display_refresh_gaps_[display_refresh_gaps_seen_++] = host_ticks - last_refresh;
++    if (display_refresh_gaps_seen_ < kDisplayRefreshGapsForEstimate) {
++      return;
++    }
++    display_refresh_gaps_seen_ = 0;
++    // Painting often shows a frame on every refresh, so the period is the
++    // shortest gap that several others match. When frames are shown only on
++    // every other refresh, that gap is two refreshes, and its grid is still a
++    // grid of refreshes.
++    std::array<uint64_t, kDisplayRefreshGapsForEstimate> gaps = display_refresh_gaps_;
++    std::sort(gaps.begin(), gaps.end());
++    for (uint64_t candidate : gaps) {
++      uint32_t matches = 0;
++      for (uint64_t gap : gaps) {
++        if (std::abs(double(gap) - double(candidate)) <= double(candidate) * kSameGapTolerance) {
++          ++matches;
++        }
++      }
++      if (matches >= kSingleRefreshGapsForEstimate) {
++        timing.period_host_ticks = double(candidate);
++        timing.valid = true;
++        display_refresh_off_grid_ = 0;
++        break;
++      }
++    }
++    return;
++  }
++
++  // A gap spans a whole number of refreshes. One that does not is a report
++  // off the grid, which must not move it.
++  uint64_t gap = host_ticks - last_refresh;
++  double exact_refreshes = double(gap) / timing.period_host_ticks;
++  double refreshes = std::round(exact_refreshes);
++  if (refreshes > kMaxRefreshesForPeriod) {
++    timing.last_refresh_host_ticks = host_ticks;
++    display_refresh_off_grid_ = 0;
++    return;
++  }
++  if (refreshes < 1.0 || std::abs(exact_refreshes - refreshes) > kGridTolerance) {
++    if (++display_refresh_off_grid_ >= kOffGridForRateChange) {
++      // The refresh rate changed: learn it again from the next reports.
++      timing.valid = false;
++      timing.last_refresh_host_ticks = host_ticks;
++      display_refresh_gaps_seen_ = 0;
++    }
++    return;
++  }
++  display_refresh_off_grid_ = 0;
++  timing.last_refresh_host_ticks = host_ticks;
++  timing.period_host_ticks += (double(gap) / refreshes - timing.period_host_ticks) * kPeriodSmoothing;
++}
++
+ void Presenter::RequestUIPaintFromUIThread() {
+   if (is_in_ui_thread_paint_) {
+     // The paint request will be done once in the end of PaintFromUIThread
+@@ -789,6 +921,15 @@ bool Presenter::InitializeCommonSurfaceIndependent() {
    {
      std::lock_guard<std::mutex> config_lock(guest_output_paint_config_mutex_);
      guest_output_paint_config_ = BuildGuestOutputPaintConfigFromCVar();
@@ -28743,7 +29963,7 @@ index 7360ed9..d4fe4c3 100644
    }
  
    // Initialize UI frame rate limiting.
-@@ -1031,10 +1069,13 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
+@@ -1031,10 +1172,13 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
    uint32_t output_height_clamped = std::min(output_height, max_rt_height);
  
  #if defined(REX_HAS_FIDELITYFX_SDK)
@@ -28760,7 +29980,7 @@ index 7360ed9..d4fe4c3 100644
      // FidelityFX Super Resolution and Contrast Adaptive Sharpening only work
      // good for up to 2x2 upscaling due to the way they fetch texels.
      // CAS is primarily a sharpening filter, not an upscaling one (its upscaling
-@@ -1056,11 +1097,13 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
+@@ -1056,11 +1200,13 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
        ffx_last_size.first = properties.frontbuffer_width;
        ffx_last_size.second = properties.frontbuffer_height;
      }
@@ -28776,7 +29996,7 @@ index 7360ed9..d4fe4c3 100644
      if ((config.GetEffect() == GuestOutputPaintConfig::Effect::kFsr || is_temporal_effect) &&
          ((ffx_last_size.first < output_width_clamped ||
            ffx_last_size.second < output_height_clamped) ||
-@@ -1069,6 +1112,7 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
+@@ -1069,6 +1215,7 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
        // Using the output size clamped to the maximum render target size here as
        // EASU will always write to intermediate images, and RCAS supports only
        // 1:1.
@@ -28784,7 +30004,7 @@ index 7360ed9..d4fe4c3 100644
        if (is_temporal_effect) {
          uint32_t temporal_input_width = ffx_last_size.first;
          uint32_t temporal_input_height = ffx_last_size.second;
-@@ -1110,7 +1154,9 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
+@@ -1110,7 +1257,9 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
          assert_true(flow.effect_count < flow.effects.size());
          flow.effect_output_sizes[flow.effect_count] = ffx_last_size;
          flow.effects[flow.effect_count++] = GuestOutputPaintEffect::kFsrEasu;
@@ -28795,7 +30015,7 @@ index 7360ed9..d4fe4c3 100644
          uint32_t easu_max_passes = config.GetFsrMaxUpsamplingPasses();
          uint32_t easu_pass_count = 0;
          while (easu_pass_count < easu_max_passes &&
-@@ -1145,7 +1191,6 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
+@@ -1145,7 +1294,6 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
                                                : GuestOutputPaintEffect::kCasResample;
      }
    }
@@ -28803,7 +30023,7 @@ index 7360ed9..d4fe4c3 100644
  
    std::pair<uint32_t, uint32_t>* last_pre_bilinear_effect_size =
        flow.effect_count ? &flow.effect_output_sizes[flow.effect_count - 1] : nullptr;
-@@ -1156,12 +1201,10 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
+@@ -1156,12 +1304,10 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
      // Clamp the output size of the last effect to the maximum render target
      // size because it will go to an intermediate image now.
      if (last_pre_bilinear_effect_size) {
@@ -28816,7 +30036,7 @@ index 7360ed9..d4fe4c3 100644
        last_pre_bilinear_effect_size->first =
            std::min(last_pre_bilinear_effect_size->first, max_rt_width);
        last_pre_bilinear_effect_size->second =
-@@ -1188,7 +1231,6 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
+@@ -1188,7 +1334,6 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
            last_effect = GuestOutputPaintEffect::kBilinearDither;
          }
          break;
@@ -28824,7 +30044,7 @@ index 7360ed9..d4fe4c3 100644
        case GuestOutputPaintEffect::kCasSharpen:
          last_effect = GuestOutputPaintEffect::kCasSharpenDither;
          break;
-@@ -1198,7 +1240,6 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
+@@ -1198,7 +1343,6 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
        case GuestOutputPaintEffect::kFsrRcas:
          last_effect = GuestOutputPaintEffect::kFsrRcasDither;
          break;
@@ -28832,6 +30052,18 @@ index 7360ed9..d4fe4c3 100644
        default:
          break;
      }
+@@ -1649,6 +1793,11 @@ void Presenter::DXGIUITickThread() {
+       Microsoft::WRL::ComPtr<IDXGIOutput> dxgi_output = dxgi_ui_tick_output_;
+       dxgi_ui_tick_lock.unlock();
+       wait_succeeded = SUCCEEDED(dxgi_ui_tick_output_->WaitForVBlank());
++      if (wait_succeeded) {
++        // The wait returns at the start of the vertical blank, with only the
++        // thread's wake-up delay after it.
++        ReportDisplayRefresh(chrono::Clock::QueryHostTickCount());
++      }
+     }
+     dxgi_ui_tick_lock.lock();
+     if (wait_succeeded) {
 diff --git a/src/ui/renderdoc_api.cpp b/src/ui/renderdoc_api.cpp
 index e1a5287..807e3ea 100644
 --- a/src/ui/renderdoc_api.cpp
@@ -28880,7 +30112,7 @@ index 46ff8e5..f811158 100644
      constexpr std::string_view kDDevice = "d:\\";
      std::string_view tail = xex_image;
 diff --git a/src/ui/vulkan/vulkan_device.cpp b/src/ui/vulkan/vulkan_device.cpp
-index 8197bb4..ed54872 100644
+index 8197bb4..1bdb2fe 100644
 --- a/src/ui/vulkan/vulkan_device.cpp
 +++ b/src/ui/vulkan/vulkan_device.cpp
 @@ -22,6 +22,12 @@
@@ -28896,7 +30128,23 @@ index 8197bb4..ed54872 100644
  REXCVAR_DEFINE_BOOL(vulkan_require_fragment_stores_and_atomics, true, "UI/Vulkan",
                      "Deprecated and ignored for parity; fragmentStoresAndAtomics is always "
                      "required for Vulkan GPU emulation")
-@@ -236,6 +242,12 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
+@@ -201,6 +207,15 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
+   if (with_swapchain) {
+     // #2.
+     XE_UI_VULKAN_STRUCT_EXTENSION(KHR_swapchain)
++    // #93. When presented images reached the display, so the guest's vertical
++    // blanks can follow its refreshes.
++    XE_UI_VULKAN_STRUCT_EXTENSION(GOOGLE_display_timing)
++    if (get_physical_device_properties2_supported) {
++      // #295 and #249. The same where display timing is unavailable, with the
++      // time a wait for a present returns.
++      XE_UI_VULKAN_STRUCT_EXTENSION(KHR_present_id)
++      XE_UI_VULKAN_STRUCT_EXTENSION(KHR_present_wait)
++    }
+   }
+ 
+   bool ext_1_2_KHR_sampler_mirror_clamp_to_edge = false;
+@@ -236,6 +251,12 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
        XE_UI_VULKAN_STRUCT_EXTENSION(EXT_custom_border_color)
        // Required for true null descriptors in bindless texture bindings.
        XE_UI_VULKAN_STRUCT_EXTENSION(EXT_robustness2)
@@ -28909,7 +30157,33 @@ index 8197bb4..ed54872 100644
      }
      if (properties.apiVersion >= VK_MAKE_API_VERSION(0, 1, 1, 0)) {
        // #237.
-@@ -478,6 +490,9 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
+@@ -335,6 +356,12 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
+   VulkanFeatures<VkPhysicalDeviceRobustness2FeaturesEXT,
+                  VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT>
+       features_EXT_robustness2;
++  VulkanFeatures<VkPhysicalDevicePresentIdFeaturesKHR,
++                 VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR>
++      features_KHR_present_id;
++  VulkanFeatures<VkPhysicalDevicePresentWaitFeaturesKHR,
++                 VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_WAIT_FEATURES_KHR>
++      features_KHR_present_wait;
+ 
+   if (get_physical_device_properties2_supported) {
+     if (properties.apiVersion >= VK_MAKE_API_VERSION(0, 1, 2, 0)) {
+@@ -376,6 +403,12 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
+     if (device->extensions_.ext_EXT_robustness2) {
+       features_EXT_robustness2.Link(supported_features_2, device_create_info);
+     }
++    if (device->extensions_.ext_KHR_present_id) {
++      features_KHR_present_id.Link(supported_features_2, device_create_info);
++    }
++    if (device->extensions_.ext_KHR_present_wait) {
++      features_KHR_present_wait.Link(supported_features_2, device_create_info);
++    }
+     ifn.vkGetPhysicalDeviceProperties2(physical_device, &properties_2);
+     ifn.vkGetPhysicalDeviceFeatures2(physical_device, &supported_features_2);
+   }
+@@ -478,6 +511,9 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
      device->queue_family_sparse_binding_ = first_queue_family_sparse_binding;
    }
  
@@ -28919,7 +30193,7 @@ index 8197bb4..ed54872 100644
    device->queue_families_[device->queue_family_graphics_compute_].queues.resize(std::max(
        size_t(1), device->queue_families_[device->queue_family_graphics_compute_].queues.size()));
    if (device->queue_family_sparse_binding_ != UINT32_MAX) {
-@@ -625,6 +640,7 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
+@@ -625,6 +661,7 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
    XE_UI_VULKAN_LIMIT(optimalBufferCopyOffsetAlignment)
    XE_UI_VULKAN_LIMIT(optimalBufferCopyRowPitchAlignment)
    XE_UI_VULKAN_LIMIT(nonCoherentAtomSize)
@@ -28927,7 +30201,7 @@ index 8197bb4..ed54872 100644
  
    if (with_gpu_emulation) {
      XE_UI_VULKAN_FEATURE(robustBufferAccess)
-@@ -650,6 +666,7 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
+@@ -650,6 +687,7 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
        XE_UI_VULKAN_FEATURE_2(features_1_2, samplerMirrorClampToEdge);
        XE_UI_VULKAN_FEATURE_2(features_1_2, uniformBufferStandardLayout);
        XE_UI_VULKAN_FEATURE_2(features_1_2, scalarBlockLayout);
@@ -28935,7 +30209,20 @@ index 8197bb4..ed54872 100644
      }
    } else {
      if (ext_1_2_KHR_sampler_mirror_clamp_to_edge) {
-@@ -771,6 +788,9 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
+@@ -731,6 +769,12 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
+     }
+   }
+ 
++  // A wait for a present needs both: the id names the present to wait for.
++  if (device->extensions_.ext_KHR_present_id && device->extensions_.ext_KHR_present_wait) {
++    XE_UI_VULKAN_FEATURE_2(features_KHR_present_id, presentId)
++    XE_UI_VULKAN_FEATURE_2(features_KHR_present_wait, presentWait)
++  }
++
+ #undef XE_UI_VULKAN_LIMIT
+ #undef XE_UI_VULKAN_ENUM_LIMIT
+ #undef XE_UI_VULKAN_FEATURE
+@@ -771,6 +815,9 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
    if (properties.apiVersion >= VK_MAKE_API_VERSION(0, 1, 1, 0)) {
  #include <rex/ui/vulkan/functions/device_1_1_khr_bind_memory2.inc>
  #include <rex/ui/vulkan/functions/device_1_1_khr_get_memory_requirements2.inc>
@@ -28945,7 +30232,7 @@ index 8197bb4..ed54872 100644
    }
    if (properties.apiVersion >= VK_MAKE_API_VERSION(0, 1, 3, 0)) {
  #include <rex/ui/vulkan/functions/device_1_3_khr_dynamic_rendering.inc>
-@@ -802,6 +822,12 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
+@@ -802,6 +849,18 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
    if (device->extensions_.ext_KHR_swapchain) {
  #include <rex/ui/vulkan/functions/device_khr_swapchain.inc>
    }
@@ -28955,14 +30242,59 @@ index 8197bb4..ed54872 100644
 +  if (device->extensions_.ext_NV_device_diagnostic_checkpoints) {
 +#include <rex/ui/vulkan/functions/device_nv_device_diagnostic_checkpoints.inc>
 +  }
++  if (device->extensions_.ext_GOOGLE_display_timing) {
++#include <rex/ui/vulkan/functions/device_google_display_timing.inc>
++  }
++  if (device->extensions_.ext_KHR_present_wait) {
++#include <rex/ui/vulkan/functions/device_khr_present_wait.inc>
++  }
  #undef XE_UI_VULKAN_FUNCTION_PROMOTED
  
  #undef XE_UI_VULKAN_FUNCTION
 diff --git a/src/ui/vulkan/vulkan_presenter.cpp b/src/ui/vulkan/vulkan_presenter.cpp
-index 8b2e79f..1932e61 100644
+index 8b2e79f..aa76ff0 100644
 --- a/src/ui/vulkan/vulkan_presenter.cpp
 +++ b/src/ui/vulkan/vulkan_presenter.cpp
-@@ -109,7 +109,6 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL FfxVkGetDeviceProcAddrCompat(VkDevice d
+@@ -15,11 +15,14 @@
+ #include <cstdint>
+ #include <cmath>
+ #include <cstring>
++#include <ctime>
+ #include <memory>
++#include <string>
+ #include <utility>
+ #include <vector>
+ 
+ #include <rex/assert.h>
++#include <rex/chrono/clock.h>
+ #include <rex/cvar.h>
+ #include <rex/logging.h>
+ #include <rex/math.h>
+@@ -50,7 +53,8 @@ REXCVAR_DEFINE_BOOL(present_render_pass_clear, true, "UI/Presenter",
+                     "Clear render pass during presentation");
+ 
+ REXCVAR_DEFINE_BOOL(vulkan_allow_present_mode_immediate, true, "UI/Vulkan",
+-                    "Allow immediate present mode (no vsync)");
++                    "Allow immediate present mode (no vsync), unless the presenter reports the "
++                    "display's refreshes (vsync_follow_display)");
+ 
+ REXCVAR_DEFINE_BOOL(vulkan_allow_present_mode_mailbox, true, "UI/Vulkan",
+                     "Allow mailbox present mode (triple buffering)");
+@@ -58,6 +62,13 @@ REXCVAR_DEFINE_BOOL(vulkan_allow_present_mode_mailbox, true, "UI/Vulkan",
+ REXCVAR_DEFINE_BOOL(vulkan_allow_present_mode_fifo_relaxed, true, "UI/Vulkan",
+                     "Allow FIFO relaxed present mode");
+ 
++REXCVAR_DEFINE_STRING(vulkan_display_refresh_source, "auto", "UI/Vulkan",
++                      "Where the presenter learns when its images reached the display, for "
++                      "vsync_follow_display: auto (display_timing, else present_wait), "
++                      "display_timing (VK_GOOGLE_display_timing), present_wait "
++                      "(VK_KHR_present_wait) or none (the guest's vblanks stay on their timer)")
++    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
++
+ namespace rex {
+ namespace ui {
+ namespace vulkan {
+@@ -109,7 +120,6 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL FfxVkGetDeviceProcAddrCompat(VkDevice d
  namespace shaders {
  #include "../shaders/vulkan_spirv/guest_output_bilinear_dither_ps.h"
  #include "../shaders/vulkan_spirv/guest_output_bilinear_ps.h"
@@ -28970,7 +30302,7 @@ index 8b2e79f..1932e61 100644
  #include "../shaders/vulkan_spirv/guest_output_ffx_cas_resample_dither_ps.h"
  #include "../shaders/vulkan_spirv/guest_output_ffx_cas_resample_ps.h"
  #include "../shaders/vulkan_spirv/guest_output_ffx_cas_sharpen_dither_ps.h"
-@@ -117,7 +116,6 @@ namespace shaders {
+@@ -117,7 +127,6 @@ namespace shaders {
  #include "../shaders/vulkan_spirv/guest_output_ffx_fsr_easu_ps.h"
  #include "../shaders/vulkan_spirv/guest_output_ffx_fsr_rcas_dither_ps.h"
  #include "../shaders/vulkan_spirv/guest_output_ffx_fsr_rcas_ps.h"
@@ -28978,7 +30310,203 @@ index 8b2e79f..1932e61 100644
  #include "../shaders/vulkan_spirv/guest_output_triangle_strip_rect_vs.h"
  }  // namespace shaders
  
-@@ -2031,19 +2029,16 @@ Presenter::PaintResult VulkanPresenter::PaintAndPresentImpl(bool execute_ui_draw
+@@ -200,6 +209,9 @@ VulkanPresenter::~VulkanPresenter() {
+   // and the vkQueuePresentKHR semaphore wait).
+   // This will await completion of all paint submissions also.
+   paint_context_.DestroySwapchainAndVulkanSurface();
++  // Nothing waits for presents once the swapchain is gone.
++  paint_context_.present_waiter = nullptr;
++  present_waiter_.reset();
+ 
+   // Await completion of the usage of everything before destroying anything
+   // (paint submission completion already awaited).
+@@ -1381,7 +1393,11 @@ VkSwapchainKHR VulkanPresenter::PaintContext::CreateSwapchainForVulkanSurface(
+   // interfering with GPU command processing, and also to allow tearing so
+   // variable refresh rate may be used where it's available.
+   // Note: If the priorities here are changes, update the cvar descriptions.
++  // While the presenter reports the display's refreshes, images are shown on
++  // refreshes rather than immediately, so the times they reached the display
++  // are refresh times.
+   if (REXCVAR_GET(vulkan_allow_present_mode_immediate) &&
++      GetDisplayRefreshSource(vulkan_device) == DisplayRefreshSource::kNone &&
+       std::find(present_modes.cbegin(), present_modes.cend(), VK_PRESENT_MODE_IMMEDIATE_KHR) !=
+           present_modes.cend()) {
+     // Allowing tearing to reduce latency, and possibly variable refresh rate
+@@ -1425,7 +1441,153 @@ VkSwapchainKHR VulkanPresenter::PaintContext::CreateSwapchainForVulkanSurface(
+   return swapchain;
+ }
+ 
++VulkanPresenter::DisplayRefreshSource VulkanPresenter::GetDisplayRefreshSource(
++    const VulkanDevice* vulkan_device) {
++  if (!REXCVAR_GET(vsync_follow_display)) {
++    return DisplayRefreshSource::kNone;
++  }
++  const std::string& choice = REXCVAR_GET(vulkan_display_refresh_source);
++  // The display timing's times are CLOCK_MONOTONIC on Linux and CACurrentMediaTime in nanoseconds
++  // with MoltenVK; on other platforms their base is not known.
++  bool display_timing_usable = (REX_PLATFORM_LINUX || REX_PLATFORM_MAC) &&
++                               vulkan_device->extensions().ext_GOOGLE_display_timing;
++  bool present_wait_usable =
++      vulkan_device->properties().presentId && vulkan_device->properties().presentWait;
++  if ((choice == "auto" || choice == "display_timing") && display_timing_usable) {
++    return DisplayRefreshSource::kDisplayTiming;
++  }
++  if ((choice == "auto" || choice == "present_wait") && present_wait_usable) {
++    return DisplayRefreshSource::kPresentWait;
++  }
++  return DisplayRefreshSource::kNone;
++}
++
++namespace {
++
++// Converts a VK_GOOGLE_display_timing time (nanoseconds) to host ticks
++// (Clock::QueryHostTickCount).
++uint64_t DisplayTimingToHostTicks(uint64_t display_time_ns) {
++  double host_tick_frequency = double(chrono::Clock::QueryHostTickFrequency());
++#if REX_PLATFORM_MAC
++  // MoltenVK: CACurrentMediaTime in nanoseconds, which counts mach_absolute_time
++  // like the host clock.
++  return uint64_t(double(display_time_ns) * 1.0e-9 * host_tick_frequency);
++#elif REX_PLATFORM_LINUX
++  // CLOCK_MONOTONIC, which NTP may run a little faster or slower than the host
++  // clock (CLOCK_MONOTONIC_RAW), by as much as the drift the reports are meant
++  // to remove: the time is converted through its age, read from both clocks
++  // now, as reports are only milliseconds old.
++  uint64_t host_now = chrono::Clock::QueryHostTickCount();
++  timespec monotonic_now;
++  clock_gettime(CLOCK_MONOTONIC, &monotonic_now);
++  int64_t age_ns =
++      int64_t(monotonic_now.tv_sec) * 1000000000 + monotonic_now.tv_nsec - int64_t(display_time_ns);
++  return host_now - uint64_t(double(std::max(int64_t(0), age_ns)) * host_tick_frequency * 1.0e-9);
++#else
++  // Not used: GetDisplayRefreshSource does not pick the display timing where
++  // its time base is not known.
++  (void)display_time_ns;
++  (void)host_tick_frequency;
++  return chrono::Clock::QueryHostTickCount();
++#endif
++}
++
++}  // namespace
++
++VulkanPresenter::PresentWaiter::PaintLock::PaintLock(PresentWaiter* waiter) : waiter_(waiter) {
++  if (!waiter_) {
++    return;
++  }
++  waiter_->paint_lock_requests_.fetch_add(1, std::memory_order_relaxed);
++  waiter_->mutex_.lock();
++  waiter_->paint_lock_requests_.fetch_sub(1, std::memory_order_relaxed);
++}
++
++VulkanPresenter::PresentWaiter::PaintLock::~PaintLock() {
++  if (!waiter_) {
++    return;
++  }
++  waiter_->mutex_.unlock();
++  waiter_->condition_.notify_all();
++}
++
++VulkanPresenter::PresentWaiter::PresentWaiter(VulkanPresenter& presenter,
++                                              const VulkanDevice* vulkan_device)
++    : presenter_(presenter), vulkan_device_(vulkan_device) {
++  thread_ = std::thread(&PresentWaiter::Thread, this);
++}
++
++VulkanPresenter::PresentWaiter::~PresentWaiter() {
++  {
++    std::lock_guard<std::mutex> lock(mutex_);
++    shutdown_ = true;
++  }
++  condition_.notify_all();
++  thread_.join();
++}
++
++void VulkanPresenter::PresentWaiter::SetSwapchainUnderPaintLock(VkSwapchainKHR swapchain) {
++  if (swapchain_ == swapchain) {
++    return;
++  }
++  swapchain_ = swapchain;
++  // Presents to an earlier swapchain are not waited on.
++  last_waited_present_id_ = last_present_id_;
++}
++
++void VulkanPresenter::PresentWaiter::PresentedUnderPaintLock(uint64_t present_id) {
++  last_present_id_ = present_id;
++}
++
++void VulkanPresenter::PresentWaiter::Thread() {
++  // Short enough for painting not to be held back noticeably while waiting for
++  // the mutex, long enough for the thread not to spin.
++  constexpr uint64_t kWaitSliceNs = 500000;
++  // A wait that returns sooner found the present already shown, at a time that
++  // is not known: it is not reported.
++  const uint64_t min_blocked_ticks = chrono::Clock::QueryHostTickFrequency() / 20000;
++
++  const VulkanDevice::Functions& dfn = vulkan_device_->functions();
++  const VkDevice device = vulkan_device_->device();
++  std::unique_lock<std::mutex> lock(mutex_);
++  while (!shutdown_) {
++    if (paint_lock_requests_.load(std::memory_order_relaxed)) {
++      // Let painting take the mutex first.
++      lock.unlock();
++      while (paint_lock_requests_.load(std::memory_order_relaxed)) {
++        std::this_thread::yield();
++      }
++      lock.lock();
++      continue;
++    }
++    if (swapchain_ == VK_NULL_HANDLE || last_waited_present_id_ >= last_present_id_) {
++      condition_.wait(lock);
++      continue;
++    }
++    // Waiting for the latest present also covers the ones before it, which may
++    // have been replaced on the display without being shown.
++    uint64_t present_id = last_present_id_;
++    uint64_t wait_start = chrono::Clock::QueryHostTickCount();
++    VkResult result = dfn.vkWaitForPresentKHR(device, swapchain_, present_id, kWaitSliceNs);
++    uint64_t wait_end = chrono::Clock::QueryHostTickCount();
++    if (result == VK_TIMEOUT) {
++      continue;
++    }
++    last_waited_present_id_ = present_id;
++    if (result == VK_SUCCESS && wait_end - wait_start >= min_blocked_ticks) {
++      lock.unlock();
++      presenter_.ReportDisplayRefresh(wait_end);
++      lock.lock();
++    }
++  }
++}
++
+ VkSwapchainKHR VulkanPresenter::PaintContext::PrepareForSwapchainRetirement() {
++  if (present_waiter) {
++    // The waiting thread must be done with the swapchain before it is retired.
++    PresentWaiter::PaintLock paint_lock(present_waiter);
++    present_waiter->SetSwapchainUnderPaintLock(VK_NULL_HANDLE);
++  }
+   if (swapchain != VK_NULL_HANDLE) {
+     submission_tracker.AwaitAllSubmissionsCompletion();
+   }
+@@ -1569,9 +1731,16 @@ Presenter::PaintResult VulkanPresenter::PaintAndPresentImpl(bool execute_ui_draw
+ 
+   VkSemaphore acquire_semaphore = paint_submission.acquire_semaphore();
+   uint32_t swapchain_image_index;
+-  VkResult acquire_result =
+-      dfn.vkAcquireNextImageKHR(device, paint_context_.swapchain, UINT64_MAX, acquire_semaphore,
+-                                VK_NULL_HANDLE, &swapchain_image_index);
++  VkResult acquire_result;
++  {
++    PresentWaiter::PaintLock paint_lock(paint_context_.present_waiter);
++    if (paint_context_.present_waiter) {
++      paint_context_.present_waiter->SetSwapchainUnderPaintLock(paint_context_.swapchain);
++    }
++    acquire_result =
++        dfn.vkAcquireNextImageKHR(device, paint_context_.swapchain, UINT64_MAX, acquire_semaphore,
++                                  VK_NULL_HANDLE, &swapchain_image_index);
++  }
+   switch (acquire_result) {
+     case VK_SUCCESS:
+     case VK_SUBOPTIMAL_KHR:
+@@ -2031,19 +2200,16 @@ Presenter::PaintResult VulkanPresenter::PaintAndPresentImpl(bool execute_ui_draw
            uint32_t effect_constants_size = 0;
            union {
              BilinearConstants bilinear;
@@ -28998,7 +30526,7 @@ index 8b2e79f..1932e61 100644
              case kGuestOutputPaintPipelineLayoutIndexCasSharpen: {
                effect_constants_size = sizeof(effect_constants.cas_sharpen);
                effect_constants.cas_sharpen.Initialize(guest_output_flow, i,
-@@ -2062,7 +2057,6 @@ Presenter::PaintResult VulkanPresenter::PaintAndPresentImpl(bool execute_ui_draw
+@@ -2062,7 +2228,6 @@ Presenter::PaintResult VulkanPresenter::PaintAndPresentImpl(bool execute_ui_draw
                effect_constants_size = sizeof(effect_constants.fsr_rcas);
                effect_constants.fsr_rcas.Initialize(guest_output_flow, i, guest_output_paint_config);
              } break;
@@ -29006,7 +30534,53 @@ index 8b2e79f..1932e61 100644
              default:
                break;
            }
-@@ -2338,7 +2332,6 @@ bool VulkanPresenter::InitializeSurfaceIndependent() {
+@@ -2240,11 +2405,42 @@ Presenter::PaintResult VulkanPresenter::PaintAndPresentImpl(bool execute_ui_draw
+   present_info.pSwapchains = &paint_context_.swapchain;
+   present_info.pImageIndices = &swapchain_image_index;
+   present_info.pResults = nullptr;
++  // Ids for knowing when each present reached the display.
++  uint64_t present_id = ++last_present_id_;
++  VkPresentIdKHR present_id_info;
++  VkPresentTimeGOOGLE present_time;
++  VkPresentTimesInfoGOOGLE present_times_info;
++  if (display_refresh_source_ == DisplayRefreshSource::kPresentWait) {
++    present_id_info.sType = VK_STRUCTURE_TYPE_PRESENT_ID_KHR;
++    present_id_info.pNext = present_info.pNext;
++    present_id_info.swapchainCount = 1;
++    present_id_info.pPresentIds = &present_id;
++    present_info.pNext = &present_id_info;
++  } else if (display_refresh_source_ == DisplayRefreshSource::kDisplayTiming) {
++    present_time.presentID = uint32_t(present_id);
++    present_time.desiredPresentTime = 0;
++    present_times_info.sType = VK_STRUCTURE_TYPE_PRESENT_TIMES_INFO_GOOGLE;
++    present_times_info.pNext = present_info.pNext;
++    present_times_info.swapchainCount = 1;
++    present_times_info.pTimes = &present_time;
++    present_info.pNext = &present_times_info;
++  }
+   VkResult present_result;
+   {
+-    const VulkanDevice::Queue::Acquisition queue_acquisition =
+-        vulkan_device_->AcquireQueue(paint_context_.present_queue_family, 0);
+-    present_result = dfn.vkQueuePresentKHR(queue_acquisition.queue(), &present_info);
++    PresentWaiter::PaintLock paint_lock(paint_context_.present_waiter);
++    {
++      const VulkanDevice::Queue::Acquisition queue_acquisition =
++          vulkan_device_->AcquireQueue(paint_context_.present_queue_family, 0);
++      present_result = dfn.vkQueuePresentKHR(queue_acquisition.queue(), &present_info);
++    }
++    if (present_result == VK_SUCCESS || present_result == VK_SUBOPTIMAL_KHR) {
++      if (paint_context_.present_waiter) {
++        paint_context_.present_waiter->PresentedUnderPaintLock(present_id);
++      }
++      if (display_refresh_source_ == DisplayRefreshSource::kDisplayTiming) {
++        ReportPastPresentationTimings();
++      }
++    }
+   }
+   switch (present_result) {
+     case VK_SUCCESS:
+@@ -2338,7 +2534,6 @@ bool VulkanPresenter::InitializeSurfaceIndependent() {
        case kGuestOutputPaintPipelineLayoutIndexBilinear:
          guest_output_paint_push_constant_range_ffx.size = sizeof(BilinearConstants);
          break;
@@ -29014,7 +30588,7 @@ index 8b2e79f..1932e61 100644
        case kGuestOutputPaintPipelineLayoutIndexCasSharpen:
          guest_output_paint_push_constant_range_ffx.size = sizeof(CasSharpenConstants);
          break;
-@@ -2351,7 +2344,6 @@ bool VulkanPresenter::InitializeSurfaceIndependent() {
+@@ -2351,7 +2546,6 @@ bool VulkanPresenter::InitializeSurfaceIndependent() {
        case kGuestOutputPaintPipelineLayoutIndexFsrRcas:
          guest_output_paint_push_constant_range_ffx.size = sizeof(FsrRcasConstants);
          break;
@@ -29022,7 +30596,7 @@ index 8b2e79f..1932e61 100644
        default:
          assert_unhandled_case(GuestOutputPaintPipelineLayoutIndex(i));
          continue;
-@@ -2393,7 +2385,6 @@ bool VulkanPresenter::InitializeSurfaceIndependent() {
+@@ -2393,7 +2587,6 @@ bool VulkanPresenter::InitializeSurfaceIndependent() {
          shader_module_create_info.codeSize = sizeof(shaders::guest_output_bilinear_dither_ps);
          shader_module_create_info.pCode = shaders::guest_output_bilinear_dither_ps;
          break;
@@ -29030,7 +30604,7 @@ index 8b2e79f..1932e61 100644
        case GuestOutputPaintEffect::kCasSharpen:
          shader_module_create_info.codeSize = sizeof(shaders::guest_output_ffx_cas_sharpen_ps);
          shader_module_create_info.pCode = shaders::guest_output_ffx_cas_sharpen_ps;
-@@ -2424,7 +2415,6 @@ bool VulkanPresenter::InitializeSurfaceIndependent() {
+@@ -2424,7 +2617,6 @@ bool VulkanPresenter::InitializeSurfaceIndependent() {
          shader_module_create_info.codeSize = sizeof(shaders::guest_output_ffx_fsr_rcas_dither_ps);
          shader_module_create_info.pCode = shaders::guest_output_ffx_fsr_rcas_dither_ps;
          break;
@@ -29038,6 +30612,56 @@ index 8b2e79f..1932e61 100644
        default:
          // Not supported by this implementation.
          continue;
+@@ -2571,9 +2763,49 @@ bool VulkanPresenter::InitializeSurfaceIndependent() {
+     return false;
+   }
+ 
++  display_refresh_source_ = GetDisplayRefreshSource(vulkan_device_);
++  switch (display_refresh_source_) {
++    case DisplayRefreshSource::kDisplayTiming:
++      REXLOG_INFO("VulkanPresenter: display refreshes from VK_GOOGLE_display_timing");
++      break;
++    case DisplayRefreshSource::kPresentWait:
++      REXLOG_INFO("VulkanPresenter: display refreshes from VK_KHR_present_wait");
++      present_waiter_ = std::make_unique<PresentWaiter>(*this, vulkan_device_);
++      paint_context_.present_waiter = present_waiter_.get();
++      break;
++    case DisplayRefreshSource::kNone:
++      REXLOG_INFO(
++          "VulkanPresenter: display refreshes not reported, the guest's vertical blanks stay on "
++          "their timer");
++      break;
++  }
++
+   return InitializeCommonSurfaceIndependent();
+ }
+ 
++void VulkanPresenter::ReportPastPresentationTimings() {
++  const VulkanDevice::Functions& dfn = vulkan_device_->functions();
++  const VkDevice device = vulkan_device_->device();
++  uint32_t timing_count = 0;
++  if (dfn.vkGetPastPresentationTimingGOOGLE(device, paint_context_.swapchain, &timing_count,
++                                            nullptr) != VK_SUCCESS ||
++      !timing_count) {
++    return;
++  }
++  past_presentation_timings_.resize(timing_count);
++  VkResult result = dfn.vkGetPastPresentationTimingGOOGLE(
++      device, paint_context_.swapchain, &timing_count, past_presentation_timings_.data());
++  if (result != VK_SUCCESS && result != VK_INCOMPLETE) {
++    return;
++  }
++  for (uint32_t i = 0; i < timing_count; ++i) {
++    uint64_t actual_present_time = past_presentation_timings_[i].actualPresentTime;
++    if (actual_present_time) {
++      ReportDisplayRefresh(DisplayTimingToHostTicks(actual_present_time));
++    }
++  }
++}
++
+ VkPipeline VulkanPresenter::CreateGuestOutputPaintPipeline(GuestOutputPaintEffect effect,
+                                                            VkRenderPass render_pass) {
+   VkPipelineShaderStageCreateInfo stages[2] = {};
 diff --git a/src/ui/vulkan/vulkan_provider.cpp b/src/ui/vulkan/vulkan_provider.cpp
 index 9eeb902..6337da5 100644
 --- a/src/ui/vulkan/vulkan_provider.cpp

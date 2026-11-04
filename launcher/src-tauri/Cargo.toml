@@ -1,6 +1,6 @@
 [package]
 name = "azura-launcher"
-version = "0.5.1"
+version = "0.6.0"
 description = "Launcher for the Azura native port"
 authors = ["Azura contributors"]
 license = "PolyForm-Strict-1.0.0"
@@ -12,11 +12,18 @@ rust-version = "1.90"
 name = "azura_launcher_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+# The development launcher, "Azura (DEV)": built with tauri.dev.conf.json by
+# `scripts/build-launcher.sh --dev`. It keeps its own saves folder and never updates itself.
+dev = []
+
 [build-dependencies]
 tauri-build = { version = "2.7.1", features = [] }
 
 [dependencies]
 serde_json = "1.0"
+# Waiting between reconnections of Alboria's events channel; the version Tauri already uses.
+tokio = { version = "1.53.3", features = ["time"] }
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 tauri = { version = "2.12.1", features = [] }

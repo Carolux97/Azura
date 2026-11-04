@@ -15,6 +15,7 @@
 
 #include "coop_ui.h"
 #include "input/player_assignment.h"
+#include "script_hooks.h"
 
 namespace azura {
 
@@ -114,6 +115,7 @@ LocalCoopMenu::LocalCoopMenu(rex::ui::ImGuiDrawer* drawer, rex::input::InputSyst
     assignment_->BeginEditing();
     assignment_->SetBlocked(true);
   }
+  script::PlayMenuSound(script::MenuSound::kOpen);
 }
 
 bool LocalCoopMenu::HandleInput() {
@@ -143,6 +145,7 @@ bool LocalCoopMenu::HandleInput() {
                           : (pressed & rex::input::X_INPUT_GAMEPAD_DPAD_RIGHT) ? 1
                                                                                 : 0;
     if (direction && assignment_->Move(slot.device.id, direction)) {
+      script::PlayMenuSound(direction < 0 ? script::MenuSound::kLeft : script::MenuSound::kRight);
       moved_ = slot.device.id;
       moved_at_ = Clock::now();
     }
@@ -163,6 +166,7 @@ bool LocalCoopMenu::HandleInput() {
       direction = 1;
     }
     if (direction && assignment_->Move(slot.device.id, direction)) {
+      script::PlayMenuSound(direction < 0 ? script::MenuSound::kLeft : script::MenuSound::kRight);
       moved_ = slot.device.id;
       moved_at_ = Clock::now();
     }
@@ -189,6 +193,7 @@ void LocalCoopMenu::OnDraw(ImGuiIO& io) {
     return;
   }
   if (HandleInput()) {
+    script::PlayMenuSound(script::MenuSound::kAccept);
     closing_ = true;
     return;
   }
@@ -326,6 +331,7 @@ void LocalCoopMenu::OnDraw(ImGuiIO& io) {
 }
 
 void LocalCoopMenu::OnClose() {
+  script::PlayMenuSound(script::MenuSound::kClose);
   if (assignment_) {
     assignment_->SetBlocked(false);
     assignment_->EndEditing();

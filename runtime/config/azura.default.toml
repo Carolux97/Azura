@@ -102,10 +102,16 @@ network_mode = "online"
 # Alboria's control API, and the name and version this build gives it when signing in (the
 # service refuses versions it no longer supports).
 alboria_api_url = "https://api.alboria.org"
-alboria_client = "azura/0.5.1"
-# The party the game starts with, which the game keeps as the player chooses in the party options:
-# joinable (the first time), invite_only, system_link or local. Joinable and Invite only host a
-# room on Alboria; when Alboria does not answer the game starts in Local and this stays as it was.
+alboria_client = "azura/0.6.0"
+# With online play, the game's own Xbox Live parties are Alboria's: the player is signed in to Xbox
+# Live as far as the game can tell while Alboria answers and accepts the account, and Joinable and
+# Invite only are the game's Live parties, each in a room. Joining a room brings the host's party as
+# an accepted invite. Off, Joinable and Invite only are System Link parties in a room instead.
+alboria_live = true
+# Only with alboria_live off: the party the game starts with, which the game keeps as the player
+# chooses in the party options: joinable (the first time), invite_only, system_link or local.
+# Joinable and Invite only host a room on Alboria; when Alboria does not answer the game starts in
+# Local and this stays as it was. With alboria_live the game keeps its party type in the profile.
 startup_party = "joinable"
 # Options > Connection's Direct connection: reach the other players of an Alboria room directly
 # when the network allows it, with the relay as fallback. Lower latency, but they can learn this
@@ -115,6 +121,12 @@ alboria_direct = true
 # an Alboria room sees the round trip to the host and whether it is direct or goes through the
 # relay; the host, which runs the game, and a game in no room see 0 ms.
 latency_overlay = false
+# The Alboria overlay's Settings: the volume of Alboria's own sounds over the game, 0 (silent) to
+# 10 (the game's effects volume). alboria_menu_volume: moving, choosing and going back in its
+# screens, and the overlay opening and closing. alboria_notice_volume: an invitation's and the other
+# notices' sounds.
+alboria_menu_volume = 10
+alboria_notice_volume = 10
 # This computer's IPv4 address on the local network System Link plays on (for example
 # "192.168.1.20"). Empty: chosen automatically, preferring a home network address over a VPN or
 # virtual adapter's. Set it when the log line "System Link: local network address" shows the wrong

@@ -57,9 +57,21 @@ struct Texts {
   const char* incomplete;
 };
 
-// Fonts carry Latin-1 only, so the languages written in other scripts use the English texts.
+// In the game's languages; the runtime loads the Cyrillic and CJK fonts each one needs.
 Texts LocalizedTexts(uint32_t language) {
   switch (language) {
+    case 2:  // Japanese
+      return {"コードで参加", "ホストから教えてもらったルームのコードを入力してください。", "削除", "戻る", "参加", "押す",
+              "コードを入力", "ルームに参加中…", "コードは8文字です"};
+    case 7:  // Korean
+      return {"코드로 참가", "호스트가 알려 준 방 코드를 입력하세요.", "지우기", "뒤로", "참가", "누르기", "코드 입력",
+              "방에 참가하는 중…", "코드는 8자입니다"};
+    case 8:  // Traditional Chinese
+      return {"以代碼加入", "輸入主持人給你的房間代碼。", "刪除", "返回", "加入", "按下", "輸入代碼", "正在加入房間…",
+              "代碼共 8 個字元"};
+    case 12:  // Russian
+      return {"ВОЙТИ ПО КОДУ", "Введите код комнаты, который дал вам хост.", "СТЕРЕТЬ", "НАЗАД", "ВОЙТИ", "Нажать",
+              "Введите код", "Вход в комнату…", "В коде 8 символов"};
     case 3:  // German
       return {"PER CODE BEITRETEN", "Gib den Code des Raums ein, den dir der Gastgeber gegeben hat.", "L\xC3\x96SCHEN",
               "ZUR\xC3\x9C""CK", "BEITRETEN", "Dr\xC3\xBC""cken", "Code eintippen", "Raum wird betreten\xE2\x80\xA6",
@@ -123,9 +135,12 @@ JoinByCodeMenu::JoinByCodeMenu(rex::ui::ImGuiDrawer* drawer, rex::input::InputSy
       opened_(Clock::now()),
       last_input_(input) {
   if (assignment_) assignment_->SetBlocked(true);
+  script::PlayMenuSound(script::MenuSound::kOpen);
 }
 
 void JoinByCodeMenu::MoveFocus(int rows, int columns) {
+  const int row = focus_row_;
+  const int column = focus_column_;
   if (rows) {
     // Keeps about the same place across rows of other lengths.
     const float place = (focus_column_ + 0.5f) / RowLength(focus_row_);
@@ -133,9 +148,19 @@ void JoinByCodeMenu::MoveFocus(int rows, int columns) {
     focus_column_ = std::clamp(static_cast<int>(place * RowLength(focus_row_)), 0, RowLength(focus_row_) - 1);
   }
   focus_column_ = std::clamp(focus_column_ + columns, 0, RowLength(focus_row_) - 1);
+  // The game's sounds for moving: up and down between rows, left and right along one.
+  if (focus_row_ != row) {
+    script::PlayMenuSound(focus_row_ < row ? script::MenuSound::kUp : script::MenuSound::kDown);
+  } else if (focus_column_ != column) {
+    script::PlayMenuSound(focus_column_ < column ? script::MenuSound::kLeft : script::MenuSound::kRight);
+  }
 }
 
 void JoinByCodeMenu::PressFocused() {
+  // Going back sounds as it closes (OnDraw); the other keys as a choice.
+  if (focus_row_ < kCharacterRows || kActions[focus_column_] != Action::kBack) {
+    script::PlayMenuSound(script::MenuSound::kAccept);
+  }
   if (focus_row_ < kCharacterRows) {
     Type(kKeyRows[focus_row_][focus_column_]);
     return;
@@ -146,6 +171,7 @@ void JoinByCodeMenu::PressFocused() {
       error_.clear();
       break;
     case Action::kBack:
+      script::PlayMenuSound(script::MenuSound::kBack);
       going_back_ = true;
       closing_ = true;
       break;
@@ -177,8 +203,13 @@ void JoinByCodeMenu::Join() {
     return;
   }
   error_.clear();
+  // A party leader with others brings them along; when they do not all fit, nothing is joined and
+  // the player stays in their party.
+  if (const std::string refused = alboria::JoinGame(code_); !refused.empty()) {
+    error_ = AlboriaErrorText(language_, refused);
+    return;
+  }
   joining_ = true;
-  alboria::JoinGame(code_);
 }
 
 bool JoinByCodeMenu::HandleInput() {
@@ -209,10 +240,14 @@ bool JoinByCodeMenu::HandleInput() {
       if (pressed & rex::input::X_INPUT_GAMEPAD_DPAD_RIGHT) MoveFocus(0, 1);
       if (pressed & rex::input::X_INPUT_GAMEPAD_A) PressFocused();
       if ((pressed & rex::input::X_INPUT_GAMEPAD_X) && !code_.empty()) {
+        script::PlayMenuSound(script::MenuSound::kBack);
         code_.pop_back();
         error_.clear();
       }
-      if (pressed & rex::input::X_INPUT_GAMEPAD_START) Join();
+      if (pressed & rex::input::X_INPUT_GAMEPAD_START) {
+        script::PlayMenuSound(script::MenuSound::kAccept);
+        Join();
+      }
     }
   }
 
@@ -239,7 +274,10 @@ bool JoinByCodeMenu::HandleInput() {
     code_.pop_back();
     error_.clear();
   }
-  if (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)) Join();
+  if (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)) {
+    script::PlayMenuSound(script::MenuSound::kAccept);
+    Join();
+  }
   return close;
 }
 
@@ -261,6 +299,7 @@ void JoinByCodeMenu::OnDraw(ImGuiIO& io) {
     return;
   }
   if (HandleInput()) {
+    script::PlayMenuSound(script::MenuSound::kBack);
     going_back_ = true;
     closing_ = true;
     return;
@@ -433,6 +472,7 @@ void JoinByCodeMenu::OnDraw(ImGuiIO& io) {
 }
 
 void JoinByCodeMenu::OnClose() {
+  script::PlayMenuSound(script::MenuSound::kClose);
   if (assignment_) assignment_->SetBlocked(false);
   if (owner_) *owner_ = nullptr;
 }

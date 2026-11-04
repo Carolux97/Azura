@@ -8,8 +8,10 @@
  * A folder check is an object with a `status`:
  *   { status: "ok", folder, titleId, mediaId, versionId, versionName, languages }
  *                                                a known build of the game: playable
- *   { status: "unsupportedVersion", folder, titleId, mediaId, languages }
- *                                                the game, in a build with no manifest yet
+ *   { status: "unsupportedVersion", folder, titleId, mediaId, languages, xexSha256, imageSha256 }
+ *                                                the game, in a build with no manifest yet; the
+ *                                                hashes of default.xex (whole, and after its
+ *                                                header) are what the player reports
  *   { status: "wrongGame", folder, titleId }     an Xbox 360 executable of another game
  *   { status: "notADirectory", folder }          the path is missing, or neither a folder nor a file
  *   { status: "notADiscImage", folder }          a file that is not an Xbox 360 disc image
@@ -27,8 +29,25 @@ const tauri = globalThis.__TAURI__;
 /** True when running inside the Tauri app rather than a browser. */
 export const isNativeApp = Boolean(tauri);
 
-/** Result the browser simulation returns for any folder: the World edition (see versions.toml). */
-const simulatedCheck = (folder) => ({
+/**
+ * Result the browser simulation returns for any folder: the World edition (see versions.toml), or
+ * with "?unsupported" in the address an edition the project does not know.
+ */
+const simulatedCheck = (folder) =>
+  simulatedQuery.has("unsupported")
+    ? {
+        status: "unsupportedVersion",
+        folder,
+        titleId: "4D5308AB",
+        mediaId: "52AC485A",
+        languages: ["DEU", "INT"],
+        xexSha256: "0f".repeat(32),
+        imageSha256: "387bdfa99c137afdbf86a337754822d59743950fa703f6c52f8dcf32c12ebbb6",
+      }
+    : simulatedWorldCheck(folder);
+
+/** The World edition's check (see versions.toml). */
+const simulatedWorldCheck = (folder) => ({
   status: "ok",
   folder,
   titleId: "4D5308AB",
@@ -162,6 +181,9 @@ export const pickDlcPackage = async () => (isNativeApp ? tauri.core.invoke("pick
 /** Installs a downloadable content package into the saves folder; resolves with its name. */
 export const installDlc = async (pkg) => (isNativeApp ? tauri.core.invoke("install_dlc", { package: pkg }) : "RAAM's Shadow");
 
+/** Removes an installed downloadable content by its key in the catalogue. */
+export const removeDlc = async (id) => (isNativeApp ? tauri.core.invoke("remove_dlc", { id }) : undefined);
+
 /**
  * The installed downloadable content: { packages, raamsShadow, raamsShadowPlayable }.
  */
@@ -183,8 +205,8 @@ const SIMULATED_OUTPUT = [
  * "runtimeMissing", "alreadyRunning", "startFailed"). Its output, restarts and end arrive
  * through onGameOutput, onGameRestart and onGameExit.
  */
-export const launchGame = async () => {
-  if (isNativeApp) return tauri.core.invoke("launch_game");
+export const launchGame = async (joinCode = null) => {
+  if (isNativeApp) return tauri.core.invoke("launch_game", { joinCode });
   SIMULATED_OUTPUT.forEach(([stream, line], index) => {
     setTimeout(() => simulated.output.forEach((listener) => listener({ stream, line })), 300 * (index + 1));
   });
@@ -396,9 +418,44 @@ export const alboriaSignIn = async (gamertag) => {
 };
 
 /** Asks for a code: purpose "create" (with the gamertag) or "signin"; { expiresIn, resendIn }. */
-/** Whether the service sends codes now: `{ emailCodes }`, false while accounts are made unverified. */
-export const alboriaStatus = async () =>
-  isNativeApp ? tauri.core.invoke("alboria_status") : { emailCodes: !simulatedCodesOff };
+/**
+ * How the service is (alboria.rs, Status): `{ emailCodes, maintenance, maintenanceUntil, motd, game,
+ * warnings }`, with the game `titleId`'s own state when given. In the simulation, "?notices",
+ * "?maintenance", "?gameoff", "?outdated" and "?warn" in the address show each state.
+ */
+export const alboriaStatus = async (titleId = null) => {
+  if (isNativeApp) return tauri.core.invoke("alboria_status", { titleId });
+  const inMinutes = (minutes) => new Date(Date.now() + minutes * 60_000).toISOString();
+  const has = (flag) => simulatedQuery.has(flag);
+  return {
+    emailCodes: !simulatedCodesOff,
+    maintenance: has("maintenance"),
+    maintenanceUntil: has("maintenance") ? inMinutes(120) : null,
+    motd: has("notices") ? "<h3>Maintenance tonight</h3><p>From <b>22:00</b> to <b>22:30</b> <span style=\"color:#d9306b\">no new rooms</span>. More on <a href=\"https://alboria.org\">alboria.org</a>.</p>" : null,
+    game: titleId
+      ? {
+          online: !has("gameoff"),
+          maintenance: false,
+          maintenanceUntil: null,
+          motd: has("notices") ? "Versus playlists are coming. Until then, invite friends to your room." : null,
+          minLauncher: has("outdated") ? "9.0.0" : null,
+        }
+      : null,
+    warnings: has("warn") ? [{ action: "restart", scope: "all", at: inMinutes(12) }, { action: "close_rooms", scope: "game", at: inMinutes(2) }] : [],
+  };
+};
+
+/** Opens the page to report an unsupported edition (fixed on the Rust side); a new tab in a browser. */
+export const openEditionReport = async () => {
+  if (isNativeApp) return tauri.core.invoke("open_edition_report");
+  window.open("https://github.com/Carolux97/Azura/issues/new", "_blank", "noopener");
+};
+
+/** Opens a link of an Alboria notice (https or mailto only) in the system's browser. */
+export const openNoticeLink = async (url) => {
+  if (isNativeApp) return tauri.core.invoke("open_notice_link", { url });
+  window.open(url, "_blank", "noopener");
+};
 
 export const alboriaRequestCode = async ({ purpose, email, gamertag = null, language }) => {
   if (isNativeApp) return tauri.core.invoke("alboria_request_code", { purpose, email, gamertag, language });
@@ -490,4 +547,122 @@ export const alboriaDelete = async (code) => {
 export const openAlboriaSite = async () => {
   if (isNativeApp) return tauri.core.invoke("open_alboria_site");
   window.open("https://alboria.org", "_blank", "noopener");
+};
+
+// --- Friends (alboria-notes:azura/alboria-relay.md, section 4.7) ---------------------------------
+// In a browser a small simulation answers, with a few friends whose state changes now and then, so
+// the panel can be designed without the service.
+
+const simulatedEvents = { event: new Set(), state: new Set() };
+const simulatedFriends = {
+  friends: [
+    { id: 2, name: "Kabosu#117", favourite: true, presence: { status: "playing", title_id: "4D5308AB", party: "joinable" } },
+    { id: 3, name: "CAPI_REX#501", favourite: false, presence: { status: "playing", title_id: "4D5308AB", party: "invite_only" } },
+    { id: 4, name: "Nimbus#4827", favourite: false, presence: { status: "online" } },
+    { id: 5, name: "Bruma#733", favourite: false, presence: { status: "offline", last_seen: new Date(Date.now() - 30 * 3_600_000).toISOString() } },
+  ],
+  incoming: [{ id: 6, name: "Viento#58" }],
+  outgoing: [{ id: 7, name: "Gale#902" }],
+  blocked: [],
+  invitations: simulatedQuery.has("invite")
+    ? [{ id: "inv1", from: { id: 3, name: "CAPI_REX#501" }, title_id: "4D5308AB", expires_at: new Date(Date.now() + 900_000).toISOString() }]
+    : [],
+};
+const simulatedFriendsAnswer = (path, body) => {
+  const f = simulatedFriends;
+  const named = (list) => list.find((entry) => entry.id === body.id);
+  const drop = (key) => (f[key] = f[key].filter((entry) => entry.id !== body.id));
+  switch (path) {
+    case "/v1/friends":
+      return structuredClone(f);
+    case "/v1/friends/request":
+      if (!f.outgoing.some((entry) => entry.name === body.name)) f.outgoing.push({ id: 100 + f.outgoing.length, name: body.name });
+      return { result: "sent" };
+    case "/v1/friends/accept": {
+      const from = named(f.incoming);
+      drop("incoming");
+      if (from) f.friends.push({ ...from, favourite: false, presence: { status: "online" } });
+      return {};
+    }
+    case "/v1/friends/decline":
+      drop("incoming");
+      return {};
+    case "/v1/friends/cancel":
+      drop("outgoing");
+      return {};
+    case "/v1/friends/remove":
+      drop("friends");
+      return {};
+    case "/v1/friends/favourite": {
+      const friend = named(f.friends);
+      if (friend) friend.favourite = body.favourite;
+      return {};
+    }
+    case "/v1/friends/block": {
+      const friend = named(f.friends);
+      drop("friends");
+      if (friend) f.blocked.push({ id: friend.id, name: friend.name });
+      return {};
+    }
+    case "/v1/friends/unblock":
+      drop("blocked");
+      return {};
+    case "/v1/friends/room":
+      if (named(f.friends)?.presence.party !== "joinable") throw simulatedError("invite_only");
+      return { code: "K7QM-2XPA", title_id: "4D5308AB" };
+    case "/v1/invitations/room":
+      f.invitations = f.invitations.filter((entry) => entry.id !== body.id);
+      return { code: "B3RT-9PLQ", title_id: "4D5308AB" };
+    case "/v1/invitations/decline":
+      f.invitations = f.invitations.filter((entry) => entry.id !== body.id);
+      return {};
+    case "/v1/invitations":
+    case "/v1/reports":
+      return { sent: true };
+    default:
+      throw simulatedError("bad_request");
+  }
+};
+
+/** A friends' request (section 4.7): `path` such as "/v1/friends/accept", with its body; the answer. */
+export const alboriaFriends = async (path, body = {}) =>
+  isNativeApp ? tauri.core.invoke("alboria_friends", { path, body }) : simulatedFriendsAnswer(path, body);
+
+/** Asks the running game to join the room `code`; with the game closed, launchGame(code) does. */
+export const joinRoom = async (code) => {
+  if (isNativeApp) return tauri.core.invoke("join_room", { code });
+};
+
+/** Opens Alboria's events channel and keeps it open; stopAlboriaEvents closes it. */
+export const startAlboriaEvents = async () => {
+  if (isNativeApp) return tauri.core.invoke("alboria_events_start");
+  simulatedEvents.state.forEach((listener) => listener({ connected: true }));
+};
+export const stopAlboriaEvents = async () => {
+  if (isNativeApp) return tauri.core.invoke("alboria_events_stop");
+};
+
+/** Calls `listener` with { event, data } for each event of the channel. */
+export const onAlboriaEvent = (listener) => {
+  if (isNativeApp) return tauri.event.listen("alboria-event", (event) => listener(event.payload));
+  simulatedEvents.event.add(listener);
+};
+/** Calls `listener` with { connected } when the channel opens or closes. */
+export const onAlboriaEventsState = (listener) => {
+  if (isNativeApp) return tauri.event.listen("alboria-events-state", (event) => listener(event.payload));
+  simulatedEvents.state.add(listener);
+};
+/** Browser simulation only: sends an event as the service would, for designing the panel. */
+export const simulateAlboriaEvent = (event, data) => simulatedEvents.event.forEach((listener) => listener({ event, data }));
+
+// --- The development launcher's Alboria server ----------------------------------------------------
+
+/** Which Alboria server this launcher talks to: `{ dev, choice, url }` (dev false: the published launcher). */
+export const alboriaServer = async () =>
+  isNativeApp ? tauri.core.invoke("alboria_server") : { dev: simulatedQuery.has("dev"), choice: "local", url: "http://127.0.0.1:8080" };
+
+/** Development launcher only: talks to `choice` (`local`, `production` or an address) from now on. */
+export const setAlboriaServer = async (choice) => {
+  if (isNativeApp) return tauri.core.invoke("alboria_server_set", { choice });
+  return { dev: true, choice: choice.startsWith("http") ? "other" : choice, url: choice.startsWith("http") ? choice : "http://127.0.0.1:8080" };
 };

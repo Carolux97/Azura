@@ -1,5 +1,7 @@
 #include "mouse_look.h"
 
+#include "player_activity.h"
+
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -83,6 +85,7 @@ bool ApplyMouseLook(uint8_t* base, uint32_t user_index, const MouseLookTarget& t
   }
   const float dx = look.dx;
   const float dy = REXCVAR_GET(mnk_invert_y) ? -look.dy : look.dy;
+  if (user_index == 0 && (dx != 0.0f || dy != 0.0f)) NoteActivity();
   // PlayerInput multiplies aMouseX and aMouseY by MouseSensitivity, whose value a console build
   // never needed: it is divided out here, so the turn per pixel is ours whatever it holds.
   float engine_sensitivity = LoadFloat(base, target.sensitivity);

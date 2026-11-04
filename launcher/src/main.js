@@ -28,7 +28,12 @@ import {
   selectedGpu,
   setDetectedSystem,
 } from "./graphics.js";
+import { canStartUpdate, updateButtonState } from "./update.js";
+import { minutesUntil, noticeKey, serviceView } from "./alboriaService.js";
+import { setupFriends } from "./friendsPanel.js";
 import {
+  alboriaServer,
+  alboriaStatus,
   checkForUpdate,
   checkGameFolder,
   getAppVersion,
@@ -38,6 +43,8 @@ import {
   installRuntime,
   installUpdate,
   isNativeApp,
+  openNoticeLink,
+  setAlboriaServer,
   launchGame,
   prepareShaders,
   shaderStorageBytes,
@@ -60,10 +67,12 @@ import {
   openSavesFolder,
   pickGameFolder,
   pickGameImage,
+  openEditionReport,
   onPathDropped,
   pickSavesFolder,
   pickDlcPackage,
   installDlc,
+  removeDlc,
   dlcState,
   repairSaves,
   resetSaves,
@@ -77,6 +86,7 @@ import { achievementView } from "./achievements.js";
 import { createBuildTracker } from "./buildProgress.js";
 import { LOCK_ICON, completedBanner, renderAchievementsPage } from "./achievementsPage.js";
 import { setupAccount } from "./account.js";
+import { mirrorSelects, syncMirrors } from "./selectMirror.js";
 
 const SPORE_COUNT = 26;
 /** Launcher version shown in a browser; the app reads its real version (see detectSystem). */
@@ -131,6 +141,12 @@ const state = {
   // null (not installing) or a percentage, -1 while the size is unknown.
   update: null,
   updateProgress: null,
+  // Whether the confirmation under the update button is showing.
+  updateConfirming: false,
+  // How Alboria is (alboria_status): undefined before the first answer, null when it could not be
+  // reached; read only with an Alboria account (renderService).
+  service: undefined,
+  serviceReadAt: 0,
   // This Mac ({ chip, memoryGb, arch }), or null when unknown (always in a browser).
   system: null,
   launcherVersion: BROWSER_LAUNCHER_VERSION,
@@ -168,6 +184,8 @@ const state = {
   gpu: null,
   // Whether the launcher minimizes itself while the game runs (minimize_while_playing).
   minimizeWhilePlaying: true,
+  // The key that opens the Alboria overlay in the game (bind_alboria_overlay).
+  overlayKey: "F1",
   // The graphics cards the runtime lists (see src-tauri/src/gpus.rs), once asked for.
   gpus: { devices: [], automatic: null },
 };
@@ -187,6 +205,7 @@ const currentSettings = () => ({
   savesFolder: state.savesFolder,
   minimizeWhilePlaying: state.minimizeWhilePlaying,
   account: state.account,
+  overlayKey: state.overlayKey,
 });
 
 /** Pending save timer; null when everything is saved. */
@@ -351,6 +370,13 @@ document.addEventListener("visibilitychange", syncMotion);
 
 const renderPlay = () => {
   syncMotion();
+  // The update button and moving the saves wait while the game runs, so they follow its state too.
+  renderUpdate();
+  renderSavesFolder();
+  // Alboria's state and the friends list follow the account, which account.js changes and then
+  // draws Play again.
+  renderService();
+  friends?.sync();
   const status = document.getElementById("status-game");
   status.dataset.state = isInstalled() ? "ok" : "warn";
   let detail = "status.noFolder";
@@ -392,6 +418,12 @@ const renderPlay = () => {
   if (player) {
     document.getElementById("status-player-detail").textContent = account.playerLine();
   }
+  // The line at the top of every page: who plays, once the player chose an account. Its light
+  // follows Alboria's state (renderService); a local account has a steady grey one.
+  const playerLine = document.getElementById("player-line");
+  playerLine.hidden = !state.account;
+  document.getElementById("player-line-text").textContent = account.playerLine();
+  if (state.account !== "alboria") playerLine.dataset.state = "local";
 
   const button = document.getElementById("launch");
   button.classList.toggle("is-install", !isInstalled());
@@ -411,10 +443,14 @@ const renderPlay = () => {
     sub = state.runtime.updateKind === "link" ? "play.updateLinkSub" : "play.updateBuildSub";
   } else if (isInstalled()) {
     label = { idle: "play.launch", starting: "play.launching", running: "play.running", preparing: "play.launch" }[state.game];
-    sub = state.game === "idle" && runtimeNeedsInstall() ? "play.runtimeWillInstall" : "play.mode";
+    // The game itself offers every mode, so a button that only plays needs no line under it: the
+    // line is there only for something that happens first.
+    sub = state.game === "idle" && runtimeNeedsInstall() ? "play.runtimeWillInstall" : null;
   }
   button.querySelector(".btn-launch-label").textContent = t(label);
-  button.querySelector(".btn-launch-sub").textContent = t(sub);
+  const subLine = document.getElementById("launch-sub");
+  subLine.hidden = !sub;
+  subLine.textContent = sub ? t(sub) : "";
   renderLogState();
 
   // macOS: the chip is the GPU too, "Apple M4 · 24 GB · Metal". Linux and Windows: the processor
@@ -611,42 +647,50 @@ const launchErrorMessage = (error) => {
  * The main button either opens the Installation view (no game files yet) or starts the game. The
  * game's output fills the log panel; its end re-enables the button.
  */
+/**
+ * Starts the game as the Play button does, installing the runtime first when needed. With
+ * `joinCode` (a friend's room or an invitation's, friends.js) the game joins that room once its
+ * main menu is up; the result is whether the game started.
+ */
+const startGame = async (joinCode = null) => {
+  if (!isInstalled()) {
+    showView("install");
+    document.getElementById("pick-game").focus();
+    return false;
+  }
+  // Building from the kit takes minutes: the button then only builds, and turns to Play once the
+  // build is done, so the game does not start while the player may have stepped away. A project
+  // build installs in a second, and Play goes on to start the game.
+  if (runtimeNeedsInstall() && state.runtime.source === "kit") {
+    await runRuntimeInstall();
+    return false;
+  }
+  document.getElementById("game-log-body").replaceChildren();
+  pendingLogLines = [];
+  state.game = "starting";
+  renderPlay();
+  if (runtimeNeedsInstall() && !(await runRuntimeInstall())) {
+    state.game = "idle";
+    renderPlay();
+    return false;
+  }
+  setLogState("log.starting");
+  renderPlay();
+  try {
+    await launchGame(joinCode);
+    state.game = "running";
+    setLogState("log.running");
+  } catch (error) {
+    state.game = "idle";
+    const [key, vars] = launchErrorMessage(error);
+    setLogState(key, "error", vars);
+  }
+  renderPlay();
+  return state.game === "running";
+};
+
 const setupLaunch = () => {
-  document.getElementById("launch").addEventListener("click", async () => {
-    if (!isInstalled()) {
-      showView("install");
-      document.getElementById("pick-game").focus();
-      return;
-    }
-    // Building from the kit takes minutes: the button then only builds, and turns to Play once the
-    // build is done, so the game does not start while the player may have stepped away. A project
-    // build installs in a second, and Play goes on to start the game.
-    if (runtimeNeedsInstall() && state.runtime.source === "kit") {
-      await runRuntimeInstall();
-      return;
-    }
-    document.getElementById("game-log-body").replaceChildren();
-    pendingLogLines = [];
-    state.game = "starting";
-    renderPlay();
-    if (runtimeNeedsInstall() && !(await runRuntimeInstall())) {
-      state.game = "idle";
-      renderPlay();
-      return;
-    }
-    setLogState("log.starting");
-    renderPlay();
-    try {
-      await launchGame();
-      state.game = "running";
-      setLogState("log.running");
-    } catch (error) {
-      state.game = "idle";
-      const [key, vars] = launchErrorMessage(error);
-      setLogState(key, "error", vars);
-    }
-    renderPlay();
-  });
+  document.getElementById("launch").addEventListener("click", () => startGame());
 
   onGameOutput((output) => {
     // Prepare shaders reports its progress on the card, not in the game log.
@@ -854,6 +898,24 @@ const setupBuildProgress = () => {
   document.getElementById("install-runtime-log").addEventListener("click", () => {
     if (state.runtimeInstallError?.log) showBuildLog(state.runtimeInstallError.log).catch((error) => console.error(error));
   });
+  // The details stay selectable in their box, so a failed copy still leaves a way to take them.
+  const copyReport = document.getElementById("edition-report-copy");
+  copyReport.addEventListener("click", async () => {
+    const report = editionReport(state.gameCheck);
+    if (!report) return;
+    try {
+      await navigator.clipboard.writeText(report);
+      copyReport.textContent = t("install.editionReportCopied");
+      setTimeout(() => (copyReport.textContent = t("install.editionReportCopy")), EDITION_REPORT_COPIED_MS);
+    } catch (error) {
+      // Without clipboard access the details are selected instead, ready for Cmd/Ctrl+C.
+      console.error("Could not copy the edition report:", error);
+      window.getSelection()?.selectAllChildren(document.getElementById("edition-report-details"));
+    }
+  });
+  document.getElementById("edition-report-open").addEventListener("click", () => {
+    openEditionReport().catch((error) => console.error(error));
+  });
 };
 
 /** How often the status is checked while Apple's install window is open, and for how long. */
@@ -957,7 +1019,7 @@ const setupCompiler = () => {
 /** Downloadable content panel: what is installed, and whether RAAM's Shadow can be played. */
 const dlc = { state: null, installing: null };
 /** One row of the downloadable content list: a light (its state), the name and a line under it. */
-const dlcRow = (name, detail, rowState) => {
+const dlcRow = (name, detail, rowState, onRemove = null) => {
   const row = document.createElement("div");
   row.className = "status";
   row.dataset.state = rowState;
@@ -971,7 +1033,26 @@ const dlcRow = (name, detail, rowState) => {
   line.textContent = detail;
   text.append(title, line);
   row.append(dot, text);
+  if (onRemove) {
+    const remove = document.createElement("button");
+    remove.className = "btn btn-small";
+    remove.textContent = t("install.dlcRemove");
+    remove.disabled = dlc.installing;
+    remove.addEventListener("click", onRemove);
+    row.append(remove);
+  }
   return row;
+};
+
+/** Removes an installed downloadable content and shows the result. */
+const removeDlcEntry = async (id) => {
+  try {
+    await removeDlc(id);
+    toast(t("install.dlcRemoved", { name: t(`install.dlcNames.${id}`) }));
+  } catch (error) {
+    toast(t("install.dlcRemoveFailed", { detail: String(error) }));
+  }
+  await refreshDlc();
 };
 
 /**
@@ -987,8 +1068,17 @@ const renderDlc = () => {
   const rows = [];
   if (dlc.installing) rows.push(dlcRow(dlc.installing, t("install.dlcStatus.installing"), "progress"));
   for (const entry of dlc.state?.entries ?? []) {
-    const rowState = entry.status === "ready" ? "ok" : entry.status === "needsRuntime" ? "pending" : "warn";
-    rows.push(dlcRow(t(`install.dlcNames.${entry.id}`), t(`install.dlcStatus.${entry.status}`), rowState));
+    const rowState =
+      entry.status === "ready" || entry.status === "installed" ? "ok" : entry.status === "needsRuntime" ? "pending" : "warn";
+    const installed = entry.status !== "notInstalled";
+    rows.push(
+      dlcRow(
+        t(`install.dlcNames.${entry.id}`),
+        t(`install.dlcStatus.${entry.status}`),
+        rowState,
+        installed ? () => removeDlcEntry(entry.id) : null,
+      ),
+    );
   }
   if (dlc.state?.otherPackages) {
     rows.push(dlcRow(t("install.dlcOthers"), t("install.dlcOthersCount", { count: dlc.state.otherPackages }), "ok"));
@@ -1045,21 +1135,34 @@ const renderInstall = () => {
     state.installingRuntime ? "install.installingRuntime" : state.runtime.installed ? "install.updateRuntime" : "install.installRuntime",
   );
 
-  const savesField = document.getElementById("saves-path");
-  savesField.value = state.savesFolder;
-  savesField.title = state.savesFolder;
-  document.getElementById("saves-conflict").hidden = !state.savesConflict;
-  if (state.savesConflict) {
-    document.getElementById("saves-conflict-text").textContent = t("install.savesConflict", { folder: state.savesConflict });
-  }
-
   const line = document.getElementById("game-check");
   line.hidden = !check;
+  const report = editionReport(check);
+  document.getElementById("edition-report").hidden = !report;
+  document.getElementById("edition-report-details").textContent = report ?? "";
   if (!check) return;
   line.dataset.state = check.status === "ok" ? "ok" : "error";
   // Every check field (titleId, mediaId, versionName, ...) is available to the message.
   line.textContent = t(`install.${check.status}`, check);
 };
+
+/**
+ * The details a player reports an unsupported edition with, or null for any other check. In
+ * English whatever the launcher's language, since they are pasted into the project's issues.
+ */
+const editionReport = (check) => {
+  if (check?.status !== "unsupportedVersion") return null;
+  return [
+    `Media ID: ${check.mediaId}`,
+    `default.xex SHA-256: ${check.xexSha256}`,
+    `Image SHA-256 (after the header): ${check.imageSha256}`,
+    `Languages: ${check.languages.join(", ") || "none found"}`,
+    `Launcher: ${state.launcherVersion}`,
+  ].join("\n");
+};
+
+/** How long the copy button says the details were copied. */
+const EDITION_REPORT_COPIED_MS = 2000;
 
 /**
  * Fills the game language selector with the languages found in the game folder. Without a folder
@@ -1127,20 +1230,6 @@ const setupInstall = () => {
 
   document.getElementById("install-runtime").addEventListener("click", () => runRuntimeInstall());
 
-  // Moving the saves: a folder that already holds saves needs a second, explicit confirmation.
-  const moveSaves = async (folder, replace) => {
-    try {
-      state.savesFolder = await changeSavesFolder(folder, replace);
-      state.savesConflict = null;
-      toast(t("toast.savesMoved"));
-    } catch (error) {
-      state.savesConflict = null;
-      if (error?.kind === "destinationHasSaves") state.savesConflict = folder;
-      else if (error?.kind === "nestedFolders") toast(t("toast.savesNested"));
-      else toast(t("toast.savesFailed", { detail: error?.detail ?? String(error) }));
-    }
-    renderInstall();
-  };
   document.getElementById("add-dlc")?.addEventListener("click", async () => {
     const pkg = await pickDlcPackage();
     if (!pkg) return;
@@ -1157,15 +1246,6 @@ const setupInstall = () => {
     await refreshDlc();
   });
   refreshDlc();
-  document.getElementById("pick-saves").addEventListener("click", async () => {
-    const folder = await pickSavesFolder();
-    if (folder && folder !== state.savesFolder) await moveSaves(folder, false);
-  });
-  document.getElementById("saves-replace").addEventListener("click", () => moveSaves(state.savesConflict, true));
-  document.getElementById("saves-cancel").addEventListener("click", () => {
-    state.savesConflict = null;
-    renderInstall();
-  });
 };
 
 /** Checks the folder saved in an earlier session, if any, and shows the result. */
@@ -1187,6 +1267,7 @@ const applyStoredGraphics = (settings) => {
   state.fullscreen = Boolean(settings.fullscreen);
   state.gpu = settings.gpu ?? null;
   state.minimizeWhilePlaying = settings.minimizeWhilePlaying ?? true;
+  state.overlayKey = settings.overlayKey ?? "F1";
 };
 
 /**
@@ -1213,7 +1294,9 @@ const renderGraphics = () => {
   select.value = offered ? state.renderResolution : "auto";
   document.getElementById("display-mode").value = state.fullscreen ? "fullscreen" : "windowed";
   document.getElementById("while-playing").value = state.minimizeWhilePlaying ? "minimize" : "keepOpen";
+  document.getElementById("overlay-key").value = state.overlayKey;
   renderGpuChoice();
+  syncMirrors();
 };
 
 /** The graphics card choice, shown only when the computer has two or more cards. */
@@ -1250,6 +1333,7 @@ const refreshGpus = async () => {
 
 /** Wires the graphics controls; every change is saved. */
 const setupGraphics = () => {
+  mirrorSelects(document.querySelector('.view[data-view="graphics"]'));
   const resolution = document.getElementById("resolution-scale");
   resolution.addEventListener("change", () => {
     state.renderResolution = resolution.value;
@@ -1259,6 +1343,15 @@ const setupGraphics = () => {
   const displayMode = document.getElementById("display-mode");
   displayMode.addEventListener("change", () => {
     state.fullscreen = displayMode.value === "fullscreen";
+    persist();
+  });
+
+  // The keys the overlay can take (settings.rs OVERLAY_KEYS): F3, F4 and F7 are the runtime's.
+  const overlayKey = document.getElementById("overlay-key");
+  for (const key of ["F1", "F2", "F5", "F6", "F8", "F9", "F10", "F11", "F12"]) overlayKey.add(new Option(key, key));
+  overlayKey.value = state.overlayKey;
+  overlayKey.addEventListener("change", () => {
+    state.overlayKey = overlayKey.value;
     persist();
   });
 
@@ -1315,19 +1408,51 @@ const renderLanguageOptions = () => {
   });
 };
 
-/** Writes the update button: hidden, "Update to X", or the download progress. */
+/**
+ * Writes the update button (hidden, "Update to X", disabled while the game runs, or the download
+ * progress) and the confirmation under it.
+ */
 const renderUpdate = () => {
   const button = document.getElementById("update-button");
-  button.hidden = !state.update;
-  if (!state.update) return;
-  button.disabled = state.updateProgress !== null;
-  if (state.updateProgress === null) {
-    button.textContent = t("update.available", { version: state.update.version });
-  } else if (state.updateProgress < 0) {
-    button.textContent = t("update.downloading", { percent: "…" });
+  const view = updateButtonState(state.update, state.updateProgress, state.game);
+  button.hidden = view.hidden;
+  button.disabled = view.disabled;
+  button.title = view.hint ? t(view.hint) : "";
+  if (view.hidden) {
+    state.updateConfirming = false;
+  } else if (view.key === "update.downloading") {
+    const percent =
+      view.vars.percent < 0 ? "…" : new Intl.NumberFormat(getLocale(), { style: "percent" }).format(view.vars.percent / 100);
+    button.textContent = t(view.key, { percent });
   } else {
-    const percent = new Intl.NumberFormat(getLocale(), { style: "percent" }).format(state.updateProgress / 100);
-    button.textContent = t("update.downloading", { percent });
+    button.textContent = t(view.key, view.vars);
+  }
+  // The confirmation only stands while the update can still start.
+  if (!canStartUpdate(state.update, state.updateProgress, state.game)) state.updateConfirming = false;
+  const confirm = document.getElementById("update-confirm");
+  confirm.hidden = !state.updateConfirming;
+  if (state.updateConfirming) {
+    document.getElementById("update-confirm-text").textContent = t("update.confirm", { version: state.update.version });
+  }
+};
+
+/**
+ * Downloads and installs the newer launcher, then restarts into it. It asks first, in the
+ * confirmation under the button; the "launcher too old" panel calls it too. Only a failure
+ * comes back here.
+ */
+const startLauncherUpdate = async () => {
+  if (!canStartUpdate(state.update, state.updateProgress, state.game)) return;
+  state.updateConfirming = false;
+  state.updateProgress = -1;
+  renderUpdate();
+  try {
+    await installUpdate();
+  } catch (error) {
+    console.error("Installing the update failed:", error);
+    state.updateProgress = null;
+    renderUpdate();
+    toast(t("update.failed"));
   }
 };
 
@@ -1342,25 +1467,290 @@ const setupUpdates = () => {
     renderUpdate();
   });
 
-  document.getElementById("update-button").addEventListener("click", async () => {
-    state.updateProgress = -1;
+  // The button asks first: updating restarts the launcher.
+  document.getElementById("update-button").addEventListener("click", () => {
+    if (!canStartUpdate(state.update, state.updateProgress, state.game)) return;
+    state.updateConfirming = true;
     renderUpdate();
-    try {
-      await installUpdate();
-    } catch (error) {
-      console.error("Installing the update failed:", error);
-      state.updateProgress = null;
-      renderUpdate();
-      toast(t("update.failed"));
-    }
+    document.getElementById("update-confirm-no").focus();
+  });
+  document.getElementById("update-confirm-yes").addEventListener("click", () => startLauncherUpdate());
+  document.getElementById("update-confirm-no").addEventListener("click", () => {
+    state.updateConfirming = false;
+    renderUpdate();
   });
 
   checkForUpdate()
     .then((update) => {
       state.update = update;
       renderUpdate();
+      // The "launcher too old" panel offers the update once the updater found it.
+      renderService();
     })
     .catch((error) => console.info("No update information:", error));
+};
+
+// --- Alboria's notices and the state of the service --------------------------------------------
+
+/** The friends list (friendsPanel.js), once wired; Play draws it with the account. */
+let friends = null;
+
+/** Gears of War 3's title ID: the game whose own notice and state the launcher asks for. */
+const SERVICE_TITLE_ID = "4D5308AB";
+/** How often the service's state is read again while the launcher is in front. */
+const SERVICE_REFRESH_MS = 60_000;
+/** Where the notices the player closed are remembered, by scope and text (noticeKey). */
+const DISMISSED_KEY = "azura.dismissedNotices";
+
+const readDismissed = () => {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(DISMISSED_KEY) ?? "[]"));
+  } catch {
+    return new Set();
+  }
+};
+const dismissed = readDismissed();
+const saveDismissed = () => {
+  try {
+    // The last few are enough: an older notice no longer comes.
+    localStorage.setItem(DISMISSED_KEY, JSON.stringify([...dismissed].slice(-20)));
+  } catch {
+    // Without storage a closed notice simply comes back next time.
+  }
+};
+
+/** Whether the launcher is in front: the game is not starting or running, and the window is seen. */
+const launcherInFront = () => state.game === "idle" && windowFocused && !document.hidden;
+
+let serviceReading = null;
+/** Reads how Alboria is now (only with an Alboria account), then draws it. */
+const refreshService = async () => {
+  if (state.account !== "alboria" || serviceReading) return serviceReading;
+  serviceReading = (async () => {
+    try {
+      state.service = await alboriaStatus(state.gameCheck?.titleId ?? SERVICE_TITLE_ID);
+    } catch (error) {
+      console.info("Alboria's state could not be read:", error?.error ?? error);
+      state.service = null;
+    }
+    state.serviceReadAt = Date.now();
+    renderService();
+  })().finally(() => (serviceReading = null));
+  return serviceReading;
+};
+
+const formatClock = (ms) => new Intl.DateTimeFormat(getLocale(), { timeStyle: "short" }).format(new Date(ms));
+const gameName = () => t("alboriaService.gameName");
+const countdownText = (at) => {
+  const minutes = minutesUntil(at);
+  return minutes <= 1 ? t("alboriaService.inAMinute") : t("alboriaService.inMinutes", { minutes });
+};
+
+/**
+ * Draws Alboria's state: the strip of countdowns and notices above every page, the line under the
+ * Alboria chip, and the Play page's panel when new rooms cannot be made. Nothing with a local
+ * account, which plays without Alboria.
+ */
+const renderService = () => {
+  const alboria = state.account === "alboria";
+  if (alboria && state.service === undefined) refreshService();
+  const view = alboria && state.service !== undefined ? serviceView(state.service, state.launcherVersion) : null;
+  const block = view?.block ?? null;
+
+  // The line under the chip.
+  const line = document.getElementById("alboria-state");
+  line.hidden = !view;
+  if (view) {
+    const [kind, key, vars] = !block
+      ? ["ok", "alboriaService.stateOnline", {}]
+      : block.kind === "down"
+        ? ["off", "alboriaService.stateDown", {}]
+        : block.kind === "outdated"
+          ? ["warn", "alboriaService.stateOutdated", {}]
+          : block.kind === "gameOff"
+            ? ["warn", "alboriaService.stateGameOff", {}]
+            : block.until
+              ? ["warn", "alboriaService.stateMaintenanceUntil", { time: formatClock(block.until) }]
+              : ["warn", "alboriaService.stateMaintenance", {}];
+    line.dataset.state = kind;
+    document.getElementById("alboria-state-text").textContent = t(key, vars);
+    // The player line's light says the same at a glance.
+    document.getElementById("player-line").dataset.state = kind;
+  }
+
+  // The Play page's panel, with the Alborian of the case (alboria-notes:alboria-web/alborians.md):
+  // the Greeter offers the update, the Night owl keeps watch while Alboria is down or in
+  // maintenance.
+  const panel = document.getElementById("service-panel");
+  panel.hidden = !block;
+  if (block) {
+    const game = gameName();
+    // The Greeter at the Gate offers the update; the Night owl keeps watch from its Observatory.
+    const outdated = block.kind === "outdated";
+    document.getElementById("service-panel-art").src = outdated ? "world/greeter.webp" : "world/night-owl.webp";
+    panel.classList.toggle("place-gate", outdated);
+    panel.classList.toggle("place-observatory", !outdated);
+    const place = document.getElementById("service-panel-place");
+    place.dataset.i18n = outdated ? "world.gate" : "world.observatory";
+    place.textContent = t(place.dataset.i18n);
+    const [title, text] =
+      block.kind === "down"
+        ? [t("alboriaService.downTitle"), t("alboriaService.downText")]
+        : block.kind === "outdated"
+        ? [t("alboriaService.outdatedTitle"), t("alboriaService.outdatedText", { game, min: block.min, version: state.launcherVersion })]
+        : block.kind === "gameOff"
+          ? [t("alboriaService.gameOffTitle", { game }), t("alboriaService.gameOffText")]
+          : [
+              block.scope === "all" ? t("alboriaService.maintenanceTitle") : t("alboriaService.gameMaintenanceTitle", { game }),
+              block.until
+                ? t("alboriaService.maintenanceUntilText", { time: formatClock(block.until) })
+                : t("alboriaService.maintenanceText"),
+            ];
+    document.getElementById("service-panel-title").textContent = title;
+    document.getElementById("service-panel-text").textContent = text;
+    // An update the updater found is the way out of "too old"; without one the text says what to do.
+    document.getElementById("service-panel-update").hidden = !(block.kind === "outdated" && state.update);
+    document.getElementById("service-panel-retry").hidden = block.kind !== "down";
+  }
+
+  // The strip: countdowns first, then the notices the player has not closed.
+  const strip = document.getElementById("alboria-notices");
+  strip.replaceChildren();
+  if (view) {
+    for (const warning of view.warnings) {
+      const item = document.createElement("div");
+      item.className = "alboria-notice is-warning";
+      // A clock instead of an Alborian: countdowns are short and urgent.
+      const clock = document.createElement("span");
+      clock.className = "alboria-notice-clock";
+      clock.setAttribute("aria-hidden", "true");
+      const head = document.createElement("strong");
+      const when = document.createElement("span");
+      when.className = "alboria-notice-when";
+      when.dataset.at = String(warning.at);
+      when.textContent = countdownText(warning.at);
+      head.append(t(`alboriaService.${warning.key}`, { game: gameName() }), " ", when);
+      const detail = document.createElement("small");
+      detail.textContent = `${t("alboriaService.at", { time: formatClock(warning.at) })} ${t(`alboriaService.${warning.thenKey}`)}`;
+      const text = document.createElement("div");
+      text.append(head, detail);
+      item.append(clock, text);
+      strip.append(item);
+    }
+    for (const notice of view.notices) {
+      const key = noticeKey(notice);
+      if (dismissed.has(key)) continue;
+      const item = document.createElement("div");
+      item.className = "alboria-notice";
+      const label = document.createElement("span");
+      label.className = "alboria-notice-label";
+      label.textContent = notice.scope === "all" ? t("alboriaService.forEveryone") : t("alboriaService.forGame", { game: gameName() });
+      const body = document.createElement("div");
+      body.className = "alboria-notice-body";
+      // formatNotice() (alboriaService.js) rebuilt it from an allowlist: only formatting is left.
+      body.innerHTML = notice.html;
+      const close = document.createElement("button");
+      close.className = "alboria-notice-close";
+      close.type = "button";
+      close.title = t("alboriaService.close");
+      close.setAttribute("aria-label", t("alboriaService.close"));
+      close.textContent = "×";
+      close.addEventListener("click", () => {
+        dismissed.add(key);
+        saveDismissed();
+        renderService();
+      });
+      // The Greeter brings Alboria's notices.
+      const greeter = document.createElement("img");
+      greeter.className = "alborian";
+      greeter.src = "world/greeter.webp";
+      greeter.alt = "";
+      const text = document.createElement("div");
+      text.className = "alboria-notice-text";
+      text.append(label, body);
+      item.append(greeter, text, close);
+      strip.append(item);
+    }
+  }
+  strip.hidden = strip.childElementCount === 0;
+};
+
+/**
+ * Keeps Alboria's state current: read again every minute while the launcher is in front and when
+ * it comes back after a while, and the countdowns ticking once a second; an action that is due reads
+ * the state again. Nothing runs while the game runs or the window is in the background.
+ */
+const setupService = () => {
+  const strip = document.getElementById("alboria-notices");
+  // Links in a notice open in the system's browser, never inside the launcher.
+  strip.addEventListener("click", (event) => {
+    const link = event.target.closest("a[href]");
+    if (!link) return;
+    event.preventDefault();
+    openNoticeLink(link.getAttribute("href")).catch((error) => console.warn("Opening a notice's link failed:", error));
+  });
+  document.getElementById("service-panel-retry").addEventListener("click", () => refreshService());
+  document.getElementById("service-panel-update").addEventListener("click", () => {
+    if (!state.update) return;
+    state.updateConfirming = true;
+    renderUpdate();
+    document.getElementById("update-confirm-no").focus();
+  });
+  const stale = () => Date.now() - state.serviceReadAt > SERVICE_REFRESH_MS;
+  window.addEventListener("focus", () => {
+    if (stale()) refreshService();
+  });
+  setInterval(() => {
+    if (!launcherInFront() || state.account !== "alboria") return;
+    if (stale()) {
+      refreshService();
+      return;
+    }
+    let due = false;
+    for (const when of strip.querySelectorAll("[data-at]")) {
+      const at = Number(when.dataset.at);
+      if (at <= Date.now()) due = true;
+      else when.textContent = countdownText(at);
+    }
+    if (due) refreshService();
+  }, 1000);
+};
+
+/**
+ * Azura (DEV) only: Account › Development chooses the Alboria server (alboria_server in lib.rs).
+ * Changing it starts the interface again, so everything about the account (the identity, the
+ * service's state, the friends and their events channel) comes from the new server.
+ */
+const setupDevServer = async () => {
+  const server = await alboriaServer().catch(() => null);
+  if (!server?.dev) return;
+  const panel = document.getElementById("dev-server-panel");
+  const choice = document.getElementById("dev-server-choice");
+  const url = document.getElementById("dev-server-url");
+  panel.hidden = false;
+  choice.value = server.choice;
+  url.hidden = server.choice !== "other";
+  if (server.choice === "other") url.value = server.url;
+  const showNow = () => (document.getElementById("dev-server-now").textContent = t("devServer.now", { url: server.url }));
+  showNow();
+  onLocaleChange(showNow);
+  choice.addEventListener("change", () => {
+    url.hidden = choice.value !== "other";
+    if (!url.hidden) url.focus();
+  });
+  document.getElementById("dev-server-apply").addEventListener("click", async () => {
+    const wanted = choice.value === "other" ? url.value.trim() : choice.value;
+    if (choice.value === "other" && !/^https?:\/\/\S+$/i.test(wanted)) {
+      toast(t("devServer.badUrl"));
+      return;
+    }
+    try {
+      await setAlboriaServer(wanted);
+      location.reload();
+    } catch (error) {
+      toast(String(error));
+    }
+  });
 };
 
 /** "24 oct 2026, 12:05": a moment in the reader's language and time zone. */
@@ -1384,6 +1774,8 @@ const BACKUP_KIND_KEYS = {
   manual: "saves.kindManual",
   beforeRepair: "saves.kindBeforeRepair",
   beforeReset: "saves.kindBeforeReset",
+  beforeMove: "saves.kindBeforeMove",
+  beforeReplace: "saves.kindBeforeReplace",
 };
 
 /** The message for a failed save operation, from its { kind, detail } (SavesError in saves.rs). */
@@ -1396,7 +1788,27 @@ const savesErrorMessage = (error) => {
  * Renders the save manager: the status, its metrics and detail, the folder, the backups and, when
  * the player asked for an action that replaces saves, the confirmation waiting for an answer.
  */
+/**
+ * Writes the saves folder panel: the folder, and the confirmation when the chosen one already
+ * holds saves. Moving the saves waits while the game starts or runs.
+ */
+const renderSavesFolder = () => {
+  const savesField = document.getElementById("saves-path");
+  savesField.value = state.savesFolder;
+  savesField.title = state.savesFolder;
+  const busy = state.game !== "idle";
+  const pick = document.getElementById("pick-saves");
+  pick.disabled = busy;
+  pick.title = busy ? t("saves.folderCloseGame") : "";
+  if (busy) state.savesConflict = null;
+  document.getElementById("saves-conflict").hidden = !state.savesConflict;
+  if (state.savesConflict) {
+    document.getElementById("saves-conflict-text").textContent = t("install.savesConflict", { folder: state.savesConflict });
+  }
+};
+
 const renderSaves = () => {
+  renderSavesFolder();
   const s = state.saveStatus;
   if (!s) return;
 
@@ -1499,6 +1911,33 @@ const setupSaves = () => {
     if (!button) return;
     const backup = state.saveStatus?.backups?.find((b) => b.id === button.dataset.id);
     ask({ action: "restore", backup: backup ?? { id: button.dataset.id } });
+  });
+
+  // Moving the saves: a folder that already holds saves needs a second, explicit confirmation.
+  // The launcher backs them up first (BeforeMove, and BeforeReplace for the ones overwritten), so
+  // the list of backups is read again afterwards.
+  const moveSaves = async (folder, replace) => {
+    try {
+      state.savesFolder = await changeSavesFolder(folder, replace);
+      state.savesConflict = null;
+      toast(t("toast.savesMoved"));
+    } catch (error) {
+      state.savesConflict = null;
+      if (error?.kind === "destinationHasSaves") state.savesConflict = folder;
+      else if (error?.kind === "nestedFolders") toast(t("toast.savesNested"));
+      else toast(t("toast.savesFailed", { detail: error?.detail ?? String(error) }));
+    }
+    renderSavesFolder();
+    await refreshAndRenderSaves();
+  };
+  document.getElementById("pick-saves").addEventListener("click", async () => {
+    const folder = await pickSavesFolder();
+    if (folder && folder !== state.savesFolder) await moveSaves(folder, false);
+  });
+  document.getElementById("saves-replace").addEventListener("click", () => moveSaves(state.savesConflict, true));
+  document.getElementById("saves-cancel").addEventListener("click", () => {
+    state.savesConflict = null;
+    renderSavesFolder();
   });
 
   document.getElementById("saves-confirm-no").addEventListener("click", () => {
@@ -1716,6 +2155,19 @@ await restoreGameFolder(settings.gameFolder);
 if (!state.achievements) refreshAchievements();
 await refreshAndRenderSaves();
 setupUpdates();
+setupService();
+friends = setupFriends({
+  state,
+  t,
+  toast,
+  inFront: launcherInFront,
+  serviceBlock: () =>
+    state.account === "alboria" && state.service !== undefined ? serviceView(state.service, state.launcherVersion).block : null,
+  startGame,
+  formatWhen: formatDateTime,
+});
+friends.sync();
+setupDevServer();
 setupReleaseNotes();
 // Running the runtime to list the cards takes a moment: the rest of the window is ready first.
 refreshGpus();

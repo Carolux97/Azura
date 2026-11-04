@@ -6,6 +6,37 @@ it as the update's notes (`scripts/release-common.sh`). Bumping the version adds
 release without one fails. One list item (`- `) per change, in English; an item may continue on
 indented lines.
 
+## 0.6.0
+
+- Public matches on Alboria. Versus, Horde and Beast have an online row in their menus: choose the
+  playlists you like and Alboria finds other players and puts you in a match, your party always on
+  one team. Players can join a match in progress, taking a bot's place, and when the host leaves
+  the match goes on with another player as its host. Ranked matches aren't available yet.
+- Friends can join you in a public match while your team has a place, from the game's friends
+  list, the launcher or an invitation. If your team is full the invitation still arrives, and
+  joining tells them there is no place left.
+- When a party's leader joins another party, their whole party comes along, as long as everyone
+  fits.
+- Leaving a public match takes you out of your party: the others play on. A player who does nothing
+  for two minutes in a public match is removed from it, the host included.
+- Your Alboria friends in the game: the game's own friends list shows who is online and playing,
+  and you can join them or invite them from there. Xbox Live parties are on Alboria by default.
+- The Alboria overlay inside the game (Back + RB on a controller): friends, invitations and your
+  account without leaving the game. Invitations and friend requests show as notices over the game,
+  and Back + RT accepts an invitation.
+- The launcher has a new look, Alboria's, and a friends list on the Play page: see who is playing
+  and join their room in one click. It also shows Alboria's notices and whether the service is up.
+- When Alboria is in maintenance, the game says so in its own language.
+- Choose the saves folder from the Saves page; your saves are backed up first.
+- The update button asks before updating, and waits while the game is running.
+- The multiplayer map packs are recognised, listed and can be removed in Downloadable content.
+- If your edition of the game isn't supported yet, the launcher shows its details with a button to
+  copy them for your report.
+- Smoother frame pacing: the game's frames follow your display's refreshes on macOS, Linux and
+  Windows.
+- Sounds in Azura's own menus in the game and in the Alboria overlay.
+- Playing online needs this version: older versions can no longer connect to Alboria.
+
 ## 0.5.1
 
 - Friends can join your room on Alboria as soon as the game starts. In 0.5.0 the room the game
