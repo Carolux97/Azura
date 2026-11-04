@@ -392,6 +392,7 @@ enum WatchedName {
   kDelayedGameSessionDelete,  // the PlayerMatch state: deletes the search's game session after a cancel
   kPlacePlayerOnSmallestTeam,  // GearGameMP_Base: a player goes to the smallest team (host migration)
   kGetOccupiedTeamSize,      // GearPlayerMatchBeaconHost: how many players a team's reservations hold (online)
+  kGetGameSummaryFromProviderIndex,  // GearUIDataStore_GameResource: a game type's summary, for its name
   kProcessSoundEvent,        // UISoundTheme: plays a menu sound by its event name (Menu sounds)
   // The menu sound events our menus play (MenuSound), in its order.
   kSoundStepUp,
@@ -427,7 +428,7 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "Callback_Credits",      "Callback_ClientMenuOptionWasSelected", "ConditionalCreatePartySession",
     "GetPartyType",          "LocalPartyCreated",      "ClientSetHUD",       "OnCustomMapChanged",
     "ApplySensitivityScaling", "ViewAdhesion",
-    "GetAdjustedAimFor",     "NotifyInviteFailed",     "CancelPartyMatchmaking", "CreatePlayerVersusMatch", "OnNoPartialPartyAvailable", "PostBeginPlay", "ContinueCreateMatch", "InitializeGameSelectionInternal", "UpdateCountdowns", "InitializeMapSelectionInternal", "GetTeamForCurrentPlayer", "HandleGameSessionJIP", "InitializePreGameGameSettings", "PreLogin", "PostLogin", "SetNumBots", "BeginMatch", "EndOfGameTransition", "GetNextMap", "CheckMapAgainstPlaylist", "GetNumberOfSupportedMapsForPlaylist", "IsEpicDev", "InitGameReplicationInfo", "UpdateGRI", "DelayedGameSessionDelete", "PlacePlayerOnSmallestTeam", "GetOccupiedTeamSize",
+    "GetAdjustedAimFor",     "NotifyInviteFailed",     "CancelPartyMatchmaking", "CreatePlayerVersusMatch", "OnNoPartialPartyAvailable", "PostBeginPlay", "ContinueCreateMatch", "InitializeGameSelectionInternal", "UpdateCountdowns", "InitializeMapSelectionInternal", "GetTeamForCurrentPlayer", "HandleGameSessionJIP", "InitializePreGameGameSettings", "PreLogin", "PostLogin", "SetNumBots", "BeginMatch", "EndOfGameTransition", "GetNextMap", "CheckMapAgainstPlaylist", "GetNumberOfSupportedMapsForPlaylist", "IsEpicDev", "InitGameReplicationInfo", "UpdateGRI", "DelayedGameSessionDelete", "PlacePlayerOnSmallestTeam", "GetOccupiedTeamSize", "GetGameSummaryFromProviderIndex",
     "ProcessSoundEvent",     "Options_StepUp",         "Options_StepDown",   "ValueChangeLeft",
     "ValueChangeRight",      "Options_AcceptButton",   "Options_BackButton", "Options_DetailsEnter",
     "Options_DetailsLeave",  "Options_SliderLeft",     "Options_SliderRight"};
@@ -5066,6 +5067,28 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
       REXLOG_WARN("[Azura online] The lobby's session settings have no PlaylistId property");
     }
   }
+  // GearUIDataStore_GameResource.GetGameSummaryFromProviderIndex(ProvIdx, MatchMode) finds a game
+  // type by its index in the playlists' game types (PlaylistGameTypes) when MatchMode is a playlist
+  // match's (1 or 4), and in the custom matches' (GameTypes, in another order) otherwise. The
+  // matchmade lobby's vote holds indexes of its playlist's game types, but the lobby's session is a
+  // custom match's on the players who join it (the host's has the playlist's match mode), so their
+  // lobby would name the game by the custom list (Team Deathmatch's index there is Beast's). In a
+  // matchmade lobby or match (the host's LobbyPlaylist, or Alboria's match room for anyone in it) the
+  // function is asked as for a playlist match (MatchMode 4).
+  if (Is(base, function, kGetGameSummaryFromProviderIndex) && LiveMode() &&
+      (LobbyPlaylist() >= 0 || rex::system::xam::alboria::GetStatus().in_match)) {
+    const int32_t offset = ParamOffset(base, function, "MatchMode");
+    const uint32_t at = LoadU32(base, ctx.r4.u32 + kFrameLocals) + static_cast<uint32_t>(offset);
+    constexpr uint8_t kPlaylistMatchMode = 4;
+    if (offset >= 0 && base[at] != 1 && base[at] != kPlaylistMatchMode) {
+      static std::atomic<bool> said{false};
+      if (!said.exchange(true)) {
+        REXLOG_INFO("[Azura online] The matchmade lobby names its games from the playlist's game types (match mode was {})",
+                    base[at]);
+      }
+      base[at] = kPlaylistMatchMode;
+    }
+  }
   // The matchmade lobby picks its games and maps from its playlist (LobbyPlaylist).
   if (Is(base, function, kInitializeGameSelectionInternal) && LobbyPlaylist() >= 0) {
     const int32_t offset = ParamOffset(base, function, "CurrPlaylistId");
@@ -5074,6 +5097,21 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
       StoreU32(base, at, static_cast<uint32_t>(LobbyPlaylist()));
       REXLOG_INFO("[Azura online] The lobby's playlist is {}", LobbyPlaylist());
     }
+    // The games the vote offers (GearPreGameGRI's First/Second/Third/RandomGameIndex, game type
+    // provider indexes) and how many the playlist has (the GameCount local), for the vote's labels.
+    const uint32_t gri = LoadU32(base, ctx.r4.u32 + kFrameObject);
+    const uint32_t locals = LoadU32(base, ctx.r4.u32 + kFrameLocals);
+    const int32_t count_at = LocalOffset(base, function, "GameCount");
+    __imp__sub_822DF9E0(ctx, base);
+    const uint32_t gri_class = LoadU32(base, gri + kObjectClass);
+    std::string games;
+    for (const char* name : {"FirstGameIndex", "SecondGameIndex", "ThirdGameIndex", "RandomGameIndex"}) {
+      const int32_t index = ClassPropertyOffset(base, gri_class, name);
+      games += fmt::format(" {}={}", name, index >= 0 ? std::to_string(base[gri + index]) : "?");
+    }
+    REXLOG_INFO("[Azura online] The lobby's game vote: {} game types in the playlist;{}",
+                count_at >= 0 ? std::to_string(static_cast<int32_t>(LoadU32(base, locals + count_at))) : "?", games);
+    return;
   }
   // The custom match Alboria's matchmaking had this player open (OpenMatchmadeLobby) is a playlist
   // match's (match mode 4), so its pre-game lobby is the matchmade one. ContinueCreateMatch has the
