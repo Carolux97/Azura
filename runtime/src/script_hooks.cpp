@@ -416,6 +416,8 @@ enum WatchedName {
   kHandleHordeAndSiegeMatchModeSelection,  // UIScene_FrontEnd: Horde's or Beast's Standard or Private
   kUpdateNatType,            // UIWidget_MainMenu (and GearMenuGame): the menus' NAT type label
   kUpdatePopulationNumbers,  // UIWidget_MainMenu: how many play each playlist, in its menus
+  kSetHostIcon,              // UIWidget_SmallPartyPanel: marks a player of the party panel as its host
+  kUpdatePlayerList,         // UIWidget_SmallPartyPanel: fills the party panel's slots from the players
   kProcessSoundEvent,        // UISoundTheme: plays a menu sound by its event name (Menu sounds)
   // The menu sound events our menus play (MenuSound), in its order.
   kSoundStepUp,
@@ -451,7 +453,7 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "Callback_Credits",      "Callback_ClientMenuOptionWasSelected", "ConditionalCreatePartySession",
     "GetPartyType",          "LocalPartyCreated",      "ClientSetHUD",       "OnCustomMapChanged",
     "ApplySensitivityScaling", "ViewAdhesion",
-    "GetAdjustedAimFor",     "NotifyInviteFailed",     "CancelPartyMatchmaking", "CreatePlayerVersusMatch", "OnNoPartialPartyAvailable", "PostBeginPlay", "ContinueCreateMatch", "InitializeGameSelectionInternal", "UpdateCountdowns", "InitializeMapSelectionInternal", "GetTeamForCurrentPlayer", "HandleGameSessionJIP", "InitializePreGameGameSettings", "PreLogin", "PostLogin", "SetNumBots", "BeginMatch", "EndOfGameTransition", "GetNextMap", "CheckMapAgainstPlaylist", "GetNumberOfSupportedMapsForPlaylist", "IsEpicDev", "InitGameReplicationInfo", "UpdateGRI", "DelayedGameSessionDelete", "PlacePlayerOnSmallestTeam", "GetOccupiedTeamSize", "GetGameSummaryFromProviderIndex", "HandleHordeSelection", "HandleSiegeSelection", "HandleHordeAndSiegeMatchModeSelection", "UpdateNatType", "UpdatePopulationNumbers",
+    "GetAdjustedAimFor",     "NotifyInviteFailed",     "CancelPartyMatchmaking", "CreatePlayerVersusMatch", "OnNoPartialPartyAvailable", "PostBeginPlay", "ContinueCreateMatch", "InitializeGameSelectionInternal", "UpdateCountdowns", "InitializeMapSelectionInternal", "GetTeamForCurrentPlayer", "HandleGameSessionJIP", "InitializePreGameGameSettings", "PreLogin", "PostLogin", "SetNumBots", "BeginMatch", "EndOfGameTransition", "GetNextMap", "CheckMapAgainstPlaylist", "GetNumberOfSupportedMapsForPlaylist", "IsEpicDev", "InitGameReplicationInfo", "UpdateGRI", "DelayedGameSessionDelete", "PlacePlayerOnSmallestTeam", "GetOccupiedTeamSize", "GetGameSummaryFromProviderIndex", "HandleHordeSelection", "HandleSiegeSelection", "HandleHordeAndSiegeMatchModeSelection", "UpdateNatType", "UpdatePopulationNumbers", "SetHostIcon", "UpdatePlayerList",
     "ProcessSoundEvent",     "Options_StepUp",         "Options_StepDown",   "ValueChangeLeft",
     "ValueChangeRight",      "Options_AcceptButton",   "Options_BackButton", "Options_DetailsEnter",
     "Options_DetailsLeave",  "Options_SliderLeft",     "Options_SliderRight"};
@@ -3884,6 +3886,41 @@ void PlaceAlboriaTeams(PPCContext& ctx, uint8_t* base) {
   }
 }
 
+// Clears bIsPartyHost in every slot of the party panel `panel` (UIWidget_SmallPartyPanel.SlotList, a
+// TArray of PartySlotData), so it marks nobody as the party's host. The struct's layout (each field's
+// offset, the bool's bit) is read from the game's own definition.
+void ClearPartyHostMarks(uint8_t* base, uint32_t panel) {
+  const uint32_t panel_class = LoadU32(base, panel + kObjectClass);
+  const int32_t slots_at = ClassPropertyOffset(base, panel_class, "SlotList");
+  if (slots_at < 0) return;
+  // The struct PartySlotData among the class's (or a super class's) fields.
+  uint32_t slot_struct = 0;
+  for (uint32_t owner = panel_class; owner && !slot_struct; owner = LoadU32(base, owner + kStructSuper)) {
+    for (uint32_t field = LoadU32(base, owner + kStructChildren); field; field = LoadU32(base, field + kFieldNext)) {
+      if (ObjectName(base, field) == "PartySlotData") slot_struct = field;
+    }
+  }
+  if (!slot_struct) return;
+  BoolField host;
+  uint32_t size = 0;  // the struct's size: past its last field, rounded up to 4 bytes
+  for (uint32_t field = LoadU32(base, slot_struct + kStructChildren); field; field = LoadU32(base, field + kFieldNext)) {
+    const uint32_t offset = LoadU32(base, field + kPropertyOffset);
+    const std::string type = ObjectName(base, LoadU32(base, field + kObjectClass));
+    const uint32_t field_size = type == "StrProperty" || type == "ArrayProperty" ? 12 : type == "ByteProperty" ? 1 : 4;
+    size = std::max(size, (offset + field_size + 3) & ~3u);
+    if (ObjectName(base, field) == "bIsPartyHost") {
+      host = {static_cast<int32_t>(offset), LoadU32(base, field + kBoolPropertyBitMask)};
+    }
+  }
+  if (host.offset < 0 || !size) return;
+  const uint32_t data = LoadU32(base, panel + static_cast<uint32_t>(slots_at));
+  const uint32_t count = LoadU32(base, panel + static_cast<uint32_t>(slots_at) + 4);
+  for (uint32_t i = 0; data && i < count && i < 32; ++i) {
+    const uint32_t at = data + i * size + static_cast<uint32_t>(host.offset);
+    StoreU32(base, at, LoadU32(base, at) & ~host.mask);
+  }
+}
+
 // Alboria answers the game's questions about a match's reservations. A playlist match (match type 4)
 // asks its reservation beacons (GearGameMP_Base.HostPlayerMatchBeacon in the match,
 // HostPregameLobbyPlayerMatchBeacon in the pre-game lobby, both GearPlayerMatchBeaconHost) for the
@@ -5259,6 +5296,24 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   if (Is(base, function, kHandleMenuSelection) && VersusMenuChoice(base, ctx.r4.u32)) {
     REXLOG_INFO("[Azura online] Opening the Versus online menu");
     OpenOnlineMenu(0);
+    return;
+  }
+  // The party panel (UIWidget_SmallPartyPanel, in the pre-game lobby, the match and Manage/Invite)
+  // marks the player whose UniqueId is the party's owner (PartyOwnerUniqueId), SetHostIcon(Idx,
+  // bIsHost): in a matchmade lobby that is the lobby's host for everyone. Nothing may say who hosts a
+  // matchmade match (alboria-notes:alboria-server/online-rules.md): in Alboria's match rooms nobody
+  // is marked. A private room among friends keeps the mark.
+  if (Is(base, function, kSetHostIcon) && LiveMode() && rex::system::xam::alboria::GetStatus().in_match) {
+    const int32_t host_at = ParamOffset(base, function, "bIsHost");
+    if (host_at >= 0) StoreU32(base, LoadU32(base, ctx.r4.u32 + kFrameLocals) + static_cast<uint32_t>(host_at), 0);
+  }
+  // The panel's slots (SlotList, PartySlotData) carry the same mark, bIsPartyHost, which
+  // UpdatePlayerList sets and the list's data for Flash shows as its crown: in Alboria's match rooms
+  // it is cleared from every slot once they are filled.
+  if (Is(base, function, kUpdatePlayerList) && LiveMode() && rex::system::xam::alboria::GetStatus().in_match) {
+    const uint32_t panel = LoadU32(base, ctx.r4.u32 + kFrameObject);
+    __imp__sub_822DF9E0(ctx, base);
+    ClearPartyHostMarks(base, panel);
     return;
   }
   // The front end's menus show the party's NAT type (UIWidget_MainMenu.UpdateNatType: NATTypeLabel,
