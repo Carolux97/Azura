@@ -444,6 +444,7 @@ enum WatchedName {
   kIsPlayerMatch,            // GearGFxMoviePlayer: whether the menus' match is a player (playlist) one
   kOnLeaveLobbyConfirmed,    // UIScene_PregameLobby: a player confirmed leaving the pre-game lobby
   kReturnToMainMenu,         // PlayerController and subclasses: the game sends the player to the main menu
+  kShowUIMessage,            // GearUIManager: opens one of the game's message boxes, by its tag
   kProcessSoundEvent,        // UISoundTheme: plays a menu sound by its event name (Menu sounds)
   // The menu sound events our menus play (MenuSound), in its order.
   kSoundStepUp,
@@ -479,7 +480,7 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "Callback_Credits",      "Callback_ClientMenuOptionWasSelected", "ConditionalCreatePartySession",
     "GetPartyType",          "LocalPartyCreated",      "ClientSetHUD",       "OnCustomMapChanged",
     "ApplySensitivityScaling", "ViewAdhesion",
-    "GetAdjustedAimFor",     "NotifyInviteFailed",     "CancelPartyMatchmaking", "CreatePlayerVersusMatch", "OnNoPartialPartyAvailable", "PostBeginPlay", "ContinueCreateMatch", "InitializeGameSelectionInternal", "UpdateCountdowns", "InitializeMapSelectionInternal", "GetTeamForCurrentPlayer", "HandleGameSessionJIP", "InitializePreGameGameSettings", "PreLogin", "PostLogin", "SetNumBots", "BeginMatch", "EndOfGameTransition", "GetNextMap", "CheckMapAgainstPlaylist", "GetNumberOfSupportedMapsForPlaylist", "IsEpicDev", "InitGameReplicationInfo", "UpdateGRI", "DelayedGameSessionDelete", "PlacePlayerOnSmallestTeam", "GetOccupiedTeamSize", "GetGameSummaryFromProviderIndex", "HandleHordeSelection", "HandleSiegeSelection", "HandleHordeAndSiegeMatchModeSelection", "UpdateNatType", "UpdatePopulationNumbers", "SetHostIcon", "UpdatePlayerList", "OnLeaveGame", "CanBackUpToMapSelect", "CanLeaveGame", "IsOfficialMatch", "IsPlayerMatch", "OnLeaveLobby_Confirmed", "ReturnToMainMenu",
+    "GetAdjustedAimFor",     "NotifyInviteFailed",     "CancelPartyMatchmaking", "CreatePlayerVersusMatch", "OnNoPartialPartyAvailable", "PostBeginPlay", "ContinueCreateMatch", "InitializeGameSelectionInternal", "UpdateCountdowns", "InitializeMapSelectionInternal", "GetTeamForCurrentPlayer", "HandleGameSessionJIP", "InitializePreGameGameSettings", "PreLogin", "PostLogin", "SetNumBots", "BeginMatch", "EndOfGameTransition", "GetNextMap", "CheckMapAgainstPlaylist", "GetNumberOfSupportedMapsForPlaylist", "IsEpicDev", "InitGameReplicationInfo", "UpdateGRI", "DelayedGameSessionDelete", "PlacePlayerOnSmallestTeam", "GetOccupiedTeamSize", "GetGameSummaryFromProviderIndex", "HandleHordeSelection", "HandleSiegeSelection", "HandleHordeAndSiegeMatchModeSelection", "UpdateNatType", "UpdatePopulationNumbers", "SetHostIcon", "UpdatePlayerList", "OnLeaveGame", "CanBackUpToMapSelect", "CanLeaveGame", "IsOfficialMatch", "IsPlayerMatch", "OnLeaveLobby_Confirmed", "ReturnToMainMenu", "ShowUIMessage",
     "ProcessSoundEvent",     "Options_StepUp",         "Options_StepDown",   "ValueChangeLeft",
     "ValueChangeRight",      "Options_AcceptButton",   "Options_BackButton", "Options_DetailsEnter",
     "Options_DetailsLeave",  "Options_SliderLeft",     "Options_SliderRight"};
@@ -5282,6 +5283,23 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     }
     if (accepted && status.in_match && status.host) {
       g_host_leave_requested.store(true);
+      return;
+    }
+  }
+  // The game's "connection lost" message box (GearGameViewportClient.NotifyConnectionError, tag
+  // ConfirmNetworkLost) as a matchmade lobby or match is lost under a party's leader (its host went,
+  // and the lobby has no host migration, or no one was left to migrate it to): the online menu says
+  // it in its place once in the main menu (HandleMatchmadeLobbyLost: "the room closed", the party
+  // still online, search again), so the player is not told twice. A member keeps the game's box (its
+  // leader's menu says it), and so does a player who chose to leave or was removed for idling (its
+  // box has another tag, ConnectionError).
+  if (Is(base, function, kShowUIMessage) && LiveMode()) {
+    const rex::system::xam::alboria::Status status = rex::system::xam::alboria::GetStatus();
+    const int32_t tag_at = ParamOffset(base, function, "SceneTag");
+    const uint32_t locals = LoadU32(base, ctx.r4.u32 + kFrameLocals);
+    const std::string tag = tag_at >= 0 ? NameText(base, LoadU32(base, locals + static_cast<uint32_t>(tag_at))) : "";
+    if (tag == "ConfirmNetworkLost" && status.in_match && status.party_leader && !g_left_lobby_by_choice.load()) {
+      REXLOG_INFO("[Azura online] The game's \"connection lost\" box is left out: the online menu says the room closed");
       return;
     }
   }
