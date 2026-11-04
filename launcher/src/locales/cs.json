@@ -542,6 +542,8 @@
     "joining": "Připojování do místnosti hráče {name}…",
     "joinFailed": "Nelze se připojit: {detail}",
     "roomGone": "Ta místnost už není otevřená",
+    "teamFull": "V týmu tvého přítele už není místo",
+    "matchStarting": "Zápas právě začíná, zkus to za chvíli znovu",
     "requestToast": "{name} vám poslal žádost o přátelství",
     "failed": "Alboria neodpověděla. Zkuste to znovu.",
     "reason": {

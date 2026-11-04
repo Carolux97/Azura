@@ -51,6 +51,7 @@ set(AZURA_SOURCES
     src/achievement_toast.cpp
     src/hooks.cpp
     src/script_hooks.cpp
+    src/host_migration.cpp
     src/class_dump.cpp
     src/dlc/bytecode.cpp
     src/dlc/class_fixups.cpp
@@ -78,6 +79,7 @@ set(AZURA_SOURCES
     src/alboria_sounds.cpp
     src/alboria_style.cpp
     src/connection_menu.cpp
+    src/versus_online_menu.cpp
     src/shader_precompile.cpp
     src/system_settings.cpp
     src/window_icon.cpp
@@ -89,6 +91,7 @@ set(AZURA_SOURCES
     src/input/install_player_assignment.cpp
     src/input/mouse_look.cpp
     src/input/overlay_input.cpp
+    src/input/player_activity.cpp
     src/input/player_assignment.cpp
     src/input/scripted_pad.cpp
     src/menu/menu_patches.cpp

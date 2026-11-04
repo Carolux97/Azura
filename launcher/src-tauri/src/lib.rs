@@ -442,8 +442,9 @@ async fn join_room(app: tauri::AppHandle, process: tauri::State<'_, GameProcess>
         .map_err(|e| LaunchError::StartFailed(e.to_string()))
 }
 
-/// The friends' requests the interface may send (docs/alboria-relay.md, section 4.7), and the
-/// report one: any other path is refused, so the interface reaches nothing else of the account.
+/// The friends' requests the interface may send (alboria-notes:azura/alboria-relay.md, section
+/// 4.7), and the report one: any other path is refused, so the interface reaches nothing else of
+/// the account.
 const FRIENDS_PATHS: &[&str] = &[
     "/v1/friends",
     "/v1/friends/request",

@@ -542,6 +542,8 @@
     "joining": "正在加入 {name} 的房間…",
     "joinFailed": "無法加入：{detail}",
     "roomGone": "該房間已不再開放",
+    "teamFull": "好友的隊伍已沒有空位",
+    "matchStarting": "比賽正在開始，請稍後再試",
     "requestToast": "{name} 向你送出好友請求",
     "failed": "Alboria 沒有回應，請再試一次。",
     "reason": {

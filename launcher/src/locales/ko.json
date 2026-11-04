@@ -542,6 +542,8 @@
     "joining": "{name}의 방에 참가하는 중…",
     "joinFailed": "참가할 수 없습니다: {detail}",
     "roomGone": "그 방은 더 이상 열려 있지 않습니다",
+    "teamFull": "친구의 팀에 빈자리가 없습니다",
+    "matchStarting": "경기가 시작되는 중입니다. 잠시 후 다시 시도하세요",
     "requestToast": "{name}이(가) 친구 요청을 보냈습니다",
     "failed": "Alboria가 응답하지 않습니다. 다시 시도하세요.",
     "reason": {

@@ -1,8 +1,8 @@
 /*
- * The friends list on the Play page (docs/alboria-relay.md, section 4.7), with an Alboria account:
- * friends with what each is doing, requests both ways, invitations to a friend's room, adding a
- * friend by Gamertag#tag, and for each friend Join (their open room), Invite (while the game runs),
- * favourite, remove, block and report.
+ * The friends list on the Play page (alboria-notes:azura/alboria-relay.md, section 4.7), with an
+ * Alboria account: friends with what each is doing, requests both ways, invitations to a friend's
+ * room, adding a friend by Gamertag#tag, and for each friend Join (their open room), Invite (while
+ * the game runs), favourite, remove, block and report.
  *
  * Joining is the game's own: the launcher asks Alboria for the room's code and starts the game with
  * it, or hands it to the running game, which joins once it is at its main menu. The launcher takes
@@ -44,6 +44,9 @@ export const setupFriends = ({ state, t, toast, inFront, serviceBlock, startGame
   const errorText = (error) => {
     if (error?.error === "list_full") return t("friends.listFull");
     if (error?.error === "invite_only" || error?.error === "room_not_found") return t("friends.roomGone");
+    // A friend in a matchmade match: their team is full, or the match has not opened yet.
+    if (error?.error === "team_full") return t("friends.teamFull");
+    if (error?.error === "match_starting") return t("friends.matchStarting");
     if (error?.error === "not_in_room") return t("friends.notInRoom");
     return t("friends.failed");
   };

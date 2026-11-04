@@ -1,8 +1,8 @@
 /*
- * The friends list's logic (docs/alboria-relay.md, section 4.7), apart from the page so it can be
- * tested on its own: the order of the list, what each friend is doing, whether their room can be
- * joined, a request's name, and the queue that holds the service's events while the launcher is
- * not in front.
+ * The friends list's logic (alboria-notes:azura/alboria-relay.md, section 4.7), apart from the page
+ * so it can be tested on its own: the order of the list, what each friend is doing, whether their
+ * room can be joined, a request's name, and the queue that holds the service's events while the
+ * launcher is not in front.
  */
 
 /** The order of presence in the list: playing first, then online, then offline. */

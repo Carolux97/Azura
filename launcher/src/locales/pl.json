@@ -542,6 +542,8 @@
     "joining": "Dołączanie do pokoju {name}…",
     "joinFailed": "Nie udało się dołączyć: {detail}",
     "roomGone": "Ten pokój nie jest już otwarty",
+    "teamFull": "W drużynie znajomego nie ma miejsca",
+    "matchStarting": "Mecz się zaczyna, spróbuj za chwilę",
     "requestToast": "{name} wysłał ci zaproszenie do znajomych",
     "failed": "Alboria nie odpowiedziała. Spróbuj ponownie.",
     "reason": {

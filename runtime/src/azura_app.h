@@ -31,6 +31,8 @@
 #include <rex/ui/immediate_drawer.h>
 #include <rex/ui/keybinds.h>
 #include <rex/ui/presenter.h>
+#include <rex/ui/window.h>
+#include <rex/ui/window_listener.h>
 
 #include "achievement_export.h"
 #include "dlc/content_install.h"
@@ -42,11 +44,13 @@
 #include "alboria_overlay.h"
 #include "input/mouse_look.h"
 #include "input/overlay_input.h"
+#include "input/player_activity.h"
 #include "input/player_assignment.h"
 #include "input/scripted_pad.h"
 #include "controls_menu.h"
 #include "local_coop_menu.h"
 #include "connection_menu.h"
+#include "versus_online_menu.h"
 #include "local_coop_notices.h"
 #include "gpu_list.h"
 #include "hle_gfx/frame_capture.h"
@@ -316,6 +320,33 @@ class AzuraApp : public rex::ReXApp {
         }
       });
     });
+    // Choosing Versus online, Horde online or Beast online in their menus opens Azura's matchmaking
+    // menu for that game, on the UI thread.
+    azura::script::SetVersusOnlineHandler([this](int game) {
+      app_context().CallInUIThread([this, game] {
+        auto* input = runtime() ? static_cast<rex::input::InputSystem*>(runtime()->input_system()) : nullptr;
+        if (!shutting_down_ && dialog_drawer_ && input && !versus_online_menu_) {
+          const azura::OnlineGame online_game =
+              game == 1 ? azura::OnlineGame::kHorde : game == 2 ? azura::OnlineGame::kBeast : azura::OnlineGame::kVersus;
+          versus_online_menu_ = new azura::VersusOnlineMenu(dialog_drawer_, input, azura::input::InstalledPlayerAssignment(),
+                                                            REXCVAR_GET(user_language), title_font_, body_font_,
+                                                            &versus_online_menu_, false, online_game);
+        }
+      });
+    });
+    // A party member sees its leader's search: the Versus online menu opens for it to follow.
+    azura::StartPartySearchFollower([this] {
+      app_context().CallInUIThread([this] {
+        auto* input = runtime() ? static_cast<rex::input::InputSystem*>(runtime()->input_system()) : nullptr;
+        if (shutting_down_ || !dialog_drawer_ || !input || versus_online_menu_ || alboria_overlay_ || join_by_code_menu_ ||
+            local_coop_menu_ || connection_menu_ || controls_menu_) {
+          return;
+        }
+        versus_online_menu_ = new azura::VersusOnlineMenu(dialog_drawer_, input, azura::input::InstalledPlayerAssignment(),
+                                                          REXCVAR_GET(user_language), title_font_, body_font_,
+                                                          &versus_online_menu_, true);
+      });
+    });
     // In the game's menus (not the title screen) the keyboard's Return and Escape accept and go back,
     // in every scene: the Options, their message boxes, the multiplayer preferences, the pause menu.
     rex::input::mnk::SetMenuKeysQuery(
@@ -394,6 +425,11 @@ class AzuraApp : public rex::ReXApp {
 #endif
     // Draws nothing until the Video options turn the performance overlay on.
     perf_overlay_ = std::make_unique<azura::PerfOverlay>(drawer, &title_font_, &body_font_);
+    // Player 1's activity counts only while the window has the focus (input/player_activity.h).
+    if (window()) {
+      azura::input::SetWindowFocused(window()->HasFocus());
+      window()->AddListener(&focus_listener_);
+    }
   }
 
   // Barlow (installed in assets/fonts) for the shader compilation notice and the performance
@@ -457,6 +493,7 @@ class AzuraApp : public rex::ReXApp {
   // Stop the prompt thread before the runtime and its memory go away, and remove the shader
   // compilation notice before the ImGui drawer does.
   void OnShutdown() override {
+    if (window()) window()->RemoveListener(&focus_listener_);
     perf_overlay_.reset();
     button_prompts_.reset();
     perf_marker_.reset();
@@ -465,6 +502,8 @@ class AzuraApp : public rex::ReXApp {
     azura::menu::SetUpscalingSupport(nullptr);
     azura::script::SetLocalCoopHandler(nullptr);
     azura::script::SetConnectionHandler(nullptr);
+    azura::script::SetVersusOnlineHandler(nullptr);
+    azura::StopPartySearchFollower();
     azura::script::SetControlsMenuHandler(nullptr);
     azura::script::SetJoinByCodeHandler(nullptr);
     rex::ui::UnregisterBind("bind_alboria_overlay");
@@ -493,6 +532,8 @@ class AzuraApp : public rex::ReXApp {
     local_coop_menu_ = nullptr;
     delete connection_menu_;
     connection_menu_ = nullptr;
+    delete versus_online_menu_;
+    versus_online_menu_ = nullptr;
     delete controls_menu_;
     controls_menu_ = nullptr;
     delete coop_notices_;
@@ -572,7 +613,7 @@ class AzuraApp : public rex::ReXApp {
   void OpenAlboriaOverlay(azura::AlboriaOverlay::Page page) {
     auto* input = runtime() ? static_cast<rex::input::InputSystem*>(runtime()->input_system()) : nullptr;
     if (shutting_down_ || !dialog_drawer_ || !input || alboria_overlay_ || join_by_code_menu_ || local_coop_menu_ ||
-        connection_menu_ || controls_menu_) {
+        connection_menu_ || versus_online_menu_ || controls_menu_) {
       return;
     }
     if (azura::script::WhereInMenus() == azura::script::Menus::kPlaying) azura::input::PressStartForGame();
@@ -586,6 +627,11 @@ class AzuraApp : public rex::ReXApp {
   std::filesystem::path exe_dir_;
   rex::ui::ImGuiDrawer* dialog_drawer_ = nullptr;
   std::unique_ptr<azura::PerfOverlay> perf_overlay_;
+  // Tells player_activity.h whether the window has the focus.
+  struct FocusListener : rex::ui::WindowListener {
+    void OnGotFocus(rex::ui::UISetupEvent&) override { azura::input::SetWindowFocused(true); }
+    void OnLostFocus(rex::ui::UISetupEvent&) override { azura::input::SetWindowFocused(false); }
+  } focus_listener_;
   ImFont* title_font_ = nullptr;
   ImFont* body_font_ = nullptr;
   // Alboria's rounded face (Nunito), for its overlay and notices; the game's fonts when it is missing.
@@ -608,6 +654,7 @@ class AzuraApp : public rex::ReXApp {
   // Accessed on the UI thread only.
   azura::LocalCoopMenu* local_coop_menu_ = nullptr;
   azura::ConnectionMenu* connection_menu_ = nullptr;
+  azura::VersusOnlineMenu* versus_online_menu_ = nullptr;
   azura::ControlsMenu* controls_menu_ = nullptr;
   // The local co-op notices, from the game's start to its end. Accessed on the UI thread only.
   azura::LocalCoopNotices* coop_notices_ = nullptr;

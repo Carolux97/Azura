@@ -1,5 +1,5 @@
 // Alboria's sounds over the game (the overlay and its notices), as alboria_sound_synth.h makes them
-// (the sound identity of the service, docs/alboria-sounds.md).
+// (the sound identity of the service, alboria-notes:azura/alboria-sounds.md).
 //
 // They play through SDL's audio, beside the game's, at the game's effects volume (the Options'
 // effects slider, from player 1's profile) times the player's own volume for each group (the

@@ -542,6 +542,8 @@
     "joining": "{name} のルームに参加中…",
     "joinFailed": "参加できませんでした: {detail}",
     "roomGone": "そのルームはもう開いていません",
+    "teamFull": "フレンドのチームに空きがありません",
+    "matchStarting": "試合を開始しています。少し待ってからもう一度お試しください",
     "requestToast": "{name} からフレンドリクエストが届きました",
     "failed": "Alboria から応答がありません。もう一度お試しください。",
     "reason": {

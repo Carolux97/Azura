@@ -1578,8 +1578,9 @@ const renderService = () => {
     document.getElementById("player-line").dataset.state = kind;
   }
 
-  // The Play page's panel, with the Alborian of the case (docs/alborians.md in alboria-web): the
-  // Greeter offers the update, the Night owl keeps watch while Alboria is down or in maintenance.
+  // The Play page's panel, with the Alborian of the case (alboria-notes:alboria-web/alborians.md):
+  // the Greeter offers the update, the Night owl keeps watch while Alboria is down or in
+  // maintenance.
   const panel = document.getElementById("service-panel");
   panel.hidden = !block;
   if (block) {

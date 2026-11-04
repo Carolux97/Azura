@@ -542,6 +542,8 @@
     "joining": "Connexion au salon de {name}…",
     "joinFailed": "Impossible de rejoindre : {detail}",
     "roomGone": "Ce salon n'est plus ouvert",
+    "teamFull": "Il n'y a plus de place dans l'équipe de ton ami",
+    "matchStarting": "Le match commence, réessaie dans un instant",
     "requestToast": "{name} vous a envoyé une demande d'ami",
     "failed": "Alboria n'a pas répondu. Réessayez.",
     "reason": {

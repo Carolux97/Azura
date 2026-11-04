@@ -217,6 +217,34 @@ address; the choice is kept in `alboria-server.txt` in its app data folder, chan
 again (each server has its own accounts), and the game it starts gets the same server
 (`--alboria_api_url`). The published launcher always uses production and shows none of this.
 
+#### Two players on one computer
+
+Online features (matchmaking, invitations, joining a friend) can be tried on one computer with a
+second game started by hand next to the one Azura (DEV) starts. The second one needs:
+
+- **Its own saves folder**, outside `~/Documents` (a game started outside the launcher waits on the
+  Documents access prompt): copy the DEV saves folder there, without its `identity.toml`, so it has
+  the same profile and settings.
+- **Its own Alboria account**: an `identity.toml` in that folder whose `key_seed` is the key of
+  another account on the local server, such as a test account made with a script that creates it
+  through `/v1/account/code` and `/v1/account/verify` (the code appears in the server's terminal).
+  Its `xuid` (`E000` and 12 random hex digits) and `machine_id` (a locally administered MAC, 12 hex
+  digits) must differ from the first game's, or the game takes both for one console.
+- **The local server's address**: `--alboria_api_url=http://127.0.0.1:8080`. Without it the game
+  goes to production, which does not know the test account and refuses the sign-in (`no_account`).
+- **Its own gamertag**: `--user_name=<name>`. Without it the game takes the copied profile's name,
+  and the test account is renamed after the first game's player.
+
+Started from the DEV runtime folder (`com.gears3azura.launcher.dev/runtime` in the app data):
+
+```bash
+./azura "--game_data_root=<game folder>" "--user_data_root=<second saves>" \
+  "--cache_root=<second cache>" "--alboria_api_url=http://127.0.0.1:8080" "--user_name=<name>"
+```
+
+Both games write their logs to the same `logs` folder, numbered in the order they started. Close
+the second game when the test ends: only one game at a time otherwise.
+
 ### Windows
 
 The launcher builds for Windows (x86-64) from Linux with `../scripts/build-launcher-windows.sh`, into
