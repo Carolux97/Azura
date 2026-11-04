@@ -2253,8 +2253,8 @@ bool SetBoolProperty(uint8_t* base, uint32_t object, const char* name) {
 
 // --- Lambency ---
 //
-// Lambency (achievement 49) spreads by execution in Versus (docs/reverse-engineering.md,
-// "Lambency"). The game starts it from its developers: GearProfileSettings.IsEpicDev() answers yes
+// Lambency (achievement 49) spreads by execution in Versus (alboria-notes:azura/
+// reverse-engineering.md, "Lambency"). The game starts it from its developers: GearProfileSettings.IsEpicDev() answers yes
 // when bIsEpicDev is set, which the game never sets on Azura, or when the profile's setting 365 is,
 // and the first time bIsEpicDev is set it stores 365 in the profile. A developer's
 // GearPC.CheckViralAchievement unlocks the achievement, and their execution passes it on.
@@ -2605,7 +2605,7 @@ bool PatchTravelURL(uint8_t* base, uint32_t fstring_addr) {
   return true;
 }
 
-// --- Host migration (docs/reverse-engineering.md, "Host migration") ---
+// --- Host migration (alboria-notes:azura/reverse-engineering.md, "Host migration") ---
 //
 // When an online match's host leaves, the game's own peer host migration hands the match to the
 // best of the other players: it reloads the map as the new host and the others travel to it. The
@@ -4225,8 +4225,9 @@ void ReturnToMainMenuWhenRoomLost(PPCContext& ctx, uint8_t* base) {
   namespace alboria = rex::system::xam::alboria;
   // With Live parties, a host that left is lost as on Xbox Live: the game's own party handles it. A
   // room that failed signed the player out of Live, which Gears of War 3 ignores in the menus
-  // (GearPC.OnConnectionStatusChange only acts away from them, docs/reverse-engineering.md): its
-  // party is replaced by a Local one as for a System Link party in a room.
+  // (GearPC.OnConnectionStatusChange only acts away from them, alboria-notes:azura/
+  // reverse-engineering.md): its party is replaced by a Local one as for a System Link party in a
+  // room.
   if (LiveMode()) alboria::TakeLostRoom();
   if (g_live_join_failed.load() && InMainMenu(base)) {
     g_live_join_failed.store(false);

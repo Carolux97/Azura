@@ -325,9 +325,10 @@ pub struct CodeSent {
     pub code_needed: bool,
 }
 
-/// What the service says about itself (`/v1/status`, docs/alboria-relay.md section 4.1): whether
-/// it sends codes now, its maintenance and notice for everyone, the asking game's own state, and
-/// the scheduled actions to warn about. The interface words and shows it (alboriaService.js).
+/// What the service says about itself (`/v1/status`, alboria-notes:azura/alboria-relay.md section
+/// 4.1): whether it sends codes now, its maintenance and notice for everyone, the asking game's own
+/// state, and the scheduled actions to warn about. The interface words and shows it
+/// (alboriaService.js).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {

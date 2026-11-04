@@ -1,8 +1,9 @@
 /*
- * Alboria's notices and the state of the service, as the launcher shows them (docs/alboria-relay.md,
- * section 4.1): the notice for everyone and the game's own notice, countdowns before scheduled
- * actions, maintenance, a game whose online play is switched off, and a launcher older than the one
- * the game needs online. Kept apart from main.js, with no DOM, so it can be tested on its own.
+ * Alboria's notices and the state of the service, as the launcher shows them
+ * (alboria-notes:azura/alboria-relay.md, section 4.1): the notice for everyone and the game's own
+ * notice, countdowns before scheduled actions, maintenance, a game whose online play is switched
+ * off, and a launcher older than the one the game needs online. Kept apart from main.js, with no
+ * DOM, so it can be tested on its own.
  *
  * A notice is HTML written in Alboria's console and shown by every launcher, so it is never inserted
  * as it is: formatNotice() rebuilds it from an allowlist. Every formatting tag works, links (https and

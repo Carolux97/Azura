@@ -1,5 +1,5 @@
 // Alboria's look for the screens of the service over the game (the Alboria overlay and its
-// notices), as on its website (alboria-web, docs/design.md): pearl glass in a carved golden frame
+// notices), as on its website (alboria-notes:alboria-web/design.md): pearl glass in a carved golden frame
 // with an engraved groove and a leaf finial at each end, buttons that are stones of light (amber for
 // the main action, mother-of-pearl for the others) with a seal holding a rune, and Alboria's ring
 // rune and planet. The controller glyphs and keyboard keys sit in the seals. The game's own menus

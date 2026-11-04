@@ -1,5 +1,5 @@
 // Alboria's sounds, made from code: the sound identity of the Alboria service, the same in every
-// game of ours (Azura's docs/alboria-sounds.md, alboria-web's docs/sounds.md). This file only
+// game of ours (alboria-notes:azura/alboria-sounds.md and alboria-web/sounds.md). This file only
 // synthesises them, with nothing of a runtime or of an audio API; Azura's runtime and alboria-web's
 // tools/sounds keep the same copy of it.
 //

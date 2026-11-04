@@ -1,8 +1,8 @@
 /*
- * The friends list on the Play page (docs/alboria-relay.md, section 4.7), with an Alboria account:
- * friends with what each is doing, requests both ways, invitations to a friend's room, adding a
- * friend by Gamertag#tag, and for each friend Join (their open room), Invite (while the game runs),
- * favourite, remove, block and report.
+ * The friends list on the Play page (alboria-notes:azura/alboria-relay.md, section 4.7), with an
+ * Alboria account: friends with what each is doing, requests both ways, invitations to a friend's
+ * room, adding a friend by Gamertag#tag, and for each friend Join (their open room), Invite (while
+ * the game runs), favourite, remove, block and report.
  *
  * Joining is the game's own: the launcher asks Alboria for the room's code and starts the game with
  * it, or hands it to the running game, which joins once it is at its main menu. The launcher takes

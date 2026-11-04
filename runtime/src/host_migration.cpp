@@ -1,6 +1,6 @@
-// Host migration (docs/reverse-engineering.md, "Host migration"): the one change to the engine's
-// own migration code the online matches need. The rest (turning the migration on, starting it
-// early, and what the new host gets back) is in script_hooks.cpp.
+// Host migration (alboria-notes:azura/reverse-engineering.md, "Host migration"): the one change to
+// the engine's own migration code the online matches need. The rest (turning the migration on,
+// starting it early, and what the new host gets back) is in script_hooks.cpp.
 
 #include <rex/cvar.h>
 #include <rex/logging.h>

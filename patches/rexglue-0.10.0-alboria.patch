@@ -1,9 +1,9 @@
 diff --git a/include/rex/system/xam/alboria.h b/include/rex/system/xam/alboria.h
 new file mode 100644
-index 0000000..604f17f
+index 0000000..a3ac626
 --- /dev/null
 +++ b/include/rex/system/xam/alboria.h
-@@ -0,0 +1,574 @@
+@@ -0,0 +1,576 @@
 +/**
 + * @file        system/xam/alboria.h
 + * @brief       Alboria: System Link over the internet through our relay
@@ -15,7 +15,7 @@ index 0000000..604f17f
 + *              a game on Alboria, the local network is a room on the relay instead: each member
 + *              has a virtual address 10.77.0.x, which is the address of its XNADDR, and the
 + *              game's datagrams to those addresses or to a broadcast travel through the relay.
-+ *              The protocol is docs/alboria-relay.md in the Azura repository.
++ *              The protocol is alboria-notes:azura/alboria-relay.md.
 + *
 + *              What arrives from the relay is handed to the game's socket through a socket on the
 + *              loopback interface for each remote member and port, so the game's socket keeps
@@ -39,7 +39,7 @@ index 0000000..604f17f
 +
 +namespace rex::system::xam::alboria {
 +
-+// --- Relay packets (docs/alboria-relay.md, section 5) --------------------------------------------
++// --- Relay packets (alboria-notes:azura/alboria-relay.md, section 5) -----------------------------
 +
 +constexpr size_t kHeaderSize = 16;
 +constexpr size_t kTagSize = 16;
@@ -151,7 +151,8 @@ index 0000000..604f17f
 +
 +// The Ed25519 public key of the installation key with `seed` (identity.toml's key seed).
 +std::array<uint8_t, 32> PublicKey(const std::array<uint8_t, 32>& seed);
-+// The sign-in signature of `challenge` (docs/alboria-relay.md, section 4.1) with the key of `seed`.
++// The sign-in signature of `challenge` (alboria-notes:azura/alboria-relay.md, section 4.1) with the
++// key of `seed`.
 +std::array<uint8_t, 64> SignChallenge(const std::array<uint8_t, 32>& seed,
 +                                      std::span<const uint8_t> challenge);
 +
@@ -164,9 +165,9 @@ index 0000000..604f17f
 +  kFailed,      // the last attempt failed or the room ended: see Status::error
 +};
 +
-+// Who may join a room (docs/alboria-relay.md, section 4.2), as the host chose it in the game's party
-+// options: anyone with the code (Joinable), or who the host invites (Invite only). Every member of
-+// the room gets the host's. A room is never System Link, which is the local network.
++// Who may join a room (alboria-notes:azura/alboria-relay.md, section 4.2), as the host chose it in
++// the game's party options: anyone with the code (Joinable), or who the host invites (Invite only).
++// Every member of the room gets the host's. A room is never System Link, which is the local network.
 +enum class PartyType { kJoinable, kInviteOnly };
 +
 +struct Status {
@@ -187,8 +188,8 @@ index 0000000..604f17f
 +  // The room host's virtual address, while connected.
 +  uint32_t host_ip = 0;
 +  // Why the last attempt failed or the room ended, as an error code of the API
-+  // (docs/alboria-relay.md, section 4) or one of: network, server, relay_unreachable, room_closed,
-+  // banned, timed_out, replaced. A ban carries its reason after a colon ("banned:<reason>").
++  // (alboria-notes:azura/alboria-relay.md, section 4) or one of: network, server,
++  // relay_unreachable, room_closed, banned, timed_out, replaced. A ban carries its reason after a colon ("banned:<reason>").
 +  std::string error;
 +};
 +
@@ -196,14 +197,15 @@ index 0000000..604f17f
 +Status GetStatus();
 +
 +// The player's account as Alboria answered the last sign-in: the gamertag and the tag that tells it
-+// apart from others with the same gamertag, shown as Gamertag#tag (docs/alboria-relay.md,
-+// section 3).
++// apart from others with the same gamertag, shown as Gamertag#tag (alboria-notes:azura/
++// alboria-relay.md, section 3).
 +struct Identity {
 +  bool known = false;
 +  std::string gamertag;
 +  int tag = 0;
 +  // Whether the account starts the Lambency contagion: the title treats it as one of the
-+  // developers whose execution spreads the Lambency achievement (docs/alboria-relay.md, 4.1).
++  // developers whose execution spreads the Lambency achievement (alboria-notes:azura/
++  // alboria-relay.md, 4.1).
 +  bool lambency = false;
 +};
 +Identity GetIdentity();
@@ -618,10 +620,10 @@ index 0000000..c7fc5de
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria.cpp b/src/system/xam/alboria.cpp
 new file mode 100644
-index 0000000..bbd03c6
+index 0000000..8cf6316
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,2755 @@
+@@ -0,0 +1,2756 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -693,7 +695,8 @@ index 0000000..bbd03c6
 +constexpr uint8_t kMagic0 = 0xA1;
 +constexpr uint8_t kMagic1 = 0xB0;
 +constexpr uint8_t kVersion = 1;
-+// What a sign-in signature covers before the challenge (docs/alboria-relay.md, section 4.1).
++// What a sign-in signature covers before the challenge (alboria-notes:azura/alboria-relay.md,
++// section 4.1).
 +constexpr std::string_view kAuthContext = "alboria-auth-v1";
 +constexpr std::string_view kCodeAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 +constexpr size_t kCodeLength = 8;
@@ -1101,7 +1104,7 @@ index 0000000..bbd03c6
 +  g_key.fill(0);
 +}
 +
-+// --- Direct connections (docs/alboria-relay.md, section 5.4) ----------------------------------------
++// --- Direct connections (alboria-notes:azura/alboria-relay.md, section 5.4) ----------------------
 +
 +// The nonce direction of a packet from the member at `from` to the member at `to`.
 +Direction PeerDirection(uint32_t from, uint32_t to) {
@@ -1919,7 +1922,7 @@ index 0000000..bbd03c6
 +  });
 +}
 +
-+// --- Streams (docs/alboria-relay.md, section 5.5) ---------------------------------------------------
++// --- Streams (alboria-notes:azura/alboria-relay.md, section 5.5) ---------------------------------
 +
 +// A connection to the stream port opens with its role (after magic and version), then the
 +// connection ID and the stream ID, in the clear; then records: a 2-byte length and the bytes sealed

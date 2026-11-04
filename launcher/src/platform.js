@@ -549,7 +549,7 @@ export const openAlboriaSite = async () => {
   window.open("https://alboria.org", "_blank", "noopener");
 };
 
-// --- Friends (docs/alboria-relay.md, section 4.7) ------------------------------------------------
+// --- Friends (alboria-notes:azura/alboria-relay.md, section 4.7) ---------------------------------
 // In a browser a small simulation answers, with a few friends whose state changes now and then, so
 // the panel can be designed without the service.
 

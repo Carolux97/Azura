@@ -508,10 +508,11 @@ code, kbd {
 
 /* ---------- Alboria's panels ---------- */
 
-/* Alboria in the launcher looks as it does on its website (alboria-web, docs/design.md): each panel is
-   a place of the planet, painted behind it (--place, set by its place-* class), and its content
-   floats on pearl glass in front, framed by the painting. Buttons are carved stones in a golden
-   frame with a seal, inputs and rows are glass too, and the type is Alboria's rounded face. */
+/* Alboria in the launcher looks as it does on its website (alboria-notes:alboria-web/design.md):
+   each panel is a place of the planet, painted behind it (--place, set by its place-* class), and
+   its content floats on pearl glass in front, framed by the painting. Buttons are carved stones in
+   a golden frame with a seal, inputs and rows are glass too, and the type is Alboria's rounded
+   face. */
 .panel.is-alboria {
   position: relative; isolation: isolate; margin: 44px 16px 16px;
   background: none; border: 0; border-radius: 26px;
