@@ -4609,7 +4609,16 @@ void JoinRoomFromLauncher(uint8_t* base) {
     g_launcher_joining = code;
   }
   REXLOG_INFO("[Azura online] Joining the room the launcher asked for");
-  alboria::JoinGame(code);
+  if (const std::string refused = alboria::JoinGame(code); !refused.empty()) {
+    // The player's party could not come along (alboria-notes:alboria-server/online-rules.md,
+    // section 5): the player stays in it, and the overlay's notices say why.
+    REXLOG_WARN("[Azura online] Not joining the room the launcher asked for: {}", refused);
+    {
+      std::lock_guard lock(g_launcher_join_mutex);
+      g_launcher_joining.clear();
+    }
+    alboria::TellJoinRefused(refused);
+  }
 }
 
 // GearProfileSettings.GetPartyType (`ctx`, about to run), with online play on: the party the game

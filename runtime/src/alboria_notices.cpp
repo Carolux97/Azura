@@ -301,17 +301,22 @@ void AlboriaNotices::OnDraw(ImGuiIO& io) {
 
   const Notice& notice = shown_->notice;
   const bool invitation = notice.kind == Notice::Kind::kInvitation;
+  // A join that was not made (its party did not fit) says why, under Alboria's name.
+  const bool refused = notice.kind == Notice::Kind::kJoinRefused;
   const char* label = invitation ? texts.invitation
                       : notice.kind == Notice::Kind::kFriendRequest ? texts.friend_request
                       : notice.kind == Notice::Kind::kHostLeft      ? texts.match
+                      : refused                                     ? texts.alboria
                                                                      : texts.in_your_room;
   // A match that ended as its host left says only that: who hosted is never shown
   // (alboria-notes:alboria-server/online-rules.md).
   const bool match_ended = notice.kind == Notice::Kind::kHostLeft;
-  const std::string name = match_ended ? std::string(texts.host_left) : notice.from_name;
+  const std::string name = match_ended ? std::string(texts.host_left)
+                           : refused   ? std::string(AlboriaErrorText(language_, notice.id))
+                                       : notice.from_name;
   std::string detail = invitation ? texts.invites
                        : notice.kind == Notice::Kind::kFriendRequest ? texts.wants_friend
-                       : match_ended                                 ? std::string()
+                       : match_ended || refused                      ? std::string()
                                                                       : texts.joined;
   if (!accept_text.empty()) detail = accept_text;
   const char* help = notice.kind == Notice::Kind::kFriendRequest ? texts.answer_in_launcher : nullptr;

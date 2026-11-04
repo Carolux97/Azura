@@ -1,9 +1,9 @@
 diff --git a/include/rex/system/xam/alboria.h b/include/rex/system/xam/alboria.h
 new file mode 100644
-index 0000000..71a265c
+index 0000000..dcfbf7a
 --- /dev/null
 +++ b/include/rex/system/xam/alboria.h
-@@ -0,0 +1,585 @@
+@@ -0,0 +1,596 @@
 +/**
 + * @file        system/xam/alboria.h
 + * @brief       Alboria: System Link over the internet through our relay
@@ -243,8 +243,11 @@ index 0000000..71a265c
 +// Changes the party type of the room this installation hosts, in the background: the service tells
 +// every member, whose GetStatus().party_type follows.
 +void SetPartyType(PartyType party_type);
-+// Joins the game with `code`, in the background.
-+void JoinGame(std::string_view code);
++// Joins the game with `code`, in the background. A party leader with others in its party's room
++// brings them along first (POST /v1/rooms/merge), which blocks the calling thread for that request:
++// answers why the party cannot come along (Alboria's error code, such as "party_does_not_fit" or
++// "team_full"), and then joins nothing and stays in its room; empty when the join goes ahead.
++std::string JoinGame(std::string_view code);
 +// Leaves the room (the relay closes it for everyone when this installation hosts it).
 +void Leave();
 +
@@ -291,6 +294,9 @@ index 0000000..71a265c
 +  uint32_t title_id = 0;  // the room's title while playing
 +  bool joinable = false;  // the room is Joinable
 +  bool with_you = false;  // in the same room as the player
++  // With the player and became a member of the party after them: the player was there first, and
++  // is told the friend joined (Notice::Kind::kFriendJoined); never the one who joined.
++  bool arrived_after_you = false;
 +};
 +
 +// The account's friends as Alboria last listed them: read in the background every few seconds
@@ -317,6 +323,8 @@ index 0000000..71a265c
 +    kFriendJoined,   // a friend joined the player's room
 +    kHostLeft,       // the match the player was in ended because its host left (who hosted is never
 +                     // said: alboria-notes:alboria-server/online-rules.md)
++    kJoinRefused,    // a join with nowhere else to say so was not made: `id` is Alboria's error code
++                     // (the player's party did not fit, section 5 of the online rules)
 +  };
 +  Kind kind = Kind::kInvitation;
 +  std::string id;
@@ -327,6 +335,9 @@ index 0000000..71a265c
 +// last ones; the first read after the reader starts reports nothing, so a player starting the game
 +// is not shown what was already waiting (the overlay and the launcher list it).
 +std::vector<Notice> TakeNotices();
++// Tells the player, with a kJoinRefused notice, that a join was not made and why (`error`, Alboria's
++// error code): for joins whose caller has no screen of its own to say it (the launcher's).
++void TellJoinRefused(const std::string& error);
 +
 +// What an overlay action reports when it is done: empty on success, else Alboria's error code
 +// ("invite_only", "room_not_found", "not_in_room", "network"...). Called on a worker thread.
@@ -629,10 +640,10 @@ index 0000000..c7fc5de
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria.cpp b/src/system/xam/alboria.cpp
 new file mode 100644
-index 0000000..1b32be8
+index 0000000..f6c8ee9
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,2807 @@
+@@ -0,0 +1,2907 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -971,10 +982,6 @@ index 0000000..1b32be8
 +std::set<uint32_t> g_incoming;
 +std::vector<Notice> g_notices;
 +bool g_friends_read = false;
-+// The code of the room the player was in at the last read, empty when none: a friend who is with
-+// the player now joined them only if the player was already in this room at the last read, not when
-+// the player is the one who just joined the friend's.
-+std::string g_notice_room;
 +// The host's overlay (SetOverlayHandler), and whether it is open. g_overlay_handler is guarded by
 +// g_friends_mutex.
 +OverlayHandler g_overlay_handler;
@@ -1546,7 +1553,7 @@ index 0000000..1b32be8
 +void PublishHostedSession(std::string code, SessionInfo session);
 +void RefreshCurrentRoom();
 +// A party member keeps with its party as it moves (section 4.9; after RefreshCurrentRoom).
-+void FollowPartyAfterMove(bool left_match);
++void FollowPartyAfterMove(bool left_match, bool merged);
 +void PublishHostedQos(std::string code, std::array<uint8_t, 8> kid, std::vector<uint8_t> data);
 +void AnswerStream(std::span<const uint8_t> announcement);
 +
@@ -1753,6 +1760,9 @@ index 0000000..1b32be8
 +        // so do the title's sessions. The rest of what the room is comes from /v1/rooms/current.
 +        if (body->size() < 7) break;
 +        constexpr uint8_t kMovedHostLeft = 3;
++        // Its party's leader joined another party and brought it along (POST /v1/rooms/merge).
++        constexpr uint8_t kMovedMerged = 6;
++        const bool merged = (*body)[2] == kMovedMerged;
 +        bool left_match = false;
 +        // A match the title lost (MatchLost): its party's leader took it back, and the online menu
 +        // says the room closed, so Alboria's "the match is over" notice is not shown.
@@ -1776,7 +1786,9 @@ index 0000000..1b32be8
 +            to_publish = *g_hosted_session;
 +          }
 +        }
-+        if ((*body)[2] == kMovedHostLeft && lost) {
++        if (merged) {
++          REXSYS_INFO("Alboria: the party's leader brought the party into another party");
++        } else if ((*body)[2] == kMovedHostLeft && lost) {
 +          REXSYS_INFO("Alboria: back from the match the title lost");
 +        } else if ((*body)[2] == kMovedHostLeft) {
 +          REXSYS_INFO("Alboria: the match's host left");
@@ -1784,7 +1796,7 @@ index 0000000..1b32be8
 +          std::lock_guard lock(g_friends_mutex);
 +          g_notices.push_back({Notice::Kind::kHostLeft, {}, 0, {}});
 +        }
-+        RunDetached("reading the room", [left_match, to_publish] {
++        RunDetached("reading the room", [left_match, merged, to_publish] {
 +          RefreshCurrentRoom();
 +          if (to_publish) {
 +            std::string code;
@@ -1794,7 +1806,7 @@ index 0000000..1b32be8
 +            }
 +            PublishHostedSession(code, *to_publish);
 +          }
-+          FollowPartyAfterMove(left_match);
++          FollowPartyAfterMove(left_match, merged);
 +        });
 +        break;
 +      }
@@ -2446,6 +2458,7 @@ index 0000000..1b32be8
 +    f.title_id = f.playing ? static_cast<uint32_t>(std::strtoul(Text(presence, "title_id").c_str(), nullptr, 16)) : 0;
 +    f.joinable = f.playing && Text(presence, "party") == "joinable";
 +    f.with_you = f.playing && Flag(presence, "with_you", false);
++    f.arrived_after_you = f.with_you && Flag(presence, "arrived_after_you", false);
 +    if (!f.online) f.last_seen = Text(presence, "last_seen");
 +    if (f.id) friends.push_back(std::move(f));
 +  }
@@ -2484,14 +2497,15 @@ index 0000000..1b32be8
 +      if (!g_incoming.contains(id)) g_notices.push_back({Notice::Kind::kFriendRequest, {}, id, name});
 +    }
 +    for (const auto& f : friends) {
-+      if (!f.with_you || room.empty() || room != g_notice_room) continue;
++      // Only whoever was in the party first is told: Alboria says who arrived after whom, from one
++      // reading of the rooms, so a player who just joined is never told the friend there joined.
++      if (!f.arrived_after_you || room.empty()) continue;
 +      const bool was_with_you = std::any_of(g_friends.begin(), g_friends.end(),
 +                                            [&](const Friend& old) { return old.id == f.id && old.with_you; });
 +      if (!was_with_you) g_notices.push_back({Notice::Kind::kFriendJoined, {}, f.id, f.name});
 +    }
 +  }
 +  g_friends_read = true;
-+  g_notice_room = room;
 +  g_incoming.clear();
 +  for (const auto& [id, name] : incoming) g_incoming.insert(id);
 +  g_friends = std::move(friends);
@@ -2508,8 +2522,8 @@ index 0000000..1b32be8
 +      if (done) done(room.error);
 +      return;
 +    }
-+    JoinGame(Text(room.json, "code"));
-+    if (done) done({});
++    const std::string refused = JoinGame(Text(room.json, "code"));
++    if (done) done(refused);
 +    ReadFriends();
 +  });
 +}
@@ -2541,6 +2555,11 @@ index 0000000..1b32be8
 +std::vector<Notice> TakeNotices() {
 +  std::lock_guard lock(g_friends_mutex);
 +  return std::exchange(g_notices, {});
++}
++
++void TellJoinRefused(const std::string& error) {
++  std::lock_guard lock(g_friends_mutex);
++  g_notices.push_back({Notice::Kind::kJoinRefused, error, 0, {}});
 +}
 +
 +void RefreshFriends() {
@@ -2636,7 +2655,13 @@ index 0000000..1b32be8
 +    g_last_invite.reset();
 +  }
 +  g_join_for_search.store(true);
-+  JoinGame(code);
++  // The title's own Join on a friend: a party that cannot come along is said with a notice, as the
++  // title only tells that the join failed.
++  if (const std::string refused = JoinGame(code); !refused.empty()) {
++    g_join_for_search.store(false);
++    TellJoinRefused(refused);
++    return std::nullopt;
++  }
 +  // The join and the relay's welcome take two requests and a round trip.
 +  constexpr auto kJoinWait = std::chrono::seconds(8);
 +  const auto deadline = Clock::now() + kJoinWait;
@@ -2794,20 +2819,62 @@ index 0000000..1b32be8
 +
 +namespace {
 +
++// Brought by its leader into a party that plays a matchmade match (alboria-notes:alboria-server/
++// online-rules.md, section 5): it joins the match in progress with the match's session, as a friend
++// joining that party does (the welcome's match ticket), and keeps the party's own Live session for
++// after the match. Both come from /v1/rooms/current (match_session, party_session).
++void FollowIntoPartyMatch() {
++  const auto room = CallSignedIn("/v1/rooms/current", nlohmann::json::object());
++  const auto match = room.error.empty() ? DecodeBase64(Text(room.json, "match_session")) : std::nullopt;
++  if (!match || match->size() != kSessionInfoSize) {
++    REXSYS_WARN("Alboria: brought into a party's match, but the match is not open to join ({})",
++                room.error.empty() ? "no session" : room.error);
++    return;
++  }
++  SessionInfo session;
++  std::memcpy(session.data(), match->data(), session.size());
++  {
++    std::lock_guard lock(g_mutex);
++    g_last_invite = session;
++    g_accepted_invite = session;
++    XnKid kid;
++    std::copy_n(session.begin(), kid.size(), kid.begin());
++    g_match_kid = kid;
++    g_match_lost.store(false);
++    if (auto party = DecodeBase64(Text(room.json, "party_session")); party && party->size() == kSessionInfoSize) {
++      SessionInfo party_session;
++      std::memcpy(party_session.data(), party->data(), party_session.size());
++      g_party_session = party_session;
++    }
++  }
++  REXSYS_INFO("Alboria: joining the match of the party it was brought into, as an accepted invite");
++  REX_KERNEL_STATE()->BroadcastNotification(kNotifyLiveInviteAccepted, 0);
++}
++
 +// A party member (not its leader) keeps with its party as Alboria moves it, since the title takes
 +// only the leader along with an invite:
 +// - moved into another party's match: its own invite to the match (the match's session, from
 +//   /v1/matchmaking/party, which has it once the match is open), for the title to take
 +//   (TakeMemberMatchInvite). In its own leader's match there is none: the title brings its party;
 +// - moved back to its party's room after a match: it joins its leader's Live party again, as an
-+//   accepted invite, as joining a friend's room does.
-+void FollowPartyAfterMove(bool left_match) {
++//   accepted invite, as joining a friend's room does;
++// - brought by its leader into another party (`merged`): it joins that party's leader's Live
++//   party the same way, or, when that party plays a match, the match's session, as a friend joining
++//   it in progress does (FollowIntoPartyMatch).
++void FollowPartyAfterMove(bool left_match, bool merged) {
 +  Status status;
 +  {
 +    std::lock_guard lock(g_mutex);
 +    status = g_status;
 +  }
-+  if (status.party_leader || status.host || !LiveSignedIn()) return;
++  if (status.party_leader || status.host || !LiveSignedIn()) {
++    if (merged) REXSYS_WARN("Alboria: brought into another party, but not following it (leader, host or signed out)");
++    return;
++  }
++  if (merged && status.in_match) {
++    FollowIntoPartyMatch();
++    return;
++  }
 +  if (status.in_match) {
 +    constexpr int kTries = 10;
 +    for (int i = 0; i < kTries; ++i) {
@@ -2832,10 +2899,11 @@ index 0000000..1b32be8
 +    }
 +    return;
 +  }
-+  if (!left_match) return;
++  if (!left_match && !merged) return;
 +  // The leader's title makes a new Live party session as it leaves the match, published a moment
 +  // later: the one the room has is waited for until it is not the one joined before the match (for
-+  // up to kTries seconds, then whatever the room has).
++  // up to kTries seconds, then whatever the room has). A party it was brought into has its own
++  // leader's session, already another than the one it had.
 +  std::optional<SessionInfo> found;
 +  constexpr int kTries = 10;
 +  for (int i = 0; i < kTries; ++i) {
@@ -2850,7 +2918,10 @@ index 0000000..1b32be8
 +    }
 +    std::this_thread::sleep_for(std::chrono::seconds(1));
 +  }
-+  if (!found) return;
++  if (!found) {
++    if (merged) REXSYS_WARN("Alboria: the party it was brought into has no Live party session to join");
++    return;
++  }
 +  const SessionInfo session = *found;
 +  {
 +    std::lock_guard lock(g_mutex);
@@ -2858,7 +2929,11 @@ index 0000000..1b32be8
 +    g_accepted_invite = session;
 +    g_party_session = session;
 +  }
-+  REXSYS_INFO("Alboria: back from the match, joining the party leader's Live party again");
++  if (merged) {
++    REXSYS_INFO("Alboria: joining the Live party of the party it was brought into, as an accepted invite");
++  } else {
++    REXSYS_INFO("Alboria: back from the match, joining the party leader's Live party again");
++  }
 +  REX_KERNEL_STATE()->BroadcastNotification(kNotifyLiveInviteAccepted, 0);
 +}
 +
@@ -2933,6 +3008,14 @@ index 0000000..1b32be8
 +    SetSearchPhaseLocked(SearchPhase::kSearching);
 +  }
 +  const auto ticket = CallSignedIn("/v1/matchmaking/search", request);
++  if (ticket.error == "not_leader") {
++    // Only a party's leader searches (its members follow it): a member's title finds nothing and
++    // does not host a match of its own.
++    REXSYS_WARN("Alboria: only the party's leader searches for a match; this search finds nothing");
++    std::lock_guard lock(g_match_mutex);
++    SetSearchPhaseLocked(SearchPhase::kStopped);
++    return {MatchOutcome::kStopped, {}};
++  }
 +  if (!ticket.error.empty()) {
 +    // Without Alboria the title hosts, as it would with nobody to find.
 +    REXSYS_WARN("Alboria: matchmaking could not start ({})", ticket.error);
@@ -3209,9 +3292,37 @@ index 0000000..1b32be8
 +  });
 +}
 +
-+void JoinGame(std::string_view code) {
++namespace {
++
++// A party leader in its party's own room, with others in it, brings them along into the party it is
++// about to join (POST /v1/rooms/merge, alboria-notes:alboria-server/online-rules.md, section 5):
++// Alboria moves them into that party's room while this installation is still in its own, so its
++// leaving (BYE) does not close the party under them. Empty when the join may go ahead (nobody to
++// bring, or all of them brought); else why not (party_does_not_fit, team_full, match_starting...),
++// and nobody was moved.
++std::string BringParty(const std::string& code, uint32_t title_id) {
++  {
++    std::lock_guard lock(g_mutex);
++    if (g_status.state != State::kConnected || !g_status.party_leader || g_status.in_match || g_peers.empty()) return {};
++  }
++  const auto answer = CallSignedIn("/v1/rooms/merge", {{"code", code}, {"title_id", fmt::format("{:08X}", title_id)}});
++  if (!answer.error.empty()) {
++    REXSYS_WARN("Alboria: the party cannot come along into party {} ({}): not joining it", code, answer.error);
++    return answer.error;
++  }
++  REXSYS_INFO("Alboria: brought {} of the party along into party {}", Number<int>(answer.json, "merged", 0), code);
++  return {};
++}
++
++}  // namespace
++
++std::string JoinGame(std::string_view code) {
++  const std::string normalized = NormalizeCode(code);
++  const uint32_t title_id = REX_KERNEL_STATE()->title_id();
++  if (std::string refused = BringParty(normalized, title_id); !refused.empty()) return refused;
 +  g_hosting.store(false);
-+  Start(REX_KERNEL_STATE()->title_id(), 0, NormalizeCode(code));
++  Start(title_id, 0, normalized);
++  return {};
 +}
 +
 +void Leave() {

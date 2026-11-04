@@ -203,8 +203,13 @@ void JoinByCodeMenu::Join() {
     return;
   }
   error_.clear();
+  // A party leader with others brings them along; when they do not all fit, nothing is joined and
+  // the player stays in their party.
+  if (const std::string refused = alboria::JoinGame(code_); !refused.empty()) {
+    error_ = AlboriaErrorText(language_, refused);
+    return;
+  }
   joining_ = true;
-  alboria::JoinGame(code_);
 }
 
 bool JoinByCodeMenu::HandleInput() {
