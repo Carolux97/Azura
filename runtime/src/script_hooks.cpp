@@ -414,6 +414,8 @@ enum WatchedName {
   kHandleHordeSelection,     // UIScene_FrontEnd: Horde is chosen in the main menu
   kHandleSiegeSelection,     // UIScene_FrontEnd: Beast is chosen in the main menu
   kHandleHordeAndSiegeMatchModeSelection,  // UIScene_FrontEnd: Horde's or Beast's Standard or Private
+  kUpdateNatType,            // UIWidget_MainMenu (and GearMenuGame): the menus' NAT type label
+  kUpdatePopulationNumbers,  // UIWidget_MainMenu: how many play each playlist, in its menus
   kProcessSoundEvent,        // UISoundTheme: plays a menu sound by its event name (Menu sounds)
   // The menu sound events our menus play (MenuSound), in its order.
   kSoundStepUp,
@@ -449,7 +451,7 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "Callback_Credits",      "Callback_ClientMenuOptionWasSelected", "ConditionalCreatePartySession",
     "GetPartyType",          "LocalPartyCreated",      "ClientSetHUD",       "OnCustomMapChanged",
     "ApplySensitivityScaling", "ViewAdhesion",
-    "GetAdjustedAimFor",     "NotifyInviteFailed",     "CancelPartyMatchmaking", "CreatePlayerVersusMatch", "OnNoPartialPartyAvailable", "PostBeginPlay", "ContinueCreateMatch", "InitializeGameSelectionInternal", "UpdateCountdowns", "InitializeMapSelectionInternal", "GetTeamForCurrentPlayer", "HandleGameSessionJIP", "InitializePreGameGameSettings", "PreLogin", "PostLogin", "SetNumBots", "BeginMatch", "EndOfGameTransition", "GetNextMap", "CheckMapAgainstPlaylist", "GetNumberOfSupportedMapsForPlaylist", "IsEpicDev", "InitGameReplicationInfo", "UpdateGRI", "DelayedGameSessionDelete", "PlacePlayerOnSmallestTeam", "GetOccupiedTeamSize", "GetGameSummaryFromProviderIndex", "HandleHordeSelection", "HandleSiegeSelection", "HandleHordeAndSiegeMatchModeSelection",
+    "GetAdjustedAimFor",     "NotifyInviteFailed",     "CancelPartyMatchmaking", "CreatePlayerVersusMatch", "OnNoPartialPartyAvailable", "PostBeginPlay", "ContinueCreateMatch", "InitializeGameSelectionInternal", "UpdateCountdowns", "InitializeMapSelectionInternal", "GetTeamForCurrentPlayer", "HandleGameSessionJIP", "InitializePreGameGameSettings", "PreLogin", "PostLogin", "SetNumBots", "BeginMatch", "EndOfGameTransition", "GetNextMap", "CheckMapAgainstPlaylist", "GetNumberOfSupportedMapsForPlaylist", "IsEpicDev", "InitGameReplicationInfo", "UpdateGRI", "DelayedGameSessionDelete", "PlacePlayerOnSmallestTeam", "GetOccupiedTeamSize", "GetGameSummaryFromProviderIndex", "HandleHordeSelection", "HandleSiegeSelection", "HandleHordeAndSiegeMatchModeSelection", "UpdateNatType", "UpdatePopulationNumbers",
     "ProcessSoundEvent",     "Options_StepUp",         "Options_StepDown",   "ValueChangeLeft",
     "ValueChangeRight",      "Options_AcceptButton",   "Options_BackButton", "Options_DetailsEnter",
     "Options_DetailsLeave",  "Options_SliderLeft",     "Options_SliderRight"};
@@ -5257,6 +5259,32 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   if (Is(base, function, kHandleMenuSelection) && VersusMenuChoice(base, ctx.r4.u32)) {
     REXLOG_INFO("[Azura online] Opening the Versus online menu");
     OpenOnlineMenu(0);
+    return;
+  }
+  // The front end's menus show the party's NAT type (UIWidget_MainMenu.UpdateNatType: NATTypeLabel,
+  // "NAT type: Open") and, by Horde's, Beast's, the playlists' and the campaign's options, how many
+  // play them in the player's region and the world (UpdatePopulationNumbers, from Xbox LIVE's
+  // playlist population). With Alboria neither means anything: there are no counts, and Alboria's
+  // relay and rooms do not depend on the NAT type. The counts are not set, and the NAT label is
+  // written empty (its texts, NATTypeString, HostNATTypeString and the NATTypeNames array, are empty
+  // while it runs: an FString or TArray whose count is 0).
+  if (Is(base, function, kUpdatePopulationNumbers) && LiveMode()) return;
+  if (Is(base, function, kUpdateNatType) && LiveMode() &&
+      ObjectName(base, LoadU32(base, function + kObjectOuter)) == "UIWidget_MainMenu") {
+    const uint32_t widget = LoadU32(base, ctx.r4.u32 + kFrameObject);
+    const uint32_t widget_class = LoadU32(base, widget + kObjectClass);
+    std::vector<std::pair<uint32_t, uint32_t>> counts;  // address of each array's count, its value
+    for (const char* name : {"NATTypeString", "HostNATTypeString", "NATTypeNames"}) {
+      const int32_t offset = ClassPropertyOffset(base, widget_class, name);
+      if (offset < 0) continue;
+      const uint32_t count_at = widget + static_cast<uint32_t>(offset) + 4;  // TArray: data, count, max
+      counts.emplace_back(count_at, LoadU32(base, count_at));
+      StoreU32(base, count_at, 0);
+    }
+    __imp__sub_822DF9E0(ctx, base);
+    for (const auto& [count_at, count] : counts) StoreU32(base, count_at, count);
+    static std::atomic<bool> said{false};
+    if (!said.exchange(true)) REXLOG_INFO("[Azura online] The menus show no NAT type nor playlist counts");
     return;
   }
   // Horde and Beast share their Standard / Private screen (UIScene_FrontEnd.
