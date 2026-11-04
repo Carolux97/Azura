@@ -91,6 +91,7 @@ set(AZURA_SOURCES
     src/input/install_player_assignment.cpp
     src/input/mouse_look.cpp
     src/input/overlay_input.cpp
+    src/input/player_activity.cpp
     src/input/player_assignment.cpp
     src/input/scripted_pad.cpp
     src/menu/menu_patches.cpp

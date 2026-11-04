@@ -1,9 +1,9 @@
 diff --git a/include/rex/system/xam/alboria.h b/include/rex/system/xam/alboria.h
 new file mode 100644
-index 0000000..dcfbf7a
+index 0000000..c9b8399
 --- /dev/null
 +++ b/include/rex/system/xam/alboria.h
-@@ -0,0 +1,596 @@
+@@ -0,0 +1,607 @@
 +/**
 + * @file        system/xam/alboria.h
 + * @brief       Alboria: System Link over the internet through our relay
@@ -466,6 +466,13 @@ index 0000000..dcfbf7a
 +// of its party too (POST /v1/matchmaking/leave); for a party's leader, EndMatch takes the party back
 +// whole instead. Cleared once this installation is out of the match room.
 +void MatchLost();
++// Leaves the matchmade match this installation plays in now (POST /v1/matchmaking/leave), at once
++// and in the background, before its title leaves it: Alboria takes it out of the match room, which
++// hands the match to another party's leader, and it leaves its party too (alboria-notes:
++// alboria-server/online-rules.md, section 3). Its title's goodbye to the others then goes nowhere,
++// so their games see their host gone silent and migrate it, as when a host's game dies (a host's
++// goodbye would end the match for them instead).
++void LeaveMatch();
 +// This installation leads a party whose title lost the match (MatchLost): the party goes back, whole,
 +// to a room of its own (POST /v1/matchmaking/end), in the background.
 +void EndMatch();
@@ -477,6 +484,10 @@ index 0000000..dcfbf7a
 +// both has gone: the runtime then closes the game's connection to it, and the game starts its host
 +// migration without waiting for its own connection timeout.
 +bool TakeHostSilent();
++// Whether the match's host left this member's match room on Alboria (MOVED reason 5: another member
++// hosts it now), once for each host: its packets reach nobody any more, so the runtime closes the
++// game's connection to it at once, without waiting for a silence.
++bool TakeHostMovedOut();
 +// Research (host migration): the system version XamGetSystemVersion answers for `seconds` from now
 +// (0: the usual one). Gears of War 3 migrates a session's host only on a newer system than the one
 +// the SDK claims, and the runtime sets it while a host migration goes on.
@@ -640,10 +651,10 @@ index 0000000..c7fc5de
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria.cpp b/src/system/xam/alboria.cpp
 new file mode 100644
-index 0000000..f6c8ee9
+index 0000000..5e0f47d
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,2907 @@
+@@ -0,0 +1,2937 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -891,6 +902,8 @@ index 0000000..f6c8ee9
 +// TakeHostSilent: set when the match's host went silent, and the host it was reported for (guarded
 +// by g_mutex), so each host is reported once.
 +std::atomic<bool> g_host_silent{false};
++// The match's host left the room on Alboria (MOVED reason 5): TakeHostMovedOut.
++std::atomic<bool> g_host_moved_out{false};
 +uint32_t g_silent_host = 0;
 +// The session ID of the match played through matchmaking, hosted or joined (MatchSessionDeleted).
 +std::optional<std::array<uint8_t, 8>> g_match_kid;
@@ -1763,6 +1776,8 @@ index 0000000..f6c8ee9
 +        // Its party's leader joined another party and brought it along (POST /v1/rooms/merge).
 +        constexpr uint8_t kMovedMerged = 6;
 +        const bool merged = (*body)[2] == kMovedMerged;
++        // The match's host left on Alboria and another member hosts the room now.
++        constexpr uint8_t kMovedNewHost = 5;
 +        bool left_match = false;
 +        // A match the title lost (MatchLost): its party's leader took it back, and the online menu
 +        // says the room closed, so Alboria's "the match is over" notice is not shown.
@@ -1771,11 +1786,25 @@ index 0000000..f6c8ee9
 +        {
 +          std::lock_guard lock(g_mutex);
 +          left_match = g_status.in_match && (*body)[0] != 2;
++          const bool was_in_match = g_status.in_match;
++          const uint32_t old_host_ip = g_status.host_ip;
 +          g_status.in_match = (*body)[0] == 2;
 +          if (!g_status.in_match) g_match_lost.store(false);
 +          g_status.host = (*body)[1] != 0;
 +          g_status.host_ip = uint32_t((*body)[3]) << 24 | uint32_t((*body)[4]) << 16 |
 +                             uint32_t((*body)[5]) << 8 | (*body)[6];
++          // The match's host left on Alboria (an idle host removed, or a host leaving): every game
++          // still connected to it closes that connection now, as one does with a host gone silent
++          // (TakeHostSilent), and the game's host migration starts at once instead of after its own
++          // connection timeout (15 seconds online). Alboria no longer has the old host in the room, so
++          // its silence would never be noticed.
++          if ((*body)[2] == kMovedNewHost && was_in_match && g_status.in_match && old_host_ip &&
++              old_host_ip != g_status.host_ip && g_silent_host != old_host_ip) {
++            g_silent_host = old_host_ip;
++            g_host_moved_out.store(true);
++            REXSYS_INFO("Alboria: the match's host (member {}) left on Alboria: its connection closes for the host migration",
++                        old_host_ip & 0xFFFF);
++          }
 +          REXSYS_INFO("Alboria: moved to {} room{}", g_status.in_match ? "a match's" : "the party's",
 +                      g_status.host ? ", hosting it" : "");
 +          // Back in its party's room as its host: the Live party session the title made meanwhile
@@ -3195,6 +3224,14 @@ index 0000000..f6c8ee9
 +  });
 +}
 +
++void LeaveMatch() {
++  RunDetached("leaving the match", [] {
++    REXSYS_INFO("Alboria: leaving the match before the title does");
++    const auto left = CallSignedIn("/v1/matchmaking/leave", nlohmann::json::object());
++    if (!left.error.empty()) REXSYS_WARN("Alboria: leaving the match failed ({})", left.error);
++  });
++}
++
 +void MatchLost() {
 +  g_match_lost.store(true);
 +  REXSYS_INFO("Alboria: the title lost the match: its session's deletion keeps the party together");
@@ -3214,6 +3251,10 @@ index 0000000..f6c8ee9
 +
 +bool TakeHostSilent() {
 +  return g_host_silent.exchange(false);
++}
++
++bool TakeHostMovedOut() {
++  return g_host_moved_out.exchange(false);
 +}
 +
 +namespace {

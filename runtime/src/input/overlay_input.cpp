@@ -1,5 +1,7 @@
 #include "overlay_input.h"
 
+#include "player_activity.h"
+
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -46,6 +48,8 @@ void Filter(uint32_t user_index, rex::input::X_INPUT_STATE& state, const std::fu
   auto& pad = state.gamepad;
   uint16_t buttons = pad.buttons;
   if (user_index == 0) {
+    // What player 1 does, as it comes, counts against the idle host's removal (player_activity.h).
+    NotePadActivity(state);
     const bool back = buttons & rex::input::X_INPUT_GAMEPAD_BACK;
     const bool shoulder = buttons & rex::input::X_INPUT_GAMEPAD_RIGHT_SHOULDER;
     if (!back && !shoulder) {

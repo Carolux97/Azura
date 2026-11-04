@@ -31,6 +31,8 @@
 #include <rex/ui/immediate_drawer.h>
 #include <rex/ui/keybinds.h>
 #include <rex/ui/presenter.h>
+#include <rex/ui/window.h>
+#include <rex/ui/window_listener.h>
 
 #include "achievement_export.h"
 #include "dlc/content_install.h"
@@ -42,6 +44,7 @@
 #include "alboria_overlay.h"
 #include "input/mouse_look.h"
 #include "input/overlay_input.h"
+#include "input/player_activity.h"
 #include "input/player_assignment.h"
 #include "input/scripted_pad.h"
 #include "controls_menu.h"
@@ -422,6 +425,11 @@ class AzuraApp : public rex::ReXApp {
 #endif
     // Draws nothing until the Video options turn the performance overlay on.
     perf_overlay_ = std::make_unique<azura::PerfOverlay>(drawer, &title_font_, &body_font_);
+    // Player 1's activity counts only while the window has the focus (input/player_activity.h).
+    if (window()) {
+      azura::input::SetWindowFocused(window()->HasFocus());
+      window()->AddListener(&focus_listener_);
+    }
   }
 
   // Barlow (installed in assets/fonts) for the shader compilation notice and the performance
@@ -485,6 +493,7 @@ class AzuraApp : public rex::ReXApp {
   // Stop the prompt thread before the runtime and its memory go away, and remove the shader
   // compilation notice before the ImGui drawer does.
   void OnShutdown() override {
+    if (window()) window()->RemoveListener(&focus_listener_);
     perf_overlay_.reset();
     button_prompts_.reset();
     perf_marker_.reset();
@@ -618,6 +627,11 @@ class AzuraApp : public rex::ReXApp {
   std::filesystem::path exe_dir_;
   rex::ui::ImGuiDrawer* dialog_drawer_ = nullptr;
   std::unique_ptr<azura::PerfOverlay> perf_overlay_;
+  // Tells player_activity.h whether the window has the focus.
+  struct FocusListener : rex::ui::WindowListener {
+    void OnGotFocus(rex::ui::UISetupEvent&) override { azura::input::SetWindowFocused(true); }
+    void OnLostFocus(rex::ui::UISetupEvent&) override { azura::input::SetWindowFocused(false); }
+  } focus_listener_;
   ImFont* title_font_ = nullptr;
   ImFont* body_font_ = nullptr;
   // Alboria's rounded face (Nunito), for its overlay and notices; the game's fonts when it is missing.

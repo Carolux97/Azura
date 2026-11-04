@@ -89,6 +89,7 @@
 #include "menu/menu_patches.h"
 #include "menu/pc_options.h"
 #include "input/mouse_look.h"
+#include "input/player_activity.h"
 #include "input/player_assignment.h"
 
 REXCVAR_DEFINE_BOOL(script_trace, false, "Azura/Debug",
@@ -445,6 +446,7 @@ enum WatchedName {
   kOnLeaveLobbyConfirmed,    // UIScene_PregameLobby: a player confirmed leaving the pre-game lobby
   kReturnToMainMenu,         // PlayerController and subclasses: the game sends the player to the main menu
   kShowUIMessage,            // GearUIManager: opens one of the game's message boxes, by its tag
+  kClientWasKicked,          // GearPC: the host removed the player (for idling): the game's message, then the main menu
   kProcessSoundEvent,        // UISoundTheme: plays a menu sound by its event name (Menu sounds)
   // The menu sound events our menus play (MenuSound), in its order.
   kSoundStepUp,
@@ -480,7 +482,7 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "Callback_Credits",      "Callback_ClientMenuOptionWasSelected", "ConditionalCreatePartySession",
     "GetPartyType",          "LocalPartyCreated",      "ClientSetHUD",       "OnCustomMapChanged",
     "ApplySensitivityScaling", "ViewAdhesion",
-    "GetAdjustedAimFor",     "NotifyInviteFailed",     "CancelPartyMatchmaking", "CreatePlayerVersusMatch", "OnNoPartialPartyAvailable", "PostBeginPlay", "ContinueCreateMatch", "InitializeGameSelectionInternal", "UpdateCountdowns", "InitializeMapSelectionInternal", "GetTeamForCurrentPlayer", "HandleGameSessionJIP", "InitializePreGameGameSettings", "PreLogin", "PostLogin", "SetNumBots", "BeginMatch", "EndOfGameTransition", "GetNextMap", "CheckMapAgainstPlaylist", "GetNumberOfSupportedMapsForPlaylist", "IsEpicDev", "InitGameReplicationInfo", "UpdateGRI", "DelayedGameSessionDelete", "PlacePlayerOnSmallestTeam", "GetOccupiedTeamSize", "GetGameSummaryFromProviderIndex", "HandleHordeSelection", "HandleSiegeSelection", "HandleHordeAndSiegeMatchModeSelection", "UpdateNatType", "UpdatePopulationNumbers", "SetHostIcon", "UpdatePlayerList", "OnLeaveGame", "CanBackUpToMapSelect", "CanLeaveGame", "IsOfficialMatch", "IsPlayerMatch", "OnLeaveLobby_Confirmed", "ReturnToMainMenu", "ShowUIMessage",
+    "GetAdjustedAimFor",     "NotifyInviteFailed",     "CancelPartyMatchmaking", "CreatePlayerVersusMatch", "OnNoPartialPartyAvailable", "PostBeginPlay", "ContinueCreateMatch", "InitializeGameSelectionInternal", "UpdateCountdowns", "InitializeMapSelectionInternal", "GetTeamForCurrentPlayer", "HandleGameSessionJIP", "InitializePreGameGameSettings", "PreLogin", "PostLogin", "SetNumBots", "BeginMatch", "EndOfGameTransition", "GetNextMap", "CheckMapAgainstPlaylist", "GetNumberOfSupportedMapsForPlaylist", "IsEpicDev", "InitGameReplicationInfo", "UpdateGRI", "DelayedGameSessionDelete", "PlacePlayerOnSmallestTeam", "GetOccupiedTeamSize", "GetGameSummaryFromProviderIndex", "HandleHordeSelection", "HandleSiegeSelection", "HandleHordeAndSiegeMatchModeSelection", "UpdateNatType", "UpdatePopulationNumbers", "SetHostIcon", "UpdatePlayerList", "OnLeaveGame", "CanBackUpToMapSelect", "CanLeaveGame", "IsOfficialMatch", "IsPlayerMatch", "OnLeaveLobby_Confirmed", "ReturnToMainMenu", "ShowUIMessage", "ClientWasKicked",
     "ProcessSoundEvent",     "Options_StepUp",         "Options_StepDown",   "ValueChangeLeft",
     "ValueChangeRight",      "Options_AcceptButton",   "Options_BackButton", "Options_DetailsEnter",
     "Options_DetailsLeave",  "Options_SliderLeft",     "Options_SliderRight"};
@@ -2695,27 +2697,40 @@ double LoadF64(const uint8_t* base, uint32_t address) {
 }
 
 void CloseSilentHost(uint8_t* base) {
-  if (!rex::system::xam::alboria::TakeHostSilent()) return;
+  // Silent for a while, or gone from the match room on Alboria (an idle host removed, a host that
+  // left): both mean the host is gone, the second at once. A host gone from the room is looked for again on the next frames for a few seconds (kRetry)
+  // when the game's connection to it is not found at once.
+  using Clock = std::chrono::steady_clock;
+  constexpr auto kRetry = std::chrono::seconds(5);
+  static std::optional<Clock::time_point> moved_out_since;
+  const bool silent = rex::system::xam::alboria::TakeHostSilent();
+  if (rex::system::xam::alboria::TakeHostMovedOut()) moved_out_since = Clock::now();
+  const bool moved_out = moved_out_since.has_value();
+  if (!silent && !moved_out) return;
   const uint32_t engine = LoadU32(base, kEngineGlobal);
   const uint32_t driver = engine ? LoadU32(base, engine + kEngineNetDriver) : 0;
   const uint32_t connection = driver ? LoadU32(base, driver + kNetDriverHostConnection) : 0;
   const uint32_t connection_class = connection >= 0x10000 ? LoadU32(base, connection + kObjectClass) : 0;
   if (connection_class < 0x10000 || ObjectName(base, connection_class).find("Connection") == std::string::npos) {
-    REXLOG_WARN("[Azura online] The match's host is silent, but the game has no connection to it");
+    static int logged = 0;
+    if (logged++ < 3) REXLOG_WARN("[Azura online] The match's host is gone, but the game has no connection to it");
+    if (moved_out && Clock::now() - *moved_out_since > kRetry) moved_out_since.reset();
     return;
   }
+  moved_out_since.reset();
   const double now = LoadF64(base, driver + kNetDriverTime);
   const double heard = LoadF64(base, connection + kConnectionLastReceiveTime);
-  // Only a connection that has indeed been silent (the SDK waits 8 s): the field is not touched
-  // otherwise.
-  if (!(now - heard >= 6.0 && now - heard <= 60.0)) {
+  // Only a connection that has indeed been silent (the SDK waits 8 s), unless the host left the
+  // room on Alboria: the field is not touched otherwise.
+  if (!moved_out && !(now - heard >= 6.0 && now - heard <= 60.0)) {
     REXLOG_WARN("[Azura online] The match's host is silent, but its connection heard it {:.1f} s ago", now - heard);
     return;
   }
   const uint64_t bits = std::bit_cast<uint64_t>(now - 1000.0);
   StoreU32(base, connection + kConnectionLastReceiveTime, static_cast<uint32_t>(bits >> 32));
   StoreU32(base, connection + kConnectionLastReceiveTime + 4, static_cast<uint32_t>(bits));
-  REXLOG_INFO("[Azura online] The match's host is silent ({:.1f} s): its connection closes now", now - heard);
+  REXLOG_INFO("[Azura online] The match's host is {} ({:.1f} s since heard): its connection closes now",
+              moved_out ? "gone from the match room on Alboria" : "silent", now - heard);
 }
 
 // Every Int, Float and Byte value of `object` its classes up to `stop`
@@ -4728,6 +4743,108 @@ void PlayMenuSound(MenuSound sound) {
 }
 }  // namespace azura::script
 
+// How long before being removed the idle host's coming removal is logged (the game shows its idle
+// players no warning either).
+constexpr float kIdleWarningSeconds = 15.0f;
+// How long after leaving the match on Alboria the idle host's game is removed from it.
+constexpr auto kIdleKickAfterLeaving = std::chrono::milliseconds(1500);
+
+// On a player input frame (`ctx`) of a matchmade match's host: the game removes idle players
+// (KickIdler, past its MaxIdleTime: 120 seconds in a matchmade match, 0 in the pre-game lobby), but
+// never its own host, whose game is the match's: an idle host would keep everyone waiting. Alboria's
+// runtime applies the same time to it, from what player 1 does (player_activity.h: the game's own
+// LastActiveTime only follows moves that reach the host over the network). Logged
+// kIdleWarningSeconds before, it is then removed in two steps:
+// 1. it leaves the match on Alboria (LeaveMatch): out of the match room, which Alboria hands to
+//    another party's leader, and out of its party (online-rules.md, section 3);
+// 2. kIdleKickAfterLeaving later, the game's GearPC.ClientWasKicked runs on its own controller, as on
+//    a client the host removed: the game's message ("removed for not participating"), then the main
+//    menu. Its game's goodbye then reaches nobody: the others see their host gone silent and migrate
+//    it, as when a host's game dies (a goodbye would end the match for them).
+void KickIdleHost(PPCContext& ctx, uint8_t* base) {
+  namespace alboria = rex::system::xam::alboria;
+  using Clock = std::chrono::steady_clock;
+  // Watching while hosting a match; then left on Alboria (at `left_at`); then removed.
+  enum class Phase { kWatching, kLeft, kRemoved };
+  static Phase phase = Phase::kWatching;
+  static Clock::time_point left_at;
+  static bool warned = false;
+  // When this match was first seen hosted: idle time before it does not count.
+  static std::optional<Clock::time_point> hosting_since;
+  const uint32_t controller = LoadU32(base, ctx.r3.u32 + kObjectOuter);
+  if (phase == Phase::kLeft) {
+    if (Clock::now() - left_at < kIdleKickAfterLeaving) return;
+    phase = Phase::kRemoved;
+    const uint32_t kick = controller ? FindControllerFunction(base, controller, "ClientWasKicked") : 0;
+    if (!kick) {
+      REXLOG_WARN("[Azura online] ClientWasKicked not found; the idle host's game is not removed from the match");
+      return;
+    }
+    if (!g_return_to_menu_locals) {
+      g_return_to_menu_locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kReturnToMainMenuLocalsSize);
+    }
+    if (!g_return_to_menu_locals) return;
+    REXLOG_INFO("[Azura online] The idle host's game is removed from the match (ClientWasKicked)");
+    g_left_lobby_by_choice.store(true);
+    std::memset(base + g_return_to_menu_locals, 0, kReturnToMainMenuLocalsSize);
+    const uint32_t frame = ctx.r4.u32;
+    const uint32_t own_object = LoadU32(base, frame + kFrameObject);
+    const uint64_t own_r3 = ctx.r3.u64;
+    StoreU32(base, frame + kFrameObject, controller);
+    ctx.r3.u64 = controller;
+    RunInstead(ctx, base, kick, g_return_to_menu_locals);
+    StoreU32(base, frame + kFrameObject, own_object);
+    ctx.r3.u64 = own_r3;
+    return;
+  }
+  const alboria::Status status = alboria::GetStatus();
+  const auto stop_watching = [] {
+    phase = Phase::kWatching;
+    warned = false;
+    hosting_since.reset();
+  };
+  if (!LiveMode() || !status.in_match || !status.host || !controller) {
+    stop_watching();
+    return;
+  }
+  const uint32_t controller_class = LoadU32(base, controller + kObjectClass);
+  if (ObjectName(base, controller_class).find("_MP") == std::string::npos) {
+    stop_watching();
+    return;
+  }
+  const int32_t world_at = ClassPropertyOffset(base, controller_class, "WorldInfo");
+  const uint32_t world = world_at >= 0 ? LoadU32(base, controller + static_cast<uint32_t>(world_at)) : 0;
+  const int32_t game_at = world ? ClassPropertyOffset(base, LoadU32(base, world + kObjectClass), "Game") : -1;
+  const uint32_t game = game_at >= 0 ? LoadU32(base, world + static_cast<uint32_t>(game_at)) : 0;
+  const int32_t max_idle_at = game ? ClassPropertyOffset(base, LoadU32(base, game + kObjectClass), "MaxIdleTime") : -1;
+  const float max_idle = max_idle_at >= 0 ? LoadF32(base, game + static_cast<uint32_t>(max_idle_at)) : 0.0f;
+  if (max_idle <= 0.0f) {
+    stop_watching();
+    return;
+  }
+  const Clock::time_point now = Clock::now();
+  if (!hosting_since) {
+    hosting_since = now;
+    REXLOG_INFO("[Azura online] Hosting a matchmade match: idle after {:.0f} s with nothing done", max_idle);
+  }
+  const double idle =
+      std::min(azura::input::SecondsSinceActivity(), std::chrono::duration<double>(now - *hosting_since).count());
+  if (idle < max_idle - kIdleWarningSeconds) {
+    if (warned) REXLOG_INFO("[Azura online] The idle host is back ({:.0f} s idle)", idle);
+    warned = false;
+    return;
+  }
+  if (!warned) {
+    warned = true;
+    REXLOG_INFO("[Azura online] The match's host has done nothing for {:.0f} s of {:.0f}: warned", idle, max_idle);
+  }
+  if (idle < max_idle) return;
+  REXLOG_INFO("[Azura online] The match's host has done nothing for {:.0f} s: it leaves the match on Alboria, then the game", idle);
+  phase = Phase::kLeft;
+  left_at = now;
+  alboria::LeaveMatch();
+}
+
 extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   if (g_names_missing.load(std::memory_order_relaxed) > 0 &&
       (g_calls.fetch_add(1, std::memory_order_relaxed) & 0x3FF) == 0) {
@@ -4751,6 +4868,7 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     NoteMatchPlayers(ctx, base);
     PlaceAlboriaTeams(ctx, base);
     JoinRoomFromLauncher(base);
+    KickIdleHost(ctx, base);
     ShowRoomMessage(ctx, base);
     RefreshPartyPanelTitle(ctx, base);
     const uint32_t player_input = ctx.r3.u32;
@@ -5285,6 +5403,18 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
       g_host_leave_requested.store(true);
       return;
     }
+  }
+  // The host removed the player from the match for idling (GearGameMP_Base.KickIdler, past the
+  // game's MaxIdleTime: 120 seconds in a matchmade match): GearPC.ClientWasKicked shows the game's
+  // own message ("removed from the session for not participating") and sends the player to the
+  // main menu. On Alboria that is leaving the match (alboria-notes:alboria-server/online-rules.md,
+  // section 3): the player leaves its party too, as the match session's deletion does, and the
+  // online menu does not cover the game's message with "the lobby closed".
+  if (Is(base, function, kClientWasKicked) && LiveMode()) {
+    const rex::system::xam::alboria::Status status = rex::system::xam::alboria::GetStatus();
+    REXLOG_INFO("[Azura online] ClientWasKicked: the player is removed from the match (in a match: {}, hosting: {})",
+                status.in_match, status.host);
+    if (status.in_match) g_left_lobby_by_choice.store(true);
   }
   // The game's "connection lost" message box (GearGameViewportClient.NotifyConnectionError, tag
   // ConfirmNetworkLost) as a matchmade lobby or match is lost under a party's leader (its host went,
