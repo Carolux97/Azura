@@ -620,10 +620,10 @@ index 0000000..c7fc5de
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria.cpp b/src/system/xam/alboria.cpp
 new file mode 100644
-index 0000000..8cf6316
+index 0000000..4e34e5e
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,2756 @@
+@@ -0,0 +1,2764 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -2673,6 +2673,9 @@ index 0000000..8cf6316
 +}
 +
 +// Tells Alboria about the hosted match as it is now (POST /v1/matchmaking/open), if it is open.
++// Only a match room's is: a session the title hosts with statistics and no presence is also a
++// private match's lobby (in its party's room), which matchmaking has no use for. A matchmade one
++// is in its match room before its session is made, and the refresher sends it again anyway.
 +void SendOpenMatch() {
 +  OpenMatchState match;
 +  {
@@ -2683,6 +2686,11 @@ index 0000000..8cf6316
 +  if (!match.open || !match.session || match.held) return;
 +  if (status.state != State::kConnected || status.code.empty()) {
 +    REXSYS_DEBUG("Alboria: the open match waits for its room");
++    return;
++  }
++  if (!status.in_match) {
++    static std::atomic<bool> said{false};
++    if (!said.exchange(true)) REXSYS_INFO("Alboria: a hosted session outside a match room is not offered to matchmaking");
 +    return;
 +  }
 +  const auto answer = CallSignedIn("/v1/matchmaking/open", {{"code", status.code},

@@ -294,6 +294,11 @@ std::function<void(int)> g_versus_online_handler;
 // The game whose online menu was opened last (0 Versus, 1 Horde, 2 Beast), to open it again when the
 // War Journal it opened closes.
 std::atomic<int> g_online_menu_game{0};
+// The failed join was into a matchmade match Alboria sent this player to (its match room): once
+// its party is Local, an online one is created again, as at start-up, and the online menu opens to
+// say the match could not be joined (g_match_join_failed_notice) and to search again.
+std::atomic<bool> g_match_join_failed{false};
+std::atomic<bool> g_match_join_failed_notice{false};
 // Horde (1) or Beast (2), as the player last chose one in the main menu (HandleHordeSelection,
 // HandleSiegeSelection): the two share their Standard / Private screen.
 std::atomic<int> g_horde_or_beast{0};
@@ -3041,6 +3046,10 @@ void SetConnectionHandler(std::function<void()> handler) {
   g_connection_handler = std::move(handler);
 }
 
+bool TakeMatchJoinFailed() {
+  return g_match_join_failed_notice.exchange(false);
+}
+
 void SetVersusOnlineHandler(std::function<void(int)> handler) {
   std::lock_guard lock(g_quit_mutex);
   g_versus_online_handler = std::move(handler);
@@ -3780,6 +3789,7 @@ std::atomic<bool> g_room_message_pending{false};
 // a member of that room. The runtime has left it, and the party in the main menu becomes Local, as
 // the game's message (the one of a failed room) says.
 std::atomic<bool> g_live_join_failed{false};
+void RecreateOnlinePartyAfterFailedMatch();
 
 // The function `name` of the player controller's class or one it extends; 0 when none has it.
 uint32_t FindControllerFunction(uint8_t* base, uint32_t controller, const char* name) {
@@ -4237,6 +4247,7 @@ void ReturnToMainMenuWhenRoomLost(PPCContext& ctx, uint8_t* base) {
     }
     std::memset(base + g_return_to_menu_locals, 0, kReturnToMainMenuLocalsSize);
     DestroyPartyInFrontEnd(ctx, base, true);  // the game has shown its message already
+    if (g_match_join_failed.exchange(false)) RecreateOnlinePartyAfterFailedMatch();
     return;
   }
   const bool failed = alboria::TakeFailedRoom();
@@ -4433,6 +4444,20 @@ void CreatePendingStartupParty(PPCContext& ctx, uint8_t* base) {
   g_creating_startup_party.store(false);
   StoreU32(base, frame + kFrameObject, own_object);
   ctx.r3.u64 = own_r3;
+  // After a matchmade match that could not be joined: the online menu says so, to search again.
+  if (g_match_join_failed_notice.load()) {
+    REXLOG_INFO("[Azura online] The online party is back after a failed match: the online menu opens to search again");
+    OpenOnlineMenu(g_online_menu_game.load());
+  }
+}
+
+// A matchmade match could not be joined and the party became Local (ReturnToMainMenuWhenRoomLost):
+// an online party is created over it in the main menu, as at start-up (CreatePendingStartupParty),
+// which then opens the online menu with the notice (TakeMatchJoinFailed).
+void RecreateOnlinePartyAfterFailedMatch() {
+  g_match_join_failed_notice.store(true);
+  g_pending_startup_party.store(kBootOnline);
+  REXLOG_INFO("[Azura online] The matchmade match could not be joined: an online party is created again");
 }
 
 // Joining a room the launcher asked for (a friend's room, or an invitation's). Its code comes with
@@ -4793,9 +4818,12 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     }
     g_invite_retries.store(0);
     if (alboria::InRoom() && !alboria::GetStatus().host) {
-      REXLOG_INFO("[Azura online] The host's Live party could not be joined: leaving its room");
+      const bool matchmade = status.in_match;
+      REXLOG_INFO("[Azura online] The host's Live party could not be joined: leaving its room{}",
+                  matchmade ? " (a matchmade match: an online party follows, and the menu to search again)" : "");
       alboria::Leave();
       g_live_join_failed.store(true);
+      g_match_join_failed.store(matchmade);
     }
   }
   // With Live parties, the player cancels matchmaking: the game waits for its pending search

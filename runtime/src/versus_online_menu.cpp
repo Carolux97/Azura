@@ -354,6 +354,40 @@ GameTexts LocalizedGameTexts(uint32_t language, OnlineGame game) {
   }
 }
 
+// The error screen's title and text when the match Alboria sent this player to could not be joined
+// (the host's game turned them away): the player's party is online again, and they can search again.
+struct JoinFailedTexts {
+  const char* title;
+  const char* help;
+};
+
+JoinFailedTexts LocalizedJoinFailedTexts(uint32_t language) {
+  switch (language) {
+    case 2:  // Japanese
+      return {"マッチに参加できませんでした", "マッチ側が参加を受け付けませんでした。グループはオンラインに戻っています。もう一度検索できます。"};
+    case 7:  // Korean
+      return {"매치에 참가할 수 없었습니다", "매치가 참가를 받아들이지 않았습니다. 파티는 다시 온라인 상태입니다. 다시 검색할 수 있습니다."};
+    case 8:  // Traditional Chinese
+      return {"無法加入對戰", "對戰沒有接受你的加入。你的群組已重新上線，可以再次搜尋。"};
+    case 12:  // Russian
+      return {"Не удалось войти в матч", "Матч не принял подключение. Ваша группа снова в сети, можно искать снова."};
+    case 3:  // German
+      return {"Dem Match konnte nicht beigetreten werden", "Das Match hat den Beitritt nicht angenommen. Deine Gruppe ist wieder online; du kannst erneut suchen."};
+    case 4:  // French
+      return {"Impossible de rejoindre la partie", "La partie n'a pas accepté la connexion. Votre groupe est de nouveau en ligne : vous pouvez relancer la recherche."};
+    case 5:  // Spanish
+      return {"No se pudo entrar en la partida", "La partida no ha aceptado la entrada. Tu grupo vuelve a estar online y puedes buscar otra vez."};
+    case 6:  // Italian
+      return {"Impossibile entrare nella partita", "La partita non ha accettato l'ingresso. Il tuo gruppo è di nuovo online: puoi cercare di nuovo."};
+    case 9:  // Portuguese
+      return {"Não foi possível entrar na partida", "A partida não aceitou a entrada. Seu grupo está online de novo e você pode buscar outra vez."};
+    case 11:  // Polish
+      return {"Nie udało się dołączyć do meczu", "Mecz nie przyjął dołączenia. Twoja grupa jest znów online i możesz szukać ponownie."};
+    default:  // English
+      return {"Couldn't join the match", "The match didn't take you in. Your party is online again and you can search again."};
+  }
+}
+
 // A mode's name and what it is about (index in kModePlaylists).
 const char* ModeName(const Texts& texts, uint32_t language, int mode) {
   if (mode == kHordeMode) return LocalizedGameTexts(language, OnlineGame::kHorde).mode;
@@ -766,6 +800,11 @@ VersusOnlineMenu::VersusOnlineMenu(rex::ui::ImGuiDrawer* drawer, rex::input::Inp
   }
   // A search still running (the menu was closed meanwhile) shows again.
   if (g_search_running.load() || watching_) screen_ = Screen::kSearching;
+  // The match Alboria sent this player to could not be joined: say so, to search again.
+  if (!watching_ && script::TakeMatchJoinFailed()) {
+    error_ = "join_failed";
+    screen_ = Screen::kError;
+  }
   script::PlayMenuSound(script::MenuSound::kOpen);
 }
 
@@ -1313,12 +1352,15 @@ void VersusOnlineMenu::OnDraw(ImGuiIO& io) {
       DrawEmblem(draw_list, icon, 34.0f * u, ErrorText(a(255)), 1.6f * u);
       const bool signed_out = error_ == "signed_out" || error_ == "no_account" || error_ == "unauthorized";
       const bool too_big = error_ == "party_too_big";
+      const bool join_failed = error_ == "join_failed";
+      const JoinFailedTexts join_texts = LocalizedJoinFailedTexts(language_);
       draw_list->AddText(title_font, 22.0f * u, ImVec2(min.x + 80.0f * u, min.y + 30.0f * u), ErrorText(a(255)),
-                         too_big ? texts.party_too_big : texts.unreachable);
+                         too_big ? texts.party_too_big : join_failed ? join_texts.title : texts.unreachable);
       draw_list->AddText(body_font, 14.0f * u, ImVec2(min.x + 80.0f * u, min.y + 64.0f * u), TextDim(a(255)),
-                         too_big      ? texts.party_too_big_help
-                         : signed_out ? texts.signed_out_help
-                                      : texts.unreachable_help,
+                         too_big       ? texts.party_too_big_help
+                         : join_failed ? join_texts.help
+                         : signed_out  ? texts.signed_out_help
+                                       : texts.unreachable_help,
                          nullptr, max.x - min.x - 110.0f * u);
       hint(0, texts.retry);
       hint(1, texts.back);
