@@ -317,14 +317,17 @@ class AzuraApp : public rex::ReXApp {
         }
       });
     });
-    // Choosing Versus online in Versus' menu opens Azura's matchmaking menu, on the UI thread.
-    azura::script::SetVersusOnlineHandler([this] {
-      app_context().CallInUIThread([this] {
+    // Choosing Versus online, Horde online or Beast online in their menus opens Azura's matchmaking
+    // menu for that game, on the UI thread.
+    azura::script::SetVersusOnlineHandler([this](int game) {
+      app_context().CallInUIThread([this, game] {
         auto* input = runtime() ? static_cast<rex::input::InputSystem*>(runtime()->input_system()) : nullptr;
         if (!shutting_down_ && dialog_drawer_ && input && !versus_online_menu_) {
+          const azura::OnlineGame online_game =
+              game == 1 ? azura::OnlineGame::kHorde : game == 2 ? azura::OnlineGame::kBeast : azura::OnlineGame::kVersus;
           versus_online_menu_ = new azura::VersusOnlineMenu(dialog_drawer_, input, azura::input::InstalledPlayerAssignment(),
                                                             REXCVAR_GET(user_language), title_font_, body_font_,
-                                                            &versus_online_menu_);
+                                                            &versus_online_menu_, false, online_game);
         }
       });
     });

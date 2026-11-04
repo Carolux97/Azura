@@ -290,7 +290,25 @@ std::function<void()> g_local_coop_handler;
 // Opens the Alboria menu (SetConnectionHandler).
 std::function<void()> g_connection_handler;
 // Opens the Versus online menu (SetVersusOnlineHandler).
-std::function<void()> g_versus_online_handler;
+std::function<void(int)> g_versus_online_handler;
+// The game whose online menu was opened last (0 Versus, 1 Horde, 2 Beast), to open it again when the
+// War Journal it opened closes.
+std::atomic<int> g_online_menu_game{0};
+// Horde (1) or Beast (2), as the player last chose one in the main menu (HandleHordeSelection,
+// HandleSiegeSelection): the two share their Standard / Private screen.
+std::atomic<int> g_horde_or_beast{0};
+
+// Opens the online menu of `game` (SetVersusOnlineHandler) from the script thread.
+void OpenOnlineMenu(int game) {
+  g_online_menu_game.store(game);
+  std::function<void(int)> handler;
+  {
+    std::lock_guard lock(g_quit_mutex);
+    handler = g_versus_online_handler;
+  }
+  if (handler) handler(game);
+}
+
 // Opens the Join by code screen (SetJoinByCodeHandler).
 std::function<void()> g_join_by_code_handler;
 // A join in a room on Alboria (JoinSystemLinkPartyInRoom, "Join by code" below): the System Link
@@ -393,6 +411,9 @@ enum WatchedName {
   kPlacePlayerOnSmallestTeam,  // GearGameMP_Base: a player goes to the smallest team (host migration)
   kGetOccupiedTeamSize,      // GearPlayerMatchBeaconHost: how many players a team's reservations hold (online)
   kGetGameSummaryFromProviderIndex,  // GearUIDataStore_GameResource: a game type's summary, for its name
+  kHandleHordeSelection,     // UIScene_FrontEnd: Horde is chosen in the main menu
+  kHandleSiegeSelection,     // UIScene_FrontEnd: Beast is chosen in the main menu
+  kHandleHordeAndSiegeMatchModeSelection,  // UIScene_FrontEnd: Horde's or Beast's Standard or Private
   kProcessSoundEvent,        // UISoundTheme: plays a menu sound by its event name (Menu sounds)
   // The menu sound events our menus play (MenuSound), in its order.
   kSoundStepUp,
@@ -428,7 +449,7 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "Callback_Credits",      "Callback_ClientMenuOptionWasSelected", "ConditionalCreatePartySession",
     "GetPartyType",          "LocalPartyCreated",      "ClientSetHUD",       "OnCustomMapChanged",
     "ApplySensitivityScaling", "ViewAdhesion",
-    "GetAdjustedAimFor",     "NotifyInviteFailed",     "CancelPartyMatchmaking", "CreatePlayerVersusMatch", "OnNoPartialPartyAvailable", "PostBeginPlay", "ContinueCreateMatch", "InitializeGameSelectionInternal", "UpdateCountdowns", "InitializeMapSelectionInternal", "GetTeamForCurrentPlayer", "HandleGameSessionJIP", "InitializePreGameGameSettings", "PreLogin", "PostLogin", "SetNumBots", "BeginMatch", "EndOfGameTransition", "GetNextMap", "CheckMapAgainstPlaylist", "GetNumberOfSupportedMapsForPlaylist", "IsEpicDev", "InitGameReplicationInfo", "UpdateGRI", "DelayedGameSessionDelete", "PlacePlayerOnSmallestTeam", "GetOccupiedTeamSize", "GetGameSummaryFromProviderIndex",
+    "GetAdjustedAimFor",     "NotifyInviteFailed",     "CancelPartyMatchmaking", "CreatePlayerVersusMatch", "OnNoPartialPartyAvailable", "PostBeginPlay", "ContinueCreateMatch", "InitializeGameSelectionInternal", "UpdateCountdowns", "InitializeMapSelectionInternal", "GetTeamForCurrentPlayer", "HandleGameSessionJIP", "InitializePreGameGameSettings", "PreLogin", "PostLogin", "SetNumBots", "BeginMatch", "EndOfGameTransition", "GetNextMap", "CheckMapAgainstPlaylist", "GetNumberOfSupportedMapsForPlaylist", "IsEpicDev", "InitGameReplicationInfo", "UpdateGRI", "DelayedGameSessionDelete", "PlacePlayerOnSmallestTeam", "GetOccupiedTeamSize", "GetGameSummaryFromProviderIndex", "HandleHordeSelection", "HandleSiegeSelection", "HandleHordeAndSiegeMatchModeSelection",
     "ProcessSoundEvent",     "Options_StepUp",         "Options_StepDown",   "ValueChangeLeft",
     "ValueChangeRight",      "Options_AcceptButton",   "Options_BackButton", "Options_DetailsEnter",
     "Options_DetailsLeave",  "Options_SliderLeft",     "Options_SliderRight"};
@@ -943,6 +964,22 @@ void RunOnObject(PPCContext& ctx, uint8_t* base, uint32_t object, uint32_t funct
   StoreU32(base, frame + kFrameObject, own_object);
 }
 
+// Horde's and Beast's playlists (their Standard, which Alboria's matchmaking replaces).
+constexpr int32_t kHordePlaylist = 16;
+constexpr int32_t kBeastPlaylist = 17;
+
+// The game's team of Alboria's team `team` in the matchmade lobby or match this host plays. Alboria
+// numbers the teams of a mode from 0; Beast's one team is its players' side, the Locust, which is the
+// game's team 1 (its team 0, the humans, is the AI's). Horde's players are the COG, team 0.
+int32_t GameTeamOf(int32_t team) {
+  return LobbyPlaylist() == kBeastPlaylist ? team + 1 : team;
+}
+
+// Alboria's team of the game's team `team` (GameTeamOf the other way).
+int32_t AlboriaTeamOf(int32_t team) {
+  return LobbyPlaylist() == kBeastPlaylist ? team - 1 : team;
+}
+
 // Opens a playlist match's pre-game lobby of `playlist` for Alboria's matchmaking, from a hook's
 // frame (`ctx`) while the front end is up: the party game `party_game`'s match mode becomes 2
 // (custom) and the front end creates a custom match, as the menu would (HandleCustomMatchSelection,
@@ -975,9 +1012,30 @@ bool LaunchMatchmadeLobby(PPCContext& ctx, uint8_t* base, uint32_t party_game, i
   }
   constexpr uint8_t kCustomMatchMode = 2;
   base[party_game + mode] = kCustomMatchMode;
-  std::memset(base + locals, 0, kLocalsSize);
-  base[locals + selected] = 0;
-  RunOnObject(ctx, base, scene, select, locals);
+  // Horde's and Beast's lobbies are set up as their Private choice does: the game (Horde 2, Beast 7,
+  // from HandleHordeSelection or HandleSiegeSelection), then their Standard / Private screen's
+  // choice of Private (its second option), replayed so that it moves to no other screen. A Versus
+  // lobby is set up as Versus' custom match is.
+  const int32_t horde_or_beast = playlist == kHordePlaylist ? 1 : playlist == kBeastPlaylist ? 2 : 0;
+  const uint32_t game_select =
+      horde_or_beast ? FindInheritedFunction(base, scene_class, horde_or_beast == 1 ? "HandleHordeSelection" : "HandleSiegeSelection") : 0;
+  const uint32_t mode_select = horde_or_beast ? FindInheritedFunction(base, scene_class, "HandleHordeAndSiegeMatchModeSelection") : 0;
+  const int32_t option_at = mode_select ? ParamOffset(base, mode_select, "SelectedOption") : -1;
+  const int32_t simulating_at = mode_select ? ParamOffset(base, mode_select, "bIsSimulating") : -1;
+  if (horde_or_beast && game_select && option_at >= 0 && simulating_at >= 0) {
+    std::memset(base + locals, 0, kLocalsSize);
+    RunOnObject(ctx, base, scene, game_select, locals);
+    std::memset(base + locals, 0, kLocalsSize);
+    constexpr uint32_t kPrivateOption = 1;
+    StoreU32(base, locals + option_at, kPrivateOption);
+    StoreU32(base, locals + simulating_at, 1);
+    RunOnObject(ctx, base, scene, mode_select, locals);
+  } else {
+    if (horde_or_beast) REXLOG_WARN("[Azura online] Horde's and Beast's selection functions were not found: the lobby is set up as Versus'");
+    std::memset(base + locals, 0, kLocalsSize);
+    base[locals + selected] = 0;
+    RunOnObject(ctx, base, scene, select, locals);
+  }
   std::memset(base + locals, 0, kLocalsSize);
   g_matchmade_match.store(true);
   RunOnObject(ctx, base, scene, launch, locals);
@@ -2979,10 +3037,11 @@ void SetConnectionHandler(std::function<void()> handler) {
   g_connection_handler = std::move(handler);
 }
 
-void SetVersusOnlineHandler(std::function<void()> handler) {
+void SetVersusOnlineHandler(std::function<void(int)> handler) {
   std::lock_guard lock(g_quit_mutex);
   g_versus_online_handler = std::move(handler);
 }
+
 
 void RequestMatchmadeLobby(int32_t playlist) {
   g_menu_lobby_request.store(playlist);
@@ -3800,7 +3859,7 @@ void PlaceAlboriaTeams(PPCContext& ctx, uint8_t* base) {
   constexpr uint32_t kLocalsSize = 128;
   static uint32_t locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kLocalsSize);
   for (size_t team = 0; team < teams.size(); ++team) {
-    const int32_t target = static_cast<int32_t>(team);
+    const int32_t target = GameTeamOf(static_cast<int32_t>(team));
     for (const std::string& full : teams[team]) {
       const std::string name = full.substr(0, full.rfind('#'));
       for (Player& player : players) {
@@ -3926,8 +3985,9 @@ void AnswerReservationFromAlboria(PPCContext& ctx, uint8_t* base, uint32_t funct
     return true;
   };
   if (!team_of_player) {
-    if (team_asked < 0 || team_asked >= static_cast<int32_t>(teams.size())) return;
-    const auto size = static_cast<int32_t>(teams[static_cast<size_t>(team_asked)].size());
+    const int32_t alboria_team = AlboriaTeamOf(team_asked);
+    if (alboria_team < 0 || alboria_team >= static_cast<int32_t>(teams.size())) return;
+    const auto size = static_cast<int32_t>(teams[static_cast<size_t>(alboria_team)].size());
     StoreU32(base, result, static_cast<uint32_t>(size));
     if (changed(static_cast<uint64_t>(team_asked), size)) REXLOG_INFO("[Azura online] Team {} holds {} players, as Alboria placed them (the beacon said {})", team_asked,
                 size, game_answer);
@@ -3963,11 +4023,11 @@ void AnswerReservationFromAlboria(PPCContext& ctx, uint8_t* base, uint32_t funct
     }
     alboria::RefreshMatchTeams();
     if (changed(player, team + 100)) REXLOG_WARN("[Azura online] Alboria has no team for {} yet: team {}, the one with fewer players (the beacon said {})",
-                name.empty() ? fmt::format("player {:016X}", player) : name, team, game_answer);
+                name.empty() ? fmt::format("player {:016X}", player) : name, GameTeamOf(team), game_answer);
   } else if (changed(player, team)) {
-    REXLOG_INFO("[Azura online] {} is on team {}, as Alboria placed them (the beacon said {})", name, team, game_answer);
+    REXLOG_INFO("[Azura online] {} is on team {}, as Alboria placed them (the beacon said {})", name, GameTeamOf(team), game_answer);
   }
-  StoreU32(base, result, static_cast<uint32_t>(team));
+  StoreU32(base, result, static_cast<uint32_t>(GameTeamOf(team)));
 }
 
 // On a player input frame (`ctx`, about to run PlayerInput) in the front end: does what the Versus
@@ -5195,14 +5255,30 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   // Versus online opens Azura's own matchmaking menu (the script, which does not know the option,
   // does not run).
   if (Is(base, function, kHandleMenuSelection) && VersusMenuChoice(base, ctx.r4.u32)) {
-    std::function<void()> handler;
-    {
-      std::lock_guard lock(g_quit_mutex);
-      handler = g_versus_online_handler;
-    }
     REXLOG_INFO("[Azura online] Opening the Versus online menu");
-    if (handler) handler();
+    OpenOnlineMenu(0);
     return;
+  }
+  // Horde and Beast share their Standard / Private screen (UIScene_FrontEnd.
+  // HandleHordeAndSiegeMatchModeSelection, which knows the game from the main menu's choice). With
+  // online play on, their Standard is their online option (menu_patches.cpp), in its place: chosen,
+  // it opens Azura's matchmaking menu for that game instead of Xbox LIVE's matchmaking
+  // (LaunchPlaylistMatch). A replayed (simulated) choice runs as the script has it.
+  if (Is(base, function, kHandleHordeSelection)) g_horde_or_beast.store(1);
+  if (Is(base, function, kHandleSiegeSelection)) g_horde_or_beast.store(2);
+  if (Is(base, function, kHandleHordeAndSiegeMatchModeSelection) && LiveMode()) {
+    const int game = g_horde_or_beast.load();
+    const int online_option = game == 1 ? azura::menu::HordeOnlineOption() : game == 2 ? azura::menu::BeastOnlineOption() : -1;
+    const uint32_t locals = LoadU32(base, ctx.r4.u32 + kFrameLocals);
+    const int32_t option_at = ParamOffset(base, function, "SelectedOption");
+    const int32_t simulating_at = ParamOffset(base, function, "bIsSimulating");
+    const bool simulated = simulating_at >= 0 && LoadU32(base, locals + simulating_at) != 0;
+    if (online_option >= 0 && option_at >= 0 && !simulated &&
+        static_cast<int32_t>(LoadU32(base, locals + option_at)) == online_option) {
+      REXLOG_INFO("[Azura online] Opening the {} online menu", game == 1 ? "Horde" : "Beast");
+      OpenOnlineMenu(game);
+      return;
+    }
   }
   const int quit_option = azura::menu::MainMenuQuitOption();
   if (quit_option >= 0 && Is(base, function, kHandleMenuSelection) && IsQuitSelection(base, ctx.r4.u32, quit_option)) {
@@ -5222,12 +5298,7 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     REXLOG_INFO("[Azura online] {} closes while the War Journal from Versus online is open", scene);
     if (scene.find("Journal") != std::string::npos) {
       g_journal_from_versus.store(false);
-      std::function<void()> handler;
-      {
-        std::lock_guard lock(g_quit_mutex);
-        handler = g_versus_online_handler;
-      }
-      if (handler) handler();
+      OpenOnlineMenu(g_online_menu_game.load());
     }
   }
   // Manage/Invite closed while the Join by code screen was open over it: nothing to close later.

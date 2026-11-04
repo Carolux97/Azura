@@ -1,7 +1,8 @@
-// Azura's own Versus online menu: the player chooses Standard (Ranked is shown, coming soon) and
-// one or more of its modes, and the menu searches for a match through Alboria, showing how the
+// Azura's own online matchmaking menu, for Versus, Horde and Beast: the player chooses Standard
+// (Ranked is shown, coming soon) and one or more of its modes, and the menu searches for a match through Alboria, showing how the
 // search goes (the players found so far) until the game opens or joins the match's pre-game lobby.
-// Opened from Versus' menu (Versus online, menu_patches.cpp; script_hooks.cpp opens it).
+// Opened from Versus', Horde's and Beast's menus (their online option, menu_patches.cpp;
+// script_hooks.cpp opens it).
 //
 // Nothing it shows tells who will host the match (alboria-notes:alboria-server/online-rules.md).
 
@@ -23,6 +24,10 @@ struct ImFont;
 
 namespace azura {
 
+// The game whose public matches the menu searches for: Versus (its Standard modes), Horde or Beast
+// (one mode each for now; more may come as rows of their own).
+enum class OnlineGame { kVersus, kHorde, kBeast };
+
 // A party member follows its leader's search: about once a second, while the player is a member
 // (not the leader) of a party with others on Alboria and not playing, it asks Alboria how the
 // leader's search goes, and calls `open_view` (from its own thread) while the leader searches,
@@ -33,10 +38,11 @@ void StopPartySearchFollower();
 class VersusOnlineMenu : public rex::ui::ImGuiDialog {
  public:
   // `owner` is cleared when the menu closes and deletes itself. `language` is the Xbox 360 language
-  // ID of the user_language setting. The fonts may be null (ImGui's default is used).
+  // ID of the user_language setting. The fonts may be null (ImGui's default is used). `game` is the
+  // menu's game; a party member's view (`watching`) takes its leader's instead.
   VersusOnlineMenu(rex::ui::ImGuiDrawer* drawer, rex::input::InputSystem* input, input::PlayerAssignment* assignment,
                    uint32_t language, ImFont* title_font, ImFont* body_font, VersusOnlineMenu** owner,
-                   bool watching = false);
+                   bool watching = false, OnlineGame game = OnlineGame::kVersus);
 
  protected:
   void OnDraw(ImGuiIO& io) override;
@@ -73,6 +79,9 @@ class VersusOnlineMenu : public rex::ui::ImGuiDialog {
   coop_ui::LastUsedInput last_input_;
   // A party member's view of its leader's search (StartPartySearchFollower), not a search of its own.
   bool watching_ = false;
+  // The game the menu searches for, and the modes it offers (indexes in the menu's list of modes).
+  OnlineGame game_ = OnlineGame::kVersus;
+  std::vector<int> rows_;
   // Each controller's buttons the frame before (the left stick's direction as D-pad bits). A
   // controller seen for the first time does nothing that frame: the press that opened the menu does
   // not also act in it.

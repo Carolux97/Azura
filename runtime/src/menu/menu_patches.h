@@ -59,4 +59,9 @@ int MainMenuOptionsOption();
 // (online play off, or the menus were not patched).
 int VersusOnlineOption();
 
+// Index of Horde's and Beast's online options (Horde online, Beast online) in their menus, -1 when
+// there are none.
+int HordeOnlineOption();
+int BeastOnlineOption();
+
 }  // namespace azura::menu

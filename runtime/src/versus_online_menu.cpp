@@ -54,7 +54,44 @@ constexpr float kNoModeSeconds = 3.0f;
 // not Versus. The search's modes are "playlist:<id>": players sharing one play a match of it, whose
 // lobby the host opens with that playlist.
 constexpr int kModes = 6;
-constexpr std::array<int, kModes> kModePlaylists = {11, 15, 13, 12, 14, 18};
+// Every mode the menu offers: Versus' Standard modes (kModes, in Texts' order), then Horde (16) and
+// Beast (17), one mode each (GameTexts).
+constexpr int kAllModes = kModes + 2;
+constexpr std::array<int, kAllModes> kModePlaylists = {11, 15, 13, 12, 14, 18, 16, 17};
+constexpr int kHordeMode = kModes;
+constexpr int kBeastMode = kModes + 1;
+
+// The modes a game's menu offers (indexes in kModePlaylists).
+std::vector<int> OfferedModes(OnlineGame game) {
+  switch (game) {
+    case OnlineGame::kHorde:
+      return {kHordeMode};
+    case OnlineGame::kBeast:
+      return {kBeastMode};
+    case OnlineGame::kVersus:
+      break;
+  }
+  std::vector<int> modes(kModes);
+  for (int i = 0; i < kModes; ++i) modes[i] = i;
+  return modes;
+}
+
+// The players a game's match holds: Versus 5 against 5; Horde and Beast one team of five, with no
+// bots in the free places.
+int MatchPlaces(OnlineGame game) {
+  return game == OnlineGame::kVersus ? kMatchPlaces : 5;
+}
+
+// The game of a search's modes ("playlist:<id>"): Horde's or Beast's playlist, else Versus.
+OnlineGame GameOfModes(const std::vector<std::string>& modes) {
+  for (const std::string& mode : modes) {
+    int playlist = -1;
+    if (std::sscanf(mode.c_str(), "playlist:%d", &playlist) != 1) continue;
+    if (playlist == kModePlaylists[kHordeMode]) return OnlineGame::kHorde;
+    if (playlist == kModePlaylists[kBeastMode]) return OnlineGame::kBeast;
+  }
+  return OnlineGame::kVersus;
+}
 
 struct Texts {
   const char* section;  // above the title
@@ -244,6 +281,92 @@ Texts LocalizedTexts(uint32_t language) {
   }
 }
 
+// The texts of Horde's and Beast's menus that are not Versus': the section and title above, the
+// subtitle, their mode's name and what it is about, and the search's count of players (no bots fill
+// their free places).
+struct GameTexts {
+  const char* section;
+  const char* title;
+  const char* subtitle;
+  const char* mode;
+  const char* mode_help;
+  const char* found;  // "%d of %d"
+};
+
+GameTexts LocalizedGameTexts(uint32_t language, OnlineGame game) {
+  const bool horde = game == OnlineGame::kHorde;
+  switch (language) {
+    case 2:  // Japanese
+      return horde ? GameTexts{"HORDE · ALBORIA", "オンラインホード", "最大5人でローカストの大群に立ち向かう", "ホード",
+                               "5人で50ウェーブのローカストを迎え撃ちます。ウェーブの合間に防衛設備を建てて強化しましょう。", "%d / %d"}
+                   : GameTexts{"BEAST · ALBORIA", "オンラインビースト", "最大5人でローカストとなり人間を狩る", "ビースト",
+                               "5人でローカストを操り、時間切れまでに人間の防衛隊を倒していきます。", "%d / %d"};
+    case 7:  // Korean
+      return horde ? GameTexts{"HORDE · ALBORIA", "온라인 호드", "최대 5명이 함께 로커스트 무리에 맞섭니다", "호드",
+                               "5명이 로커스트 50웨이브를 막아냅니다. 웨이브 사이에 방어 시설을 짓고 강화하세요.", "%d / %d"}
+                   : GameTexts{"BEAST · ALBORIA", "온라인 비스트", "최대 5명이 로커스트가 되어 인간을 사냥합니다", "비스트",
+                               "5명이 로커스트가 되어 시간이 끝나기 전에 인간 방어군을 쓰러뜨립니다.", "%d / %d"};
+    case 8:  // Traditional Chinese
+      return horde ? GameTexts{"HORDE · ALBORIA", "線上群襲", "最多 5 人一起對抗蝗蟲大軍", "群襲",
+                               "5 名玩家抵擋 50 波蝗蟲攻勢，並在每波之間建造與強化防禦工事。", "%d / %d"}
+                   : GameTexts{"BEAST · ALBORIA", "線上野獸", "最多 5 人化身蝗蟲獵殺人類", "野獸",
+                               "5 名玩家扮演蝗蟲，在時間用完前擊倒一波波的人類守軍。", "%d / %d"};
+    case 12:  // Russian
+      return horde ? GameTexts{"HORDE · ALBORIA", "Орда онлайн", "До 5 игроков против полчищ саранчи", "Орда",
+                               "Пятеро игроков сдерживают 50 волн саранчи, а между волнами строят и улучшают укрепления.", "%d из %d"}
+                   : GameTexts{"BEAST · ALBORIA", "Зверь онлайн", "До 5 игроков в роли саранчи охотятся на людей", "Зверь",
+                               "Пятеро игроков за саранчу уничтожают волны защитников-людей, пока не вышло время.", "%d из %d"};
+    case 3:  // German
+      return horde ? GameTexts{"HORDE · ALBORIA", "Horde online", "Mit bis zu 5 Spielern gegen die Locust-Horden", "Horde",
+                               "Fünf Spieler halten 50 Wellen der Locust stand und bauen zwischen den Wellen Befestigungen aus.", "%d von %d"}
+                   : GameTexts{"BEAST · ALBORIA", "Bestie online", "Mit bis zu 5 Spielern als Locust auf Menschenjagd", "Bestie",
+                               "Fünf Spieler übernehmen die Locust und schalten Wellen menschlicher Verteidiger aus, bevor die Zeit abläuft.", "%d von %d"};
+    case 4:  // French
+      return horde ? GameTexts{"HORDE · ALBORIA", "Horde en ligne", "Jusqu'à 5 joueurs contre les vagues de Locustes", "Horde",
+                               "Cinq joueurs tiennent face à 50 vagues de Locustes et bâtissent des fortifications entre les vagues.", "%d sur %d"}
+                   : GameTexts{"BEAST · ALBORIA", "Bête en ligne", "Jusqu'à 5 joueurs dans la peau des Locustes", "Bête",
+                               "Cinq joueurs incarnent les Locustes et éliminent les vagues de défenseurs humains avant la fin du temps.", "%d sur %d"};
+    case 5:  // Spanish
+      return horde ? GameTexts{"HORDE · ALBORIA", "Horda online", "Hasta 5 jugadores contra las oleadas de Locust", "Horda",
+                               "Cinco jugadores resisten 50 oleadas de Locust y levantan y mejoran fortificaciones entre oleada y oleada.", "%d de %d"}
+                   : GameTexts{"BEAST · ALBORIA", "Bestia online", "Hasta 5 jugadores como Locust a la caza de humanos", "Bestia",
+                               "Cinco jugadores encarnan a los Locust y acaban con oleadas de defensores humanos antes de que se agote el tiempo.", "%d de %d"};
+    case 6:  // Italian
+      return horde ? GameTexts{"HORDE · ALBORIA", "Orda online", "Fino a 5 giocatori contro le ondate di Locust", "Orda",
+                               "Cinque giocatori resistono a 50 ondate di Locust e costruiscono fortificazioni tra un'ondata e l'altra.", "%d di %d"}
+                   : GameTexts{"BEAST · ALBORIA", "Bestia online", "Fino a 5 giocatori nei panni dei Locust", "Bestia",
+                               "Cinque giocatori guidano i Locust ed eliminano ondate di difensori umani prima che scada il tempo.", "%d di %d"};
+    case 9:  // Portuguese
+      return horde ? GameTexts{"HORDE · ALBORIA", "Horda online", "Até 5 jogadores contra as ondas de Locust", "Horda",
+                               "Cinco jogadores resistem a 50 ondas de Locust e constroem e melhoram fortificações entre as ondas.", "%d de %d"}
+                   : GameTexts{"BEAST · ALBORIA", "Fera online", "Até 5 jogadores como Locust à caça de humanos", "Fera",
+                               "Cinco jogadores controlam os Locust e eliminam ondas de defensores humanos antes que o tempo acabe.", "%d de %d"};
+    case 11:  // Polish
+      return horde ? GameTexts{"HORDE · ALBORIA", "Horda online", "Do 5 graczy przeciw falom Szarańczy", "Horda",
+                               "Pięciu graczy odpiera 50 fal Szarańczy, a między falami buduje i ulepsza umocnienia.", "%d z %d"}
+                   : GameTexts{"BEAST · ALBORIA", "Bestia online", "Do 5 graczy jako Szarańcza poluje na ludzi", "Bestia",
+                               "Pięciu graczy wciela się w Szarańczę i likwiduje fale ludzkich obrońców, zanim skończy się czas.", "%d z %d"};
+    default:  // English
+      return horde ? GameTexts{"HORDE · ALBORIA", "Horde online", "Up to 5 players against waves of Locust", "Horde",
+                               "Five players hold out against 50 waves of Locust, building and upgrading fortifications between waves.", "%d of %d"}
+                   : GameTexts{"BEAST · ALBORIA", "Beast online", "Up to 5 players as the Locust, hunting humans", "Beast",
+                               "Five players take the Locust's side and wipe out waves of human defenders before time runs out.", "%d of %d"};
+  }
+}
+
+// A mode's name and what it is about (index in kModePlaylists).
+const char* ModeName(const Texts& texts, uint32_t language, int mode) {
+  if (mode == kHordeMode) return LocalizedGameTexts(language, OnlineGame::kHorde).mode;
+  if (mode == kBeastMode) return LocalizedGameTexts(language, OnlineGame::kBeast).mode;
+  return texts.modes[mode];
+}
+
+const char* ModeHelp(const Texts& texts, uint32_t language, int mode) {
+  if (mode == kHordeMode) return LocalizedGameTexts(language, OnlineGame::kHorde).mode_help;
+  if (mode == kBeastMode) return LocalizedGameTexts(language, OnlineGame::kBeast).mode_help;
+  return texts.mode_help[mode];
+}
+
 // --- The search -----------------------------------------------------------------------------------
 //
 // It runs on a thread of its own (alboria::Matchmake blocks until Alboria decides) and outlives the
@@ -252,7 +375,7 @@ Texts LocalizedTexts(uint32_t language) {
 
 // Standard's modes the player marked: read from versus_online_modes as the menu opens, and written
 // back to it (and to azura.toml) as the player marks or unmarks one.
-std::array<bool, kModes> g_marked = {};
+std::array<bool, kAllModes> g_marked = {};
 
 void LoadMarked() {
   const std::string saved = REXCVAR_GET(versus_online_modes);
@@ -269,6 +392,7 @@ void LoadMarked() {
 
 void SaveMarked() {
   std::string saved;
+  // Versus' modes only: Horde and Beast have one mode each, always searched for.
   for (int i = 0; i < kModes; ++i) {
     if (!g_marked[i]) continue;
     if (!saved.empty()) saved += ',';
@@ -286,13 +410,13 @@ int64_t NowTicks() {
   return std::chrono::steady_clock::now().time_since_epoch().count();
 }
 
-std::vector<std::string> MarkedModes();
+std::vector<std::string> MarkedModes(OnlineGame game);
 
-// Searches for a match of the modes marked. The game then opens the lobby of the playlist Alboria
-// decided on (this player hosts: never said as such), or takes the match's invite.
-void StartSearch() {
+// Searches for a match of the modes of `game` marked. The game then opens the lobby of the playlist
+// Alboria decided on (this player hosts: never said as such), or takes the match's invite.
+void StartSearch(OnlineGame game) {
   if (g_search_running.exchange(true)) return;
-  const std::vector<std::string> modes = MarkedModes();
+  const std::vector<std::string> modes = MarkedModes(game);
   g_search_cancelled.store(false);
   g_search_started.store(NowTicks());
   alboria::ResetSearchStatus();
@@ -307,7 +431,7 @@ void StartSearch() {
         if (std::sscanf(status.mode.c_str(), "playlist:%d", &playlist) == 1 && playlist > 0) {
           script::RequestMatchmadeLobby(playlist);
         } else {
-          REXLOG_WARN("[Azura online] Versus online: Alboria decided on an unknown mode ({})", status.mode);
+          REXLOG_WARN("[Azura online] Online menu: Alboria decided on an unknown mode ({})", status.mode);
         }
       } else if (status.phase == alboria::SearchPhase::kJoin) {
         script::RequestMatchInvite();
@@ -345,7 +469,7 @@ alboria::PartySearch PartySearchNow(int64_t* received = nullptr) {
 }
 
 // The modes of a search ("playlist:<id>") by their names, joined by " · ".
-std::string ModesLine(const Texts& texts, const std::vector<std::string>& modes) {
+std::string ModesLine(const Texts& texts, uint32_t language, const std::vector<std::string>& modes) {
   std::string line;
   for (const std::string& mode : modes) {
     int playlist = -1;
@@ -353,15 +477,15 @@ std::string ModesLine(const Texts& texts, const std::vector<std::string>& modes)
     const auto found = std::find(kModePlaylists.begin(), kModePlaylists.end(), playlist);
     if (found == kModePlaylists.end()) continue;
     if (!line.empty()) line += " · ";
-    line += texts.modes[found - kModePlaylists.begin()];
+    line += ModeName(texts, language, static_cast<int>(found - kModePlaylists.begin()));
   }
   return line;
 }
 
-// The modes the player marked, as a search sends them.
-std::vector<std::string> MarkedModes() {
+// The modes of `game` the player marked, as a search sends them.
+std::vector<std::string> MarkedModes(OnlineGame game) {
   std::vector<std::string> modes;
-  for (int i = 0; i < kModes; ++i) {
+  for (const int i : OfferedModes(game)) {
     if (g_marked[i]) modes.push_back("playlist:" + std::to_string(kModePlaylists[i]));
   }
   return modes;
@@ -619,7 +743,7 @@ void StopPartySearchFollower() {
 
 VersusOnlineMenu::VersusOnlineMenu(rex::ui::ImGuiDrawer* drawer, rex::input::InputSystem* input,
                                    input::PlayerAssignment* assignment, uint32_t language, ImFont* title_font,
-                                   ImFont* body_font, VersusOnlineMenu** owner, bool watching)
+                                   ImFont* body_font, VersusOnlineMenu** owner, bool watching, OnlineGame game)
     : ImGuiDialog(drawer),
       input_(input),
       assignment_(assignment),
@@ -630,10 +754,16 @@ VersusOnlineMenu::VersusOnlineMenu(rex::ui::ImGuiDrawer* drawer, rex::input::Inp
       opened_(Clock::now()),
       last_input_(input),
       watching_(watching),
+      game_(watching ? GameOfModes(PartySearchNow().modes) : game),
+      rows_(OfferedModes(game_)),
       screen_since_(Clock::now()) {
   if (assignment_) assignment_->SetBlocked(true);
   alboria::RefreshIdentity();
   LoadMarked();
+  // Horde's and Beast's one mode is always searched for.
+  if (game_ != OnlineGame::kVersus) {
+    for (const int i : rows_) g_marked[i] = true;
+  }
   // A search still running (the menu was closed meanwhile) shows again.
   if (g_search_running.load() || watching_) screen_ = Screen::kSearching;
   script::PlayMenuSound(script::MenuSound::kOpen);
@@ -675,7 +805,7 @@ VersusOnlineMenu::Presses VersusOnlineMenu::ReadInput() {
 }
 
 void VersusOnlineMenu::Search() {
-  if (std::none_of(g_marked.begin(), g_marked.end(), [](bool marked) { return marked; })) {
+  if (std::none_of(rows_.begin(), rows_.end(), [](int mode) { return g_marked[mode]; })) {
     no_mode_since_ = Clock::now();
     script::PlayMenuSound(script::MenuSound::kBack);
     return;
@@ -687,7 +817,7 @@ void VersusOnlineMenu::Search() {
     screen_since_ = Clock::now();
     return;
   }
-  StartSearch();
+  StartSearch(game_);
   screen_ = Screen::kSearching;
   screen_since_ = Clock::now();
 }
@@ -727,13 +857,14 @@ void VersusOnlineMenu::Update(const Presses& presses) {
         script::PlayMenuSound(script::MenuSound::kAccept);
         script::RequestWarJournal();
         closing_ = true;
-      } else if (presses.mark) {
+      } else if (presses.mark && game_ == OnlineGame::kVersus) {
         script::PlayMenuSound(script::MenuSound::kAccept);
-        g_marked[focus_] = !g_marked[focus_];
+        g_marked[rows_[focus_]] = !g_marked[rows_[focus_]];
         SaveMarked();
-      } else if (presses.move) {
+      } else if (presses.move && rows_.size() > 1) {
+        const int rows = static_cast<int>(rows_.size());
         script::PlayMenuSound(presses.move < 0 ? script::MenuSound::kUp : script::MenuSound::kDown);
-        focus_ = (focus_ + presses.move + kModes) % kModes;
+        focus_ = (focus_ + presses.move + rows) % rows;
       }
       break;
     case Screen::kSearching: {
@@ -804,6 +935,10 @@ void VersusOnlineMenu::OnDraw(ImGuiIO& io) {
   ImFont* title_font = title_font_ ? title_font_ : ImGui::GetFont();
   ImFont* body_font = body_font_ ? body_font_ : ImGui::GetFont();
   const Texts texts = LocalizedTexts(language_);
+  // Horde's and Beast's own texts (Versus' are in `texts`), and how many players the game's match holds.
+  const GameTexts game_texts = LocalizedGameTexts(language_, game_);
+  const bool versus = game_ == OnlineGame::kVersus;
+  const int match_places = MatchPlaces(game_);
   ImDrawList* draw_list = ImGui::GetForegroundDrawList();
 
   // The backdrop: the game darkened, a cog turning slowly while it searches, veins of Imulsion
@@ -821,12 +956,12 @@ void VersusOnlineMenu::OnDraw(ImGuiIO& io) {
 
   // The header: the section, the screen's title and what it is about, an amber stroke under them;
   // the player's Alboria name on the right.
-  const char* title = texts.title;
-  std::string subtitle = texts.subtitle;
+  const char* title = versus ? texts.title : game_texts.title;
+  std::string subtitle = versus ? texts.subtitle : game_texts.subtitle;
   if (screen_ == Screen::kSearching) {
     title = texts.searching;
-    subtitle = watching_ ? std::string(texts.leader_searches) + " · " + ModesLine(texts, PartySearchNow().modes)
-                         : ModesLine(texts, MarkedModes());
+    subtitle = watching_ ? std::string(texts.leader_searches) + " · " + ModesLine(texts, language_, PartySearchNow().modes)
+                         : ModesLine(texts, language_, MarkedModes(game_));
   } else if (screen_ == Screen::kReady) {
     title = texts.ready_title;
     subtitle = texts.ready_subtitle;
@@ -834,7 +969,8 @@ void VersusOnlineMenu::OnDraw(ImGuiIO& io) {
     title = texts.error_title;
     subtitle.clear();
   }
-  AddSpacedText(draw_list, body_font, 12.0f * u, at(64, 44), TextFaint(a(255)), texts.section, 2.4f * u);
+  AddSpacedText(draw_list, body_font, 12.0f * u, at(64, 44), TextFaint(a(255)), versus ? texts.section : game_texts.section,
+                2.4f * u);
   AddSpacedText(draw_list, title_font, 36.0f * u, at(64, 62), Text(a(255)), title, 3.0f * u);
   if (!subtitle.empty()) {
     draw_list->AddText(body_font, 14.0f * u, at(64, 106), TextDim(a(255)),
@@ -891,8 +1027,8 @@ void VersusOnlineMenu::OnDraw(ImGuiIO& io) {
     const float gap = 8.0f * u;
     const float place_width = (width - gap * (columns - 1)) / columns;
     const float place_height = 40.0f * u;
-    const int shown = std::min(kMatchPlaces, static_cast<int>(players.size()));
-    const int places = bots >= 0 ? shown + (bots > 0 ? 1 : 0) : kMatchPlaces;
+    const int shown = std::min(match_places, static_cast<int>(players.size()));
+    const int places = bots >= 0 ? shown + (bots > 0 ? 1 : 0) : match_places;
     for (int i = 0; i < places; ++i) {
       const ImVec2 min(top_left.x + (i % columns) * (place_width + gap), top_left.y + (i / columns) * (place_height + gap));
       const ImVec2 max(min.x + place_width, min.y + place_height);
@@ -996,30 +1132,35 @@ void VersusOnlineMenu::OnDraw(ImGuiIO& io) {
                     Text(a(255)), texts.standard, 2.4f * u);
       draw_list->AddText(body_font, 12.5f * u, ImVec2(standard_min.x + 22.0f * u, standard_min.y + 72.0f * u),
                          TextDim(a(255)), Fit(body_font, 12.5f * u, texts.standard_help, 400.0f * u).c_str());
-      const ImVec2 ranked_min = at(64, 314);
-      const ImVec2 ranked_max = at(504, 398);
-      DrawCutPanel(draw_list, ranked_min, ranked_max, 12.0f * u, PanelSolid(a(150)), SteelLine(a(150)), 1.0f * u);
-      AddSpacedText(draw_list, title_font, 24.0f * u, ImVec2(ranked_min.x + 22.0f * u, ranked_min.y + 14.0f * u),
-                    TextFaint(a(255)), texts.ranked, 2.0f * u);
-      const float soon_width = AddSpacedText(nullptr, body_font, 10.5f * u, ImVec2(), 0, texts.coming_soon, 1.6f * u);
-      const ImVec2 soon_min(ranked_max.x - soon_width - 34.0f * u, ranked_min.y + 18.0f * u);
-      draw_list->AddRect(soon_min, ImVec2(ranked_max.x - 18.0f * u, soon_min.y + 20.0f * u), TextFaint(a(255)), 0, 0, 1.0f * u);
-      AddSpacedText(draw_list, body_font, 10.5f * u, ImVec2(soon_min.x + 8.0f * u, soon_min.y + 4.0f * u), TextFaint(a(255)),
-                    texts.coming_soon, 1.6f * u);
-      draw_list->AddText(body_font, 12.5f * u, ImVec2(ranked_min.x + 22.0f * u, ranked_min.y + 52.0f * u), TextFaint(a(220)),
-                         texts.ranked_help);
+      // Ranked, coming soon: Versus only (Horde and Beast have no ranked matches).
+      if (versus) {
+        const ImVec2 ranked_min = at(64, 314);
+        const ImVec2 ranked_max = at(504, 398);
+        DrawCutPanel(draw_list, ranked_min, ranked_max, 12.0f * u, PanelSolid(a(150)), SteelLine(a(150)), 1.0f * u);
+        AddSpacedText(draw_list, title_font, 24.0f * u, ImVec2(ranked_min.x + 22.0f * u, ranked_min.y + 14.0f * u),
+                      TextFaint(a(255)), texts.ranked, 2.0f * u);
+        const float soon_width = AddSpacedText(nullptr, body_font, 10.5f * u, ImVec2(), 0, texts.coming_soon, 1.6f * u);
+        const ImVec2 soon_min(ranked_max.x - soon_width - 34.0f * u, ranked_min.y + 18.0f * u);
+        draw_list->AddRect(soon_min, ImVec2(ranked_max.x - 18.0f * u, soon_min.y + 20.0f * u), TextFaint(a(255)), 0, 0, 1.0f * u);
+        AddSpacedText(draw_list, body_font, 10.5f * u, ImVec2(soon_min.x + 8.0f * u, soon_min.y + 4.0f * u), TextFaint(a(255)),
+                      texts.coming_soon, 1.6f * u);
+        draw_list->AddText(body_font, 12.5f * u, ImVec2(ranked_min.x + 22.0f * u, ranked_min.y + 52.0f * u), TextFaint(a(220)),
+                           texts.ranked_help);
+      }
 
       // The modes, marked or not; the focused one lit.
       const ImVec2 modes_min = at(560, 196);
       const float row_height = 42.0f * u;
-      const ImVec2 modes_max(at(1216, 0).x, modes_min.y + 46.0f * u + kModes * row_height + 10.0f * u);
+      const int rows = static_cast<int>(rows_.size());
+      const ImVec2 modes_max(at(1216, 0).x, modes_min.y + 46.0f * u + rows * row_height + 10.0f * u);
       DrawCutPanel(draw_list, modes_min, modes_max, 12.0f * u, PanelSolid(a(245)), SteelLine(a(255)), 1.0f * u);
       AddSpacedText(draw_list, body_font, 11.0f * u, ImVec2(modes_min.x + 22.0f * u, modes_min.y + 16.0f * u), TextDim(a(255)),
                     texts.modes_label, 1.8f * u);
-      for (int i = 0; i < kModes; ++i) {
-        const ImVec2 row_min(modes_min.x + 10.0f * u, modes_min.y + 44.0f * u + i * row_height);
+      for (int row = 0; row < rows; ++row) {
+        const int i = rows_[row];
+        const ImVec2 row_min(modes_min.x + 10.0f * u, modes_min.y + 44.0f * u + row * row_height);
         const ImVec2 row_max(modes_max.x - 10.0f * u, row_min.y + row_height - 4.0f * u);
-        const bool focused = i == focus_;
+        const bool focused = row == focus_;
         if (focused) {
           draw_list->AddRectFilled(row_min, row_max, IM_COL32(31, 26, 15, a(255)));
           draw_list->AddRectFilled(row_min, ImVec2(row_min.x + 3.0f * u, row_max.y), Imulsion(a(255)));
@@ -1028,7 +1169,8 @@ void VersusOnlineMenu::OnDraw(ImGuiIO& io) {
         DrawDiamond(draw_list, ImVec2(row_min.x + 24.0f * u, middle), 12.0f * u, g_marked[i] ? Imulsion(a(255)) : TextFaint(a(255)),
                     Imulsion(a(255)), g_marked[i], 1.5f * u);
         draw_list->AddText(title_font, 16.0f * u, ImVec2(row_min.x + 44.0f * u, middle - 9.0f * u),
-                           focused ? Imulsion(a(255)) : g_marked[i] ? Text(a(255)) : TextDim(a(255)), texts.modes[i]);
+                           focused ? Imulsion(a(255)) : g_marked[i] ? Text(a(255)) : TextDim(a(255)),
+                           ModeName(texts, language_, i));
       }
       // What the focused mode is about, under the list; "choose at least one mode" in its place for
       // a while after a search with none.
@@ -1038,11 +1180,11 @@ void VersusOnlineMenu::OnDraw(ImGuiIO& io) {
       } else {
         draw_list->AddRectFilled(ImVec2(help_at.x - 12.0f * u, help_at.y + 1.0f * u), ImVec2(help_at.x - 9.0f * u, help_at.y + 34.0f * u),
                                  Imulsion(a(200)));
-        draw_list->AddText(body_font, 13.5f * u, help_at, TextDim(a(255)), texts.mode_help[focus_], nullptr,
+        draw_list->AddText(body_font, 13.5f * u, help_at, TextDim(a(255)), ModeHelp(texts, language_, rows_[focus_]), nullptr,
                            modes_max.x - modes_min.x - 24.0f * u);
       }
       hint(0, texts.search);
-      hint(2, texts.mark);
+      if (versus) hint(2, texts.mark);  // Horde's and Beast's one mode is always marked
       hint(3, texts.journal);
       hint(1, texts.back);
       break;
@@ -1079,7 +1221,7 @@ void VersusOnlineMenu::OnDraw(ImGuiIO& io) {
         draw_list->AddLine(center, ImVec2(center.x + std::cos(sweep) * r, center.y + std::sin(sweep) * r), Imulsion(a(255)), 2.0f * u);
         // Glyphs of Alboriano, one more for each player found: dark, they keep changing; lit by the
         // sweep, each settles on its own and glows, then fades and scrambles again.
-        const int blips = std::min(kMatchPlaces, 5 + static_cast<int>(players.size()));
+        const int blips = std::min(match_places, 5 + static_cast<int>(players.size()));
         for (int i = 0; i < blips; ++i) {
           const float angle = static_cast<float>(Mix(i * 2 + 1) % 6283) / 1000.0f;
           const float distance = r * (0.3f + 0.55f * static_cast<float>(Mix(i * 2 + 2) % 1000) / 1000.0f);
@@ -1109,11 +1251,13 @@ void VersusOnlineMenu::OnDraw(ImGuiIO& io) {
       const int step = ready ? 4 : !watching_ && status.phase == alboria::SearchPhase::kIdle ? 0 : players.size() >= 2 ? 2 : 1;
       draw_steps(at(list_left, 196), (ready ? 700.0f : list_width) * u, step);
       const int columns = ready ? 3 : 2;
-      const int bots = ready ? std::max(0, kMatchPlaces - static_cast<int>(players.size())) : -1;
+      // Horde and Beast have no bots in the free places.
+      const int bots = ready ? (versus ? std::max(0, match_places - static_cast<int>(players.size())) : 0) : -1;
       draw_places(at(list_left, 230), list_width * u, columns, players, party, bots);
       if (!ready) {
         char found[160];
-        std::snprintf(found, sizeof(found), texts.found, std::min(kMatchPlaces, static_cast<int>(players.size())), kMatchPlaces);
+        std::snprintf(found, sizeof(found), versus ? texts.found : game_texts.found,
+                      std::min(match_places, static_cast<int>(players.size())), match_places);
         draw_list->AddText(body_font, 12.0f * u, at(list_left, 470), TextFaint(a(255)), found);
         hint(1, watching_ ? texts.hide : texts.cancel);
       } else {
