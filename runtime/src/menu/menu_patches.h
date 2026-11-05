@@ -36,6 +36,14 @@ constexpr int kMainMenuScreen = 1;
 // Standard and Arcade.
 constexpr int kCampaignScreen = 3;
 constexpr int kCampaignDlcOption = 2;
+// Screen index of the standard campaign's menu (MAINMENUOP_CampaignStandard), seen in
+// HandleMenuSelection on 6 November 2026: Continue, New, Select chapter, Load, Create public, Join
+// public, Recap. With menu_remove_unused, Create public and Join public (public campaign matches,
+// which Azura does not offer) are removed, so the options after them come kCampaignPublicOptions
+// positions earlier than the game counts them.
+constexpr int kCampaignStandardScreen = 4;
+constexpr int kCampaignFirstPublicOption = 4;
+constexpr int kCampaignPublicOptions = 2;
 // Screen index of Versus' menu (MAINMENUOP_VS_Competitiveness), seen in HandleMenuSelection on
 // 3 November 2026.
 constexpr int kVersusScreen = 11;

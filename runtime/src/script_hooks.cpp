@@ -788,6 +788,21 @@ void NoteCampaignChoice(const uint8_t* base, uint32_t frame) {
   }
 }
 
+// The standard campaign's menu without its public matches (menu_patches.cpp): UIScene_FrontEnd.
+// HandleMenuSelection handles its choices by their original position, so a position at or after
+// the removed options is moved past them before it runs.
+void CampaignStandardPosition(uint8_t* base, uint32_t frame) {
+  if (!REXCVAR_GET(menu_remove_unused)) return;
+  const uint32_t function = LoadU32(base, frame + kFrameNode);
+  const uint32_t locals = LoadU32(base, frame + kFrameLocals);
+  const int32_t screen = ParamOffset(base, function, "ParentScreen");
+  const int32_t option = ParamOffset(base, function, "SelectedOption");
+  if (screen < 0 || option < 0 || base[locals + screen] != azura::menu::kCampaignStandardScreen) return;
+  const int32_t shown = static_cast<int32_t>(LoadU32(base, locals + option));
+  if (shown < azura::menu::kCampaignFirstPublicOption) return;
+  StoreU32(base, locals + option, static_cast<uint32_t>(shown + azura::menu::kCampaignPublicOptions));
+}
+
 // Whether the frame about to run is the main menu choosing the Quit Game option.
 bool IsQuitSelection(const uint8_t* base, uint32_t frame, int quit_option) {
   const uint32_t function = LoadU32(base, frame + kFrameNode);
@@ -2809,8 +2824,11 @@ static void StripListenParam(std::string& s) {
 // without a loading screen, the game swaps those chapter maps inside GearGame_P with
 // PrepareMapChange and CommitMapChange, which cannot work if a chapter map is the main map.
 // A System Link host keeps ?listen (rex::system::xam::HostingSystemLinkSession): without it the
-// game accepts no clients.
-bool PatchTravelURL(uint8_t* base, uint32_t fstring_addr) {
+// game accepts no clients. A new URL longer than the FString's room (the game sizes it to the URL it
+// built: RAAM's Shadow's chapter=31 with ?listen kept is one character longer) gets more room from
+// the game's own TArray resize (guest 0x822B0E30: r3 the array, r4 its new capacity, r5 the element
+// size), on the caller's context, so the game's allocator frees it later.
+bool PatchTravelURL(PPCContext& ctx, uint8_t* base, uint32_t fstring_addr) {
   if (!fstring_addr) return false;
   const uint32_t data = LoadU32(base, fstring_addr);
   const uint32_t count = LoadU32(base, fstring_addr + 4);
@@ -2856,15 +2874,35 @@ bool PatchTravelURL(uint8_t* base, uint32_t fstring_addr) {
       }
     }
   }
-  if (new_url == url || new_url.size() + 1 > max) return false;
+  if (new_url == url) return false;
+  uint32_t room = max;
+  if (new_url.size() + 1 > room) {
+    const uint64_t r3 = ctx.r3.u64, r4 = ctx.r4.u64, r5 = ctx.r5.u64;
+    ctx.r3.u64 = fstring_addr;
+    ctx.r4.u64 = static_cast<uint32_t>(new_url.size() + 1);
+    ctx.r5.u64 = 2;  // a TCHAR
+    __imp__sub_822B0E30(ctx, base);
+    ctx.r3.u64 = r3;
+    ctx.r4.u64 = r4;
+    ctx.r5.u64 = r5;
+    if (LoadU32(base, fstring_addr)) {
+      room = static_cast<uint32_t>(new_url.size() + 1);
+      StoreU32(base, fstring_addr + 8, room);
+    }
+  }
+  const uint32_t buffer = LoadU32(base, fstring_addr);
+  if (!buffer || new_url.size() + 1 > room) {
+    REXLOG_WARN("[Azura campaign] Travel URL '{}' could not become '{}': no room for it", url, new_url);
+    return false;
+  }
 
   // The URL fits in the buffer (checked against its capacity above).
   for (size_t i = 0; i < new_url.size(); ++i) {
-    base[data + i * 2] = 0;
-    base[data + i * 2 + 1] = static_cast<uint8_t>(new_url[i]);
+    base[buffer + i * 2] = 0;
+    base[buffer + i * 2 + 1] = static_cast<uint8_t>(new_url[i]);
   }
-  base[data + new_url.size() * 2] = 0;
-  base[data + new_url.size() * 2 + 1] = 0;
+  base[buffer + new_url.size() * 2] = 0;
+  base[buffer + new_url.size() * 2 + 1] = 0;
   StoreU32(base, fstring_addr + 4, static_cast<uint32_t>(new_url.size() + 1));
   REXLOG_INFO("[Azura campaign] Travel URL: '{}' -> '{}'", url, new_url);
   return true;
@@ -5197,7 +5235,7 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     const uint32_t result = ctx.r5.u32;
     __imp__sub_822DF9E0(ctx, base);
     if (result) {
-      PatchTravelURL(base, result);
+      PatchTravelURL(ctx, base, result);
     }
     return;
   }
@@ -5221,7 +5259,7 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     const uint32_t locals = LoadU32(base, ctx.r4.u32 + kFrameLocals);
     const int32_t url_offset = ParamOffset(base, function, "URL");
     if (url_offset >= 0) {
-      PatchTravelURL(base, locals + static_cast<uint32_t>(url_offset));
+      PatchTravelURL(ctx, base, locals + static_cast<uint32_t>(url_offset));
     }
   }
   if (Is(base, function, kConditionalCreateParty) && OnlineMode() &&
@@ -5961,7 +5999,10 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
       CreateOnlineParty(ctx, base, function)) {
     return;
   }
-  if (Is(base, function, kHandleMenuSelection)) NoteCampaignChoice(base, ctx.r4.u32);
+  if (Is(base, function, kHandleMenuSelection)) {
+    NoteCampaignChoice(base, ctx.r4.u32);
+    CampaignStandardPosition(base, ctx.r4.u32);
+  }
   // The main menu's Options option opens the Options as Start does there (the script, which does
   // not know the option, does not run).
   const int options_option = azura::menu::MainMenuOptionsOption();

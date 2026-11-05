@@ -6,6 +6,12 @@ it as the update's notes (`scripts/release-common.sh`). Bumping the version adds
 release without one fails. One list item (`- `) per change, in English; an item may continue on
 indented lines.
 
+## 0.6.2
+
+- RAAM's Shadow starts again when you play in an Alboria party: choosing it no longer starts the
+  main campaign.
+- The campaign menus no longer offer public campaign matches, which Azura doesn't have.
+
 ## 0.6.1
 
 - Czech and Hungarian: play the game in them, with Azura's own menus and the Alboria overlay too.
