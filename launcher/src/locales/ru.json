@@ -48,7 +48,7 @@
     "gpuValueLinux": "{gpu} · Vulkan",
     "gpuUnknown": "Не определена · Vulkan",
     "runtimeMissing": "Сборка не найдена",
-    "player": "Player",
+    "player": "Игрок",
     "runtimeNotInstalled": "Установится при нажатии «Играть»",
     "runtimeUpdate": "Обновление готово, установится при нажатии «Играть»",
     "compiler": "Компилятор",
@@ -552,7 +552,21 @@
       "gamertag": "Оскорбительный геймертег",
       "impersonation": "Выдача себя за другого",
       "other": "Другое"
-    }
+    },
+    "availability": "Твой статус",
+    "availabilityOption": {
+      "online": "В сети",
+      "busy": "Занят",
+      "invisible": "Невидимый"
+    },
+    "availabilityChanged": {
+      "online": "Друзья видят тебя в сети",
+      "busy": "Друзья видят, что ты занят; уведомления не всплывают",
+      "invisible": "Друзья видят тебя не в сети; уведомления не всплывают"
+    },
+    "busy": "Занят",
+    "playingBusy": "Занят · играет в {game}",
+    "cameOnline": "{name} в сети"
   },
   "devServer": {
     "title": "Разработка",

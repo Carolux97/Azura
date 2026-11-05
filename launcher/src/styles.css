@@ -671,10 +671,25 @@ code, kbd {
 }
 
 /* What's new: Alboria's panel with the Greeter, beside the button. */
-.release-notes { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; margin: 0; padding: 10px 24px 12px 6px; }
-.release-notes .alborian { width: 104px; }
-.release-notes-text { flex: 1; min-width: 0; }
-.release-notes-list { margin: 4px 0 10px; padding-left: 18px; display: grid; gap: 2px; color: var(--navy); font-size: 16px; line-height: 1.35; }
+/* The "What's new" window: over the launcher, on a dimmed backdrop, under the welcome page (which
+   comes first on a first start). The list scrolls inside it, so a long changelog never pushes the
+   page around. */
+.notes-dialog {
+  position: fixed; inset: 0; z-index: 35; display: flex; align-items: center; justify-content: center;
+  padding: 40px 52px; background: rgba(9, 14, 36, 0.55);
+}
+.notes-dialog[hidden] { display: none; }
+.notes-box {
+  width: min(820px, 100%); max-height: 100%; margin: 0; display: flex; align-items: flex-start; gap: 8px;
+  padding: 16px 24px 18px 6px;
+}
+.notes-box .alborian { width: 104px; flex: none; align-self: center; }
+.release-notes-text { flex: 1; min-width: 0; max-height: calc(100vh - 116px); display: flex; flex-direction: column; }
+.release-notes-text .btn { align-self: flex-start; }
+.release-notes-list {
+  margin: 4px 0 12px; padding: 0 8px 0 18px; display: grid; gap: 4px; color: var(--navy); font-size: 16px;
+  line-height: 1.35; overflow-y: auto; min-height: 0;
+}
 .release-notes-list li::marker { color: var(--sky-deep); }
 
 /* The game's parts on the left, Alboria on the right while it has something to show. */
@@ -764,16 +779,59 @@ code, kbd {
   display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px 12px; padding: 9px 10px;
   background: rgba(255, 255, 255, 0.72); border: 1px solid rgba(255, 255, 255, 0.95); border-radius: 20px;
 }
-/* What each friend is doing, as a seal with Alboria's ring rune: gold playing, green online, grey
-   offline, and amber pulsing for a request waiting for an answer. */
+/* A seal with Alboria's ring rune before rows without a friend's picture: amber pulsing for a request
+   waiting for an answer, grey otherwise. Friends' rows show their picture instead (.friend-avatar). */
 .friend-row::before {
   --seal: radial-gradient(circle at 40% 35%, #8e9ab8, #4c5778 75%);
   content: ""; flex: none; width: 32px; height: 32px; border-radius: 50%;
   background: var(--rune-ring-light) center / 18px 18px no-repeat, var(--seal);
   box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.35), 0 0 0 2px #fff3cc, 0 0 0 3px #d8b866;
 }
-.friend-row[data-state="online"]::before { --seal: radial-gradient(circle at 40% 35%, #46c79a, #12795a 75%); }
-.friend-row[data-state="playing"]::before { --seal: radial-gradient(circle at 40% 35%, #f6c445, #b77a0c 75%); }
+/* A friend's picture: a round, metallic golden frame around it (a default silhouette until players
+   have avatars), and at its top right a smaller golden setting, sunk inwards, holding a light in the
+   colour of the friend's state: green online, red busy, off (dark, no shine) offline or invisible.
+   The seal of the rows without a friend (requests) is not drawn on these. */
+.friend-row.has-avatar::before { display: none; }
+.friend-avatar {
+  position: relative; flex: none; width: 40px; height: 40px; border-radius: 50%;
+  background:
+    radial-gradient(circle at 50% 38%, #eef1f7 0 7px, transparent 7.5px),
+    radial-gradient(ellipse 12px 9px at 50% 92%, #eef1f7 0 100%, transparent 100%),
+    radial-gradient(circle at 40% 30%, #a9bad6, #6f84a8 80%);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.35), 0 0 0 2px #7a5210, 0 0 0 4px #f3c969, 0 0 0 5px #b07a1e,
+    0 2px 6px rgba(60, 40, 0, 0.3);
+}
+/* The setting's centre sits on the golden frame at 45 degrees: the frame's middle is 23px from the
+   picture's centre (20px of picture and 3px into the 5px frame), 16.3px across and up from it. */
+.friend-avatar::after {
+  content: ""; position: absolute; top: calc(20px - 16.3px - 4.5px); left: calc(20px + 16.3px - 4.5px);
+  width: 9px; height: 9px; border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #e9fff5 0 1.5px, #1fb37e 2.5px, #12795a 100%);
+  box-shadow: 0 0 0 2px #7a5210, 0 0 0 4px #f3c969, 0 0 0 5px #b07a1e, inset 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+.friend-avatar[data-light="busy"]::after { background: radial-gradient(circle at 35% 30%, #ffe3de 0 1.5px, #e0503f 2.5px, #a8322a 100%); }
+.friend-avatar[data-light="off"]::after { background: radial-gradient(circle at 50% 50%, #5a647e, #3a4259 100%); }
+/* The availability control: a pill in the colour of the state chosen (green online, red busy, slate
+   invisible), with a dot before the text and an arrow after it, so the state reads at a glance. */
+.friends-availability { position: relative; display: inline-flex; align-items: center; margin-top: 8px; }
+.friends-availability::before {
+  content: ""; position: absolute; left: 12px; top: 50%; width: 8px; height: 8px; margin-top: -4px;
+  border-radius: 50%; background: #fff; box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.35); pointer-events: none;
+}
+.friends-availability::after {
+  content: ""; position: absolute; right: 12px; top: 50%; width: 6px; height: 6px; margin-top: -5px;
+  border-right: 2px solid #fff; border-bottom: 2px solid #fff; transform: rotate(45deg); pointer-events: none;
+}
+.friends-availability select {
+  appearance: none; -webkit-appearance: none; padding: 5px 32px 5px 28px; border: 0; border-radius: 999px;
+  background: #12795a; color: #fff; font: inherit; font-size: 14px; font-weight: 800; cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25), 0 2px 6px rgba(20, 30, 60, 0.18);
+}
+.friends-availability select:focus-visible { outline: 3px solid #ffd866; outline-offset: 2px; }
+.friends-availability select[data-state="online"] { background: #12795a; }
+.friends-availability select[data-state="busy"] { background: #a8322a; }
+.friends-availability select[data-state="invisible"] { background: #4c5778; }
+.friends-availability option { color: #1b2340; background: #fff; }
 .friends-body > .friend-row::before { --seal: radial-gradient(circle at 40% 35%, #ffd866, #c98a10 75%); animation: status-progress 1.6s ease-in-out infinite; }
 .friend-text { flex: 1 1 150px; min-width: 0; }
 .friend-text strong { display: block; font-size: 17px; overflow-wrap: anywhere; }

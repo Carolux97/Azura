@@ -93,6 +93,18 @@ void AddTextCentered(ImDrawList* draw_list, ImFont* font, float size, ImVec2 cen
   draw_list->AddText(font, size, ImVec2(std::round(at.x), std::round(at.y)), color, text);
 }
 
+void AddTextMiddleLeft(ImDrawList* draw_list, ImFont* font, float size, ImVec2 left_middle, ImU32 color,
+                       const char* text) {
+  // The capitals' ink from the point AddText draws at, at the size it is drawn at.
+  ImFontBaked* baked = font->GetFontBaked(size);
+  const float scale = baked && baked->Size > 0.0f ? size / baked->Size : 1.0f;
+  const ImFontGlyph* capital = baked ? baked->FindGlyph(static_cast<ImWchar>('H')) : nullptr;
+  const float middle = capital && capital->Visible ? (capital->Y0 + capital->Y1) * 0.5f * scale
+                                                   : font->CalcTextSizeA(size, FLT_MAX, 0.0f, text).y * 0.5f;
+  // Whole pixels, so thin strokes stay sharp.
+  draw_list->AddText(font, size, ImVec2(std::round(left_middle.x), std::round(left_middle.y - middle)), color, text);
+}
+
 // `text` cut with an ellipsis to fit `max_width`.
 std::string Fit(ImFont* font, float size, const std::string& text, float max_width) {
   if (font->CalcTextSizeA(size, FLT_MAX, 0.0f, text.c_str()).x <= max_width) {

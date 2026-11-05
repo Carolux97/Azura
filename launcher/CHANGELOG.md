@@ -6,6 +6,24 @@ it as the update's notes (`scripts/release-common.sh`). Bumping the version adds
 release without one fails. One list item (`- `) per change, in English; an item may continue on
 indented lines.
 
+## 0.6.1
+
+- Czech and Hungarian: play the game in them, with Azura's own menus and the Alboria overlay too.
+- The Latin American Spanish edition of the game is supported.
+- Joining a friend works again when the host has more multiplayer map packs than you.
+- The lobby only offers the maps everyone in it has, in the host's map list and in the vote. Joining
+  a match on a map you don't have now tells you so.
+- Leaving a friend's party takes you out of their room too.
+- Friends: choose to show yourself online, busy or invisible, from the launcher or the overlay. You
+  are told when a friend comes online, and friends lists update at once.
+- The overlay: your status under your name (Y, or E on the keyboard), X copies your room's code,
+  and its pages change with LB/RB only.
+- Leaving a public match from the pause menu no longer says the room closed.
+- macOS: the game's memory no longer grows the longer you play.
+- Corrected translations in the game's menus.
+- The launcher's release notes open in a window of their own, which scrolls, instead of stretching
+  the Play page.
+
 ## 0.6.0
 
 - Public matches on Alboria. Versus, Horde and Beast have an online row in their menus: choose the

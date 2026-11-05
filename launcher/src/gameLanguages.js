@@ -24,21 +24,25 @@ const LANGUAGE_NAMES = {
   CHN: "中文",
 };
 
-/** Engine code that matches each launcher locale, used to preselect the game language. */
-const LOCALE_TO_GAME_LANGUAGE = {
-  en: "INT",
-  fr: "FRA",
-  de: "DEU",
-  it: "ITA",
-  es: "ESN",
-  pt: "PTB",
-  ru: "RUS",
-  pl: "POL",
-  ja: "JPN",
-  ko: "KOR",
-  "zh-Hant": "CHN",
-  cs: "CZE",
-  hu: "HUN",
+/**
+ * Engine codes that match each launcher locale, in order of preference, used to preselect the game
+ * language. Spanish has two variants, each on its own edition (Spain's ESN, Latin America's ESM):
+ * the launcher has one Spanish, so it takes whichever the game folder has.
+ */
+const LOCALE_TO_GAME_LANGUAGES = {
+  en: ["INT"],
+  fr: ["FRA"],
+  de: ["DEU"],
+  it: ["ITA"],
+  es: ["ESN", "ESM"],
+  pt: ["PTB"],
+  ru: ["RUS"],
+  pl: ["POL"],
+  ja: ["JPN"],
+  ko: ["KOR"],
+  "zh-Hant": ["CHN"],
+  cs: ["CZE"],
+  hu: ["HUN"],
 };
 
 /** Engine code the game falls back to; every edition ships it. */
@@ -48,14 +52,14 @@ export const DEFAULT_GAME_LANGUAGE = "INT";
 export const gameLanguageName = (code) => LANGUAGE_NAMES[code] ?? code;
 
 /**
- * Picks the language to preselect from those available in the game folder: the one matching the
- * launcher's language when the folder has it, otherwise English, otherwise the first available.
+ * Picks the language to preselect from those available in the game folder: the first one matching
+ * the launcher's language that the folder has, otherwise English, otherwise the first available.
  * Returns null when the folder lists none.
  */
 export const defaultGameLanguage = (available, launcherLocale) => {
   if (!available?.length) return null;
-  const preferred = LOCALE_TO_GAME_LANGUAGE[launcherLocale];
-  if (preferred && available.includes(preferred)) return preferred;
+  const preferred = (LOCALE_TO_GAME_LANGUAGES[launcherLocale] ?? []).find((code) => available.includes(code));
+  if (preferred) return preferred;
   if (available.includes(DEFAULT_GAME_LANGUAGE)) return DEFAULT_GAME_LANGUAGE;
   return available[0];
 };

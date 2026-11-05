@@ -16,6 +16,7 @@
 #include "coop_ui.h"
 #include "input/player_assignment.h"
 #include "script_hooks.h"
+#include "menu_language.h"
 
 namespace azura {
 
@@ -74,7 +75,7 @@ Texts LocalizedTexts(uint32_t language) {
               "Termin\xC3\xA9", "Entr\xC3\xA9""e", "Retour"};
     case 5:  // Spanish
       return {"COOPERATIVO LOCAL",
-              "Pulse izquierda o derecha en un dispositivo para pas\xC3\xA1rselo a otro jugador.",
+              "Pulsa izquierda o derecha en un dispositivo para pas\xC3\xA1rselo a otro jugador.",
               "SIN ASIGNAR", "JUGADOR %d", "Teclado y rat\xC3\xB3n", "Sin dispositivo", "Mover", "Listo", "Intro", "Volver"};
     case 6:  // Italian
       return {"COOPERATIVA LOCALE",
@@ -90,6 +91,13 @@ Texts LocalizedTexts(uint32_t language) {
               "Naci\xC5\x9Bnij w lewo lub w prawo na urz\xC4\x85""dzeniu, aby da\xC4\x87 je innemu graczowi.",
               "NIEPRZYPISANE", "GRACZ %d", "Klawiatura i mysz", "Brak urz\xC4\x85""dzenia", "Przenie\xC5\x9B",
               "Gotowe", "Enter", "Wr\xC3\xB3\xC4\x87"};
+    case kLanguageCzech:
+      return {"MÍSTNÍ KOOPERACE", "Stiskněte na zařízení doleva nebo doprava a předejte ho jinému hráči.",
+              "NEPŘIŘAZENO", "HRÁČ %d", "Klávesnice a myš", "Žádné zařízení", "Přesunout", "Hotovo", "Enter", "Zpět"};
+    case kLanguageHungarian:
+      return {"HELYI KOOPERATÍV", "Nyomj balra vagy jobbra egy eszközön, hogy átadd egy másik játékosnak.",
+              "NINCS HOZZÁRENDELVE", "%d. JÁTÉKOS", "Billentyűzet és egér", "Nincs eszköz", "Áthelyezés", "Kész",
+              "Enter", "Vissza"};
     default:
       return {"LOCAL CO-OP", "Press left or right on a device to give it to another player.", "UNASSIGNED",
               "PLAYER %d", "Keyboard and mouse", "No device", "Move", "Done", "Enter", "Back"};
@@ -294,8 +302,8 @@ void LocalCoopMenu::OnDraw(ImGuiIO& io) {
       }
       const std::string name = Fit(body_font, 12.5f * unit, slot.keyboard ? texts.keyboard : slot.device.name,
                                    column_width - 70.0f * unit);
-      draw_list->AddText(body_font, 12.5f * unit, ImVec2(left + 62.0f * unit, card_top + card_height * 0.5f - 8.0f * unit),
-                         Text(a(255)), name.c_str());
+      AddTextMiddleLeft(draw_list, body_font, 12.5f * unit, ImVec2(left + 62.0f * unit, card_top + card_height * 0.5f),
+                        Text(a(255)), name.c_str());
       card_top += card_height + card_gap;
     }
     if (!any) {
@@ -321,13 +329,14 @@ void LocalCoopMenu::OnDraw(ImGuiIO& io) {
   DrawArrow(draw_list, ImVec2(x + 5.0f * unit, hints_y + 8.0f * unit), 10.0f * unit, true, Imulsion(a(255)));
   DrawArrow(draw_list, ImVec2(x + 19.0f * unit, hints_y + 8.0f * unit), 10.0f * unit, false, Imulsion(a(255)));
   x += 30.0f * unit;
-  draw_list->AddText(body_font, 13.0f * unit, ImVec2(x, hints_y), Text(a(255)), texts.move);
+  AddTextMiddleLeft(draw_list, body_font, 13.0f * unit, ImVec2(x, hints_y + 8.0f * unit), Text(a(255)), texts.move);
   x += body_font->CalcTextSizeA(13.0f * unit, FLT_MAX, 0.0f, texts.move).x + 26.0f * unit;
   // With only the keyboard, Escape goes back (Enter closes the menu too).
   x += DrawConfirmGlyph(draw_list, title_font, ImVec2(x, hints_y), unit,
                         player_one_pad ? &player_one_pad->device : nullptr, "Esc", a(255)) +
        6.0f * unit;
-  draw_list->AddText(body_font, 13.0f * unit, ImVec2(x, hints_y), Text(a(255)), player_one_pad ? texts.done : texts.back);
+  AddTextMiddleLeft(draw_list, body_font, 13.0f * unit, ImVec2(x, hints_y + 8.0f * unit), Text(a(255)),
+                    player_one_pad ? texts.done : texts.back);
 }
 
 void LocalCoopMenu::OnClose() {

@@ -34,8 +34,8 @@ class PlayerAssignment;
 
 class LocalCoopNotices : public rex::ui::ImGuiDialog {
  public:
-  // `language` is the Xbox 360 language ID of the user_language setting; `gamertag` names the
-  // players (LocalPlayerName). The fonts may be null (ImGui's default is used).
+  // `language` is MenuLanguage() (an Xbox 360 language ID, or Czech or Hungarian); `gamertag`
+  // names the players (LocalPlayerName). The fonts may be null (ImGui's default is used).
   LocalCoopNotices(rex::ui::ImGuiDrawer* drawer, rex::input::InputSystem* input,
                    input::PlayerAssignment* assignment, uint32_t language, std::string gamertag,
                    ImFont* title_font, ImFont* body_font);

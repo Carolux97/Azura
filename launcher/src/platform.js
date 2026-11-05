@@ -564,6 +564,7 @@ const simulatedFriends = {
   incoming: [{ id: 6, name: "Viento#58" }],
   outgoing: [{ id: 7, name: "Gale#902" }],
   blocked: [],
+  me: { availability: "online" },
   invitations: simulatedQuery.has("invite")
     ? [{ id: "inv1", from: { id: 3, name: "CAPI_REX#501" }, title_id: "4D5308AB", expires_at: new Date(Date.now() + 900_000).toISOString() }]
     : [],
@@ -584,6 +585,9 @@ const simulatedFriendsAnswer = (path, body) => {
       if (from) f.friends.push({ ...from, favourite: false, presence: { status: "online" } });
       return {};
     }
+    case "/v1/friends/availability":
+      f.me.availability = body.availability;
+      return { availability: body.availability };
     case "/v1/friends/decline":
       drop("incoming");
       return {};

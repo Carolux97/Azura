@@ -48,7 +48,7 @@
     "gpuValueLinux": "{gpu} · Vulkan",
     "gpuUnknown": "検出されません · Vulkan",
     "runtimeMissing": "ビルドが見つかりません",
-    "player": "Player",
+    "player": "プレイヤー",
     "runtimeNotInstalled": "「プレイ」を押すとインストールされます",
     "runtimeUpdate": "アップデートの準備完了。「プレイ」を押すとインストールされます",
     "compiler": "コンパイラ",
@@ -552,7 +552,21 @@
       "gamertag": "不快なゲーマータグ",
       "impersonation": "なりすまし",
       "other": "その他"
-    }
+    },
+    "availability": "ステータス",
+    "availabilityOption": {
+      "online": "オンライン",
+      "busy": "取り込み中",
+      "invisible": "オフライン表示"
+    },
+    "availabilityChanged": {
+      "online": "フレンドにはオンラインと表示されます",
+      "busy": "フレンドには取り込み中と表示されます。通知は表示されません",
+      "invisible": "フレンドにはオフラインと表示されます。通知は表示されません"
+    },
+    "busy": "取り込み中",
+    "playingBusy": "取り込み中 · {game}をプレイ中",
+    "cameOnline": "{name}がオンラインになりました"
   },
   "devServer": {
     "title": "開発",

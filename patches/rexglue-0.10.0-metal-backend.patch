@@ -258,7 +258,7 @@ index d9a64eb..c9f0fa4 100644
  ]])
 +endif()
 diff --git a/include/rex/graphics/command_processor.h b/include/rex/graphics/command_processor.h
-index da8e432..4d0b308 100644
+index da8e432..231288e 100644
 --- a/include/rex/graphics/command_processor.h
 +++ b/include/rex/graphics/command_processor.h
 @@ -96,6 +96,9 @@ class CommandProcessor {
@@ -271,7 +271,7 @@ index da8e432..4d0b308 100644
    virtual void InvalidateGpuMemory();
  
    // "Desired" is for the external thread managing the post-processing effect.
-@@ -168,6 +171,24 @@ class CommandProcessor {
+@@ -168,6 +171,31 @@ class CommandProcessor {
    virtual void MakeCoherent();
    virtual void PrepareForWait();
    virtual void ReturnFromWait();
@@ -282,6 +282,13 @@ index da8e432..4d0b308 100644
 +  // without sending more commands. While it has, the command processor sleeps briefly between
 +  // calls instead of waiting up to 5 ms for new commands. Default: none.
 +  virtual bool HasPendingGuestResults() const { return false; }
++  // Opened before and closed after each turn of the worker thread's loop (the commands of one read
++  // of the ring buffer, or the functions queued for the thread), for backends whose API hands out
++  // objects that live until a scope of the thread ends: Metal's autoreleased objects, which a
++  // thread of plain C++ would otherwise keep for as long as it runs. Begin returns what End gets
++  // back. Default: nothing.
++  virtual void* BeginWorkScope() { return nullptr; }
++  virtual void EndWorkScope(void* /*scope*/) {}
 +
 +  // Writes the value of a fence the guest asked for (EVENT_WRITE_SHD) to guest memory, already
 +  // swapped to the guest's endianness. The guest takes the value as the GPU being done with
@@ -296,7 +303,7 @@ index da8e432..4d0b308 100644
  
    uint32_t ExecutePrimaryBuffer(uint32_t start_index, uint32_t end_index);
    virtual void OnPrimaryBufferEnd() {}
-@@ -244,6 +265,8 @@ class CommandProcessor {
+@@ -244,6 +272,8 @@ class CommandProcessor {
    std::vector<uint32_t> me_bin_;
  
    uint32_t counter_ = 0;
@@ -2527,6 +2534,21 @@ index 06888b9..d4650bc 100644
    std::vector<std::unique_ptr<Setting>> setting_list_;
    std::unordered_map<uint32_t, Setting*> settings_;
    KernelState* kernel_state_ = nullptr;
+diff --git a/include/rex/system/xobject.h b/include/rex/system/xobject.h
+index 0a43f07..a148e7a 100644
+--- a/include/rex/system/xobject.h
++++ b/include/rex/system/xobject.h
+@@ -244,6 +244,10 @@ class XObject {
+   // if we allocated it!
+   uint32_t guest_object_ptr_ = 0;
+   bool allocated_guest_object_ = false;
++  // Guest address of the dispatch header that holds this object's handle (StashHandle), or 0.
++  // GetNativeObject checks it: the stashed handle stays in guest memory after the object is gone,
++  // and its number may since have been given to an unrelated object.
++  uint32_t stashed_header_ptr_ = 0;
+ };
+ 
+ template <typename T>
 diff --git a/include/rex/system/xsocket.h b/include/rex/system/xsocket.h
 index a1b4443..bb69cc9 100644
 --- a/include/rex/system/xsocket.h
@@ -3832,7 +3854,7 @@ index 0d8f8af..935e88b 100644
      target_link_libraries(rexgpu-xenos PRIVATE
          d3d12
 diff --git a/src/graphics/command_processor.cpp b/src/graphics/command_processor.cpp
-index a744375..62eb27c 100644
+index a744375..0e94690 100644
 --- a/src/graphics/command_processor.cpp
 +++ b/src/graphics/command_processor.cpp
 @@ -14,6 +14,7 @@
@@ -3861,7 +3883,23 @@ index a744375..62eb27c 100644
      .lifecycle(rex::cvar::Lifecycle::kHotReload);
  
  REXCVAR_DEFINE_INT32(query_occlusion_fake_sample_count, 1000, "GPU",
-@@ -219,14 +222,21 @@ void CommandProcessor::WorkerThreadMain() {
+@@ -203,7 +206,15 @@ void CommandProcessor::WorkerThreadMain() {
+     return;
+   }
+ 
++  // Each turn of the loop runs in a work scope of the backend (BeginWorkScope), closed whichever
++  // way the turn ends.
++  struct WorkScope {
++    CommandProcessor* processor;
++    void* scope;
++    ~WorkScope() { processor->EndWorkScope(scope); }
++  };
+   while (worker_running_) {
++    const WorkScope work_scope{this, BeginWorkScope()};
+     while (!pending_fns_.empty()) {
+       auto fn = std::move(pending_fns_.front());
+       pending_fns_.pop();
+@@ -219,14 +230,21 @@ void CommandProcessor::WorkerThreadMain() {
        PrepareForWait();
        uint32_t loop_count = 0;
        do {
@@ -3887,7 +3925,7 @@ index a744375..62eb27c 100644
          loop_count++;
          write_ptr_index = write_ptr_index_.load();
        } while (worker_running_ && pending_fns_.empty() &&
-@@ -340,6 +350,22 @@ uint32_t CommandProcessor::ReadRegisterValue(uint32_t index) const {
+@@ -340,6 +358,22 @@ uint32_t CommandProcessor::ReadRegisterValue(uint32_t index) const {
    return it != extended_register_values_.end() ? it->second : 0;
  }
  
@@ -3910,7 +3948,7 @@ index a744375..62eb27c 100644
  void CommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
    RegisterFile& regs = *register_file_;
    if (index >= RegisterFile::kRegisterCount) {
-@@ -355,7 +381,7 @@ void CommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
+@@ -355,7 +389,7 @@ void CommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
  
    // Volatile for the WAIT_REG_MEM loop.
    const_cast<volatile uint32_t&>(regs.values[index]) = value;
@@ -3919,7 +3957,7 @@ index a744375..62eb27c 100644
      REXGPU_DEBUG("GPU: Write to unknown register ({:04X} = {:08X})", index, value);
    }
  
-@@ -612,6 +638,10 @@ void CommandProcessor::PrepareForWait() {}
+@@ -612,6 +646,10 @@ void CommandProcessor::PrepareForWait() {}
  
  void CommandProcessor::ReturnFromWait() {}
  
@@ -3930,7 +3968,7 @@ index a744375..62eb27c 100644
  uint32_t CommandProcessor::ExecutePrimaryBuffer(uint32_t read_index, uint32_t write_index) {
    SCOPE_profile_cpu_f("gpu");
  
-@@ -702,6 +732,12 @@ bool CommandProcessor::ExecutePacketType0(memory::RingBuffer* reader, uint32_t p
+@@ -702,6 +740,12 @@ bool CommandProcessor::ExecutePacketType0(memory::RingBuffer* reader, uint32_t p
  
    uint32_t base_index = (packet & 0x7FFF);
    uint32_t write_one_reg = (packet >> 15) & 0x1;
@@ -3943,7 +3981,7 @@ index a744375..62eb27c 100644
    for (uint32_t m = 0; m < count; m++) {
      uint32_t reg_data = reader->ReadAndSwap<uint32_t>();
      uint32_t target_index = write_one_reg ? base_index : base_index + m;
-@@ -905,7 +941,16 @@ bool CommandProcessor::ExecutePacketType3_ME_INIT(memory::RingBuffer* reader, ui
+@@ -905,7 +949,16 @@ bool CommandProcessor::ExecutePacketType3_ME_INIT(memory::RingBuffer* reader, ui
  bool CommandProcessor::ExecutePacketType3_NOP(memory::RingBuffer* reader, uint32_t packet,
                                                uint32_t count) {
    // skip N 32-bit words to get to the next packet
@@ -3961,7 +3999,7 @@ index a744375..62eb27c 100644
    reader->AdvanceRead(count * sizeof(uint32_t));
    return true;
  }
-@@ -916,6 +961,7 @@ bool CommandProcessor::ExecutePacketType3_INTERRUPT(memory::RingBuffer* reader,
+@@ -916,6 +969,7 @@ bool CommandProcessor::ExecutePacketType3_INTERRUPT(memory::RingBuffer* reader,
  
    // generate interrupt from the command stream
    uint32_t cpu_mask = reader->ReadAndSwap<uint32_t>();
@@ -3969,7 +4007,7 @@ index a744375..62eb27c 100644
    for (int n = 0; n < 6; n++) {
      if (cpu_mask & (1 << n)) {
        if (graphics_system_) {
-@@ -988,6 +1034,7 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
+@@ -988,6 +1042,7 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
    uint32_t wait = reader->ReadAndSwap<uint32_t>();
  
    bool is_memory = (wait_info & 0x10) != 0;
@@ -3977,7 +4015,7 @@ index a744375..62eb27c 100644
  
    bool matched = false;
    do {
-@@ -1091,10 +1138,12 @@ bool CommandProcessor::ExecutePacketType3_REG_TO_MEM(memory::RingBuffer* reader,
+@@ -1091,10 +1146,12 @@ bool CommandProcessor::ExecutePacketType3_REG_TO_MEM(memory::RingBuffer* reader,
  
    uint32_t reg_val = ReadRegisterValue(reg_addr);
  
@@ -3990,7 +4028,7 @@ index a744375..62eb27c 100644
  
    return true;
  }
-@@ -1102,6 +1151,7 @@ bool CommandProcessor::ExecutePacketType3_REG_TO_MEM(memory::RingBuffer* reader,
+@@ -1102,6 +1159,7 @@ bool CommandProcessor::ExecutePacketType3_REG_TO_MEM(memory::RingBuffer* reader,
  bool CommandProcessor::ExecutePacketType3_MEM_WRITE(memory::RingBuffer* reader, uint32_t packet,
                                                      uint32_t count) {
    uint32_t write_addr = reader->ReadAndSwap<uint32_t>();
@@ -3998,7 +4036,7 @@ index a744375..62eb27c 100644
    for (uint32_t i = 0; i < count - 1; i++) {
      uint32_t write_data = reader->ReadAndSwap<uint32_t>();
  
-@@ -1111,6 +1161,7 @@ bool CommandProcessor::ExecutePacketType3_MEM_WRITE(memory::RingBuffer* reader,
+@@ -1111,6 +1169,7 @@ bool CommandProcessor::ExecutePacketType3_MEM_WRITE(memory::RingBuffer* reader,
      memory::store(memory_->TranslatePhysical(addr), write_data);
      write_addr += 4;
    }
@@ -4006,7 +4044,7 @@ index a744375..62eb27c 100644
  
    return true;
  }
-@@ -1166,10 +1217,12 @@ bool CommandProcessor::ExecutePacketType3_COND_WRITE(memory::RingBuffer* reader,
+@@ -1166,10 +1225,12 @@ bool CommandProcessor::ExecutePacketType3_COND_WRITE(memory::RingBuffer* reader,
      // Write.
      if (wait_info & 0x100) {
        // Memory.
@@ -4019,7 +4057,7 @@ index a744375..62eb27c 100644
      } else {
        // Register.
        WriteRegister(write_reg_addr, write_data);
-@@ -1214,7 +1267,12 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_SHD(memory::RingBuffer* re
+@@ -1214,7 +1275,12 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_SHD(memory::RingBuffer* re
    auto endianness = static_cast<xenos::Endian>(address & 0x3);
    address &= ~0x3;
    data_value = GpuSwap(data_value, endianness);
@@ -4033,7 +4071,7 @@ index a744375..62eb27c 100644
    return true;
  }
  
-@@ -1291,6 +1349,7 @@ bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32
+@@ -1291,6 +1357,7 @@ bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32
    // when true, render conditionally based on query result
    // uint32_t viz_use = viz_query_condition & 0x100;
  
@@ -4280,10 +4318,10 @@ index 8f2fcb0..2f60d10 100644
    // SCOPE_profile_cpu_f("gpu");
 diff --git a/src/graphics/metal/metal_command_processor.h b/src/graphics/metal/metal_command_processor.h
 new file mode 100644
-index 0000000..2c8c69c
+index 0000000..9f110d0
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.h
-@@ -0,0 +1,409 @@
+@@ -0,0 +1,413 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.h
 + * @brief       Xenos command processing with Metal
@@ -4405,6 +4443,10 @@ index 0000000..2c8c69c
 +  void OnGammaRampPWLValueWritten() override {}
 +
 +  void PrepareForWait() override;
++  // An autorelease pool for each turn of the worker thread: the encoders, descriptors and labels
++  // Metal hands out autoreleased are freed at its end instead of piling up for the whole session.
++  void* BeginWorkScope() override;
++  void EndWorkScope(void* scope) override;
 +  void WriteGuestFence(uint32_t address, uint32_t value) override;
 +  bool ExecutePacketType3_EVENT_WRITE_ZPD(memory::RingBuffer* reader, uint32_t packet,
 +                                          uint32_t count) override;
@@ -4695,10 +4737,10 @@ index 0000000..2c8c69c
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_command_processor.mm b/src/graphics/metal/metal_command_processor.mm
 new file mode 100644
-index 0000000..2b2c550
+index 0000000..a3d198b
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.mm
-@@ -0,0 +1,2886 @@
+@@ -0,0 +1,2899 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.mm
 + * @brief       Xenos command processing with Metal
@@ -4708,6 +4750,11 @@ index 0000000..2b2c550
 + */
 +
 +#include "metal_command_processor.h"
++
++// The Objective-C runtime's autorelease pool calls, which @autoreleasepool compiles to; declared
++// here because no public header does, so a pool can span a C++ scope (BeginWorkScope).
++extern "C" void* objc_autoreleasePoolPush(void);
++extern "C" void objc_autoreleasePoolPop(void* pool);
 +
 +#include <algorithm>
 +#include <chrono>
@@ -5939,6 +5986,14 @@ index 0000000..2b2c550
 +  CommandProcessor::InitializeShaderStorage(cache_root, title_id, blocking);
 +  // Whether blocking or not, the stored pipelines are created in the background.
 +  pipeline_cache_->InitializeShaderStorage(cache_root, title_id);
++}
++
++void* MetalCommandProcessor::BeginWorkScope() {
++  return objc_autoreleasePoolPush();
++}
++
++void MetalCommandProcessor::EndWorkScope(void* scope) {
++  objc_autoreleasePoolPop(scope);
 +}
 +
 +void MetalCommandProcessor::PrepareForWait() {
@@ -26349,7 +26404,7 @@ index 82a252c..3dcec80 100644
    if (event.gbutton.down) {
      if (xbutton == X_INPUT_GAMEPAD_GUIDE && !REXCVAR_GET(guide_button)) {
 diff --git a/src/kernel/xam/apps/xgi_app.cpp b/src/kernel/xam/apps/xgi_app.cpp
-index 2b222da..abfd16d 100644
+index 2b222da..4bbc183 100644
 --- a/src/kernel/xam/apps/xgi_app.cpp
 +++ b/src/kernel/xam/apps/xgi_app.cpp
 @@ -10,7 +10,21 @@
@@ -26422,7 +26477,7 @@ index 2b222da..abfd16d 100644
          }
        } else {
          REXKRNL_INFO("XGIUserWriteAchievements: skipped (count={} ptr={:08X})", achievement_count,
-@@ -113,6 +156,93 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -113,6 +156,103 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
            "{:08X})",
            session_ptr, flags, num_slots_public, num_slots_private, user_xuid, session_info_ptr,
            nonce_ptr);
@@ -26445,7 +26500,17 @@ index 2b222da..abfd16d 100644
 +        if (session.hosting) {
 +          const auto party_type = (flags & kXSessionCreateJoinViaPresenceDisabled) ? alboria::PartyType::kInviteOnly
 +                                                                                   : alboria::PartyType::kJoinable;
-+          if (!alboria::InRoom()) {
++          // Hosting while a member of another player's party room means the title left that party
++          // and made its own: the friend's room is left (HostGame stops it, saying goodbye) and the
++          // new party gets a room of its own, as leaving a party did on Xbox Live. A match room is
++          // kept: a member who hosts there is the title's own host migration.
++          const alboria::Status status = alboria::GetStatus();
++          const bool left_friends_party =
++              status.state == alboria::State::kConnected && !status.host && !status.in_match;
++          if (!alboria::InRoom() || left_friends_party) {
++            if (left_friends_party) {
++              REXKRNL_INFO("Alboria: the title left the party of room {} for its own: leaving that room", status.code);
++            }
 +            alboria::HostGame(kernel_state_->title_id(), std::clamp<int>(num_slots_public + num_slots_private, 2, 10),
 +                              party_type);
 +          } else {
@@ -26516,7 +26581,7 @@ index 2b222da..abfd16d 100644
        return X_E_SUCCESS;
      }
      case 0x000B0011: {
-@@ -123,6 +253,13 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -123,6 +263,13 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
        uint64_t session_nonce = memory::load_and_swap<uint64_t>(buffer + 8);
  
        REXKRNL_DEBUG("XGISessionDelete({:08X}, {:08X}, {:016X})", obj_ptr, flags, session_nonce);
@@ -26530,7 +26595,7 @@ index 2b222da..abfd16d 100644
  
        return X_E_SUCCESS;
      }
-@@ -148,6 +285,10 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -148,6 +295,10 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
        uint64_t session_nonce = memory::load_and_swap<uint64_t>(buffer + 8);
  
        REXKRNL_DEBUG("XSessionStart({:08X}, {:08X}, {:016X})", obj_ptr, flags, session_nonce);
@@ -26541,7 +26606,7 @@ index 2b222da..abfd16d 100644
  
        return X_STATUS_SUCCESS;
      }
-@@ -179,6 +320,67 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -179,6 +330,67 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
        REXKRNL_DEBUG("XSessionSearch({}, {}, {}, {}, {}, {:08X}, {:08X}, {}, {:08X})", proc_index,
                      user_index, num_results, num_props, num_ctx, props_ptr, ctx_ptr,
                      results_buffer_size, search_results_ptr);
@@ -26609,7 +26674,7 @@ index 2b222da..abfd16d 100644
        return X_E_SUCCESS;
      }
      case 0x000B0018: {
-@@ -191,6 +393,21 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -191,6 +403,21 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
  
        REXKRNL_DEBUG("XSessionModify({:08X}, {:08X}, {:08X}, {:08X})", obj_ptr, flags,
                      maxPublicSlots, maxPrivateSlots);
@@ -26631,7 +26696,7 @@ index 2b222da..abfd16d 100644
  
        return X_E_SUCCESS;
      }
-@@ -243,7 +460,25 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -243,7 +470,25 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
  
        REXKRNL_DEBUG("XSessionMigrateHost({:08X}, {:08X}, {}, {}, {}, {})", obj_ptr,
                      session_info_ptr, user_index, reserved1, reserved2, reserved3);
@@ -26658,7 +26723,7 @@ index 2b222da..abfd16d 100644
        return X_E_SUCCESS;
      }
      case 0x000B0019: {
-@@ -288,6 +523,37 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -288,6 +533,37 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
        REXKRNL_DEBUG("XSessionSearchByID({}, {:08X}, {:08X}, {:08X}, {:08X}, {}, {}, {})",
                      user_index, num_session_ids, session_ids_ptr, results_buffer_size,
                      search_results_ptr, reserved1, reserved2, reserved3);
@@ -26696,7 +26761,7 @@ index 2b222da..abfd16d 100644
  
        return X_E_SUCCESS;
      }
-@@ -329,7 +595,30 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -329,7 +605,30 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
  
        REXKRNL_DEBUG("XUserReadStats({}, {}, {:08X}, {}, {:08X}, {}, {:08X})", title_id, xuids_count,
                      xuids_ptr, specs_count, specs_ptr, results_size, results_ptr);
@@ -29024,6 +29089,46 @@ index 76cc877..1a3bd5c 100644
      return false;
    }
  
+diff --git a/src/system/xobject.cpp b/src/system/xobject.cpp
+index d358f39..1fb0bb5 100644
+--- a/src/system/xobject.cpp
++++ b/src/system/xobject.cpp
+@@ -363,6 +363,7 @@ void XObject::SetNativePointer(uint32_t native_ptr, bool uninitialized) {
+   // Stash pointer in struct.
+   // FIXME: This assumes the object has a dispatch header (some don't!)
+   StashHandle(header, handle());
++  stashed_header_ptr_ = native_ptr;
+ 
+   guest_object_ptr_ = native_ptr;
+ }
+@@ -394,6 +395,19 @@ object_ref<XObject> XObject::GetNativeObject(KernelState* kernel_state, void* na
+     uint32_t handle = header->wait_list_blink;
+     auto object = kernel_state->object_table()->LookupObject<XObject>(handle);
+ 
++    // The stash outlives the object: once the object is destroyed its handle number is reused,
++    // and the guest can still pass the old header (a work item of the title's XAM worker threads
++    // dereferences its long-gone thread object, for instance). The handle then names an
++    // unrelated object, which must not be touched, or the title loses it (an event, a thread, or
++    // the listening socket of a party beacon, which then accepts no one). Only the object stashed
++    // at this very header answers for it.
++    const uint32_t header_ptr = kernel_state->memory()->HostToGuestVirtual(native_ptr);
++    if (object && object->stashed_header_ptr_ != header_ptr) {
++      REXSYS_DEBUG("GetNativeObject: header {:08X} holds stale handle {:08X}, now another object's",
++                   header_ptr, handle);
++      return nullptr;
++    }
++
+     // TODO(benvanik): assert nothing has been changed in the struct.
+     return object;
+   } else {
+@@ -443,6 +457,7 @@ object_ref<XObject> XObject::GetNativeObject(KernelState* kernel_state, void* na
+     // Stash pointer in struct.
+     // FIXME: This assumes the object contains a dispatch header (some don't!)
+     StashHandle(header, object->handle());
++    object->stashed_header_ptr_ = kernel_state->memory()->HostToGuestVirtual(native_ptr);
+ 
+     return object_ref<XObject>(object);
+   }
 diff --git a/src/system/xsocket.cpp b/src/system/xsocket.cpp
 index 2d13ac8..7aea83e 100644
 --- a/src/system/xsocket.cpp

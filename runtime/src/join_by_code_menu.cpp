@@ -16,6 +16,7 @@
 #include "input/player_assignment.h"
 #include "online_room_overlay.h"
 #include "script_hooks.h"
+#include "menu_language.h"
 
 namespace azura {
 
@@ -67,7 +68,7 @@ Texts LocalizedTexts(uint32_t language) {
       return {"코드로 참가", "호스트가 알려 준 방 코드를 입력하세요.", "지우기", "뒤로", "참가", "누르기", "코드 입력",
               "방에 참가하는 중…", "코드는 8자입니다"};
     case 8:  // Traditional Chinese
-      return {"以代碼加入", "輸入主持人給你的房間代碼。", "刪除", "返回", "加入", "按下", "輸入代碼", "正在加入房間…",
+      return {"以代碼加入", "輸入房主給你的房間代碼。", "刪除", "返回", "加入", "按下", "輸入代碼", "正在加入房間…",
               "代碼共 8 個字元"};
     case 12:  // Russian
       return {"ВОЙТИ ПО КОДУ", "Введите код комнаты, который дал вам хост.", "СТЕРЕТЬ", "НАЗАД", "ВОЙТИ", "Нажать",
@@ -95,6 +96,12 @@ Texts LocalizedTexts(uint32_t language) {
       return {"DO\xC5\x81\xC4\x84""CZ KODEM", "Wpisz kod pokoju, kt\xC3\xB3ry poda\xC5\x82 ci gospodarz.", "USU\xC5\x83",
               "WR\xC3\x93\xC4\x86", "DO\xC5\x81\xC4\x84""CZ", "Naci\xC5\x9Bnij", "Wpisz kod",
               "Do\xC5\x82\xC4\x85""czanie do pokoju\xE2\x80\xA6", "Kod ma 8 znak\xC3\xB3w"};
+    case kLanguageCzech:
+      return {"PŘIPOJIT SE KÓDEM", "Zadejte kód místnosti, který vám dal hostitel.", "SMAZAT", "ZPĚT", "PŘIPOJIT",
+              "Stiskněte", "Zadejte kód", "Připojování k místnosti…", "Kód má 8 znaků"};
+    case kLanguageHungarian:
+      return {"CSATLAKOZÁS KÓDDAL", "Írd be a szoba kódját, amelyet a házigazdától kaptál.", "TÖRLÉS", "VISSZA",
+              "CSATLAKOZÁS", "Nyomd meg", "Írd be a kódot", "Csatlakozás a szobához…", "A kód 8 karakterből áll"};
     default:
       return {"JOIN BY CODE", "Type the code of the room the host gave you.", "DELETE", "BACK", "JOIN", "Press",
               "Type the code", "Joining the room\xE2\x80\xA6", "The code has 8 characters"};
@@ -455,14 +462,14 @@ void JoinByCodeMenu::OnDraw(ImGuiIO& io) {
     } else {
       x += DrawConfirmGlyph(draw_list, title_font, ImVec2(x, hints_y), unit, nullptr, key, a(255)) + 6.0f * unit;
     }
-    draw_list->AddText(body_font, 13.0f * unit, ImVec2(x, hints_y), Text(a(255)), text);
+    AddTextMiddleLeft(draw_list, body_font, 13.0f * unit, ImVec2(x, hints_y + 8.0f * unit), Text(a(255)), text);
     x += body_font->CalcTextSizeA(13.0f * unit, FLT_MAX, 0.0f, text).x + 20.0f * unit;
   };
   if (!joining_) {
     if (pad) {
       hint(PadControl::kA, nullptr, texts.press);
     } else {
-      draw_list->AddText(body_font, 13.0f * unit, ImVec2(x, hints_y), TextDim(a(255)), texts.type);
+      AddTextMiddleLeft(draw_list, body_font, 13.0f * unit, ImVec2(x, hints_y + 8.0f * unit), TextDim(a(255)), texts.type);
       x += body_font->CalcTextSizeA(13.0f * unit, FLT_MAX, 0.0f, texts.type).x + 20.0f * unit;
       hint(PadControl::kStart, "Enter", texts.join);
       hint(PadControl::kX, "Backspace", texts.erase);

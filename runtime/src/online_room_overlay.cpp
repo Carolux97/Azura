@@ -9,6 +9,7 @@
 
 #include "perf_overlay.h"
 #include "script_hooks.h"
+#include "menu_language.h"
 
 namespace azura {
 
@@ -59,7 +60,7 @@ Texts LocalizedTexts(uint32_t language) {
               "Alboria はメンテナンス中です。後でもう一度お試しください",
               "このゲームのオンラインプレイは停止中です",
               "Alboria から応答がありません", "フレンドのチームに空きがありません",
-              "試合を開始しています。少し待ってからもう一度お試しください",
+              "マッチを開始しています。少し待ってからもう一度お試しください",
               "あなたのパーティーはフレンドのパーティーに入りきりません",
               "すでにそのルームにいます"};
     case 7:  // Korean
@@ -69,7 +70,7 @@ Texts LocalizedTexts(uint32_t language) {
               "이 게임의 온라인 플레이가 꺼져 있습니다",
               "Alboria가 응답하지 않았습니다",
               "친구의 팀에 빈자리가 없습니다",
-              "경기가 시작되는 중입니다. 잠시 후 다시 시도하세요",
+              "매치가 시작되는 중입니다. 잠시 후 다시 시도하세요",
               "내 파티가 친구의 파티에 다 들어갈 수 없습니다", "이미 그 방에 있습니다"};
     case 8:  // Traditional Chinese
       return {"線上房間", "正在建立房間…", "正在加入房間…", "線上", "無法連線到 Alboria", "沒有使用這個代碼的遊戲",
@@ -77,7 +78,7 @@ Texts LocalizedTexts(uint32_t language) {
               "Alboria 正在維護，請稍後再試",
               "這款遊戲的線上遊戲已關閉",
               "Alboria 沒有回應", "好友的隊伍已沒有空位",
-              "比賽正在開始，請稍後再試", "你的隊伍無法全部加入好友的隊伍", "你已經在這個房間裡"};
+              "對戰正在開始，請稍後再試", "你的隊伍無法全部加入好友的隊伍", "你已經在這個房間裡"};
     case 12:  // Russian
       return {"ОНЛАЙН-КОМНАТА", "Создание комнаты…", "Вход в комнату…", "ОНЛАЙН", "Нет связи с Alboria",
               "Нет игры с таким кодом", "Игра заполнена", "Комната закрыта", "Alboria заблокировала вас",
@@ -102,14 +103,14 @@ Texts LocalizedTexts(uint32_t language) {
     case 4:  // French
       return {"SALON EN LIGNE", "Cr\xC3\xA9""ation du salon\xE2\x80\xA6", "Connexion au salon\xE2\x80\xA6", "EN LIGNE",
               "Impossible de joindre Alboria", "Aucune partie n'a ce code", "La partie est pleine",
-              "Le salon a \xC3\xA9t\xC3\xA9 ferm\xC3\xA9", "Tu as \xC3\xA9t\xC3\xA9 banni d'Alboria",
-              "Mets \xC3\xA0 jour Azura pour jouer en ligne", "Connecte-toi \xC3\xA0 Alboria depuis le launcher",
-              "Alboria est en maintenance, r\xC3\xA9""essaie plus tard",
+              "Le salon a \xC3\xA9t\xC3\xA9 ferm\xC3\xA9", "Vous avez \xC3\xA9t\xC3\xA9 banni d'Alboria",
+              "Mettez \xC3\xA0 jour Azura pour jouer en ligne", "Connectez-vous \xC3\xA0 Alboria depuis le launcher",
+              "Alboria est en maintenance, r\xC3\xA9""essayez plus tard",
               "Le jeu en ligne est d\xC3\xA9sactiv\xC3\xA9 pour ce jeu",
-              "Alboria n'a pas r\xC3\xA9pondu", "Il n'y a plus de place dans l'\xC3\xA9quipe de ton ami",
-              "Le match commence, r\xC3\xA9""essaie dans un instant",
-              "Ton groupe ne tient pas dans celui de ton ami",
-              "Tu es d\xC3\xA9j\xC3\xA0 dans ce salon"};
+              "Alboria n'a pas r\xC3\xA9pondu", "Il n'y a plus de place dans l'\xC3\xA9quipe de votre ami",
+              "Le match commence, r\xC3\xA9""essayez dans un instant",
+              "Votre groupe ne tient pas dans celui de votre ami",
+              "Vous \xC3\xAAtes d\xC3\xA9j\xC3\xA0 dans ce salon"};
     case 5:  // Spanish
       return {"SALA ONLINE", "Creando la sala\xE2\x80\xA6", "Entrando en la sala\xE2\x80\xA6", "ONLINE",
               "No se puede conectar con Alboria", "Ninguna partida tiene ese c\xC3\xB3""digo",
@@ -146,7 +147,7 @@ Texts LocalizedTexts(uint32_t language) {
     case 11:  // Polish
       return {"POK\xC3\x93J ONLINE", "Tworzenie pokoju\xE2\x80\xA6", "Do\xC5\x82\xC4\x85""czanie do pokoju\xE2\x80\xA6",
               "ONLINE",
-              "Brak po\xC5\x82\xC4\x85""czenia z Alboria", "\xC5\xBB""adna gra nie ma tego kodu",
+              "Brak po\xC5\x82\xC4\x85""czenia z Albori\xC4\x85", "\xC5\xBB""adna gra nie ma tego kodu",
               "Gra jest pe\xC5\x82na", "Pok\xC3\xB3j zosta\xC5\x82 zamkni\xC4\x99ty",
               "Alboria ci\xC4\x99 zablokowa\xC5\x82""a", "Zaktualizuj Azur\xC4\x99, aby gra\xC4\x87 online",
               "Zaloguj si\xC4\x99 do Alborii w launcherze", "Alboria jest w trakcie konserwacji, spr\xC3\xB3""buj p\xC3\xB3\xC5\xBAniej",
@@ -155,6 +156,22 @@ Texts LocalizedTexts(uint32_t language) {
               "Mecz si\xC4\x99 zaczyna, spr\xC3\xB3""buj za chwil\xC4\x99",
               "Twoja dru\xC5\xBCyna nie zmie\xC5\x9B""ci si\xC4\x99 w dru\xC5\xBCynie znajomego",
               "Ju\xC5\xBC jeste\xC5\x9B w tym pokoju"};
+    case kLanguageCzech:
+      return {"ONLINE MÍSTNOST", "Vytváření místnosti…", "Připojování k místnosti…", "ONLINE",
+              "Nelze se spojit s Alborií", "Žádná hra nemá tento kód", "Hra je plná", "Místnost byla zavřena",
+              "Alboria vám zablokovala přístup", "Pro hraní online aktualizujte Azura",
+              "Přihlaste se k Alborii v launcheru", "Alboria je v údržbě, zkuste to později",
+              "Online hraní této hry je vypnuto", "Alboria neodpověděla", "V týmu vašeho přítele už není místo",
+              "Zápas začíná; zkuste to za chvíli znovu", "Vaše skupina se nevejde do skupiny vašeho přítele",
+              "V této místnosti už jste"};
+    case kLanguageHungarian:
+      return {"ONLINE SZOBA", "Szoba létrehozása…", "Csatlakozás a szobához…", "ONLINE", "Az Alboria nem érhető el",
+              "Nincs ilyen kódú játék", "A játék megtelt", "A szobát bezárták", "Az Alboria kitiltott",
+              "Frissítsd az Azurát az online játékhoz", "Jelentkezz be az Alboriába a launcherben",
+              "Az Alboria karbantartás alatt áll, próbáld újra később",
+              "Ennek a játéknak az online módja ki van kapcsolva", "Az Alboria nem válaszolt",
+              "A barátod csapatában nincs több hely", "A meccs most indul; próbáld újra egy kicsit később",
+              "A csoportod nem fér be a barátod csoportjába", "Már ebben a szobában vagy"};
     default:
       return {"ONLINE ROOM", "Creating the room\xE2\x80\xA6", "Joining the room\xE2\x80\xA6", "ONLINE", "Cannot reach Alboria",
               "No game has that code", "The game is full", "The room was closed",

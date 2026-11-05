@@ -23,14 +23,14 @@ struct ImFont;
 
 namespace azura {
 
-// What the player reads, in the language `language` (an Xbox 360 language ID), for a failure of
-// Alboria (rex::system::xam::alboria::Status::error).
+// What the player reads, in the language `language` (MenuLanguage(): an Xbox 360 language ID, or
+// Czech or Hungarian), for a failure of Alboria (rex::system::xam::alboria::Status::error).
 const char* AlboriaErrorText(uint32_t language, const std::string& error);
 
 class OnlineRoomOverlay : public rex::ui::ImGuiDialog {
  public:
-  // `owner` is cleared when the dialog closes and deletes itself. `language` is the Xbox 360
-  // language ID of the user_language setting. The fonts may be null (ImGui's default is used).
+  // `owner` is cleared when the dialog closes and deletes itself. `language` is MenuLanguage()
+  // (an Xbox 360 language ID, or Czech or Hungarian). The fonts may be null (ImGui's default is used).
   OnlineRoomOverlay(rex::ui::ImGuiDrawer* drawer, uint32_t language, ImFont* title_font,
                     ImFont* body_font, OnlineRoomOverlay** owner);
 

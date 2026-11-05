@@ -449,6 +449,7 @@ const FRIENDS_PATHS: &[&str] = &[
     "/v1/friends",
     "/v1/friends/request",
     "/v1/friends/accept",
+    "/v1/friends/availability",
     "/v1/friends/decline",
     "/v1/friends/cancel",
     "/v1/friends/remove",

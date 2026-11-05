@@ -88,10 +88,11 @@ const LEGACY_KEYS: [&str; 4] = [
 ];
 
 /// Console language ID (the SDK's `XLanguage`) for an engine language code. Czech and Hungarian
-/// have none on the console, so they are not passed to the runtime.
+/// have none on the console: as on an Xbox 360 set to English in the Czech Republic or Hungary,
+/// they are English, and the country (`console_country`) picks them.
 fn console_language(code: &str) -> Option<i64> {
     Some(match code {
-        "INT" => 1,
+        "INT" | "CZE" | "HUN" => 1,
         "JPN" => 2,
         "DEU" => 3,
         "FRA" => 4,
@@ -110,7 +111,8 @@ fn console_language(code: &str) -> Option<i64> {
 /// country of that language's edition, so the game picks the variant the player chose rather than
 /// another one of the same language (without a country the SDK reports the United States, and the
 /// game looks for Latin American Spanish, ESM, before Spain's, ESN). English (INT) keeps the SDK's
-/// default, the United States; Czech and Hungarian have no console language, so no country either.
+/// default, the United States. Czech and Hungarian, which the console only has as countries, are
+/// English with their country, and the runtime shows its own menus in them from that pair.
 fn console_country(code: &str) -> Option<i64> {
     Some(match code {
         "ESN" => 31,  // Spain
@@ -124,6 +126,8 @@ fn console_country(code: &str) -> Option<i64> {
         "JPN" => 53,  // Japan
         "KOR" => 56,  // Korea
         "CHN" => 101, // Taiwan (traditional Chinese)
+        "CZE" => 23,  // Czech Republic
+        "HUN" => 42,  // Hungary
         _ => return None,
     })
 }
@@ -715,6 +719,18 @@ mod tests {
         settings.game_language = Some("INT".into());
         paths.save(&settings).unwrap();
         assert_eq!(country(&dir), None);
+        // Czech and Hungarian are English on the console, with their country.
+        let language = |dir: &Path| {
+            let text = fs::read_to_string(dir.join(RUNTIME_CONFIG)).unwrap();
+            text.lines().find(|line| line.starts_with("user_language")).map(str::to_owned)
+        };
+        settings.game_language = Some("CZE".into());
+        paths.save(&settings).unwrap();
+        assert_eq!(language(&dir).as_deref(), Some("user_language = 1"));
+        assert_eq!(country(&dir).as_deref(), Some("user_country = 23"));
+        settings.game_language = Some("HUN".into());
+        paths.save(&settings).unwrap();
+        assert_eq!(country(&dir).as_deref(), Some("user_country = 42"));
     }
 
     #[test]

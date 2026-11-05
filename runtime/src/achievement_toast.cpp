@@ -15,6 +15,8 @@
 #include <rex/ui/imgui_drawer.h>
 #include <rex/ui/immediate_drawer.h>
 
+#include "menu_language.h"
+
 namespace azura {
 
 namespace {
@@ -53,6 +55,10 @@ const char* LocalizedHeading(uint32_t language) {
       return "CONQUISTA DESBLOQUEADA";
     case 11:  // Polish
       return "OSI\xC4\x84GNI\xC4\x98" "CIE ODBLOKOWANE";
+    case kLanguageCzech:
+      return "ÚSPĚCH ODEMČEN";
+    case kLanguageHungarian:
+      return "TELJESÍTMÉNY FELOLDVA";
     default:
       return "ACHIEVEMENT UNLOCKED";
   }

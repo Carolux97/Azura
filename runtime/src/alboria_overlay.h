@@ -21,9 +21,10 @@
 // in a match, the game's pause menu opens under it. While it is open the game reads its controllers with nothing
 // pressed and hears that the Guide is open (XN_SYS_UI); the keyboard and the mouse are ImGui's.
 //
-// Controls: LB/RB or Tab change page, the D-pad, the arrows or W and S move, A or Enter does the
-// focused row's main action, X its second one, Y copies the room's code, B, Escape or the opening
-// key close. The mouse clicks the tabs and the buttons. The focused row's buttons show the control
+// Controls: LB/RB or Tab change page (left and right only change a setting's value), the D-pad, the
+// arrows or W and S move, A or Enter does the focused row's main action, X its second one (on the
+// Room page it copies the room's code, as Ctrl+C does), Y or E open the menu of what the player
+// shows their friends (under their name in the head), B, Escape or the opening key close. The mouse clicks the tabs and the buttons. The focused row's buttons show the control
 // that does each; the controller's glyphs and the on-screen keyboard take Alboria's colours too.
 #pragma once
 
@@ -62,9 +63,9 @@ class AlboriaOverlay : public rex::ui::ImGuiDialog {
  public:
   using Page = rex::system::xam::alboria::OverlayPage;
 
-  // `owner` is cleared when the overlay closes and deletes itself. `language` is the Xbox 360
-  // language ID of the user_language setting. `join_by_code` opens the Join by code screen once the
-  // overlay has closed. The fonts may be null (ImGui's default is used).
+  // `owner` is cleared when the overlay closes and deletes itself. `language` is MenuLanguage()
+  // (an Xbox 360 language ID, or Czech or Hungarian). `join_by_code` opens the Join by code screen
+  // once the overlay has closed. The fonts may be null (ImGui's default is used).
   // `header` is the painting of Alboria's Ring Plaza its head shows (null: none).
   AlboriaOverlay(rex::ui::ImGuiDrawer* drawer, rex::input::InputSystem* input,
                  input::PlayerAssignment* assignment, uint32_t language, Page page, ImFont* title_font,
@@ -85,10 +86,11 @@ class AlboriaOverlay : public rex::ui::ImGuiDialog {
   struct Actions {
     int page = 0;    // -1 previous, +1 next
     int move = 0;    // -1 up, +1 down
-    int horizontal = 0;  // -1 left, +1 right: a setting's value, or the page elsewhere
+    int horizontal = 0;  // -1 left, +1 right: a setting's value (pages change with LB and RB)
     bool primary = false;
     bool secondary = false;
     bool copy = false;
+    bool availability = false;  // open or close the menu of the player's state (Y, E)
     bool close = false;
   };
   Actions ReadInput();
@@ -130,6 +132,10 @@ class AlboriaOverlay : public rex::ui::ImGuiDialog {
   bool add_shift_ = true;
   int key_row_ = 1;
   int key_column_ = 0;
+  // The menu of what the player shows their friends, open under their state in the head, and the
+  // state focused in it (as kAvailabilities).
+  bool choosing_availability_ = false;
+  int availability_focus_ = 0;
   bool closing_ = false;
   // When the closing animation started, once closing_ is set.
   std::optional<Clock::time_point> closing_since_;

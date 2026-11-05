@@ -8,6 +8,7 @@
 
 #include <rex/system/interfaces/graphics.h>
 
+#include "menu_language.h"
 #include "perf_overlay.h"
 
 namespace azura {
@@ -51,6 +52,10 @@ Texts LocalizedTexts(uint32_t language) {
       return {"COMPILANDO SHADERS", "Preparando os gr\xC3\xA1""ficos (%d%%)"};
     case 11:  // Polish
       return {"KOMPILOWANIE SHADER\xC3\x93W", "Przygotowywanie grafiki (%d%%)"};
+    case kLanguageCzech:
+      return {"KOMPILACE SHADERŮ", "Příprava grafiky (%d %%)"};
+    case kLanguageHungarian:
+      return {"SHADEREK FORDÍTÁSA", "Grafika előkészítése (%d%%)"};
     default:
       return {"COMPILING SHADERS", "Preparing graphics (%d%%)"};
   }

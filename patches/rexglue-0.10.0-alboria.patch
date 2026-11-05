@@ -1,9 +1,9 @@
 diff --git a/include/rex/system/xam/alboria.h b/include/rex/system/xam/alboria.h
 new file mode 100644
-index 0000000..c9b8399
+index 0000000..d83e4f3
 --- /dev/null
 +++ b/include/rex/system/xam/alboria.h
-@@ -0,0 +1,607 @@
+@@ -0,0 +1,621 @@
 +/**
 + * @file        system/xam/alboria.h
 + * @brief       Alboria: System Link over the internet through our relay
@@ -293,6 +293,7 @@ index 0000000..c9b8399
 +  bool playing = false;   // in a room
 +  uint32_t title_id = 0;  // the room's title while playing
 +  bool joinable = false;  // the room is Joinable
++  bool busy = false;      // online or playing, and chose to show themselves busy
 +  bool with_you = false;  // in the same room as the player
 +  // With the player and became a member of the party after them: the player was there first, and
 +  // is told the friend joined (Notice::Kind::kFriendJoined); never the one who joined.
@@ -313,6 +314,12 @@ index 0000000..c9b8399
 +std::vector<Invitation> Invitations();
 +// Reads the friends and the invitations again now, in the background (the overlay opening).
 +void RefreshFriends();
++// What the player shows their friends, as Alboria last listed it: "online", "busy" or "invisible".
++// Busy or invisible, no notices pop up over the title (TakeNotices keeps only the player's own).
++std::string Availability();
++// Shows the player to their friends as `availability` ("online", "busy" or "invisible", POST
++// /v1/friends/availability), then reads the lists again.
++void SetAvailability(const std::string& availability, std::function<void(const std::string& error)> done);
 +
 +// Something new that the friends reader found, for the host to show over the title as the console's
 +// Guide showed its notifications.
@@ -321,10 +328,13 @@ index 0000000..c9b8399
 +    kInvitation,     // an invitation arrived: `id` is the invitation's
 +    kFriendRequest,  // someone asked to be the player's friend
 +    kFriendJoined,   // a friend joined the player's room
++    kFriendOnline,   // a friend came online (or straight into a game)
 +    kHostLeft,       // the match the player was in ended because its host left (who hosted is never
 +                     // said: alboria-notes:alboria-server/online-rules.md)
 +    kJoinRefused,    // a join with nowhere else to say so was not made: `id` is Alboria's error code
 +                     // (the player's party did not fit, section 5 of the online rules)
++    kMapNotShared,   // the host chose a map that a player of its pre-game lobby does not have (a map
++                     // pack's), and the game kept the one it had
 +  };
 +  Kind kind = Kind::kInvitation;
 +  std::string id;
@@ -333,11 +343,15 @@ index 0000000..c9b8399
 +};
 +// The notices found since the last call, oldest first. Each read compares the new lists with the
 +// last ones; the first read after the reader starts reports nothing, so a player starting the game
-+// is not shown what was already waiting (the overlay and the launcher list it).
++// is not shown what was already waiting (the overlay and the launcher list it). While the player
++// shows themselves busy or invisible, the reads find none: what arrives waits in the lists.
 +std::vector<Notice> TakeNotices();
 +// Tells the player, with a kJoinRefused notice, that a join was not made and why (`error`, Alboria's
 +// error code): for joins whose caller has no screen of its own to say it (the launcher's).
 +void TellJoinRefused(const std::string& error);
++// Tells the host, with a kMapNotShared notice, that the map it chose is not one every player of its
++// pre-game lobby has, which the game refuses without a word.
++void TellMapNotShared();
 +
 +// What an overlay action reports when it is done: empty on success, else Alboria's error code
 +// ("invite_only", "room_not_found", "not_in_room", "network"...). Called on a worker thread.
@@ -651,10 +665,10 @@ index 0000000..c7fc5de
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria.cpp b/src/system/xam/alboria.cpp
 new file mode 100644
-index 0000000..5e0f47d
+index 0000000..9316ec3
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,2937 @@
+@@ -0,0 +1,3023 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -995,12 +1009,23 @@ index 0000000..5e0f47d
 +std::set<uint32_t> g_incoming;
 +std::vector<Notice> g_notices;
 +bool g_friends_read = false;
++// What the player shows their friends ("online", "busy" or "invisible"), as the last read found it.
++// Guarded by g_friends_mutex.
++std::string g_availability = "online";
 +// The host's overlay (SetOverlayHandler), and whether it is open. g_overlay_handler is guarded by
 +// g_friends_mutex.
 +OverlayHandler g_overlay_handler;
 +std::atomic<bool> g_overlay_shown{false};
 +// XN_SYS_UI: a system screen (the Guide) opened (1) or closed (0) over the title.
 +constexpr uint32_t kNotifySystemUi = 0x00000009;
++// The friends notifications (XNID(0, XNOTIFY_FRIENDS, 1..3)), sent when a read finds the list
++// changed, as the console sent them when Xbox Live's did: a friend's presence changed, a friend was
++// added, a friend was removed. Their parameter is the local player's index, which Unreal Engine 3
++// titles use unchecked to pick the player whose friends-change delegates to run (**verified** in
++// Gears of War 3's notification handler, sub_829815C8: index * 40 + 836 into the online subsystem).
++constexpr uint32_t kNotifyFriendsPresenceChanged = 0x04000001;
++constexpr uint32_t kNotifyFriendAdded = 0x04000002;
++constexpr uint32_t kNotifyFriendRemoved = 0x04000003;
 +std::atomic<bool> g_friends_reader{false};
 +// How often the friends list is read again while signed in to Live.
 +constexpr auto kFriendsInterval = std::chrono::seconds(10);
@@ -2467,6 +2492,37 @@ index 0000000..5e0f47d
 +
 +namespace {
 +
++// Whether the title would show `a` and `b`, two readings of one friend, the same: online, in a
++// room, which game, whether it may be joined, and busy.
++bool SamePresence(const Friend& a, const Friend& b) {
++  return a.online == b.online && a.playing == b.playing && a.title_id == b.title_id && a.joinable == b.joinable &&
++         a.busy == b.busy;
++}
++
++// The friends notifications that going from the list `before` to `after` calls for, each once: a
++// friend added, a friend removed, a friend's presence changed.
++std::vector<uint32_t> FriendsChanges(const std::vector<Friend>& before, const std::vector<Friend>& after) {
++  auto find = [](const std::vector<Friend>& list, uint32_t id) {
++    return std::find_if(list.begin(), list.end(), [id](const Friend& f) { return f.id == id; });
++  };
++  bool added = false;
++  bool removed = false;
++  bool presence = false;
++  for (const auto& f : after) {
++    const auto old = find(before, f.id);
++    if (old == before.end()) added = true;
++    else if (!SamePresence(*old, f)) presence = true;
++  }
++  for (const auto& f : before) {
++    if (find(after, f.id) == after.end()) removed = true;
++  }
++  std::vector<uint32_t> notifications;
++  if (added) notifications.push_back(kNotifyFriendAdded);
++  if (removed) notifications.push_back(kNotifyFriendRemoved);
++  if (presence) notifications.push_back(kNotifyFriendsPresenceChanged);
++  return notifications;
++}
++
 +// Reads the account's friends from Alboria (POST /v1/friends) into g_friends; on failure the last
 +// list stays.
 +void ReadFriends() {
@@ -2486,6 +2542,7 @@ index 0000000..5e0f47d
 +    f.playing = status == "playing";
 +    f.title_id = f.playing ? static_cast<uint32_t>(std::strtoul(Text(presence, "title_id").c_str(), nullptr, 16)) : 0;
 +    f.joinable = f.playing && Text(presence, "party") == "joinable";
++    f.busy = f.online && Flag(presence, "busy", false);
 +    f.with_you = f.playing && Flag(presence, "with_you", false);
 +    f.arrived_after_you = f.with_you && Flag(presence, "arrived_after_you", false);
 +    if (!f.online) f.last_seen = Text(presence, "last_seen");
@@ -2509,12 +2566,19 @@ index 0000000..5e0f47d
 +      if (id) incoming[id] = Text(entry, "name");
 +    }
 +  }
++  const auto me = answer.json.contains("me") ? answer.json["me"] : nlohmann::json::object();
++  const std::string availability = Text(me, "availability", "online");
 +  const Status status = GetStatus();
 +  const std::string room = status.state == State::kConnected ? status.code : std::string();
-+  std::lock_guard lock(g_friends_mutex);
++  std::unique_lock lock(g_friends_mutex);
++  g_availability = availability;
++  // The friends notifications the title gets for this read: none for the first one, which the title
++  // asks for itself once the player is signed in.
++  const std::vector<uint32_t> notifications = g_friends_read ? FriendsChanges(g_friends, friends) : std::vector<uint32_t>{};
 +  // What is new since the last read becomes a notice, once a read has given the lists to compare
 +  // with: what was already there when the player signed in waits in the overlay and the launcher.
-+  if (g_friends_read) {
++  // Busy or invisible, nothing pops up: it all waits in the lists.
++  if (g_friends_read && availability == "online") {
 +    for (const auto& invitation : invitations) {
 +      const bool known = std::any_of(g_invitations.begin(), g_invitations.end(),
 +                                     [&](const Invitation& old) { return old.id == invitation.id; });
@@ -2533,12 +2597,29 @@ index 0000000..5e0f47d
 +                                            [&](const Friend& old) { return old.id == f.id && old.with_you; });
 +      if (!was_with_you) g_notices.push_back({Notice::Kind::kFriendJoined, {}, f.id, f.name});
 +    }
++    for (const auto& f : friends) {
++      // A friend who was offline in the last read and is online or playing now. One added since
++      // the last read is not told: becoming friends is news of its own.
++      if (!f.online) continue;
++      const bool was_offline = std::any_of(g_friends.begin(), g_friends.end(),
++                                           [&](const Friend& old) { return old.id == f.id && !old.online; });
++      if (was_offline) g_notices.push_back({Notice::Kind::kFriendOnline, {}, f.id, f.name});
++    }
 +  }
 +  g_friends_read = true;
 +  g_incoming.clear();
 +  for (const auto& [id, name] : incoming) g_incoming.insert(id);
 +  g_friends = std::move(friends);
 +  g_invitations = std::move(invitations);
++  // Sent with the lists stored and unlocked: the title answers by enumerating the friends again
++  // (Friends), on its own threads.
++  lock.unlock();
++  if (auto* kernel_state = REX_KERNEL_STATE()) {
++    for (const uint32_t id : notifications) {
++      REXSYS_INFO("Alboria: the friends changed, telling the title ({:08X})", id);
++      kernel_state->BroadcastNotification(id, 0);
++    }
++  }
 +}
 +
 +// Joins the room whose code `path` gives for `request` (a friend's, or an invitation's), as a join
@@ -2591,6 +2672,11 @@ index 0000000..5e0f47d
 +  g_notices.push_back({Notice::Kind::kJoinRefused, error, 0, {}});
 +}
 +
++void TellMapNotShared() {
++  std::lock_guard lock(g_friends_mutex);
++  g_notices.push_back({Notice::Kind::kMapNotShared, {}, 0, {}});
++}
++
 +void RefreshFriends() {
 +  if (!LiveSignedIn()) return;
 +  RunDetached("reading the friends", [] { ReadFriends(); });
@@ -2609,6 +2695,20 @@ index 0000000..5e0f47d
 +    const auto answer = CallSignedIn("/v1/invitations/decline", {{"id", id}});
 +    if (done) done(answer.error);
 +    ReadFriends();
++  });
++}
++
++std::string Availability() {
++  std::lock_guard lock(g_friends_mutex);
++  return g_availability;
++}
++
++void SetAvailability(const std::string& availability, ActionDone done) {
++  RunDetached("changing the availability", [availability, done = std::move(done)] {
++    const auto answer = CallSignedIn("/v1/friends/availability", {{"availability", availability}});
++    if (!answer.error.empty()) REXSYS_WARN("Alboria: /v1/friends/availability answered {}", answer.error);
++    ReadFriends();
++    if (done) done(answer.error);
 +  });
 +}
 +
