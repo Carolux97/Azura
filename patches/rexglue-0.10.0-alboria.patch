@@ -1,9 +1,9 @@
 diff --git a/include/rex/system/xam/alboria.h b/include/rex/system/xam/alboria.h
 new file mode 100644
-index 0000000..eaa903c
+index 0000000..d83e4f3
 --- /dev/null
 +++ b/include/rex/system/xam/alboria.h
-@@ -0,0 +1,616 @@
+@@ -0,0 +1,621 @@
 +/**
 + * @file        system/xam/alboria.h
 + * @brief       Alboria: System Link over the internet through our relay
@@ -333,6 +333,8 @@ index 0000000..eaa903c
 +                     // said: alboria-notes:alboria-server/online-rules.md)
 +    kJoinRefused,    // a join with nowhere else to say so was not made: `id` is Alboria's error code
 +                     // (the player's party did not fit, section 5 of the online rules)
++    kMapNotShared,   // the host chose a map that a player of its pre-game lobby does not have (a map
++                     // pack's), and the game kept the one it had
 +  };
 +  Kind kind = Kind::kInvitation;
 +  std::string id;
@@ -347,6 +349,9 @@ index 0000000..eaa903c
 +// Tells the player, with a kJoinRefused notice, that a join was not made and why (`error`, Alboria's
 +// error code): for joins whose caller has no screen of its own to say it (the launcher's).
 +void TellJoinRefused(const std::string& error);
++// Tells the host, with a kMapNotShared notice, that the map it chose is not one every player of its
++// pre-game lobby has, which the game refuses without a word.
++void TellMapNotShared();
 +
 +// What an overlay action reports when it is done: empty on success, else Alboria's error code
 +// ("invite_only", "room_not_found", "not_in_room", "network"...). Called on a worker thread.
@@ -660,10 +665,10 @@ index 0000000..c7fc5de
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria.cpp b/src/system/xam/alboria.cpp
 new file mode 100644
-index 0000000..1a5cd97
+index 0000000..9316ec3
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,3018 @@
+@@ -0,0 +1,3023 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -2665,6 +2670,11 @@ index 0000000..1a5cd97
 +void TellJoinRefused(const std::string& error) {
 +  std::lock_guard lock(g_friends_mutex);
 +  g_notices.push_back({Notice::Kind::kJoinRefused, error, 0, {}});
++}
++
++void TellMapNotShared() {
++  std::lock_guard lock(g_friends_mutex);
++  g_notices.push_back({Notice::Kind::kMapNotShared, {}, 0, {}});
 +}
 +
 +void RefreshFriends() {

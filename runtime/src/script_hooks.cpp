@@ -448,6 +448,13 @@ enum WatchedName {
   kReturnToMainMenu,         // PlayerController and subclasses: the game sends the player to the main menu
   kShowUIMessage,            // GearUIManager: opens one of the game's message boxes, by its tag
   kClientWasKicked,          // GearPC: the host removed the player (for idling): the game's message, then the main menu
+  kBuildSortedMapList,       // GearPreGameGRI: builds the custom match's map list (map packs)
+  kGetResourceProviders,     // UIDataStore_GameResource: the summaries of a kind of resource (map packs)
+  kPopulateMapList,          // UIWidget_MPCustomMap: shows the host the map list (map packs)
+  kSubmitMapSelectionByName,  // GearPreGameGRI: the host picks a map (map packs)
+  kPlayersLackRequiredDLC,   // GearPreGameGRI: whether a player lacks a map's pack (map packs)
+  kServerSetDLCFlag,         // GearPC: a player's game tells the host its map packs (map packs)
+  kNotifyConnectionError,    // GearGameViewportClient: a connection is lost or refused, with the engine's reason
   kOnConfirmReturnToMenu,    // UIScene_Pause: the player confirmed leaving the match for the main menu
   kProcessSoundEvent,        // UISoundTheme: plays a menu sound by its event name (Menu sounds)
   // The menu sound events our menus play (MenuSound), in its order.
@@ -485,6 +492,8 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "GetPartyType",          "LocalPartyCreated",      "ClientSetHUD",       "OnCustomMapChanged",
     "ApplySensitivityScaling", "ViewAdhesion",
     "GetAdjustedAimFor",     "NotifyInviteFailed",     "CancelPartyMatchmaking", "CreatePlayerVersusMatch", "OnNoPartialPartyAvailable", "PostBeginPlay", "ContinueCreateMatch", "InitializeGameSelectionInternal", "UpdateCountdowns", "InitializeMapSelectionInternal", "GetTeamForCurrentPlayer", "HandleGameSessionJIP", "InitializePreGameGameSettings", "PreLogin", "PostLogin", "SetNumBots", "BeginMatch", "EndOfGameTransition", "GetNextMap", "CheckMapAgainstPlaylist", "GetNumberOfSupportedMapsForPlaylist", "IsEpicDev", "InitGameReplicationInfo", "UpdateGRI", "DelayedGameSessionDelete", "PlacePlayerOnSmallestTeam", "GetOccupiedTeamSize", "GetGameSummaryFromProviderIndex", "HandleHordeSelection", "HandleSiegeSelection", "HandleHordeAndSiegeMatchModeSelection", "UpdateNatType", "UpdatePopulationNumbers", "SetHostIcon", "UpdatePlayerList", "OnLeaveGame", "CanBackUpToMapSelect", "CanLeaveGame", "IsOfficialMatch", "IsPlayerMatch", "OnLeaveLobby_Confirmed", "ReturnToMainMenu", "ShowUIMessage", "ClientWasKicked",
+    "BuildSortedMapList",    "GetResourceProviders",   "PopulateMapList",    "SubmitMapSelectionByName",
+    "PlayersLackRequiredDLC", "ServerSetDLCFlag", "NotifyConnectionError",
     "OnConfirm_ReturnToMenu",
     "ProcessSoundEvent",     "Options_StepUp",         "Options_StepDown",   "ValueChangeLeft",
     "ValueChangeRight",      "Options_AcceptButton",   "Options_BackButton", "Options_DetailsEnter",
@@ -2072,6 +2081,230 @@ std::string RecentLobbyMaps() {
   return text.empty() ? "none" : text;
 }
 
+// --- Map packs in the pre-game lobby ---
+//
+// Every map belongs to the base game or to a map pack: its summary (a GearGameMapSummary, the
+// game's resource provider for it) holds DLCId, 0 for the base game. Each player's PRI holds
+// DLCFlag, the OR of 1 << DLCId of the packs the player has (-1 until the player's game sends it).
+// The host's lists only follow the host's own packs: the custom match's map list
+// (GearPreGameGRI.BuildSortedMapList keeps the maps whose summary has bHasPurchased) and the vote's
+// maps (InitializeMapSelectionInternal). The game refuses a map a player lacks only when the host
+// picks it (SubmitMapSelectionByName asks PlayersLackRequiredDLC), and says nothing, so the lobby
+// looks broken. So:
+// - while BuildSortedMapList runs, the summaries of the maps a player lacks have bHasPurchased
+//   cleared, as soon as its GetResourceProviders call has given it their list, and set back after;
+// - the host's list is built again each time it opens (UIWidget_MPCustomMap.PopulateMapList): the
+//   lobby builds it as it opens, before the other players are in;
+// - while the vote draws its maps, the check of a map (CheckMapAgainstPlaylist) answers -1 for one
+//   a player lacks; the lobby draws its vote as it opens, before the others are in, so when a
+//   player's packs reach the host (ServerSetDLCFlag) and the vote offers a map that player lacks,
+//   the vote is drawn again (RedrawVoteForMapPacks);
+// - when the game still refuses the host's pick for that reason (a player who came in after the
+//   list was built), Alboria's notice tells the host.
+constexpr int32_t kRoleAuthority = 3;
+std::atomic<uint32_t> g_map_list_gri{0};  // the GRI whose BuildSortedMapList runs, 0 when none
+std::mutex g_hidden_maps_mutex;
+std::vector<uint32_t> g_hidden_map_summaries;  // summaries whose bHasPurchased is cleared for now
+uint32_t g_refresh_map_list_locals = 0;        // guest memory for RefreshAlphabeticalMapNames' locals
+std::atomic<bool> g_submitting_map{false};     // SubmitMapSelectionByName runs
+std::atomic<bool> g_submitted_map_lacked{false};  // ...and PlayersLackRequiredDLC answered true
+std::atomic<int64_t> g_map_notice_at{0};       // when the host was last told (steady clock, ms)
+// Guest address of GearGameViewportClient.NotifyConnectionError's Message (the engine's reason for a
+// lost or refused connection) while it runs, else 0.
+std::atomic<uint32_t> g_connection_error_message{0};
+
+// The BoolProperty `name` of `object`: 1 or 0, or -1 when it has none.
+int GetBoolField(const uint8_t* base, uint32_t object, const char* name) {
+  for (uint32_t owner = LoadU32(base, object + kObjectClass); owner; owner = LoadU32(base, owner + kStructSuper)) {
+    for (uint32_t field = LoadU32(base, owner + kStructChildren); field; field = LoadU32(base, field + kFieldNext)) {
+      if (ObjectName(base, field) != name) continue;
+      if (ObjectName(base, LoadU32(base, field + kObjectClass)) != "BoolProperty") return -1;
+      const uint32_t mask = LoadU32(base, field + kBoolPropertyBitMask);
+      return (LoadU32(base, object + LoadU32(base, field + kPropertyOffset)) & mask) ? 1 : 0;
+    }
+  }
+  return -1;
+}
+
+// The IntProperty or ByteProperty `name` of `object`, or nullopt when it has neither.
+std::optional<int32_t> GetIntField(const uint8_t* base, uint32_t object, const char* name) {
+  for (uint32_t owner = LoadU32(base, object + kObjectClass); owner; owner = LoadU32(base, owner + kStructSuper)) {
+    for (uint32_t field = LoadU32(base, owner + kStructChildren); field; field = LoadU32(base, field + kFieldNext)) {
+      if (ObjectName(base, field) != name) continue;
+      const std::string type = ObjectName(base, LoadU32(base, field + kObjectClass));
+      const uint32_t at = object + LoadU32(base, field + kPropertyOffset);
+      if (type == "IntProperty") return static_cast<int32_t>(LoadU32(base, at));
+      if (type == "ByteProperty") return base[at];
+      return std::nullopt;
+    }
+  }
+  return std::nullopt;
+}
+
+// The name a map summary gives its map (MapName), or "?".
+std::string MapSummaryName(const uint8_t* base, uint32_t summary) {
+  const int32_t at = ClassPropertyOffset(base, LoadU32(base, summary + kObjectClass), "MapName");
+  return at >= 0 ? FStringText(base, summary + at) : std::string("?");
+}
+
+// The summaries of the maps met so far (by lower-case MapName): the vote's draw checks every map of
+// the playlist, so they are all known once it has run. Summaries live as long as the game.
+std::mutex g_map_summaries_mutex;
+std::map<std::string, uint32_t> g_map_summaries;
+
+void NoteMapSummary(const uint8_t* base, uint32_t summary) {
+  std::lock_guard lock(g_map_summaries_mutex);
+  g_map_summaries[Lower(MapSummaryName(base, summary))] = summary;
+}
+
+uint32_t MapSummaryNamed(const std::string& map) {
+  std::lock_guard lock(g_map_summaries_mutex);
+  const auto it = g_map_summaries.find(Lower(map));
+  return it == g_map_summaries.end() ? 0 : it->second;
+}
+
+// Whether a player of `gri`'s lobby lacks the map pack of the map `summary` sums up: an active
+// human player whose DLCFlag is known and has no bit for the map's DLCId. Bots play any map, and a
+// player whose game has not sent its packs yet (-1) is not counted, as the game's own check does
+// unless asked to be strict.
+bool MapPackLackedInLobby(const uint8_t* base, uint32_t gri, uint32_t summary) {
+  const std::optional<int32_t> dlc = GetIntField(base, summary, "DLCId");
+  if (!dlc || *dlc <= 0 || *dlc >= 32) return false;
+  const int32_t pri_array = ClassPropertyOffset(base, LoadU32(base, gri + kObjectClass), "PRIArray");
+  if (pri_array < 0) return false;
+  const uint32_t data = LoadU32(base, gri + pri_array);
+  const uint32_t count = LoadU32(base, gri + pri_array + 4);
+  for (uint32_t i = 0; data && i < count && i < 64; ++i) {
+    const uint32_t pri = LoadU32(base, data + i * 4);
+    if (!pri || GetBoolField(base, pri, "bIsInactive") == 1 || GetBoolField(base, pri, "bBot") == 1) continue;
+    const std::optional<int32_t> flag = GetIntField(base, pri, "DLCFlag");
+    if (!flag || *flag == -1) continue;
+    if ((static_cast<uint32_t>(*flag) & (1u << *dlc)) == 0) return true;
+  }
+  return false;
+}
+
+// Right after BuildSortedMapList's GetResourceProviders call (`frame`, BuildSortedMapList's own):
+// clears bHasPurchased on the summaries in its MapProviders of the maps a player lacks.
+void HideUnsharedMaps(uint8_t* base, uint32_t frame) {
+  const uint32_t gri = g_map_list_gri.load();
+  const int32_t providers = LocalOffset(base, LoadU32(base, frame + kFrameNode), "MapProviders");
+  if (!gri || providers < 0) return;
+  const uint32_t array = LoadU32(base, frame + kFrameLocals) + static_cast<uint32_t>(providers);
+  const uint32_t data = LoadU32(base, array);
+  const uint32_t count = LoadU32(base, array + 4);
+  std::string hidden;
+  std::lock_guard lock(g_hidden_maps_mutex);
+  for (uint32_t i = 0; data && i < count && i < 256; ++i) {
+    const uint32_t summary = LoadU32(base, data + i * 4);
+    if (summary) NoteMapSummary(base, summary);
+    if (!summary || !MapPackLackedInLobby(base, gri, summary)) continue;
+    if (SetBoolField(base, summary, "bHasPurchased", false) != 1) continue;
+    g_hidden_map_summaries.push_back(summary);
+    hidden += (hidden.empty() ? "" : ", ") + MapSummaryName(base, summary);
+  }
+  if (!hidden.empty()) REXLOG_INFO("[Azura online] The lobby's map list leaves out maps a player lacks: {}", hidden);
+}
+
+// After BuildSortedMapList: the summaries HideUnsharedMaps changed are as they were.
+void RestoreHiddenMaps(uint8_t* base) {
+  std::lock_guard lock(g_hidden_maps_mutex);
+  for (const uint32_t summary : g_hidden_map_summaries) SetBoolField(base, summary, "bHasPurchased", true);
+  g_hidden_map_summaries.clear();
+}
+
+// On UIWidget_MPCustomMap.PopulateMapList's frame (`ctx`, about to run) on the host: the GRI
+// builds its map list again (RefreshAlphabeticalMapNames), with the players in the lobby now.
+void RefreshLobbyMapList(PPCContext& ctx, uint8_t* base, uint32_t function) {
+  const int32_t param = ParamOffset(base, function, "PreGameGRI");
+  const uint32_t gri = param >= 0 ? LoadU32(base, LoadU32(base, ctx.r4.u32 + kFrameLocals) + param) : 0;
+  if (!gri || GetIntField(base, gri, "Role").value_or(0) != kRoleAuthority) return;
+  const uint32_t refresh = FindInheritedFunction(base, LoadU32(base, gri + kObjectClass), "RefreshAlphabeticalMapNames");
+  if (!refresh) {
+    REXLOG_WARN("[Azura online] RefreshAlphabeticalMapNames not found; the lobby's map list is not rebuilt");
+    return;
+  }
+  constexpr uint32_t kLocalsSize = 64;  // its one local (GameResourceDS), with room
+  if (!g_refresh_map_list_locals) {
+    g_refresh_map_list_locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kLocalsSize);
+    if (!g_refresh_map_list_locals) return;
+  }
+  std::memset(base + g_refresh_map_list_locals, 0, kLocalsSize);
+  RunOnObject(ctx, base, gri, refresh, g_refresh_map_list_locals);
+}
+
+// After SubmitMapSelectionByName refused a map because a player lacks it: tells the host, once
+// every few seconds at most (the game asks again as the selection moves).
+void TellHostMapNotShared() {
+  constexpr int64_t kNoticeIntervalMs = 4000;
+  const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::steady_clock::now().time_since_epoch()).count();
+  if (now - g_map_notice_at.load() < kNoticeIntervalMs) return;
+  g_map_notice_at.store(now);
+  REXLOG_INFO("[Azura online] The host chose a map a player of the lobby lacks: telling the host");
+  if (LiveMode()) rex::system::xam::alboria::TellMapNotShared();
+}
+
+// The vote's MatchModeIdx, as the lobby drew its maps (InitializeMapSelectionInternal's parameter).
+std::atomic<int32_t> g_vote_match_mode{-1};
+uint32_t g_redraw_vote_locals = 0;  // guest memory for InitializeMapSelectionInternal's locals
+constexpr const char* kVoteMapFields[] = {"FirstMapName", "SecondMapName", "ThirdMapName", "RandomMapName"};
+
+// The vote's four maps, for the log.
+std::string VoteMaps(const uint8_t* base, uint32_t gri) {
+  const uint32_t cls = LoadU32(base, gri + kObjectClass);
+  std::string drawn;
+  for (const char* name : kVoteMapFields) {
+    const int32_t offset = ClassPropertyOffset(base, cls, name);
+    drawn += (drawn.empty() ? "" : ", ") + (offset >= 0 ? FStringText(base, gri + offset) : std::string("?"));
+  }
+  return drawn;
+}
+
+// After the host ran a player's ServerSetDLCFlag (`ctx`, its frame, just run; `pc`, the player's
+// controller): the lobby draws its vote as it opens, before the other players are in, so a map
+// one of them lacks may be among the vote's. While the vote is not over (no WinningMapName yet),
+// such a vote is drawn again with the game's own InitializeMapSelectionInternal, which the map
+// check now answers with the players present.
+void RedrawVoteForMapPacks(PPCContext& ctx, uint8_t* base, uint32_t pc) {
+  const int32_t world_info = ClassPropertyOffset(base, LoadU32(base, pc + kObjectClass), "WorldInfo");
+  const uint32_t world = world_info >= 0 ? LoadU32(base, pc + world_info) : 0;
+  const int32_t gri_at = world ? ClassPropertyOffset(base, LoadU32(base, world + kObjectClass), "GRI") : -1;
+  const uint32_t gri = gri_at >= 0 ? LoadU32(base, world + gri_at) : 0;
+  if (!gri || ObjectName(base, LoadU32(base, gri + kObjectClass)) != "GearPreGameGRI" ||
+      GetIntField(base, gri, "Role").value_or(0) != kRoleAuthority || GetBoolField(base, gri, "bGameVoteEnabled") != 1) {
+    return;
+  }
+  const uint32_t cls = LoadU32(base, gri + kObjectClass);
+  const int32_t winner = ClassPropertyOffset(base, cls, "WinningMapName");
+  if (winner < 0 || LoadU32(base, gri + winner + 4) != 0 || g_vote_match_mode.load() < 0) return;
+  std::string lacked;
+  for (const char* name : kVoteMapFields) {
+    const int32_t offset = ClassPropertyOffset(base, cls, name);
+    if (offset < 0) continue;
+    const std::string map = FStringText(base, gri + offset);
+    const uint32_t summary = MapSummaryNamed(map);
+    if (summary && MapPackLackedInLobby(base, gri, summary)) lacked += (lacked.empty() ? "" : ", ") + map;
+  }
+  if (lacked.empty()) return;
+  const uint32_t draw = FindInheritedFunction(base, cls, "InitializeMapSelectionInternal");
+  const int32_t mode = draw ? ParamOffset(base, draw, "MatchModeIdx") : -1;
+  constexpr uint32_t kLocalsSize = 128;  // its locals are 52 bytes
+  if (!g_redraw_vote_locals) g_redraw_vote_locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kLocalsSize);
+  if (!draw || mode < 0 || !g_redraw_vote_locals) {
+    REXLOG_WARN("[Azura online] The vote offers maps a player lacks ({}) and cannot be drawn again", lacked);
+    return;
+  }
+  std::memset(base + g_redraw_vote_locals, 0, kLocalsSize);
+  StoreU32(base, g_redraw_vote_locals + static_cast<uint32_t>(mode), static_cast<uint32_t>(g_vote_match_mode.load()));
+  REXLOG_INFO("[Azura online] The vote offers maps a player lacks ({}): drawing it again", lacked);
+  g_vote_leaves_out_maps.store(true);
+  g_drawing_vote_maps.store(true);
+  RunOnObject(ctx, base, gri, draw, g_redraw_vote_locals);
+  g_drawing_vote_maps.store(false);
+  REXLOG_INFO("[Azura online] The vote's maps: {}", VoteMaps(base, gri));
+}
+
 // --- Restart message box ---
 //
 // When the player leaves a category of the Options menu (from the main menu) with a new value for
@@ -3026,6 +3259,8 @@ bool HandleLiveChange(PPCContext& ctx, uint8_t* base, uint32_t function, int bor
 
 }  // namespace
 
+
+
 extern "C" void sub_822DF4D0(PPCContext& __restrict ctx, uint8_t* base) {
   // A Super call of RAAM's Shadow to a parent function the disc build lacks (dlc/missing_super.h).
   if (ctx.r6.u32 == 0 && azura::dlc::HandleMissingSuper(ctx, base)) return;
@@ -3060,6 +3295,15 @@ extern "C" void sub_822DF4D0(PPCContext& __restrict ctx, uint8_t* base) {
       const uint32_t outer = LoadU32(base, function + kObjectOuter);
       REXLOG_INFO("[Azura script] {}.{}", ObjectName(base, outer), ObjectName(base, function));
     }
+  }
+  // Map packs in the pre-game lobby: BuildSortedMapList has the summaries of every map once its
+  // GetResourceProviders call is over (its MapProviders local), before it looks at any of them.
+  if (ctx.r6.u32 && g_map_list_gri.load() && Is(base, ctx.r6.u32, kGetResourceProviders) &&
+      Is(base, LoadU32(base, ctx.r4.u32 + kFrameNode), kBuildSortedMapList)) {
+    const uint32_t frame = ctx.r4.u32;
+    __imp__sub_822DF4D0(ctx, base);
+    HideUnsharedMaps(base, frame);
+    return;
   }
   __imp__sub_822DF4D0(ctx, base);
 }
@@ -5150,10 +5394,49 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     static std::atomic<bool> done{false};
     LetPlaylistLobbyVote(base, function, done, false);
   }
+  // Map packs in the pre-game lobby (see "Map packs in the pre-game lobby").
+  if (Is(base, function, kBuildSortedMapList)) {
+    g_map_list_gri.store(LoadU32(base, ctx.r4.u32 + kFrameObject));
+    __imp__sub_822DF9E0(ctx, base);
+    g_map_list_gri.store(0);
+    RestoreHiddenMaps(base);
+    return;
+  }
+  if (Is(base, function, kPopulateMapList)) RefreshLobbyMapList(ctx, base, function);
+  if (Is(base, function, kPlayersLackRequiredDLC) && g_submitting_map.load()) {
+    const uint32_t result = ctx.r5.u32;
+    __imp__sub_822DF9E0(ctx, base);
+    if (result && LoadU32(base, result) != 0) g_submitted_map_lacked.store(true);
+    return;
+  }
+  if (Is(base, function, kServerSetDLCFlag) && LiveMode()) {
+    const uint32_t frame = ctx.r4.u32;
+    const uint32_t pc = LoadU32(base, frame + kFrameObject);
+    const uint64_t self = ctx.r3.u64;
+    __imp__sub_822DF9E0(ctx, base);
+    ctx.r4.u64 = frame;
+    ctx.r3.u64 = self;
+    RedrawVoteForMapPacks(ctx, base, pc);
+    return;
+  }
+  if (Is(base, function, kSubmitMapSelectionByName)) {
+    const uint32_t result = ctx.r5.u32;
+    g_submitted_map_lacked.store(false);
+    g_submitting_map.store(true);
+    __imp__sub_822DF9E0(ctx, base);
+    g_submitting_map.store(false);
+    if (g_submitted_map_lacked.exchange(false) && result && LoadU32(base, result) == 0) TellHostMapNotShared();
+    return;
+  }
   if (Is(base, function, kInitializeMapSelectionInternal) && LiveMode() &&
       ObjectName(base, LoadU32(base, function + kObjectOuter)) == "GearPreGameGRI") {
     static std::atomic<bool> done{false};
     LetPlaylistLobbyVote(base, function, done, true);
+    const int32_t match_mode = ParamOffset(base, function, "MatchModeIdx");
+    if (match_mode >= 0) {
+      g_vote_match_mode.store(static_cast<int32_t>(
+          LoadU32(base, LoadU32(base, ctx.r4.u32 + kFrameLocals) + static_cast<uint32_t>(match_mode))));
+    }
     g_vote_leaves_out_maps.store(true);
     g_drawing_vote_maps.store(true);
     // The frame and result registers do not survive the call.
@@ -5187,15 +5470,21 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   }
   // ...and the check of a map answers -1 for a recent one (its MapData local, the map's provider,
   // holds its MapName).
-  if (Is(base, function, kCheckMapAgainstPlaylist) && g_drawing_vote_maps.load() && g_vote_leaves_out_maps.load()) {
+  // A map a player of the lobby lacks the pack of is left out too, whether or not the recent ones
+  // are, and is not counted among those (the count never gets it back).
+  if (Is(base, function, kCheckMapAgainstPlaylist) && g_drawing_vote_maps.load()) {
     const uint32_t result = ctx.r5.u32;
+    const uint32_t gri = LoadU32(base, ctx.r4.u32 + kFrameObject);
     const uint32_t locals = LoadU32(base, ctx.r4.u32 + kFrameLocals);
     __imp__sub_822DF9E0(ctx, base);
     const int32_t map_data = LocalOffset(base, function, "MapData");
     const uint32_t provider = map_data >= 0 ? LoadU32(base, locals + map_data) : 0;
-    const int32_t name = provider ? ClassPropertyOffset(base, LoadU32(base, provider + kObjectClass), "MapName") : -1;
-    if (result && static_cast<int32_t>(LoadU32(base, result)) != -1 && name >= 0 &&
-        IsRecentLobbyMap(FStringText(base, provider + name))) {
+    if (provider) NoteMapSummary(base, provider);
+    if (!result || !provider || static_cast<int32_t>(LoadU32(base, result)) == -1) return;
+    if (MapPackLackedInLobby(base, gri, provider)) {
+      StoreU32(base, result, static_cast<uint32_t>(-1));
+      REXLOG_DEBUG("[Azura online] The vote leaves out {}: a player lacks its map pack", MapSummaryName(base, provider));
+    } else if (g_vote_leaves_out_maps.load() && IsRecentLobbyMap(MapSummaryName(base, provider))) {
       StoreU32(base, result, static_cast<uint32_t>(-1));
       g_maps_left_out.fetch_add(1);
     }
@@ -5439,6 +5728,36 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   // still online, search again), so the player is not told twice. A member keeps the game's box (its
   // leader's menu says it), and so does a player who chose to leave or was removed for idling (its
   // box has another tag, ConnectionError).
+  // A lost or refused connection: the engine gives GearGameViewportClient.NotifyConnectionError its
+  // reason (Message, localized: for a player without the host's map packs, that the host has
+  // downloadable content the player does not), but the box it opens ('ConfirmNetworkLost', which
+  // stays up into the main menu) has a fixed body, "the connection with the host was lost". The box
+  // says the engine's reason instead: the Body of that ShowUIMessage call and NotifyConnectionError's
+  // Message are swapped (each frame then frees the string it ends with).
+  if (Is(base, function, kNotifyConnectionError)) {
+    const int32_t message = ParamOffset(base, function, "Message");
+    const uint32_t locals = LoadU32(base, ctx.r4.u32 + kFrameLocals);
+    g_connection_error_message.store(message >= 0 ? locals + static_cast<uint32_t>(message) : 0);
+    __imp__sub_822DF9E0(ctx, base);
+    g_connection_error_message.store(0);
+    return;
+  }
+  if (Is(base, function, kShowUIMessage) && g_connection_error_message.load()) {
+    const int32_t tag_at = ParamOffset(base, function, "SceneTag");
+    const int32_t body_at = ParamOffset(base, function, "Body");
+    const uint32_t locals = LoadU32(base, ctx.r4.u32 + kFrameLocals);
+    const uint32_t reason = g_connection_error_message.load();
+    if (tag_at >= 0 && body_at >= 0 && LoadU32(base, reason + 4) > 1 &&
+        NameText(base, LoadU32(base, locals + static_cast<uint32_t>(tag_at))) == "ConfirmNetworkLost") {
+      const uint32_t body = locals + static_cast<uint32_t>(body_at);
+      for (uint32_t i = 0; i < 12; i += 4) {
+        const uint32_t word = LoadU32(base, body + i);
+        StoreU32(base, body + i, LoadU32(base, reason + i));
+        StoreU32(base, reason + i, word);
+      }
+      REXLOG_INFO("[Azura online] The \"connection lost\" box gives the engine's reason: {}", FStringText(base, body));
+    }
+  }
   if (Is(base, function, kShowUIMessage) && LiveMode()) {
     const rex::system::xam::alboria::Status status = rex::system::xam::alboria::GetStatus();
     const int32_t tag_at = ParamOffset(base, function, "SceneTag");
