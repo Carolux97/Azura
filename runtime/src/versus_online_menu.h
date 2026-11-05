@@ -37,9 +37,9 @@ void StopPartySearchFollower();
 
 class VersusOnlineMenu : public rex::ui::ImGuiDialog {
  public:
-  // `owner` is cleared when the menu closes and deletes itself. `language` is the Xbox 360 language
-  // ID of the user_language setting. The fonts may be null (ImGui's default is used). `game` is the
-  // menu's game; a party member's view (`watching`) takes its leader's instead.
+  // `owner` is cleared when the menu closes and deletes itself. `language` is MenuLanguage()
+  // (an Xbox 360 language ID, or Czech or Hungarian). The fonts may be null (ImGui's default is
+  // used). `game` is the menu's game; a party member's view (`watching`) takes its leader's instead.
   VersusOnlineMenu(rex::ui::ImGuiDrawer* drawer, rex::input::InputSystem* input, input::PlayerAssignment* assignment,
                    uint32_t language, ImFont* title_font, ImFont* body_font, VersusOnlineMenu** owner,
                    bool watching = false, OnlineGame game = OnlineGame::kVersus);

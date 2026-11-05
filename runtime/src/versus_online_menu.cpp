@@ -20,6 +20,7 @@
 #include <rex/system/xam/alboria.h>
 
 #include "menu/pc_options.h"
+#include "menu_language.h"
 #include "script_hooks.h"
 
 REXCVAR_DEFINE_STRING(versus_online_modes, "11,15,13", "Azura/Online",
@@ -209,7 +210,7 @@ Texts LocalizedTexts(uint32_t language) {
               "Vérifiez votre connexion internet et réessayez.",
               "Connectez-vous à Alboria depuis le launcher.", "Rechercher à nouveau", "Entrée",
               "Espace",
-              {"Deux équipes de cinq partagent leurs réapparitions. Épuisez celles de l'adversaire pour gagner la manche.", "Prenez et tenez l'anneau qui se déplace sur la carte pour marquer. Avec réapparitions.", "Pas de réapparition. Un ennemi à terre ne peut être achevé que par une exécution.", "Pas de réapparition, une vie par manche. La dernière équipe debout gagne.", "Capturez le chef adverse pour marquer, tout en protégeant le vôtre.", "Cinq équipes de deux. Le premier binôme à atteindre le score gagne."}, "Masquer", "Le chef de ton groupe cherche", "Statistiques et récompenses", "Ton groupe est trop grand", "Les parties publiques acceptent des groupes de 5 joueurs au plus."};
+              {"Deux équipes de cinq partagent leurs réapparitions. Épuisez celles de l'adversaire pour gagner la manche.", "Prenez et tenez l'anneau qui se déplace sur la carte pour marquer. Avec réapparitions.", "Pas de réapparition. Un ennemi à terre ne peut être achevé que par une exécution.", "Pas de réapparition, une vie par manche. La dernière équipe debout gagne.", "Capturez le chef adverse pour marquer, tout en protégeant le vôtre.", "Cinq équipes de deux. Le premier binôme à atteindre le score gagne."}, "Masquer", "Le chef de votre groupe cherche", "Statistiques et récompenses", "Votre groupe est trop grand", "Les parties publiques acceptent des groupes de 5 joueurs au plus."};
     case 5:  // Spanish
       return {"VERSUS · ALBORIA", "VERSUS ONLINE", "Juega contra el mundo", "PARTIDAS ABIERTAS", "ESTÁNDAR",
               "Entra y sal cuando quieras · cuenta para los logros", "CLASIFICATORIA", "PRÓXIMAMENTE",
@@ -266,6 +267,30 @@ Texts LocalizedTexts(uint32_t language) {
               "Sprawdź połączenie z internetem i spróbuj ponownie.",
               "Zaloguj się do Alborii w launcherze.", "Szukaj ponownie", "Enter", "Spacja",
               {"Dwie pięcioosobowe drużyny dzielą się odrodzeniami. Wyczerpij odrodzenia rywali, by wygrać rundę.", "Zdobywaj i utrzymuj krąg, który przenosi się po mapie, by zdobywać punkty. Z odrodzeniami.", "Bez odrodzeń. Powalonego wroga można dobić tylko egzekucją.", "Bez odrodzeń, jedno życie na rundę. Wygrywa ostatnia stojąca drużyna.", "Schwytaj przywódcę rywali, by zdobywać punkty, i chroń swojego.", "Pięć drużyn po dwie osoby. Wygrywa para, która pierwsza zdobędzie wynik."}, "Ukryj", "Lider twojej grupy szuka", "Statystyki i nagrody", "Twoja grupa jest za duża", "Mecze publiczne przyjmują grupy do 5 graczy."};
+    case kLanguageCzech:
+      return {"VERSUS · ALBORIA", "VERSUS ONLINE", "Hrajte proti celému světu", "OTEVŘENÉ ZÁPASY", "STANDARD",
+              "Připojte se a odejděte kdykoli · započítává se do úspěchů", "HODNOCENÉ", "JIŽ BRZY",
+              "Divize a sezónní hodnosti", "REŽIMY · JEDEN NEBO VÍCE",
+              {"Týmový deathmatch", "Král kopce", "Poprava", "Válečná zóna", "Zajetí velitele", "Wingman"},
+              "Zvolte alespoň jeden režim", "Hledat", "Označit režim", "Zpět", "HLEDÁNÍ",
+              {"Alboria", "Hledání", "Hráči", "Připraveno"}, "volné",
+              "%d z %d · volná místa na začátku obsadí boti", "Zrušit hledání", "ZÁPAS PŘIPRAVEN",
+              "Všichni připojeni", "+ boti: %d", "Přecházíme k hlasování", "Mapu a režim volí všichni",
+              "VERSUS ONLINE", "Nelze se připojit k Alborii", "Zkontrolujte připojení k internetu a zkuste to znovu.",
+              "Přihlaste se k Alborii v launcheru.", "Hledat znovu", "Enter", "Mezerník",
+              {"Dva pětičlenné týmy sdílejí zásobu respawnů. Připravte soupeře o všechny a vyhrajte kolo.", "Obsaďte a udržte kruh, který se přesouvá po mapě, a získávejte body. S respawny.", "Bez respawnů. Sraženého nepřítele lze dorazit jen popravou.", "Bez respawnů, jeden život na kolo. Vyhrává poslední tým, který zůstane stát.", "Zajměte velitele soupeřů a získávejte body, zatímco chráníte svého.", "Pět dvoučlenných týmů. Vyhrává dvojice, která první dosáhne cílového skóre."}, "Skrýt", "Vedoucí vaší skupiny hledá", "Statistiky a ocenění", "Vaše skupina je příliš velká", "Veřejné zápasy přijímají skupiny až do 5 hráčů."};
+    case kLanguageHungarian:
+      return {"VERSUS · ALBORIA", "VERSUS ONLINE", "Játssz az egész világ ellen", "NYÍLT MECCSEK", "STANDARD",
+              "Bármikor beléphetsz és kiléphetsz · beleszámít a teljesítményekbe", "RANGSOROLT", "HAMAROSAN",
+              "Divíziók és szezonrangok", "MÓDOK · EGY VAGY TÖBB",
+              {"Csapatos deathmatch", "A domb királya", "Kivégzés", "Háborús övezet", "A vezér elfogása", "Wingman"},
+              "Válassz legalább egy módot", "Keresés", "Mód kijelölése", "Vissza", "KERESÉS",
+              {"Alboria", "Keresés", "Játékosok", "Kész"}, "szabad",
+              "%d / %d · a kezdéskor szabad helyeket botok töltik ki", "Keresés megszakítása", "MECCS KÉSZ",
+              "Mindenki csatlakozott", "+ %d bot", "Irány a szavazás", "A pályát és a módot mindenki együtt választja",
+              "VERSUS ONLINE", "Az Alboria nem érhető el", "Ellenőrizd az internetkapcsolatot, és próbáld újra.",
+              "Jelentkezz be az Alboriába a launcherben.", "Új keresés", "Enter", "Szóköz",
+              {"Két ötfős csapat közös újraéledési kerettel. Fogyaszd el az ellenfél újraéledéseit, és megnyered a kört.", "Foglald el és tartsd meg a pályán vándorló kört a pontokért. Újraéledéssel.", "Nincs újraéledés. A földre került ellenséget csak kivégzéssel lehet legyőzni.", "Nincs újraéledés, körönként egy élet. Az utolsó talpon maradt csapat nyer.", "Fogd el az ellenséges vezért a pontokért, és közben védd a sajátodat.", "Öt kétfős csapat. Az a páros nyer, amelyik elsőként éri el a célpontszámot."}, "Elrejtés", "A csoportod vezetője keres", "Statisztikák és kitüntetések", "Túl nagy a csoportod", "A nyilvános meccsekre legfeljebb 5 fős csoportok léphetnek be."};
     default:
       return {"VERSUS · ALBORIA", "VERSUS ONLINE", "Play against the world", "OPEN MATCHES", "STANDARD",
               "Join and leave at any time · counts for achievements", "RANKED", "COMING SOON",
@@ -346,6 +371,16 @@ GameTexts LocalizedGameTexts(uint32_t language, OnlineGame game) {
                                "Pięciu graczy odpiera 50 fal Szarańczy, a między falami buduje i ulepsza umocnienia.", "%d z %d"}
                    : GameTexts{"BEAST · ALBORIA", "Bestia online", "Do 5 graczy jako Szarańcza poluje na ludzi", "Bestia",
                                "Pięciu graczy wciela się w Szarańczę i likwiduje fale ludzkich obrońców, zanim skończy się czas.", "%d z %d"};
+    case kLanguageCzech:
+      return horde ? GameTexts{"HORDE · ALBORIA", "Horda online", "Až 5 hráčů proti vlnám Locustů", "Horda",
+                               "Pět hráčů odolává 50 vlnám Locustů a mezi vlnami staví a vylepšuje opevnění.", "%d z %d"}
+                   : GameTexts{"BEAST · ALBORIA", "Bestie online", "Až 5 hráčů jako Locusti na lovu lidí", "Bestie",
+                               "Pět hráčů se přidá na stranu Locustů a likviduje vlny lidských obránců, než vyprší čas.", "%d z %d"};
+    case kLanguageHungarian:
+      return horde ? GameTexts{"HORDE · ALBORIA", "Horda online", "Legfeljebb 5 játékos a Locust-hullámok ellen", "Horda",
+                               "Öt játékos tart ki 50 Locust-hullámmal szemben, és a hullámok között erődítéseket épít és fejleszt.", "%d / %d"}
+                   : GameTexts{"BEAST · ALBORIA", "Fenevad online", "Legfeljebb 5 játékos Locustként vadászik az emberekre", "Fenevad",
+                               "Öt játékos a Locustok oldalára áll, és az idő lejárta előtt végez az emberi védők hullámaival.", "%d / %d"};
     default:  // English
       return horde ? GameTexts{"HORDE · ALBORIA", "Horde online", "Up to 5 players against waves of Locust", "Horde",
                                "Five players hold out against 50 waves of Locust, building and upgrading fortifications between waves.", "%d of %d"}
@@ -384,6 +419,10 @@ NoticeTexts LocalizedRoomClosedTexts(uint32_t language) {
       return {"A sala foi fechada", "A partida não pôde continuar. Seu grupo continua online e você pode buscar outra vez."};
     case 11:  // Polish
       return {"Poczekalnia została zamknięta", "Mecz nie mógł być kontynuowany. Twoja grupa jest nadal online i możesz szukać ponownie."};
+    case kLanguageCzech:
+      return {"Lobby bylo zavřeno", "Zápas nemohl pokračovat. Vaše skupina je stále online a můžete hledat znovu."};
+    case kLanguageHungarian:
+      return {"A lobbi bezárult", "A meccs nem folytatódhatott. A csoportod továbbra is online, és újra kereshetsz."};
     default:  // English
       return {"The lobby closed", "The match couldn't go on. Your party is still online and you can search again."};
   }
@@ -413,6 +452,10 @@ NoticeTexts LocalizedJoinFailedTexts(uint32_t language) {
       return {"Não foi possível entrar na partida", "A partida não aceitou a entrada. Seu grupo está online de novo e você pode buscar outra vez."};
     case 11:  // Polish
       return {"Nie udało się dołączyć do meczu", "Mecz nie przyjął dołączenia. Twoja grupa jest znów online i możesz szukać ponownie."};
+    case kLanguageCzech:
+      return {"K zápasu se nepodařilo připojit", "Zápas vás nepřijal. Vaše skupina je opět online a můžete hledat znovu."};
+    case kLanguageHungarian:
+      return {"Nem sikerült csatlakozni a meccshez", "A meccs nem fogadott be. A csoportod újra online, és ismét kereshetsz."};
     default:  // English
       return {"Couldn't join the match", "The match didn't take you in. Your party is online again and you can search again."};
   }

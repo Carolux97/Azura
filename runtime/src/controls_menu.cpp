@@ -17,6 +17,7 @@
 
 #include "coop_ui.h"
 #include "input/player_assignment.h"
+#include "menu_language.h"
 #include "script_hooks.h"
 
 namespace azura {
@@ -204,6 +205,26 @@ Texts LocalizedTexts(uint32_t language) {
               "Wy\xC5\x82\xC4\x85""czone", "Nie", "Tak", "Zmie\xC5\x84", "Usu\xC5\x84", "Domy\xC5\x9Blne", "Karta", "Wr\xC3\xB3\xC4\x87",
               "Schemat", "Niedost\xC4\x99pne", "Spacja", "Shift", "Caps Lock", "Lewy klik", "Prawy klik", "\xC5\x9Arodkowy klik",
               "Boczny 1", "Boczny 2", "K\xC3\xB3\xC5\x82ko w g\xC3\xB3r\xC4\x99", "K\xC3\xB3\xC5\x82ko w d\xC3\xB3\xC5\x82"};
+    case kLanguageCzech:
+      return {"KLÁVESNICE A MYŠ", "OVLÁDÁNÍ", "Zvolte akci a stiskněte klávesu nebo tlačítko myši.",
+              "Schéma hry, nebo vaše vlastní.", "PŘIŘAZENÍ", "NASTAVENÍ", "POHYB", "ZBRANĚ", "BOJ", "AKCE",
+              "Vpřed", "Vzad", "Vlevo", "Vpravo", "Zbraň %d", "Sprint (samostatná klávesa)",
+              "Stiskněte klávesu nebo tlačítko myši...", "Stiskněte tlačítko pro tuto akci...",
+              "Pevné: Esc, Enter, Backspace a šipky.", "VLASTNÍ", "Rozhlížení", "Citlivost myši",
+              "Citlivost při míření", "Citlivost přiblížení", "Obrátit osu Y", "Akcelerace myši", "Míření",
+              "Přiblížení", "Sprint", "Držet", "Stisknout", "Vypnuto", "Ne", "Ano", "Změnit", "Vymazat", "Výchozí",
+              "Karta", "Zpět", "Schéma", "Nedostupné", "Mezerník", "Shift", "Caps Lock", "Levé tlačítko",
+              "Pravé tlačítko", "Prostřední tlačítko", "Boční 1", "Boční 2", "Kolečko nahoru", "Kolečko dolů"};
+    case kLanguageHungarian:
+      return {"BILLENTYŰZET ÉS EGÉR", "IRÁNYÍTÁS", "Válassz egy műveletet, és nyomd meg a billentyűt vagy egérgombot.",
+              "A játék sémája vagy a sajátod.", "KIOSZTÁS", "BEÁLLÍTÁSOK", "MOZGÁS", "FEGYVEREK", "HARC",
+              "MŰVELETEK", "Előre", "Hátra", "Balra", "Jobbra", "%d. fegyver", "Sprint (külön billentyű)",
+              "Nyomj meg egy billentyűt vagy egérgombot...", "Nyomd meg a művelethez kívánt gombot...",
+              "Rögzített: Esc, Enter, Backspace és a nyílbillentyűk.", "EGYÉNI", "Nézelődés", "Egérérzékenység",
+              "Érzékenység célzáskor", "Érzékenység nagyításkor", "Y tengely megfordítása", "Egérgyorsítás",
+              "Célzás", "Nagyítás", "Sprint", "Nyomva tartás", "Lenyomás", "Ki", "Nem", "Igen", "Módosítás",
+              "Törlés", "Alapértékek", "Lap", "Vissza", "Séma", "Nem elérhető", "Szóköz", "Shift", "Caps Lock",
+              "Bal gomb", "Jobb gomb", "Középső gomb", "Oldalsó 1", "Oldalsó 2", "Görgő fel", "Görgő le"};
     default:
       return {"KEYBOARD AND MOUSE", "CONTROLS", "Choose an action and press the key or mouse button.",
               "The game's scheme, or your own.", "ASSIGNMENT", "SETTINGS", "MOVEMENT", "WEAPONS", "COMBAT", "ACTIONS",

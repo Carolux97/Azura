@@ -57,8 +57,9 @@ class ControlsMenu : public rex::ui::ImGuiDialog {
  public:
   enum class Kind { kKeyboardMouse, kController };
 
-  // `owner` is cleared when the menu closes and deletes itself. `language` is the Xbox 360
-  // language ID of the user_language setting. The fonts may be null (ImGui's default is used).
+  // `owner` is cleared when the menu closes and deletes itself. `language` is
+  // MenuLanguage() (an Xbox 360 language ID, or Czech or Hungarian). The fonts may be null (ImGui's
+  // default is used).
   ControlsMenu(rex::ui::ImGuiDrawer* drawer, rex::input::InputSystem* input, input::PlayerAssignment* assignment,
                Kind kind, uint32_t language, ImFont* title_font, ImFont* body_font, ControlsMenu** owner);
 
