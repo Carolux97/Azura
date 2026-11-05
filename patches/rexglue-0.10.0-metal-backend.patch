@@ -2527,6 +2527,21 @@ index 06888b9..d4650bc 100644
    std::vector<std::unique_ptr<Setting>> setting_list_;
    std::unordered_map<uint32_t, Setting*> settings_;
    KernelState* kernel_state_ = nullptr;
+diff --git a/include/rex/system/xobject.h b/include/rex/system/xobject.h
+index 0a43f07..a148e7a 100644
+--- a/include/rex/system/xobject.h
++++ b/include/rex/system/xobject.h
+@@ -244,6 +244,10 @@ class XObject {
+   // if we allocated it!
+   uint32_t guest_object_ptr_ = 0;
+   bool allocated_guest_object_ = false;
++  // Guest address of the dispatch header that holds this object's handle (StashHandle), or 0.
++  // GetNativeObject checks it: the stashed handle stays in guest memory after the object is gone,
++  // and its number may since have been given to an unrelated object.
++  uint32_t stashed_header_ptr_ = 0;
+ };
+ 
+ template <typename T>
 diff --git a/include/rex/system/xsocket.h b/include/rex/system/xsocket.h
 index a1b4443..bb69cc9 100644
 --- a/include/rex/system/xsocket.h
@@ -29034,6 +29049,46 @@ index 76cc877..1a3bd5c 100644
      return false;
    }
  
+diff --git a/src/system/xobject.cpp b/src/system/xobject.cpp
+index d358f39..1fb0bb5 100644
+--- a/src/system/xobject.cpp
++++ b/src/system/xobject.cpp
+@@ -363,6 +363,7 @@ void XObject::SetNativePointer(uint32_t native_ptr, bool uninitialized) {
+   // Stash pointer in struct.
+   // FIXME: This assumes the object has a dispatch header (some don't!)
+   StashHandle(header, handle());
++  stashed_header_ptr_ = native_ptr;
+ 
+   guest_object_ptr_ = native_ptr;
+ }
+@@ -394,6 +395,19 @@ object_ref<XObject> XObject::GetNativeObject(KernelState* kernel_state, void* na
+     uint32_t handle = header->wait_list_blink;
+     auto object = kernel_state->object_table()->LookupObject<XObject>(handle);
+ 
++    // The stash outlives the object: once the object is destroyed its handle number is reused,
++    // and the guest can still pass the old header (a work item of the title's XAM worker threads
++    // dereferences its long-gone thread object, for instance). The handle then names an
++    // unrelated object, which must not be touched, or the title loses it (an event, a thread, or
++    // the listening socket of a party beacon, which then accepts no one). Only the object stashed
++    // at this very header answers for it.
++    const uint32_t header_ptr = kernel_state->memory()->HostToGuestVirtual(native_ptr);
++    if (object && object->stashed_header_ptr_ != header_ptr) {
++      REXSYS_DEBUG("GetNativeObject: header {:08X} holds stale handle {:08X}, now another object's",
++                   header_ptr, handle);
++      return nullptr;
++    }
++
+     // TODO(benvanik): assert nothing has been changed in the struct.
+     return object;
+   } else {
+@@ -443,6 +457,7 @@ object_ref<XObject> XObject::GetNativeObject(KernelState* kernel_state, void* na
+     // Stash pointer in struct.
+     // FIXME: This assumes the object contains a dispatch header (some don't!)
+     StashHandle(header, object->handle());
++    object->stashed_header_ptr_ = kernel_state->memory()->HostToGuestVirtual(native_ptr);
+ 
+     return object_ref<XObject>(object);
+   }
 diff --git a/src/system/xsocket.cpp b/src/system/xsocket.cpp
 index 2d13ac8..7aea83e 100644
 --- a/src/system/xsocket.cpp
