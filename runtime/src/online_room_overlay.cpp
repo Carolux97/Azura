@@ -59,7 +59,7 @@ Texts LocalizedTexts(uint32_t language) {
               "Alboria はメンテナンス中です。後でもう一度お試しください",
               "このゲームのオンラインプレイは停止中です",
               "Alboria から応答がありません", "フレンドのチームに空きがありません",
-              "試合を開始しています。少し待ってからもう一度お試しください",
+              "マッチを開始しています。少し待ってからもう一度お試しください",
               "あなたのパーティーはフレンドのパーティーに入りきりません",
               "すでにそのルームにいます"};
     case 7:  // Korean
@@ -69,7 +69,7 @@ Texts LocalizedTexts(uint32_t language) {
               "이 게임의 온라인 플레이가 꺼져 있습니다",
               "Alboria가 응답하지 않았습니다",
               "친구의 팀에 빈자리가 없습니다",
-              "경기가 시작되는 중입니다. 잠시 후 다시 시도하세요",
+              "매치가 시작되는 중입니다. 잠시 후 다시 시도하세요",
               "내 파티가 친구의 파티에 다 들어갈 수 없습니다", "이미 그 방에 있습니다"};
     case 8:  // Traditional Chinese
       return {"線上房間", "正在建立房間…", "正在加入房間…", "線上", "無法連線到 Alboria", "沒有使用這個代碼的遊戲",
@@ -77,7 +77,7 @@ Texts LocalizedTexts(uint32_t language) {
               "Alboria 正在維護，請稍後再試",
               "這款遊戲的線上遊戲已關閉",
               "Alboria 沒有回應", "好友的隊伍已沒有空位",
-              "比賽正在開始，請稍後再試", "你的隊伍無法全部加入好友的隊伍", "你已經在這個房間裡"};
+              "對戰正在開始，請稍後再試", "你的隊伍無法全部加入好友的隊伍", "你已經在這個房間裡"};
     case 12:  // Russian
       return {"ОНЛАЙН-КОМНАТА", "Создание комнаты…", "Вход в комнату…", "ОНЛАЙН", "Нет связи с Alboria",
               "Нет игры с таким кодом", "Игра заполнена", "Комната закрыта", "Alboria заблокировала вас",
@@ -146,7 +146,7 @@ Texts LocalizedTexts(uint32_t language) {
     case 11:  // Polish
       return {"POK\xC3\x93J ONLINE", "Tworzenie pokoju\xE2\x80\xA6", "Do\xC5\x82\xC4\x85""czanie do pokoju\xE2\x80\xA6",
               "ONLINE",
-              "Brak po\xC5\x82\xC4\x85""czenia z Alboria", "\xC5\xBB""adna gra nie ma tego kodu",
+              "Brak po\xC5\x82\xC4\x85""czenia z Albori\xC4\x85", "\xC5\xBB""adna gra nie ma tego kodu",
               "Gra jest pe\xC5\x82na", "Pok\xC3\xB3j zosta\xC5\x82 zamkni\xC4\x99ty",
               "Alboria ci\xC4\x99 zablokowa\xC5\x82""a", "Zaktualizuj Azur\xC4\x99, aby gra\xC4\x87 online",
               "Zaloguj si\xC4\x99 do Alborii w launcherze", "Alboria jest w trakcie konserwacji, spr\xC3\xB3""buj p\xC3\xB3\xC5\xBAniej",

@@ -140,7 +140,7 @@ Texts LocalizedTexts(uint32_t language) {
               "실패했습니다: %s"};
     case 8:  // Traditional Chinese
       return {"Alboria", "好友", "邀請", "房間", "加入", "邀請", "稍後", "複製", "以代碼加入", "關閉", "切換頁面",
-              "正在玩 %s · 開放房間", "正在玩 %s · 僅限邀請", "遊戲中", "在線", "離線", "%s前上線", "%d 分鐘",
+              "正在玩 %s · 開放房間", "正在玩 %s · 僅限邀請", "遊戲中", "線上", "離線", "最後上線：%s前", "%d 分鐘",
               "%d 小時", "%d 天", "你在 Alboria 還沒有好友。請從啟動器新增。", "你沒有邀請。", "%s 邀請你加入房間",
               "你不在任何房間。", "你的房間代碼", "已複製代碼", "正在加入房間…", "正在傳送邀請…", "已邀請 %s",
               "已拒絕邀請", "目前無法使用 Alboria", "請檢查連線，並確認帳號已在啟動器中連結。", "無法完成：%s"};
@@ -157,7 +157,7 @@ Texts LocalizedTexts(uint32_t language) {
       return {"Alboria", "Amigos", "Invitaciones", "Sala", "Unirse", "Invitar", "Ahora no", "Copiar",
               "Unirse por c\xC3\xB3""digo", "Cerrar", "Cambiar de p\xC3\xA1gina", "Jugando a %s \xC2\xB7 sala abierta",
               "Jugando a %s \xC2\xB7 solo por invitaci\xC3\xB3n", "Jugando", "En l\xC3\xAD""nea", "Desconectado",
-              "Visto hace %s", "%d min", "%d h", "%d d\xC3\xAD""as", "Todav\xC3\xAD""a no tienes amigos en Alboria. A\xC3\xB1\xC3\xA1""delos desde el launcher.",
+              "Visto hace %s", "%d min", "%d h", "%d d", "Todav\xC3\xAD""a no tienes amigos en Alboria. A\xC3\xB1\xC3\xA1""delos desde el launcher.",
               "No tienes invitaciones.", "%s te invita a su sala", "No est\xC3\xA1s en ninguna sala.",
               "C\xC3\xB3""digo de tu sala", "C\xC3\xB3""digo copiado", "Entrando en la sala\xE2\x80\xA6",
               "Enviando la invitaci\xC3\xB3n\xE2\x80\xA6", "Invitaci\xC3\xB3n enviada a %s", "Invitaci\xC3\xB3n rechazada",
@@ -168,7 +168,7 @@ Texts LocalizedTexts(uint32_t language) {
       return {"Alboria", "Freunde", "Einladungen", "Raum", "Beitreten", "Einladen", "Nicht jetzt", "Kopieren",
               "Per Code beitreten", "Schlie\xC3\x9F""en", "Seite wechseln", "Spielt %s \xC2\xB7 offener Raum",
               "Spielt %s \xC2\xB7 nur auf Einladung", "Spielt", "Online", "Offline", "Zuletzt gesehen vor %s",
-              "%d Min.", "%d Std.", "%d Tagen", "Du hast noch keine Freunde auf Alboria. F\xC3\xBC""ge sie im Launcher hinzu.",
+              "%d Min.", "%d Std.", "%d Tg.", "Du hast noch keine Freunde auf Alboria. F\xC3\xBC""ge sie im Launcher hinzu.",
               "Du hast keine Einladungen.", "%s l\xC3\xA4""dt dich in seinen Raum ein", "Du bist in keinem Raum.",
               "Code deines Raums", "Code kopiert", "Raum wird betreten\xE2\x80\xA6", "Einladung wird gesendet\xE2\x80\xA6",
               "Einladung an %s gesendet", "Einladung abgelehnt", "Alboria ist gerade nicht erreichbar",
@@ -178,7 +178,7 @@ Texts LocalizedTexts(uint32_t language) {
       return {"Alboria", "Amis", "Invitations", "Salon", "Rejoindre", "Inviter", "Pas maintenant", "Copier",
               "Rejoindre par code", "Fermer", "Changer de page", "Joue \xC3\xA0 %s \xC2\xB7 salon ouvert",
               "Joue \xC3\xA0 %s \xC2\xB7 sur invitation", "Joue", "En ligne", "Hors ligne", "Vu il y a %s", "%d min",
-              "%d h", "%d jours", "Tu n'as pas encore d'amis sur Alboria. Ajoute-les depuis le launcher.",
+              "%d h", "%d j", "Tu n'as pas encore d'amis sur Alboria. Ajoute-les depuis le launcher.",
               "Tu n'as aucune invitation.", "%s t'invite dans son salon", "Tu n'es dans aucun salon.",
               "Code de ton salon", "Code copi\xC3\xA9", "Connexion au salon\xE2\x80\xA6", "Envoi de l'invitation\xE2\x80\xA6",
               "Invitation envoy\xC3\xA9""e \xC3\xA0 %s", "Invitation refus\xC3\xA9""e", "Alboria n'est pas disponible pour le moment",
@@ -187,7 +187,7 @@ Texts LocalizedTexts(uint32_t language) {
       return {"Alboria", "Amici", "Inviti", "Stanza", "Unisciti", "Invita", "Non ora", "Copia",
               "Unisciti con codice", "Chiudi", "Cambia pagina", "Gioca a %s \xC2\xB7 stanza aperta",
               "Gioca a %s \xC2\xB7 solo su invito", "Sta giocando", "Online", "Offline", "Visto %s fa", "%d min",
-              "%d h", "%d giorni", "Non hai ancora amici su Alboria. Aggiungili dal launcher.", "Non hai inviti.",
+              "%d h", "%d g", "Non hai ancora amici su Alboria. Aggiungili dal launcher.", "Non hai inviti.",
               "%s ti invita nella sua stanza", "Non sei in nessuna stanza.", "Codice della tua stanza",
               "Codice copiato", "Ingresso nella stanza\xE2\x80\xA6", "Invio dell'invito\xE2\x80\xA6", "Invito inviato a %s",
               "Invito rifiutato", "Alboria non \xC3\xA8 disponibile ora",
@@ -196,7 +196,7 @@ Texts LocalizedTexts(uint32_t language) {
       return {"Alboria", "Amigos", "Convites", "Sala", "Entrar", "Convidar", "Agora n\xC3\xA3o", "Copiar",
               "Entrar com c\xC3\xB3""digo", "Fechar", "Mudar de p\xC3\xA1gina", "Jogando %s \xC2\xB7 sala aberta",
               "Jogando %s \xC2\xB7 s\xC3\xB3 por convite", "Jogando", "Online", "Offline", "Visto h\xC3\xA1 %s", "%d min",
-              "%d h", "%d dias", "Voc\xC3\xAA ainda n\xC3\xA3o tem amigos na Alboria. Adicione-os pelo launcher.",
+              "%d h", "%d d", "Voc\xC3\xAA ainda n\xC3\xA3o tem amigos na Alboria. Adicione-os pelo launcher.",
               "Voc\xC3\xAA n\xC3\xA3o tem convites.", "%s te convida para a sala", "Voc\xC3\xAA n\xC3\xA3o est\xC3\xA1 em nenhuma sala.",
               "C\xC3\xB3""digo da sua sala", "C\xC3\xB3""digo copiado", "Entrando na sala\xE2\x80\xA6", "Enviando o convite\xE2\x80\xA6",
               "Convite enviado para %s", "Convite recusado", "A Alboria n\xC3\xA3o est\xC3\xA1 dispon\xC3\xADvel agora",
@@ -205,7 +205,7 @@ Texts LocalizedTexts(uint32_t language) {
       return {"Alboria", "Znajomi", "Zaproszenia", "Pok\xC3\xB3j", "Do\xC5\x82\xC4\x85""cz", "Zapro\xC5\x9B", "Nie teraz",
               "Kopiuj", "Do\xC5\x82\xC4\x85""cz kodem", "Zamknij", "Zmie\xC5\x84 stron\xC4\x99", "Gra w %s \xC2\xB7 pok\xC3\xB3j otwarty",
               "Gra w %s \xC2\xB7 tylko na zaproszenie", "Gra", "Online", "Offline", "Widziany %s temu", "%d min",
-              "%d godz.", "%d dni", "Nie masz jeszcze znajomych w Alborii. Dodaj ich w launcherze.",
+              "%d godz.", "%d dn.", "Nie masz jeszcze znajomych w Alborii. Dodaj ich w launcherze.",
               "Nie masz zaprosze\xC5\x84.", "%s zaprasza ci\xC4\x99 do pokoju", "Nie jeste\xC5\x9B w \xC5\xBC""adnym pokoju.",
               "Kod twojego pokoju", "Skopiowano kod", "Do\xC5\x82\xC4\x85""czanie do pokoju\xE2\x80\xA6", "Wysy\xC5\x82""anie zaproszenia\xE2\x80\xA6",
               "Wys\xC5\x82""ano zaproszenie do %s", "Odrzucono zaproszenie", "Alboria jest teraz niedost\xC4\x99pna",
@@ -213,7 +213,7 @@ Texts LocalizedTexts(uint32_t language) {
     default:
       return {"Alboria", "Friends", "Invitations", "Room", "Join", "Invite", "Not now", "Copy", "Join by code",
               "Close", "Change page", "Playing %s \xC2\xB7 open room", "Playing %s \xC2\xB7 invite only", "Playing",
-              "Online", "Offline", "Last seen %s ago", "%d min", "%d h", "%d days",
+              "Online", "Offline", "Last seen %s ago", "%d min", "%d h", "%d d",
               "You have no friends on Alboria yet. Add them from the launcher.", "You have no invitations.",
               "%s invites you to their room", "You are not in a room.", "Your room's code", "Code copied",
               "Joining the room\xE2\x80\xA6", "Sending the invitation\xE2\x80\xA6", "Invitation sent to %s",
@@ -251,7 +251,7 @@ AddTexts LocalizedAddTexts(uint32_t language) {
               "%s 님과 친구가 되었습니다", "게이머태그와 번호를 입력하세요"};
     case 8:
       return {"新增好友", "輸入對方的玩家代號和數字，例如 Nimbus#4827。", "玩家代號", "數字", "傳送", "大寫",
-              "空格", "刪除", "返回", "正在傳送請求…", "已向 %s 傳送請求", "你和 %s 已成為好友",
+              "空白鍵", "刪除", "返回", "正在傳送請求…", "已向 %s 傳送請求", "你和 %s 已成為好友",
               "請輸入玩家代號和數字"};
     case 12:
       return {"Добавить друга", "Введите его Gamertag и номер, например Nimbus#4827.", "Gamertag", "Номер",
@@ -405,7 +405,7 @@ SettingsTexts LocalizedSettingsTexts(uint32_t language) {
     case 8:
       return {"設定", "選單音效", "在 Alboria 畫面中移動、選擇和返回", "通知", "遊戲上方顯示的邀請和其他通知", "調整"};
     case 12:
-      return {"Настройки", "Звуки меню", "Перемещение, выбор и возврат в экранах Alboria", "Уведомления",
+      return {"Настройки", "Звуки меню", "Перемещение, выбор и возврат на экранах Alboria", "Уведомления",
               "Приглашения и другие уведомления поверх игры", "Настроить"};
     case 5:
       return {"Ajustes", "Sonidos del menú", "Moverte, elegir y volver en las pantallas de Alboria", "Notificaciones",

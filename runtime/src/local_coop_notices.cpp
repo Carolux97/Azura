@@ -79,7 +79,7 @@ Texts LocalizedTexts(uint32_t language) {
     case 11:  // Polish
       return {"KONTROLER ODŁĄCZONY", "GRACZ %d", "Podłącz ponownie kontroler lub naciśnij",
               "na innym kontrolerze, aby go użyć.", "KONTROLER PODŁĄCZONY",
-              "Przypisz go graczowi w Opcje > Lokalna kooperacja."};
+              "Przypisz go graczowi w menu Opcje > Lokalna kooperacja."};
     default:
       return {"CONTROLLER DISCONNECTED", "PLAYER %d", "Reconnect the controller, or press",
               "on another controller to use it.", "CONTROLLER CONNECTED",

@@ -66,13 +66,13 @@ Texts LocalizedTexts(uint32_t language) {
               "네트워크가 허용하면 방의 다른 플레이어와 직접 연결하고, 안 되면 릴레이를 사용합니다. 지연은 줄지만 다른 "
               "플레이어가 이 컴퓨터의 공용 IP 주소를 알 수 있습니다. 다음 방부터 적용됩니다.",
               "지연 시간 표시",
-              "온라인 방에서 호스트까지의 왕복 시간과, 연결이 직접인지 릴레이를 거치는지를 성능 표시 구석에 보여 줍니다.",
-              "켜짐", "꺼짐", "변경", "뒤로", "Enter", "방에 플레이어가 있는 동안에는 바꿀 수 없습니다"};
+              "온라인 방에서 호스트까지의 왕복 시간과, 연결이 직접인지 릴레이를 거치는지를 성능 표시 모서리에 보여 줍니다.",
+              "켬", "끔", "변경", "뒤로", "Enter", "방에 플레이어가 있는 동안에는 바꿀 수 없습니다"};
     case 8:  // Traditional Chinese
       return {"ALBORIA", "帳號", "正在登入…", "無法連線到 Alboria", "直接連線",
               "網路允許時，直接連線到房間裡的其他玩家，否則改用中繼。延遲較低，但其他玩家可能得知這台電腦的公用 IP "
               "位址。從下一個房間開始生效。",
-              "顯示延遲", "在線上房間中，於效能顯示的角落顯示與主持人之間的往返時間，以及連線是直接還是經由中繼。",
+              "顯示延遲", "在線上房間中，於效能顯示的角落顯示與房主之間的往返時間，以及連線是直接還是經由中繼。",
               "開啟", "關閉", "變更", "返回", "Enter", "房間裡有玩家時無法變更"};
     case 12:  // Russian
       return {"ALBORIA", "АККАУНТ", "Вход…", "Нет связи с Alboria", "ПРЯМОЕ ПОДКЛЮЧЕНИЕ",
@@ -80,7 +80,7 @@ Texts LocalizedTexts(uint32_t language) {
               "запасе. Меньше задержка, но другие игроки могут узнать публичный IP-адрес этого компьютера. "
               "Действует со следующей комнаты.",
               "ПОКАЗЫВАТЬ ЗАДЕРЖКУ",
-              "В онлайн-комнате показывает задержку до хоста в углу индикатора производительности и то, прямое ли "
+              "В онлайн-комнате показывает задержку до хоста в углу показателя производительности и то, прямое ли "
               "соединение или через ретранслятор.",
               "Вкл.", "Выкл.", "Изменить", "Назад", "Enter", "Нельзя изменить, пока в комнате есть игроки"};
     case 3:  // German
@@ -139,7 +139,7 @@ Texts LocalizedTexts(uint32_t language) {
               "Ativada", "Desativada", "Mudar", "Voltar", "Enter",
               "N\xC3\xA3o pode ser mudada com jogadores na sala"};
     case 11:  // Polish
-      return {"ALBORIA", "KONTO", "Logowanie\xE2\x80\xA6", "Brak po\xC5\x82\xC4\x85""czenia z Alboria",
+      return {"ALBORIA", "KONTO", "Logowanie\xE2\x80\xA6", "Brak po\xC5\x82\xC4\x85""czenia z Albori\xC4\x85",
               "PO\xC5\x81\xC4\x84""CZENIE BEZPO\xC5\x9AREDNIE",
               "\xC5\x81\xC4\x85""czy ci\xC4\x99 bezpo\xC5\x9Brednio z innymi graczami pokoju, gdy sie\xC4\x87 na to "
               "pozwala, z przeka\xC5\xBAnikiem jako zapasem. Mniejsze op\xC3\xB3\xC5\xBAnienie, ale inni gracze "

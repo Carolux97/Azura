@@ -3533,7 +3533,7 @@ struct ManageInviteTexts {
 ManageInviteTexts ManageInviteTextsFor(uint32_t language) {
   switch (language) {
     case 2: return {u"ロビー ID", u"IDを表示", u"IDを非表示"};
-    case 3: return {u"LOBBY-ID", u"ID ANZEIGEN", u"ID AUSBLENDEN"};
+    case 3: return {u"RAUM-ID", u"ID ANZEIGEN", u"ID AUSBLENDEN"};
     case 4: return {u"ID DU SALON", u"AFFICHER L'ID", u"MASQUER L'ID"};
     case 5: return {u"ID DE SALA", u"MOSTRAR ID", u"OCULTAR ID"};
     case 6: return {u"ID STANZA", u"MOSTRA ID", u"NASCONDI ID"};
