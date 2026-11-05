@@ -552,7 +552,21 @@
       "gamertag": "冒犯性的玩家代號",
       "impersonation": "冒充他人",
       "other": "其他"
-    }
+    },
+    "availability": "你的狀態",
+    "availabilityOption": {
+      "online": "線上",
+      "busy": "忙碌",
+      "invisible": "隱身"
+    },
+    "availabilityChanged": {
+      "online": "好友會看到你在線上",
+      "busy": "好友會看到你忙碌中，不會跳出通知",
+      "invisible": "好友會看到你離線，不會跳出通知"
+    },
+    "busy": "忙碌",
+    "playingBusy": "忙碌 · 正在玩 {game}",
+    "cameOnline": "{name} 上線了"
   },
   "devServer": {
     "title": "開發",

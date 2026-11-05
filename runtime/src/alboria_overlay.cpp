@@ -466,6 +466,116 @@ SettingsTexts LocalizedSettingsTexts(uint32_t language) {
   }
 }
 
+// What the player shows their friends (alboria::Availability), in the order the Settings row
+// steps through them, and the texts that go with it in the game's languages.
+constexpr const char* kAvailabilities[] = {"online", "busy", "invisible"};
+
+struct AvailabilityTexts {
+  const char* busy;          // a friend who shows themselves busy
+  const char* playing_busy;  // %s: the game
+  const char* label;         // the Settings row
+  const char* options[3];    // as kAvailabilities
+  const char* helps[3];      // what each one does, under the row
+};
+
+AvailabilityTexts LocalizedAvailabilityTexts(uint32_t language) {
+  switch (language) {
+    case 2:  // Japanese
+      return {"取り込み中", "取り込み中 · %sをプレイ中", "ステータス",
+              {"オンライン", "取り込み中", "オフライン表示"},
+              {"フレンドにはオンラインと表示されます",
+               "フレンドには取り込み中と表示され、通知は表示されません",
+               "フレンドにはオフラインと表示され、通知は表示されません"}};
+    case 7:  // Korean
+      return {"다른 용무 중", "다른 용무 중 · %s 플레이 중", "내 상태",
+              {"온라인", "다른 용무 중", "오프라인으로 표시"},
+              {"친구에게 온라인으로 보입니다",
+               "친구에게 다른 용무 중으로 보이고 알림이 뜨지 않습니다",
+               "친구에게 오프라인으로 보이고 알림이 뜨지 않습니다"}};
+    case 8:  // Traditional Chinese
+      return {"忙碌", "忙碌 · 正在玩 %s", "你的狀態",
+              {"線上", "忙碌", "隱身"},
+              {"好友會看到你在線上",
+               "好友會看到你忙碌中，不會跳出通知",
+               "好友會看到你離線，不會跳出通知"}};
+    case 12:  // Russian
+      return {"Занят", "Занят · играет в %s", "Ваш статус",
+              {"В сети", "Занят", "Невидимый"},
+              {"Друзья видят вас в сети",
+               "Друзья видят, что вы заняты; уведомления не всплывают",
+               "Друзья видят вас не в сети; уведомления не всплывают"}};
+    case 5:  // Spanish
+      return {"Ocupado", "Ocupado \xC2\xB7 jugando a %s", "Tu estado",
+              {"En l\xC3\xADnea", "Ocupado", "Invisible"},
+              {"Tus amigos te ven en l\xC3\xADnea",
+               "Tus amigos te ven ocupado y no te saltan avisos",
+               "Tus amigos te ven desconectado y no te saltan avisos"}};
+    case 3:  // German
+      return {"Besch\xC3\xA4""ftigt", "Besch\xC3\xA4""ftigt \xC2\xB7 spielt %s", "Dein Status",
+              {"Online", "Besch\xC3\xA4""ftigt", "Unsichtbar"},
+              {"Deine Freunde sehen dich online",
+               "Deine Freunde sehen dich besch\xC3\xA4""ftigt; Hinweise bleiben stumm",
+               "Deine Freunde sehen dich offline; Hinweise bleiben stumm"}};
+    case 4:  // French
+      return {"Occup\xC3\xA9", "Occup\xC3\xA9 \xC2\xB7 joue \xC3\xA0 %s", "Ton statut",
+              {"En ligne", "Occup\xC3\xA9", "Invisible"},
+              {"Tes amis te voient en ligne",
+               "Tes amis te voient occup\xC3\xA9 ; aucune notification ne s'affiche",
+               "Tes amis te voient hors ligne ; aucune notification ne s'affiche"}};
+    case 6:  // Italian
+      return {"Occupato", "Occupato \xC2\xB7 gioca a %s", "Il tuo stato",
+              {"Online", "Occupato", "Invisibile"},
+              {"I tuoi amici ti vedono online",
+               "I tuoi amici ti vedono occupato; nessun avviso a schermo",
+               "I tuoi amici ti vedono offline; nessun avviso a schermo"}};
+    case 9:  // Portuguese
+      return {"Ocupado", "Ocupado \xC2\xB7 jogando %s", "Seu status",
+              {"Online", "Ocupado", "Invis\xC3\xADvel"},
+              {"Seus amigos veem voc\xC3\xAA online",
+               "Seus amigos veem voc\xC3\xAA ocupado e nenhum aviso aparece",
+               "Seus amigos veem voc\xC3\xAA offline e nenhum aviso aparece"}};
+    case 11:  // Polish
+      return {"Zaj\xC4\x99ty", "Zaj\xC4\x99ty \xC2\xB7 gra w %s", "Tw\xC3\xB3j status",
+              {"Dost\xC4\x99pny", "Zaj\xC4\x99ty", "Niewidoczny"},
+              {"Znajomi widz\xC4\x85 ci\xC4\x99 jako dost\xC4\x99pnego",
+               "Znajomi widz\xC4\x85 ci\xC4\x99 jako zaj\xC4\x99tego; powiadomienia si\xC4\x99 nie pojawiaj\xC4\x85",
+               "Znajomi widz\xC4\x85 ci\xC4\x99 jako niedost\xC4\x99pnego; powiadomienia si\xC4\x99 nie pojawiaj\xC4\x85"}};
+    case kLanguageCzech:
+      return {"Zaneprázdněn", "Zaneprázdněn · hraje %s", "Váš stav",
+              {"Online", "Zaneprázdněn", "Neviditelný"},
+              {"Přátelé vás vidí online",
+               "Přátelé vás vidí jako zaneprázdněného a nevyskakují žádná oznámení",
+               "Přátelé vás vidí offline a nevyskakují žádná oznámení"}};
+    case kLanguageHungarian:
+      return {"Elfoglalt", "Elfoglalt · játszik: %s", "Állapotod",
+              {"Online", "Elfoglalt", "Láthatatlan"},
+              {"A barátaid online látnak",
+               "A barátaid elfoglaltnak látnak, és nem ugranak fel értesítések",
+               "A barátaid offline látnak, és nem ugranak fel értesítések"}};
+    default:
+      return {"Busy", "Busy \xC2\xB7 playing %s", "Your status",
+              {"Online", "Busy", "Invisible"},
+              {"Friends see you online",
+               "Friends see you busy, and no notices pop up",
+               "Friends see you offline, and no notices pop up"}};
+  }
+}
+
+// What a friend is doing, in words, saying when they show themselves busy.
+std::string FriendLine(const Texts& texts, const AvailabilityTexts& availability, const alboria::Friend& f) {
+  if (!f.busy) return Activity(texts, f);
+  if (f.playing && f.title_id == kGearsOfWar3) return Format(availability.playing_busy, "Gears of War 3");
+  return availability.busy;
+}
+
+// Where `availability` stands in kAvailabilities (online for one it does not know).
+int AvailabilityIndex(const std::string& availability) {
+  for (int i = 0; i < 3; ++i) {
+    if (availability == kAvailabilities[i]) return i;
+  }
+  return 0;
+}
+
 // The colours of a row's seal, light at its top and dark below; none (0) leaves the row without one.
 struct SealTone {
   ImU32 light = 0;
@@ -476,18 +586,26 @@ struct SealTone {
     return {with(light), with(dark)};
   }
 };
-// Gold while playing, green online, grey offline (the launcher's friend rows), and sky for a setting.
-constexpr SealTone kPlayingTone{IM_COL32(246, 196, 69, 255), IM_COL32(183, 122, 12, 255)};
+// The colours of the player's own state: green online, slate invisible, and red busy below. Friends'
+// rows show their picture with a status light instead (DrawFriendAvatar).
 constexpr SealTone kOnlineTone{IM_COL32(70, 199, 154, 255), IM_COL32(18, 121, 90, 255)};
 constexpr SealTone kOfflineTone{IM_COL32(142, 154, 184, 255), IM_COL32(76, 87, 120, 255)};
-constexpr SealTone kSkyTone{IM_COL32(47, 94, 168, 255), IM_COL32(27, 47, 99, 255)};
+// Red for the busy state, as in the launcher.
+constexpr SealTone kBusyTone{IM_COL32(240, 122, 106, 255), IM_COL32(168, 50, 42, 255)};
+
+// The light of a friend's state on their picture: red busy, green online (playing included), off
+// offline or invisible.
+StatusLight FriendLight(const alboria::Friend& f) {
+  return !f.online ? StatusLight::kOff : f.busy ? StatusLight::kBusy : StatusLight::kOnline;
+}
 
 // A carved button (alboria_style.h): amber for the main action, mother-of-pearl for the others,
-// the control that does it in its seal when `glyph` is set (the focused row's buttons), Alboria's
-// ring rune there otherwise. Returns its width; `hit` says whether the mouse clicked it this frame.
+// the control that does it in its seal when `glyph` is set (the focused row's buttons), no seal
+// otherwise. Returns its width; `hit` says whether the mouse clicked it this frame.
 float DrawPill(ImDrawList* draw_list, ImFont* font, float size, ImVec2 right_center, const char* label, bool primary,
                float unit, int alpha, bool* hit, const PillGlyph* glyph = nullptr) {
   SealContent seal;
+  seal.none = glyph == nullptr;
   if (glyph) {
     seal.control = true;
     seal.pad = glyph->pad;
@@ -636,14 +754,14 @@ AlboriaOverlay::Actions AlboriaOverlay::ReadInput() {
       if (pressed & rex::input::X_INPUT_GAMEPAD_DPAD_RIGHT) actions.horizontal = 1;
       if (pressed & rex::input::X_INPUT_GAMEPAD_A) actions.primary = true;
       if (pressed & rex::input::X_INPUT_GAMEPAD_X) actions.secondary = true;
-      if (pressed & rex::input::X_INPUT_GAMEPAD_Y) actions.copy = true;
+      if (pressed & rex::input::X_INPUT_GAMEPAD_Y) actions.availability = true;
       if (pressed & (rex::input::X_INPUT_GAMEPAD_B | rex::input::X_INPUT_GAMEPAD_BACK)) actions.close = true;
     }
   }
   last_input_.NoteKeyboard();
   if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) actions.close = true;
   if (ImGui::IsKeyPressed(ImGuiKey_Tab, false)) actions.page = ImGui::GetIO().KeyShift ? -1 : 1;
-  // Left and right change a setting's value on the Settings page, and the page elsewhere.
+  // Left and right change a setting's value on the Settings page.
   if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow) || ImGui::IsKeyPressed(ImGuiKey_A)) actions.horizontal = -1;
   if (ImGui::IsKeyPressed(ImGuiKey_RightArrow) || ImGui::IsKeyPressed(ImGuiKey_D)) actions.horizontal = 1;
   // Up and down with the arrows, or with W and S as in the game.
@@ -653,6 +771,7 @@ AlboriaOverlay::Actions AlboriaOverlay::ReadInput() {
     actions.primary = true;
   }
   if (ImGui::IsKeyPressed(ImGuiKey_I, false)) actions.secondary = true;
+  if (ImGui::IsKeyPressed(ImGuiKey_E, false)) actions.availability = true;
   if ((ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper) && ImGui::IsKeyPressed(ImGuiKey_C, false)) actions.copy = true;
   return actions;
 }
@@ -825,6 +944,7 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
     return 1;
   };
   const SettingsTexts settings = LocalizedSettingsTexts(language_);
+  const AvailabilityTexts availability_texts = LocalizedAvailabilityTexts(language_);
   // The Settings page's rows: the group of sounds each one sets, and the sound it plays as a sample.
   const alboria_sounds::Group setting_groups[] = {alboria_sounds::Group::kMenu, alboria_sounds::Group::kNotices};
   auto change_volume = [&](int row, int volume) {
@@ -833,6 +953,15 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
     if (volume == alboria_sounds::Volume(group)) return;
     alboria_sounds::SetVolume(group, volume);
     alboria_sounds::Play(group == alboria_sounds::Group::kMenu ? Sound::kAccept : Sound::kNotice);
+  };
+  // Shows the player to their friends as kAvailabilities[index] and closes the menu; the message
+  // line says what it does once Alboria keeps it.
+  auto choose_availability = [&](int index) {
+    const std::string chosen = kAvailabilities[index];
+    choosing_availability_ = false;
+    Start(availability_texts.options[index],
+          [chosen](alboria::ActionDone done) { alboria::SetAvailability(chosen, std::move(done)); },
+          availability_texts.helps[index], false);
   };
 
   Actions actions = adding_ || closing_ ? Actions{} : ReadInput();
@@ -847,12 +976,32 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
       closing_ = true;
     }
   }
+  // The state menu, while open, takes the input: up and down choose, A or Enter keep the choice, B,
+  // Escape, Y or E close it without a change. Nothing else happens meanwhile.
+  if (choosing_availability_ && (!signed_in || actions.close || actions.availability)) {
+    choosing_availability_ = false;
+    alboria_sounds::Play(Sound::kBack);
+    actions = Actions{};
+  } else if (choosing_availability_) {
+    if (actions.move) {
+      const int moved = std::clamp(availability_focus_ + actions.move, 0, 2);
+      if (moved != availability_focus_) alboria_sounds::Play(Sound::kMove);
+      availability_focus_ = moved;
+    }
+    if (actions.primary) choose_availability(availability_focus_);
+    actions = Actions{};
+  } else if (actions.availability && signed_in) {
+    choosing_availability_ = true;
+    availability_focus_ = AvailabilityIndex(alboria::Availability());
+    alboria_sounds::Play(Sound::kAccept);
+  }
   if (actions.close) closing_ = true;
+  // X copies the room's code on the Room page, where it shows.
+  if (actions.secondary && page_ == Page::kRoom) actions.copy = true;
   if (page_ == Page::kSettings && actions.horizontal) {
     change_volume(focus_, alboria_sounds::Volume(setting_groups[std::clamp(focus_, 0, 1)]) + actions.horizontal);
-  } else if (actions.horizontal && !actions.page) {
-    actions.page = actions.horizontal;
   }
+  // Left and right only change a setting's value: pages change with LB and RB (or Tab) alone.
   if (actions.page) {
     alboria_sounds::Play(Sound::kPage);
     page_ = static_cast<Page>((static_cast<int>(page_) + actions.page + pages) % pages);
@@ -902,7 +1051,8 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
   ImFont* body_font = body_font_ ? body_font_ : ImGui::GetFont();
   ImDrawList* draw_list = ImGui::GetForegroundDrawList();
   const ImVec2 mouse = io.MousePos;
-  const bool clicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !closing_;
+  // A click; the state menu takes it first when it falls on the menu or on the state.
+  bool clicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !closing_;
   auto inside = [&](ImVec2 min, ImVec2 max) {
     return mouse.x >= min.x && mouse.x <= max.x && mouse.y >= min.y && mouse.y <= max.y;
   };
@@ -971,6 +1121,79 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
                        GoldText(a(255)), tag.c_str());
   }
 
+  // What the player shows their friends, under their name: a pill in the state's colour (green
+  // online, red busy, slate invisible) with a white dot, and the control that opens its menu (Y, or
+  // E on the keyboard). A click on it opens or closes the menu too.
+  const float state_middle = medallion_center.y + 16.0f * unit + 24.0f * unit;
+  ImVec2 state_min, state_max;
+  // The menu under it: one row a state, its light, its name and what it does.
+  const float menu_row = 50.0f * unit;
+  const float menu_width = 330.0f * unit;
+  ImVec2 menu_min, menu_max;
+  if (signed_in) {
+    const int chosen = AvailabilityIndex(alboria::Availability());
+    const SealTone tone = chosen == 1 ? kBusyTone : chosen == 2 ? kOfflineTone : kOnlineTone;
+    const char* label = availability_texts.options[chosen];
+    const float text_size = 16.0f * unit;
+    const float text_width = title_font->CalcTextSizeA(text_size, FLT_MAX, 0.0f, label).x;
+    const float control_height = 18.0f * unit;
+    const float control_width =
+        pad ? AlboriaGlyph(draw_list, title_font, ImVec2(0, 0), control_height, look, PadControl::kY, 0)
+            : AlboriaKey(draw_list, title_font, 0.0f, 0.0f, control_height, "E", 0);
+    const float dot = 4.0f * unit;
+    const float pad_x = 12.0f * unit;
+    state_max = ImVec2(panel_max.x - margin, state_middle + 15.0f * unit);
+    state_min = ImVec2(state_max.x - pad_x - dot * 2.0f - 8.0f * unit - text_width - 10.0f * unit - control_width - pad_x,
+                       state_middle - 15.0f * unit);
+    const SealTone shade = tone.At(a(255));
+    const int first = draw_list->VtxBuffer.Size;
+    draw_list->AddRectFilled(state_min, state_max, White(a(255)), 15.0f * unit);
+    ShadeVertical(draw_list, first, state_min.y, state_max.y, shade.light, shade.dark);
+    draw_list->AddRect(state_min, state_max, choosing_availability_ ? GoldLight(a(255)) : IM_COL32(255, 255, 255, a(110)),
+                       15.0f * unit, 0, (choosing_availability_ ? 2.0f : 1.0f) * unit);
+    float x = state_min.x + pad_x;
+    draw_list->AddCircleFilled(ImVec2(x + dot, state_middle), dot, White(a(255)));
+    x += dot * 2.0f + 8.0f * unit;
+    AddTextMiddleLeft(draw_list, title_font, text_size, ImVec2(x, state_middle), White(a(255)), label);
+    x += text_width + 10.0f * unit;
+    if (pad) {
+      AlboriaGlyph(draw_list, title_font, ImVec2(x + control_width * 0.5f, state_middle), control_height, look,
+                   PadControl::kY, a(255));
+    } else {
+      AlboriaKey(draw_list, title_font, x, state_middle, control_height, "E", a(255));
+    }
+    menu_max = ImVec2(state_max.x, state_max.y + 8.0f * unit + 3 * menu_row + 16.0f * unit);
+    menu_min = ImVec2(menu_max.x - menu_width, state_max.y + 8.0f * unit);
+    // The menu takes the clicks that fall on it or on the state; one anywhere else closes it.
+    const ImVec2 mouse = ImGui::GetIO().MousePos;
+    const auto over = [&](ImVec2 min, ImVec2 max) {
+      return mouse.x >= min.x && mouse.x < max.x && mouse.y >= min.y && mouse.y < max.y;
+    };
+    if (choosing_availability_) {
+      for (int i = 0; i < 3; ++i) {
+        const ImVec2 row_min(menu_min.x + 8.0f * unit, menu_min.y + 8.0f * unit + i * menu_row);
+        const ImVec2 row_max(menu_max.x - 8.0f * unit, row_min.y + menu_row);
+        if (ImGui::GetIO().MouseDelta.x != 0.0f || ImGui::GetIO().MouseDelta.y != 0.0f) {
+          if (over(row_min, row_max)) availability_focus_ = i;
+        }
+        if (clicked && over(row_min, row_max)) {
+          clicked = false;
+          choose_availability(i);
+        }
+      }
+    }
+    if (clicked && over(state_min, state_max)) {
+      clicked = false;
+      choosing_availability_ = !choosing_availability_;
+      availability_focus_ = chosen;
+      alboria_sounds::Play(choosing_availability_ ? Sound::kAccept : Sound::kBack);
+    } else if (clicked && choosing_availability_ && !over(menu_min, menu_max)) {
+      clicked = false;
+      choosing_availability_ = false;
+      alboria_sounds::Play(Sound::kBack);
+    }
+  }
+
   // The tabs: small carved stones, the current one amber.
   const char* tab_names[] = {texts.friends, texts.invitations, texts.room, settings.tab};
   float tab_x = panel_min.x + margin + 10.0f * unit;
@@ -980,11 +1203,21 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
     if (i == 1 && !invitations.empty()) label += " (" + std::to_string(invitations.size()) + ")";
     const bool current = static_cast<int>(page_) == i;
     const Stone stone = current ? Stone::kAmber : Stone::kPearl;
+    // The tabs beside the current one hold the control that goes to them (LB and RB, or Tab for the
+    // next one on the keyboard); the others hold no seal.
+    const int current_index = static_cast<int>(page_);
+    SealContent seal;
+    seal.none = true;
+    if (i == (current_index + pages - 1) % pages && pad) {
+      seal = {true, true, look, PadControl::kLeftShoulder, nullptr};
+    } else if (i == (current_index + 1) % pages) {
+      seal = pad ? SealContent{true, true, look, PadControl::kRightShoulder, nullptr} : SealContent{true, false, look, PadControl::kA, "Tab"};
+    }
     const float width =
-        DrawRuneButton(draw_list, title_font, 16.0f * unit, ImVec2(0, 0), label.c_str(), stone, unit, 0, nullptr);
+        DrawRuneButton(draw_list, title_font, 16.0f * unit, ImVec2(0, 0), label.c_str(), stone, unit, 0, nullptr, seal);
     bool hit = false;
     DrawRuneButton(draw_list, title_font, 16.0f * unit, ImVec2(tab_x + width, tab_middle), label.c_str(), stone, unit,
-                   a(255), &hit);
+                   a(255), &hit, seal);
     if (hit && !current) {
       page_ = static_cast<Page>(i);
       focus_ = 0;
@@ -1012,7 +1245,8 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
   // vertical middle.
   const int visible_rows = std::max(1, static_cast<int>((list_bottom - list_top + row_gap) / (row_height + row_gap)));
   const int first_row = std::clamp(focus_ - visible_rows + 1, 0, std::max(0, rows_on_page() - visible_rows));
-  auto row = [&](int index, SealTone seal, const std::string& name, const std::string& detail) -> float {
+  auto row = [&](int index, SealTone seal, const std::string& name, const std::string& detail,
+                 bool picture = false) -> float {
     const float top = list_top + (index - first_row) * (row_height + row_gap);
     const ImVec2 min(list_left, top);
     const ImVec2 max(list_right, top + row_height);
@@ -1030,8 +1264,10 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
     if (!focused) draw_list->AddRect(min, max, White(a(250)), round, 0, 1.0f * unit);
     const float middle = top + row_height * 0.5f;
     if (seal.light) DrawStatusSeal(draw_list, ImVec2(min.x + 28.0f * unit, middle), 15.0f * unit, seal.light, seal.dark, a(255));
-    draw_list->AddText(title_font, 19.0f * unit, ImVec2(min.x + 54.0f * unit, top + 8.0f * unit), Ink(a(255)), name.c_str());
-    draw_list->AddText(body_font, 14.0f * unit, ImVec2(min.x + 54.0f * unit, top + 32.0f * unit), NightSoft(a(255)),
+    // The text leaves room for a seal or a picture (drawn by the caller), else starts near the edge.
+    const float text_left = min.x + (seal.light || picture ? 54.0f : 20.0f) * unit;
+    draw_list->AddText(title_font, 19.0f * unit, ImVec2(text_left, top + 8.0f * unit), Ink(a(255)), name.c_str());
+    draw_list->AddText(body_font, 14.0f * unit, ImVec2(text_left, top + 32.0f * unit), NightSoft(a(255)),
                        Fit(body_font, 14.0f * unit, detail, (max.x - min.x) * 0.5f).c_str());
     if (clicked && inside(min, max)) focus_ = index;
     return middle;
@@ -1129,7 +1365,7 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
   } else if (page_ == Page::kFriends) {
     // The first row: Add friend.
     if (first_row == 0) {
-      const float middle = row(0, SealTone{}, LocalizedAddTexts(language_).add_friend, LocalizedAddTexts(language_).help);
+      const float middle = row(0, SealTone{}, LocalizedAddTexts(language_).add_friend, LocalizedAddTexts(language_).help, true);
       // Its seal: amber, with a plus.
       const ImVec2 seal(list_left + 28.0f * unit, middle);
       draw_list->AddCircleFilled(seal, 17.4f * unit, Gold(a(255)), 40);
@@ -1159,13 +1395,14 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
     }
     for (int i = std::max(first_row, 1); i <= static_cast<int>(friends.size()) && i < first_row + visible_rows; ++i) {
       const alboria::Friend& f = friends[i - 1];
-      const SealTone tone = f.playing ? kPlayingTone : f.online ? kOnlineTone : kOfflineTone;
-      const float middle = row(i, tone.At(a(255)), f.name, Activity(texts, f));
-      // A favourite: a ring of golden light around its seal (the fonts have no star).
+      // The row has no seal: the friend's picture takes its place, with the light of their state.
+      const float middle = row(i, SealTone{}, f.name, FriendLine(texts, availability_texts, f), true);
+      // A favourite: a ring of golden light around the picture (the fonts have no star).
       if (f.favourite) {
         draw_list->AddCircle(ImVec2(list_left + 28.0f * unit, middle), 21.0f * unit, IM_COL32(255, 201, 60, a(255)), 0,
                              2.0f * unit);
       }
+      DrawFriendAvatar(draw_list, ImVec2(list_left + 28.0f * unit, middle), 14.0f * unit, FriendLight(f), a(255));
       float right = list_right - 18.0f * unit;
       bool hit = false;
       if (f.joinable) {
@@ -1190,7 +1427,9 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
     if (invitations.empty()) empty_text(texts.no_invitations);
     for (int i = first_row; i < static_cast<int>(invitations.size()) && i < first_row + visible_rows; ++i) {
       const float middle =
-          row(i, kPlayingTone.At(a(255)), invitations[i].from_name, Format(texts.invites_you, invitations[i].from_name));
+          row(i, SealTone{}, invitations[i].from_name, Format(texts.invites_you, invitations[i].from_name), true);
+      // Who invites: their picture, lit as online (they are in a room).
+      DrawFriendAvatar(draw_list, ImVec2(list_left + 28.0f * unit, middle), 14.0f * unit, StatusLight::kOnline, a(255));
       float right = list_right - 18.0f * unit;
       bool hit = false;
       right -= DrawPill(draw_list, title_font, 16.0f * unit, ImVec2(right, middle), texts.join, true, unit, a(255), &hit,
@@ -1212,7 +1451,7 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
     const char* labels[] = {settings.menu, settings.notices};
     const char* helps[] = {settings.menu_help, settings.notices_help};
     for (int i = 0; i < 2; ++i) {
-      const float middle = row(i, kSkyTone.At(a(255)), labels[i], helps[i]);
+      const float middle = row(i, SealTone{}, labels[i], helps[i]);
       const int volume = alboria_sounds::Volume(setting_groups[i]);
       const float step = 16.0f * unit;
       const float gap = 4.0f * unit;
@@ -1238,11 +1477,11 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
         }
       }
       const std::string number = std::to_string(volume);
-      draw_list->AddText(title_font, 18.0f * unit,
-                         ImVec2(list_right - 22.0f * unit - title_font->CalcTextSizeA(18.0f * unit, FLT_MAX, 0.0f,
-                                                                                        number.c_str()).x,
-                                middle - 11.0f * unit),
-                         Navy(a(255)), number.c_str());
+      AddTextMiddleLeft(draw_list, title_font, 18.0f * unit,
+                        ImVec2(list_right - 22.0f * unit -
+                                   title_font->CalcTextSizeA(18.0f * unit, FLT_MAX, 0.0f, number.c_str()).x,
+                               middle),
+                        Navy(a(255)), number.c_str());
     }
   } else {
     // The room: its code in big letters, to copy, and Join by code.
@@ -1253,7 +1492,7 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
       draw_list->AddText(title_font, 48.0f * unit, ImVec2(list_left, list_top + 30.0f * unit), Navy(a(255)), code.c_str());
       const float code_width = title_font->CalcTextSizeA(48.0f * unit, FLT_MAX, 0.0f, code.c_str()).x;
       bool hit = false;
-      const PillGlyph copy_glyph{pad != nullptr, look, PadControl::kY, "Ctrl+C"};
+      const PillGlyph copy_glyph{pad != nullptr, look, PadControl::kX, "Ctrl+C"};
       const float pill_width = DrawPill(draw_list, title_font, 16.0f * unit, ImVec2(0, 0), texts.copy, false, unit, 0,
                                         nullptr, &copy_glyph);
       DrawPill(draw_list, title_font, 16.0f * unit, ImVec2(list_left + code_width + 24.0f * unit + pill_width,
@@ -1286,6 +1525,32 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
   }
 
   // Button hints along the bottom, under an engraved golden line, with the glyphs of the input in use.
+  // The state menu, open over the page: a carved glass card, the focused state in a golden halo.
+  if (signed_in && choosing_availability_) {
+    DrawCarvedPanel(draw_list, menu_min, menu_max, 16.0f * unit, unit, a(255));
+    const SealTone tones[] = {kOnlineTone, kBusyTone, kOfflineTone};
+    for (int i = 0; i < 3; ++i) {
+      const ImVec2 row_min(menu_min.x + 8.0f * unit, menu_min.y + 8.0f * unit + i * menu_row);
+      const ImVec2 row_max(menu_max.x - 8.0f * unit, row_min.y + menu_row);
+      if (i == availability_focus_) {
+        draw_list->AddRectFilled(row_min, row_max, White(a(240)), 12.0f * unit);
+        draw_list->AddRect(row_min, row_max, Gold(a(255)), 12.0f * unit, 0, 1.6f * unit);
+      }
+      const float middle = (row_min.y + row_max.y) * 0.5f;
+      const ImVec2 lamp(row_min.x + 18.0f * unit, middle);
+      const SealTone shade = tones[i].At(a(255));
+      const int first = draw_list->VtxBuffer.Size;
+      draw_list->AddCircleFilled(lamp, 8.0f * unit, White(a(255)), 20);
+      ShadeVertical(draw_list, first, lamp.y - 8.0f * unit, lamp.y + 8.0f * unit, shade.light, shade.dark);
+      draw_list->AddCircle(lamp, 9.0f * unit, Gold(a(255)), 20, 1.6f * unit);
+      draw_list->AddText(title_font, 16.0f * unit, ImVec2(row_min.x + 36.0f * unit, row_min.y + 6.0f * unit), Ink(a(255)),
+                         availability_texts.options[i]);
+      draw_list->AddText(body_font, 13.0f * unit, ImVec2(row_min.x + 36.0f * unit, row_min.y + 27.0f * unit),
+                         NightSoft(a(255)),
+                         Fit(body_font, 13.0f * unit, availability_texts.helps[i], row_max.x - row_min.x - 44.0f * unit).c_str());
+    }
+  }
+
   const float hints_y = panel_max.y - 38.0f * unit;
   draw_list->AddLine(ImVec2(panel_min.x + margin, hints_y - 14.0f * unit), ImVec2(panel_max.x - margin, hints_y - 14.0f * unit),
                      Gold(a(150)), 1.0f * unit);
@@ -1299,7 +1564,8 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
     } else {
       x += AlboriaKey(draw_list, title_font, x, hints_y + 9.0f * unit, glyph, key, a(255)) + 6.0f * unit;
     }
-    draw_list->AddText(body_font, 15.0f * unit, ImVec2(x, hints_y), Navy(a(255)), text);
+    // On the glyph's middle line, 9 units below the bar's top.
+    AddTextMiddleLeft(draw_list, body_font, 15.0f * unit, ImVec2(x, hints_y + 9.0f * unit), Navy(a(255)), text);
     x += body_font->CalcTextSizeA(15.0f * unit, FLT_MAX, 0.0f, text).x + 20.0f * unit;
   };
   if (adding_) {
@@ -1328,7 +1594,8 @@ void AlboriaOverlay::OnDraw(ImGuiIO& io) {
     x += AlboriaArrowsGlyph(draw_list, ImVec2(x + width * 0.5f, hints_y + 9.0f * unit), glyph, pad != nullptr, vertical,
                             a(255)) +
          6.0f * unit;
-    draw_list->AddText(body_font, 15.0f * unit, ImVec2(x, hints_y), Navy(a(255)), text);
+    // On the glyph's middle line, 9 units below the bar's top.
+    AddTextMiddleLeft(draw_list, body_font, 15.0f * unit, ImVec2(x, hints_y + 9.0f * unit), Navy(a(255)), text);
     x += body_font->CalcTextSizeA(15.0f * unit, FLT_MAX, 0.0f, text).x + 20.0f * unit;
   };
   if (page_ != Page::kRoom && (signed_in || page_ == Page::kSettings) && rows_on_page() > 1) {

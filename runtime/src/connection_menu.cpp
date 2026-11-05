@@ -394,10 +394,10 @@ void ConnectionMenu::OnDraw(ImGuiIO& io) {
   const float hints_y = panel_max.y - 30.0f * unit;
   float x = panel_min.x + margin;
   x += DrawConfirmGlyph(draw_list, title_font, ImVec2(x, hints_y), unit, pad, texts.enter, a(255)) + 6.0f * unit;
-  draw_list->AddText(body_font, 13.0f * unit, ImVec2(x, hints_y), Text(a(255)), texts.change);
+  AddTextMiddleLeft(draw_list, body_font, 13.0f * unit, ImVec2(x, hints_y + 8.0f * unit), Text(a(255)), texts.change);
   x += body_font->CalcTextSizeA(13.0f * unit, FLT_MAX, 0.0f, texts.change).x + 26.0f * unit;
   x += DrawCancelGlyph(draw_list, title_font, ImVec2(x, hints_y), unit, pad, "Esc", a(255)) + 6.0f * unit;
-  draw_list->AddText(body_font, 13.0f * unit, ImVec2(x, hints_y), Text(a(255)), texts.back);
+  AddTextMiddleLeft(draw_list, body_font, 13.0f * unit, ImVec2(x, hints_y + 8.0f * unit), Text(a(255)), texts.back);
 }
 
 void ConnectionMenu::OnClose() {

@@ -49,6 +49,8 @@ struct SealContent {
   coop_ui::PadLook look = coop_ui::PadLook::kGeneric;
   rex::input::PadControl control_id = rex::input::PadControl::kA;
   const char* key = nullptr;
+  // No seal at all: the stone holds only its label.
+  bool none = false;
 };
 
 // A carved panel: pearl glass (white to lilac to sky, top to bottom, `opacity` of it), a white
@@ -77,6 +79,15 @@ void DrawRingRune(ImDrawList* draw_list, ImVec2 center, float radius, ImU32 colo
 // A round seal of colour, light at the top and dark below, ringed in gold, with the ring rune in
 // white: what a friend is doing, or a page's sigil.
 void DrawStatusSeal(ImDrawList* draw_list, ImVec2 center, float radius, ImU32 light, ImU32 dark, int alpha);
+
+// What a friend's status light shows: green online, red busy, off (dark, no shine) offline or
+// invisible.
+enum class StatusLight { kOnline, kBusy, kOff };
+
+// A friend's picture (a default silhouette until players have avatars) in a round, metallic golden
+// frame, with a smaller golden setting sunk into the frame at 45 degrees to the top right that holds
+// the light of their state. `radius` is the picture's; the frame and the setting reach past it.
+void DrawFriendAvatar(ImDrawList* draw_list, ImVec2 center, float radius, StatusLight light, int alpha);
 
 // The logo's pearl medallion ringed in gold, with a soft sky glow; the planet is drawn on it apart.
 void DrawMedallion(ImDrawList* draw_list, ImVec2 center, float radius, int alpha);

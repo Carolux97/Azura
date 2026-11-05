@@ -1260,7 +1260,7 @@ void VersusOnlineMenu::OnDraw(ImGuiIO& io) {
                                  a(255));
     }
     hint_x += 6.0f * u;
-    draw_list->AddText(body_font, 13.0f * u, ImVec2(hint_x, hint_y), Text(a(255)), label);
+    AddTextMiddleLeft(draw_list, body_font, 13.0f * u, ImVec2(hint_x, hint_y + 8.0f * u), Text(a(255)), label);
     hint_x += body_font->CalcTextSizeA(13.0f * u, FLT_MAX, 0.0f, label).x + 26.0f * u;
   };
 
@@ -1314,9 +1314,9 @@ void VersusOnlineMenu::OnDraw(ImGuiIO& io) {
         const float middle = (row_min.y + row_max.y) * 0.5f;
         DrawDiamond(draw_list, ImVec2(row_min.x + 24.0f * u, middle), 12.0f * u, g_marked[i] ? Imulsion(a(255)) : TextFaint(a(255)),
                     Imulsion(a(255)), g_marked[i], 1.5f * u);
-        draw_list->AddText(title_font, 16.0f * u, ImVec2(row_min.x + 44.0f * u, middle - 9.0f * u),
-                           focused ? Imulsion(a(255)) : g_marked[i] ? Text(a(255)) : TextDim(a(255)),
-                           ModeName(texts, language_, i));
+        AddTextMiddleLeft(draw_list, title_font, 16.0f * u, ImVec2(row_min.x + 44.0f * u, middle),
+                          focused ? Imulsion(a(255)) : g_marked[i] ? Text(a(255)) : TextDim(a(255)),
+                          ModeName(texts, language_, i));
       }
       // What the focused mode is about, under the list; "choose at least one mode" in its place for
       // a while after a search with none.

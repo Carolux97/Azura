@@ -552,7 +552,21 @@
       "gamertag": "Obraźliwy gamertag",
       "impersonation": "Podszywanie się",
       "other": "Coś innego"
-    }
+    },
+    "availability": "Twój status",
+    "availabilityOption": {
+      "online": "Dostępny",
+      "busy": "Zajęty",
+      "invisible": "Niewidoczny"
+    },
+    "availabilityChanged": {
+      "online": "Znajomi widzą cię jako dostępnego",
+      "busy": "Znajomi widzą cię jako zajętego; powiadomienia się nie pojawią",
+      "invisible": "Znajomi widzą cię jako niedostępnego; powiadomienia się nie pojawią"
+    },
+    "busy": "Zajęty",
+    "playingBusy": "Zajęty · gra w {game}",
+    "cameOnline": "{name} jest dostępny"
   },
   "devServer": {
     "title": "Programowanie",

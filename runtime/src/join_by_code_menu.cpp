@@ -462,14 +462,14 @@ void JoinByCodeMenu::OnDraw(ImGuiIO& io) {
     } else {
       x += DrawConfirmGlyph(draw_list, title_font, ImVec2(x, hints_y), unit, nullptr, key, a(255)) + 6.0f * unit;
     }
-    draw_list->AddText(body_font, 13.0f * unit, ImVec2(x, hints_y), Text(a(255)), text);
+    AddTextMiddleLeft(draw_list, body_font, 13.0f * unit, ImVec2(x, hints_y + 8.0f * unit), Text(a(255)), text);
     x += body_font->CalcTextSizeA(13.0f * unit, FLT_MAX, 0.0f, text).x + 20.0f * unit;
   };
   if (!joining_) {
     if (pad) {
       hint(PadControl::kA, nullptr, texts.press);
     } else {
-      draw_list->AddText(body_font, 13.0f * unit, ImVec2(x, hints_y), TextDim(a(255)), texts.type);
+      AddTextMiddleLeft(draw_list, body_font, 13.0f * unit, ImVec2(x, hints_y + 8.0f * unit), TextDim(a(255)), texts.type);
       x += body_font->CalcTextSizeA(13.0f * unit, FLT_MAX, 0.0f, texts.type).x + 20.0f * unit;
       hint(PadControl::kStart, "Enter", texts.join);
       hint(PadControl::kX, "Backspace", texts.erase);

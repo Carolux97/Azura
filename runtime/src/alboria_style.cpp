@@ -11,6 +11,7 @@
 namespace azura::alboria_style {
 
 using coop_ui::AddTextCentered;
+using coop_ui::AddTextMiddleLeft;
 using coop_ui::ControlName;
 using coop_ui::PadLook;
 using rex::input::PadControl;
@@ -237,6 +238,53 @@ void DrawStatusSeal(ImDrawList* draw_list, ImVec2 center, float radius, ImU32 li
   DrawRingRune(draw_list, center, radius * 0.62f, White(alpha), std::max(1.0f, radius * 0.11f));
 }
 
+void DrawFriendAvatar(ImDrawList* draw_list, ImVec2 center, float radius, StatusLight light, int alpha) {
+  const auto with_alpha = [alpha](ImU32 c) {
+    return (c & ~IM_COL32_A_MASK) | (static_cast<ImU32>(alpha) << IM_COL32_A_SHIFT);
+  };
+  const ImU32 gold_dark = with_alpha(IM_COL32(176, 122, 30, 255));
+  const ImU32 gold_light = with_alpha(IM_COL32(243, 201, 105, 255));
+  const ImU32 gold_deep = with_alpha(IM_COL32(122, 82, 16, 255));
+  // The frame: dark gold outside, light gold in its middle, deep gold against the picture.
+  draw_list->AddCircleFilled(center, radius * 1.26f, gold_dark, 48);
+  draw_list->AddCircleFilled(center, radius * 1.17f, gold_light, 48);
+  draw_list->AddCircleFilled(center, radius * 1.07f, gold_deep, 48);
+  // The picture: a sky-blue disc with a pale head and shoulders, the shoulders kept inside it.
+  int first = draw_list->VtxBuffer.Size;
+  draw_list->AddCircleFilled(center, radius, White(alpha), 48);
+  ShadeVertical(draw_list, first, center.y - radius, center.y + radius, with_alpha(IM_COL32(169, 186, 214, 255)),
+                with_alpha(IM_COL32(111, 132, 168, 255)));
+  const ImU32 figure = with_alpha(IM_COL32(238, 241, 247, 255));
+  draw_list->AddCircleFilled(ImVec2(center.x, center.y - radius * 0.22f), radius * 0.34f, figure, 32);
+  draw_list->PathArcTo(ImVec2(center.x, center.y + radius * 0.78f), radius * 0.56f, IM_PI, 2.0f * IM_PI, 24);
+  draw_list->PathFillConvex(figure);
+  // The setting: centred on the frame's middle at 45 degrees, its own small golden rings, and the
+  // light inside, shaded with a spot of shine while lit.
+  const float reach = radius * 1.165f * 0.7071f;
+  const ImVec2 setting(center.x + reach, center.y - reach);
+  const float bezel = radius * 0.36f;
+  draw_list->AddCircleFilled(setting, bezel, gold_dark, 24);
+  draw_list->AddCircleFilled(setting, bezel * 0.85f, gold_light, 24);
+  draw_list->AddCircleFilled(setting, bezel * 0.66f, gold_deep, 24);
+  const float lamp = bezel * 0.52f;
+  ImU32 top = with_alpha(IM_COL32(90, 100, 126, 255));
+  ImU32 bottom = with_alpha(IM_COL32(58, 66, 89, 255));
+  if (light == StatusLight::kOnline) {
+    top = with_alpha(IM_COL32(70, 214, 158, 255));
+    bottom = with_alpha(IM_COL32(18, 121, 90, 255));
+  } else if (light == StatusLight::kBusy) {
+    top = with_alpha(IM_COL32(240, 122, 106, 255));
+    bottom = with_alpha(IM_COL32(168, 50, 42, 255));
+  }
+  first = draw_list->VtxBuffer.Size;
+  draw_list->AddCircleFilled(setting, lamp, White(alpha), 20);
+  ShadeVertical(draw_list, first, setting.y - lamp, setting.y + lamp, top, bottom);
+  if (light != StatusLight::kOff) {
+    draw_list->AddCircleFilled(ImVec2(setting.x - lamp * 0.35f, setting.y - lamp * 0.35f), lamp * 0.3f,
+                               IM_COL32(255, 255, 255, alpha * 200 / 255), 12);
+  }
+}
+
 void DrawMedallion(ImDrawList* draw_list, ImVec2 center, float radius, int alpha) {
   draw_list->AddCircleFilled(center, radius * 1.3f, IM_COL32(140, 200, 255, alpha * 50 / 255), 48);
   draw_list->AddCircleFilled(center, radius * 1.1f, Gold(alpha), 48);
@@ -259,9 +307,10 @@ float DrawRuneButton(ImDrawList* draw_list, ImFont* font, float size, ImVec2 rig
     content_width = seal.pad ? AlboriaGlyph(draw_list, font, ImVec2(0, 0), content_height, seal.look, seal.control_id, 0)
                              : AlboriaKey(draw_list, font, 0.0f, 0.0f, content_height, seal.key, 0);
   }
-  const float seal_width = std::max(seal_height, content_width + 8.0f * unit);
+  const float seal_width = seal.none ? 0.0f : std::max(seal_height, content_width + 8.0f * unit);
   const float text_width = font->CalcTextSizeA(size, FLT_MAX, 0.0f, label).x;
-  const float width = 4.0f * unit + seal_width + 10.0f * unit + text_width + 20.0f * unit;
+  const float width = seal.none ? 20.0f * unit + text_width + 20.0f * unit
+                                : 4.0f * unit + seal_width + 10.0f * unit + text_width + 20.0f * unit;
   const ImVec2 min(right_center.x - width, right_center.y - height * 0.5f);
   const ImVec2 max(right_center.x, right_center.y + height * 0.5f);
   if (alpha <= 0) return width;
@@ -288,27 +337,34 @@ float DrawRuneButton(ImDrawList* draw_list, ImFont* font, float size, ImVec2 rig
                      White(alpha * 220 / 255), 1.5f * unit);
   draw_list->AddRect(ImVec2(min.x + 3.0f * unit, min.y + 3.0f * unit), ImVec2(max.x - 3.0f * unit, max.y - 3.0f * unit),
                      amber ? White(alpha * 140 / 255) : Gold(alpha * 140 / 255), round - 3.0f * unit, 0, 1.0f * unit);
-  // The seal, ringed in the frame's light, and what it holds.
-  const ImVec2 seal_center(min.x + 4.0f * unit + seal_width * 0.5f, right_center.y);
-  const ImVec2 seal_min(seal_center.x - seal_width * 0.5f, seal_center.y - seal_height * 0.5f);
-  const ImVec2 seal_max(seal_center.x + seal_width * 0.5f, seal_center.y + seal_height * 0.5f);
-  draw_list->AddRectFilled(ImVec2(seal_min.x - 1.5f * unit, seal_min.y - 1.5f * unit),
-                           ImVec2(seal_max.x + 1.5f * unit, seal_max.y + 1.5f * unit), frame_light, seal_height * 0.5f + 1.5f * unit);
-  const ImU32 seal_light = amber ? IM_COL32(138, 90, 18, alpha) : IM_COL32(47, 94, 168, alpha);
-  const ImU32 seal_dark = amber ? IM_COL32(90, 58, 10, alpha) : IM_COL32(27, 47, 99, alpha);
-  const int seal_first = draw_list->VtxBuffer.Size;
-  draw_list->AddRectFilled(seal_min, seal_max, seal_light, seal_height * 0.5f);
-  ShadeVertical(draw_list, seal_first, seal_min.y, seal_max.y, seal_light, seal_dark);
-  if (seal.control && seal.pad) {
-    AlboriaGlyph(draw_list, font, seal_center, content_height, seal.look, seal.control_id, alpha);
-  } else if (seal.control) {
-    AlboriaKey(draw_list, font, seal_center.x - content_width * 0.5f, seal_center.y, content_height, seal.key, alpha);
-  } else {
-    DrawRingRune(draw_list, seal_center, seal_height * 0.36f,
-                 amber ? IM_COL32(255, 244, 194, alpha) : IM_COL32(217, 241, 255, alpha), std::max(1.0f, 1.6f * unit));
+  // The label sits on the stone's middle line (AddTextMiddleLeft).
+  if (seal.none) {
+    AddTextMiddleLeft(draw_list, font, size, ImVec2(min.x + 20.0f * unit, right_center.y),
+                      amber ? IM_COL32(43, 29, 4, alpha) : Ink(alpha), label);
   }
-  draw_list->AddText(font, size, ImVec2(seal_max.x + 10.0f * unit, right_center.y - size * 0.55f),
-                     amber ? IM_COL32(43, 29, 4, alpha) : Ink(alpha), label);
+  // The seal, ringed in the frame's light, and what it holds.
+  if (!seal.none) {
+    const ImVec2 seal_center(min.x + 4.0f * unit + seal_width * 0.5f, right_center.y);
+    const ImVec2 seal_min(seal_center.x - seal_width * 0.5f, seal_center.y - seal_height * 0.5f);
+    const ImVec2 seal_max(seal_center.x + seal_width * 0.5f, seal_center.y + seal_height * 0.5f);
+    draw_list->AddRectFilled(ImVec2(seal_min.x - 1.5f * unit, seal_min.y - 1.5f * unit),
+                             ImVec2(seal_max.x + 1.5f * unit, seal_max.y + 1.5f * unit), frame_light, seal_height * 0.5f + 1.5f * unit);
+    const ImU32 seal_light = amber ? IM_COL32(138, 90, 18, alpha) : IM_COL32(47, 94, 168, alpha);
+    const ImU32 seal_dark = amber ? IM_COL32(90, 58, 10, alpha) : IM_COL32(27, 47, 99, alpha);
+    const int seal_first = draw_list->VtxBuffer.Size;
+    draw_list->AddRectFilled(seal_min, seal_max, seal_light, seal_height * 0.5f);
+    ShadeVertical(draw_list, seal_first, seal_min.y, seal_max.y, seal_light, seal_dark);
+    if (seal.control && seal.pad) {
+      AlboriaGlyph(draw_list, font, seal_center, content_height, seal.look, seal.control_id, alpha);
+    } else if (seal.control) {
+      AlboriaKey(draw_list, font, seal_center.x - content_width * 0.5f, seal_center.y, content_height, seal.key, alpha);
+    } else {
+      DrawRingRune(draw_list, seal_center, seal_height * 0.36f,
+                   amber ? IM_COL32(255, 244, 194, alpha) : IM_COL32(217, 241, 255, alpha), std::max(1.0f, 1.6f * unit));
+    }
+    AddTextMiddleLeft(draw_list, font, size, ImVec2(seal_max.x + 10.0f * unit, right_center.y),
+                      amber ? IM_COL32(43, 29, 4, alpha) : Ink(alpha), label);
+  }
   if (hit) {
     const ImVec2 mouse = ImGui::GetIO().MousePos;
     *hit = ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mouse.x >= min.x && mouse.x <= max.x && mouse.y >= min.y &&
