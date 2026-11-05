@@ -121,7 +121,7 @@
         </label>
         <span class="version">
           <span id="launcher-version"></span>
-          <!-- Opens the "What's new" panel again once it was dismissed (renderReleaseNotes). -->
+          <!-- Opens the "What's new" window again once it was closed (renderReleaseNotes). -->
           <button class="version-link" id="release-notes-show" type="button" hidden data-i18n="releaseNotes.show"></button>
         </span>
         <span class="version" id="runtime-version"></span>
@@ -151,17 +151,6 @@
               <span class="btn-launch-label"></span>
             </button>
             <span class="btn-launch-sub" id="launch-sub"></span>
-          </div>
-          <!-- What this launcher version brings, once after it is installed or updated (from
-               launcher/CHANGELOG.md); renderReleaseNotes() fills it. -->
-          <div class="panel is-alboria place-gate release-notes" id="release-notes" hidden>
-            <span class="alb-place" data-i18n="world.gate"></span>
-            <img class="alborian" src="world/greeter.webp" alt="" width="104" height="107">
-            <div class="release-notes-text">
-              <h2 class="tagline" id="release-notes-title"></h2>
-              <ul class="release-notes-list" id="release-notes-list"></ul>
-              <button class="btn btn-small btn-primary" id="release-notes-dismiss" data-pad-back data-i18n="releaseNotes.dismiss"></button>
-            </div>
           </div>
         </div>
 
@@ -654,6 +643,22 @@
         </div>
       </section>
     </main>
+  </div>
+
+  <!-- WHAT'S NEW: what this launcher version brings (from launcher/CHANGELOG.md), in a window over
+       the launcher: once after it is installed or updated, and again from the rail's link;
+       renderReleaseNotes() fills it. A long list scrolls inside it. While it is open, the controller
+       moves only between its controls (data-modal, gamepadNav.js), and Back or Escape closes it. -->
+  <div class="notes-dialog" id="release-notes" data-modal hidden>
+    <div class="panel is-alboria place-gate notes-box" role="dialog" aria-modal="true" aria-labelledby="release-notes-title">
+      <span class="alb-place" data-i18n="world.gate"></span>
+      <img class="alborian" src="world/greeter.webp" alt="" width="104" height="107">
+      <div class="release-notes-text">
+        <h2 class="tagline" id="release-notes-title"></h2>
+        <ul class="release-notes-list" id="release-notes-list"></ul>
+        <button class="btn btn-small btn-primary" id="release-notes-dismiss" data-pad-back data-i18n="releaseNotes.dismiss"></button>
+      </div>
+    </div>
   </div>
 
   <!-- WELCOME: the account the player plays with, the first time the launcher opens (also after an

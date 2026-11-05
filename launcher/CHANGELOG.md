@@ -21,6 +21,8 @@ indented lines.
 - Leaving a public match from the pause menu no longer says the room closed.
 - macOS: the game's memory no longer grows the longer you play.
 - Corrected translations in the game's menus.
+- The launcher's release notes open in a window of their own, which scrolls, instead of stretching
+  the Play page.
 
 ## 0.6.0
 
