@@ -48,7 +48,7 @@
     "gpuValueLinux": "{gpu} · Vulkan",
     "gpuUnknown": "未偵測到 · Vulkan",
     "runtimeMissing": "找不到組建",
-    "player": "Player",
+    "player": "玩家",
     "runtimeNotInstalled": "按下「遊玩」時安裝",
     "runtimeUpdate": "更新已就緒，按下「遊玩」時安裝",
     "compiler": "編譯器",

@@ -48,7 +48,7 @@
     "gpuValueLinux": "{gpu} · Vulkan",
     "gpuUnknown": "Nezjištěno · Vulkan",
     "runtimeMissing": "Žádné sestavení nenalezeno",
-    "player": "Player",
+    "player": "Hráč",
     "runtimeNotInstalled": "Nainstaluje se po stisknutí Hrát",
     "runtimeUpdate": "Aktualizace připravena, nainstaluje se po stisknutí Hrát",
     "compiler": "Kompilátor",

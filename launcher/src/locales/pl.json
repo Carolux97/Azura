@@ -48,7 +48,7 @@
     "gpuValueLinux": "{gpu} · Vulkan",
     "gpuUnknown": "Nie wykryto · Vulkan",
     "runtimeMissing": "Nie znaleziono kompilacji",
-    "player": "Player",
+    "player": "Gracz",
     "runtimeNotInstalled": "Zainstaluje się po kliknięciu Graj",
     "runtimeUpdate": "Aktualizacja gotowa, zainstaluje się po kliknięciu Graj",
     "compiler": "Kompilator",
