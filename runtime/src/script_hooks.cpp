@@ -88,6 +88,7 @@
 #include "system_settings.h"
 #include "menu/menu_patches.h"
 #include "menu/pc_options.h"
+#include "menu_language.h"
 #include "input/mouse_look.h"
 #include "input/player_activity.h"
 #include "input/player_assignment.h"
@@ -3523,7 +3524,7 @@ uint32_t g_heading_property = 0;
 uint32_t g_lb_text_property = 0;
 std::map<std::u16string, uint32_t> g_heading_code;  // guest bytecode for each heading and button
 
-// Texts in the player's language (Xbox 360 language IDs), upper case as the game's.
+// Texts in the player's language (MenuLanguage), upper case as the game's.
 struct ManageInviteTexts {
   const char16_t* lobby_id;
   const char16_t* show_id;
@@ -3543,6 +3544,8 @@ ManageInviteTexts ManageInviteTextsFor(uint32_t language) {
     case 10: return {u"大厅 ID", u"显示 ID", u"隐藏 ID"};
     case 11: return {u"ID POKOJU", u"POKAŻ ID", u"UKRYJ ID"};
     case 12: return {u"ID ЛОББИ", u"ПОКАЗАТЬ ID", u"СКРЫТЬ ID"};
+    case azura::kLanguageCzech: return {u"ID MÍSTNOSTI", u"ZOBRAZIT ID", u"SKRÝT ID"};
+    case azura::kLanguageHungarian: return {u"SZOBAAZONOSÍTÓ", u"AZONOSÍTÓ MEGJELENÍTÉSE", u"AZONOSÍTÓ ELREJTÉSE"};
     default: return {u"LOBBY ID", u"SHOW ID", u"HIDE ID"};
   }
 }
@@ -3567,13 +3570,13 @@ std::u16string PlayersHeading(const uint8_t* base, uint32_t scene, uint32_t head
   if (status.state != rex::system::xam::alboria::State::kConnected || status.code.empty()) return g_players_heading;
   const std::string code = g_show_room_code.load() ? status.code : std::string("****-****");
   return g_players_heading + u" <font color='#E3A63B'>(" +
-         ManageInviteTextsFor(REXCVAR_GET(user_language)).lobby_id + u": " + Utf16(code) + u")</font>";
+         ManageInviteTextsFor(azura::MenuLanguage()).lobby_id + u": " + Utf16(code) + u")</font>";
 }
 
 // LB's text (UIScene_WhatsUp.InviteGearsButtonActive): the button's controller font character,
 // which the button prompts replace, and "Show ID" or "Hide ID".
 std::u16string ShowIdButton() {
-  const ManageInviteTexts texts = ManageInviteTextsFor(REXCVAR_GET(user_language));
+  const ManageInviteTexts texts = ManageInviteTextsFor(azura::MenuLanguage());
   return std::u16string(u"<Font:$ControllerFont>_</Font> ") + (g_show_room_code.load() ? texts.hide_id : texts.show_id);
 }
 
