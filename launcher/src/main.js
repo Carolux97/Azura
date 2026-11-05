@@ -305,17 +305,19 @@ const refreshRuntime = async () => {
  * "Install", so it never offers to start a game that cannot run.
  */
 /**
- * The "What's new" panel: this version's notes until the player dismisses them, and again when
- * they reopen them from the rail's link (shown while the panel is closed). The notes are in English
- * (launcher/CHANGELOG.md); the title around them is translated.
+ * The "What's new" window: this version's notes over the launcher until the player closes them,
+ * and again when they reopen them from the rail's link (shown while the window is closed). The
+ * notes are in English (launcher/CHANGELOG.md); the title around them is translated. The focus
+ * goes to its button when it opens, so a controller or the keyboard can close it at once.
  */
 const renderReleaseNotes = () => {
-  const panel = document.getElementById("release-notes");
+  const dialog = document.getElementById("release-notes");
   const notes = state.releaseNotes;
   const dismissed = Boolean(notes) && notes.version === state.seenReleaseNotes;
-  panel.hidden = !notes || (dismissed && !state.releaseNotesReopened);
-  document.getElementById("release-notes-show").hidden = !notes || !panel.hidden;
-  if (panel.hidden) return;
+  const wasOpen = !dialog.hidden;
+  dialog.hidden = !notes || (dismissed && !state.releaseNotesReopened);
+  document.getElementById("release-notes-show").hidden = !notes || !dialog.hidden;
+  if (dialog.hidden) return;
   document.getElementById("release-notes-title").textContent = t("releaseNotes.title", { version: notes.version });
   document.getElementById("release-notes-list").replaceChildren(
     ...notes.items.map((item) => {
@@ -324,20 +326,30 @@ const renderReleaseNotes = () => {
       return line;
     }),
   );
+  if (!wasOpen) {
+    document.getElementById("release-notes-list").scrollTop = 0;
+    document.getElementById("release-notes-dismiss").focus({ preventScroll: true });
+  }
 };
 
 const setupReleaseNotes = async () => {
-  document.getElementById("release-notes-dismiss").addEventListener("click", () => {
+  const close = () => {
     state.seenReleaseNotes = state.releaseNotes?.version ?? null;
     state.releaseNotesReopened = false;
     persist();
     renderReleaseNotes();
+  };
+  document.getElementById("release-notes-dismiss").addEventListener("click", close);
+  // Escape closes the window too (a controller's Back presses its button, data-pad-back).
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !document.getElementById("release-notes").hidden) {
+      event.preventDefault();
+      close();
+    }
   });
   document.getElementById("release-notes-show").addEventListener("click", () => {
     state.releaseNotesReopened = true;
-    showView("play");
     renderReleaseNotes();
-    document.getElementById("release-notes").scrollIntoView({ block: "nearest" });
   });
   try {
     state.releaseNotes = await getReleaseNotes();
