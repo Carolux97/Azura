@@ -448,6 +448,7 @@ enum WatchedName {
   kReturnToMainMenu,         // PlayerController and subclasses: the game sends the player to the main menu
   kShowUIMessage,            // GearUIManager: opens one of the game's message boxes, by its tag
   kClientWasKicked,          // GearPC: the host removed the player (for idling): the game's message, then the main menu
+  kOnConfirmReturnToMenu,    // UIScene_Pause: the player confirmed leaving the match for the main menu
   kProcessSoundEvent,        // UISoundTheme: plays a menu sound by its event name (Menu sounds)
   // The menu sound events our menus play (MenuSound), in its order.
   kSoundStepUp,
@@ -484,6 +485,7 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "GetPartyType",          "LocalPartyCreated",      "ClientSetHUD",       "OnCustomMapChanged",
     "ApplySensitivityScaling", "ViewAdhesion",
     "GetAdjustedAimFor",     "NotifyInviteFailed",     "CancelPartyMatchmaking", "CreatePlayerVersusMatch", "OnNoPartialPartyAvailable", "PostBeginPlay", "ContinueCreateMatch", "InitializeGameSelectionInternal", "UpdateCountdowns", "InitializeMapSelectionInternal", "GetTeamForCurrentPlayer", "HandleGameSessionJIP", "InitializePreGameGameSettings", "PreLogin", "PostLogin", "SetNumBots", "BeginMatch", "EndOfGameTransition", "GetNextMap", "CheckMapAgainstPlaylist", "GetNumberOfSupportedMapsForPlaylist", "IsEpicDev", "InitGameReplicationInfo", "UpdateGRI", "DelayedGameSessionDelete", "PlacePlayerOnSmallestTeam", "GetOccupiedTeamSize", "GetGameSummaryFromProviderIndex", "HandleHordeSelection", "HandleSiegeSelection", "HandleHordeAndSiegeMatchModeSelection", "UpdateNatType", "UpdatePopulationNumbers", "SetHostIcon", "UpdatePlayerList", "OnLeaveGame", "CanBackUpToMapSelect", "CanLeaveGame", "IsOfficialMatch", "IsPlayerMatch", "OnLeaveLobby_Confirmed", "ReturnToMainMenu", "ShowUIMessage", "ClientWasKicked",
+    "OnConfirm_ReturnToMenu",
     "ProcessSoundEvent",     "Options_StepUp",         "Options_StepDown",   "ValueChangeLeft",
     "ValueChangeRight",      "Options_AcceptButton",   "Options_BackButton", "Options_DetailsEnter",
     "Options_DetailsLeave",  "Options_SliderLeft",     "Options_SliderRight"};
@@ -5393,6 +5395,17 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   // custom match's host does, taking everyone into its own party. Its game goes back to the main menu
   // by itself instead (HostLeaveMatchmadeLobby), and the others' lobby closes under them, so each
   // party goes back whole to a room of its own (HandleMatchmadeLobbyLost).
+  // Leaving a match from the pause menu, confirmed: its GearPC.ReturnToMainMenu runs within this
+  // call, and counts as a chosen leave, as leaving the lobby does (no "the room closed" from the
+  // online menu). Answered with anything else, nothing goes back to the main menu, so the mark is
+  // cleared again once the call is over.
+  if (Is(base, function, kOnConfirmReturnToMenu) && LiveMode()) {
+    g_left_lobby_by_choice.store(true);
+    REXLOG_INFO("[Azura online] The player answered the pause menu's Return to menu");
+    __imp__sub_822DF9E0(ctx, base);
+    g_left_lobby_by_choice.store(false);
+    return;
+  }
   if (Is(base, function, kOnLeaveLobbyConfirmed) && LiveMode()) {
     const int32_t alias_at = ParamOffset(base, function, "SelectedInputAlias");
     const uint32_t locals = LoadU32(base, ctx.r4.u32 + kFrameLocals);
