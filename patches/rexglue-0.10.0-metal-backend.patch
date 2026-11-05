@@ -26349,7 +26349,7 @@ index 82a252c..3dcec80 100644
    if (event.gbutton.down) {
      if (xbutton == X_INPUT_GAMEPAD_GUIDE && !REXCVAR_GET(guide_button)) {
 diff --git a/src/kernel/xam/apps/xgi_app.cpp b/src/kernel/xam/apps/xgi_app.cpp
-index 2b222da..abfd16d 100644
+index 2b222da..4bbc183 100644
 --- a/src/kernel/xam/apps/xgi_app.cpp
 +++ b/src/kernel/xam/apps/xgi_app.cpp
 @@ -10,7 +10,21 @@
@@ -26422,7 +26422,7 @@ index 2b222da..abfd16d 100644
          }
        } else {
          REXKRNL_INFO("XGIUserWriteAchievements: skipped (count={} ptr={:08X})", achievement_count,
-@@ -113,6 +156,93 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -113,6 +156,103 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
            "{:08X})",
            session_ptr, flags, num_slots_public, num_slots_private, user_xuid, session_info_ptr,
            nonce_ptr);
@@ -26445,7 +26445,17 @@ index 2b222da..abfd16d 100644
 +        if (session.hosting) {
 +          const auto party_type = (flags & kXSessionCreateJoinViaPresenceDisabled) ? alboria::PartyType::kInviteOnly
 +                                                                                   : alboria::PartyType::kJoinable;
-+          if (!alboria::InRoom()) {
++          // Hosting while a member of another player's party room means the title left that party
++          // and made its own: the friend's room is left (HostGame stops it, saying goodbye) and the
++          // new party gets a room of its own, as leaving a party did on Xbox Live. A match room is
++          // kept: a member who hosts there is the title's own host migration.
++          const alboria::Status status = alboria::GetStatus();
++          const bool left_friends_party =
++              status.state == alboria::State::kConnected && !status.host && !status.in_match;
++          if (!alboria::InRoom() || left_friends_party) {
++            if (left_friends_party) {
++              REXKRNL_INFO("Alboria: the title left the party of room {} for its own: leaving that room", status.code);
++            }
 +            alboria::HostGame(kernel_state_->title_id(), std::clamp<int>(num_slots_public + num_slots_private, 2, 10),
 +                              party_type);
 +          } else {
@@ -26516,7 +26526,7 @@ index 2b222da..abfd16d 100644
        return X_E_SUCCESS;
      }
      case 0x000B0011: {
-@@ -123,6 +253,13 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -123,6 +263,13 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
        uint64_t session_nonce = memory::load_and_swap<uint64_t>(buffer + 8);
  
        REXKRNL_DEBUG("XGISessionDelete({:08X}, {:08X}, {:016X})", obj_ptr, flags, session_nonce);
@@ -26530,7 +26540,7 @@ index 2b222da..abfd16d 100644
  
        return X_E_SUCCESS;
      }
-@@ -148,6 +285,10 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -148,6 +295,10 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
        uint64_t session_nonce = memory::load_and_swap<uint64_t>(buffer + 8);
  
        REXKRNL_DEBUG("XSessionStart({:08X}, {:08X}, {:016X})", obj_ptr, flags, session_nonce);
@@ -26541,7 +26551,7 @@ index 2b222da..abfd16d 100644
  
        return X_STATUS_SUCCESS;
      }
-@@ -179,6 +320,67 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -179,6 +330,67 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
        REXKRNL_DEBUG("XSessionSearch({}, {}, {}, {}, {}, {:08X}, {:08X}, {}, {:08X})", proc_index,
                      user_index, num_results, num_props, num_ctx, props_ptr, ctx_ptr,
                      results_buffer_size, search_results_ptr);
@@ -26609,7 +26619,7 @@ index 2b222da..abfd16d 100644
        return X_E_SUCCESS;
      }
      case 0x000B0018: {
-@@ -191,6 +393,21 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -191,6 +403,21 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
  
        REXKRNL_DEBUG("XSessionModify({:08X}, {:08X}, {:08X}, {:08X})", obj_ptr, flags,
                      maxPublicSlots, maxPrivateSlots);
@@ -26631,7 +26641,7 @@ index 2b222da..abfd16d 100644
  
        return X_E_SUCCESS;
      }
-@@ -243,7 +460,25 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -243,7 +470,25 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
  
        REXKRNL_DEBUG("XSessionMigrateHost({:08X}, {:08X}, {}, {}, {}, {})", obj_ptr,
                      session_info_ptr, user_index, reserved1, reserved2, reserved3);
@@ -26658,7 +26668,7 @@ index 2b222da..abfd16d 100644
        return X_E_SUCCESS;
      }
      case 0x000B0019: {
-@@ -288,6 +523,37 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -288,6 +533,37 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
        REXKRNL_DEBUG("XSessionSearchByID({}, {:08X}, {:08X}, {:08X}, {:08X}, {}, {}, {})",
                      user_index, num_session_ids, session_ids_ptr, results_buffer_size,
                      search_results_ptr, reserved1, reserved2, reserved3);
@@ -26696,7 +26706,7 @@ index 2b222da..abfd16d 100644
  
        return X_E_SUCCESS;
      }
-@@ -329,7 +595,30 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+@@ -329,7 +605,30 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
  
        REXKRNL_DEBUG("XUserReadStats({}, {}, {:08X}, {}, {:08X}, {}, {:08X})", title_id, xuids_count,
                      xuids_ptr, specs_count, specs_ptr, results_size, results_ptr);
