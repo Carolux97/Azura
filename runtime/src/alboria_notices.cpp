@@ -67,6 +67,9 @@ struct Texts {
   // The label and the line of a match that ended as its host left (shown in the name's place).
   const char* match;
   const char* host_left;
+  // The label and the line of a friend who came online.
+  const char* friend_online;
+  const char* came_online;
 };
 
 // In the game's languages; the runtime loads the Cyrillic and CJK fonts each one needs.
@@ -74,59 +77,72 @@ Texts LocalizedTexts(uint32_t language) {
   switch (language) {
     case 2:  // Japanese
       return {"招待", "フレンドリクエスト", "あなたのルーム", "あなたをルームに招待しています", "フレンドになりたがっています", "Alboria ランチャーから返答してください",
-              "あなたのルームに参加しました", "承諾", "Alboria", "ルームに参加中…", "マッチ", "マッチが終了しました"};
+              "あなたのルームに参加しました", "承諾", "Alboria", "ルームに参加中…", "マッチ", "マッチが終了しました",
+              "フレンドがオンライン", "オンラインになりました"};
     case 7:  // Korean
       return {"초대", "친구 요청", "내 방", "방에 초대했습니다", "친구가 되고 싶어 합니다", "Alboria 런처에서 응답하세요", "내 방에 들어왔습니다", "수락",
-              "Alboria", "방에 참가 중…", "매치", "매치가 끝났습니다"};
+              "Alboria", "방에 참가 중…", "매치", "매치가 끝났습니다",
+              "친구 접속", "온라인이 되었습니다"};
     case 8:  // Traditional Chinese
       return {"邀請", "好友請求", "你的房間", "邀請你加入房間", "想成為你的好友", "請從 Alboria 啟動器回覆", "加入了你的房間", "接受", "Alboria",
-              "正在加入房間…", "對戰", "對戰已結束"};
+              "正在加入房間…", "對戰", "對戰已結束",
+              "好友上線", "上線了"};
     case 12:  // Russian
       return {"ПРИГЛАШЕНИЕ", "ЗАПРОС В ДРУЗЬЯ", "В ВАШЕЙ КОМНАТЕ", "приглашает вас в комнату",
               "хочет добавить вас в друзья", "Ответьте в лаунчере Alboria", "вошёл в вашу комнату", "Принять",
-              "Alboria", "Вход в комнату…", "МАТЧ", "Матч завершён"};
+              "Alboria", "Вход в комнату…", "МАТЧ", "Матч завершён",
+              "ДРУГ В СЕТИ", "теперь в сети"};
     case 5:  // Spanish
       return {"INVITACI\xC3\x93N", "SOLICITUD DE AMISTAD", "EN TU SALA", "te invita a su sala",
               "quiere ser tu amigo", "Resp\xC3\xB3ndela desde el launcher de Alboria", "ha entrado en tu sala",
               "Aceptar", "Alboria", "Uni\xC3\xA9ndote a la sala\xE2\x80\xA6", "PARTIDA",
-              "La partida ha terminado"};
+              "La partida ha terminado",
+              "AMIGO CONECTADO", "se ha conectado"};
     case 3:  // German
       return {"EINLADUNG", "FREUNDSCHAFTSANFRAGE", "IN DEINEM RAUM", "l\xC3\xA4""dt dich in den Raum ein",
               "m\xC3\xB6""chte dein Freund sein", "Beantworte sie im Alboria-Launcher",
               "ist deinem Raum beigetreten", "Annehmen", "Alboria", "Raum wird betreten\xE2\x80\xA6", "MATCH",
-              "Das Match ist beendet"};
+              "Das Match ist beendet",
+              "FREUND ONLINE", "ist jetzt online"};
     case 4:  // French
       return {"INVITATION", "DEMANDE D'AMI", "DANS VOTRE SALON", "vous invite dans son salon",
               "veut \xC3\xAAtre votre ami", "R\xC3\xA9pondez-y depuis le launcher Alboria", "a rejoint votre salon",
               "Accepter", "Alboria", "Connexion au salon\xE2\x80\xA6", "PARTIE",
-              "La partie est termin\xC3\xA9""e"};
+              "La partie est termin\xC3\xA9""e",
+              "AMI EN LIGNE", "est en ligne"};
     case 6:  // Italian
       return {"INVITO", "RICHIESTA DI AMICIZIA", "NELLA TUA STANZA", "ti invita nella sua stanza",
               "vuole essere tuo amico", "Rispondi dal launcher di Alboria", "\xC3\xA8 entrato nella tua stanza",
               "Accetta", "Alboria", "Ingresso nella stanza\xE2\x80\xA6", "PARTITA",
-              "La partita \xC3\xA8 finita"};
+              "La partita \xC3\xA8 finita",
+              "AMICO ONLINE", "\xC3\xA8 online"};
     case 9:  // Portuguese
       return {"CONVITE", "PEDIDO DE AMIZADE", "NA SUA SALA", "convidou voc\xC3\xAA para a sala",
               "quer ser seu amigo", "Responda pelo launcher da Alboria", "entrou na sua sala", "Aceitar",
-              "Alboria", "Entrando na sala\xE2\x80\xA6", "PARTIDA", "A partida terminou"};
+              "Alboria", "Entrando na sala\xE2\x80\xA6", "PARTIDA", "A partida terminou",
+              "AMIGO ONLINE", "ficou online"};
     case 11:  // Polish
       return {"ZAPROSZENIE", "ZAPROSZENIE DO ZNAJOMYCH", "W TWOIM POKOJU", "zaprasza ci\xC4\x99 do pokoju",
               "chce zosta\xC4\x87 twoim znajomym", "Odpowiedz w launcherze Alboria",
               "do\xC5\x82\xC4\x85""czy\xC5\x82 do twojego pokoju", "Akceptuj", "Alboria",
               "Do\xC5\x82\xC4\x85""czanie do pokoju\xE2\x80\xA6", "MECZ",
-              "Mecz si\xC4\x99 zako\xC5\x84""czy\xC5\x82"};
+              "Mecz si\xC4\x99 zako\xC5\x84""czy\xC5\x82",
+              "ZNAJOMY DOST\xC4\x98PNY", "jest dost\xC4\x99pny"};
     case kLanguageCzech:
       return {"POZVÁNKA", "ŽÁDOST O PŘÁTELSTVÍ", "VE VAŠÍ MÍSTNOSTI", "vás zve do své místnosti",
               "si vás chce přidat mezi přátele", "Odpovězte v launcheru Alboria", "je teď ve vaší místnosti",
-              "Přijmout", "Alboria", "Připojování k místnosti…", "ZÁPAS", "Zápas skončil"};
+              "Přijmout", "Alboria", "Připojování k místnosti…", "ZÁPAS", "Zápas skončil",
+              "PŘÍTEL ONLINE", "je teď online"};
     case kLanguageHungarian:
       return {"MEGHÍVÓ", "BARÁTKÉRELEM", "A SZOBÁDBAN", "meghívott a szobájába", "szeretne a barátod lenni",
               "Válaszolj rá az Alboria launcherben", "csatlakozott a szobádhoz", "Elfogadás", "Alboria",
-              "Csatlakozás a szobához…", "MECCS", "A meccs véget ért"};
+              "Csatlakozás a szobához…", "MECCS", "A meccs véget ért",
+              "BARÁT ONLINE", "online lett"};
     default:
       return {"INVITATION", "FRIEND REQUEST", "IN YOUR ROOM", "invites you to their room",
               "wants to be your friend", "Answer it from the Alboria launcher", "joined your room", "Accept",
-              "Alboria", "Joining the room\xE2\x80\xA6", "MATCH", "The match has ended"};
+              "Alboria", "Joining the room\xE2\x80\xA6", "MATCH", "The match has ended",
+              "FRIEND ONLINE", "is online"};
   }
 }
 
@@ -315,6 +331,7 @@ void AlboriaNotices::OnDraw(ImGuiIO& io) {
   const char* label = invitation ? texts.invitation
                       : notice.kind == Notice::Kind::kFriendRequest ? texts.friend_request
                       : notice.kind == Notice::Kind::kHostLeft      ? texts.match
+                      : notice.kind == Notice::Kind::kFriendOnline  ? texts.friend_online
                       : refused                                     ? texts.alboria
                                                                      : texts.in_your_room;
   // A match that ended as its host left says only that: who hosted is never shown
@@ -325,6 +342,7 @@ void AlboriaNotices::OnDraw(ImGuiIO& io) {
                                        : notice.from_name;
   std::string detail = invitation ? texts.invites
                        : notice.kind == Notice::Kind::kFriendRequest ? texts.wants_friend
+                       : notice.kind == Notice::Kind::kFriendOnline  ? texts.came_online
                        : match_ended || refused                      ? std::string()
                                                                       : texts.joined;
   if (!accept_text.empty()) detail = accept_text;
@@ -347,20 +365,20 @@ void AlboriaNotices::OnDraw(ImGuiIO& io) {
         const float w1 = AlboriaGlyph(draw_list, title_font, ImVec2(0, 0), glyph, look, first, 0);
         x += AlboriaGlyph(draw_list, title_font, ImVec2(x + w1 * 0.5f, middle), glyph, look, first, alpha);
         x += 2.0f * unit;
-        draw_list->AddText(body_font, detail_size, ImVec2(x, middle - detail_size * 0.55f), Ink(alpha), "+");
+        AddTextMiddleLeft(draw_list, body_font, detail_size, ImVec2(x, middle), Ink(alpha), "+");
         x += body_font->CalcTextSizeA(detail_size, FLT_MAX, 0.0f, "+").x + 2.0f * unit;
         const float w2 = AlboriaGlyph(draw_list, title_font, ImVec2(0, 0), glyph, look, second, 0);
         x += AlboriaGlyph(draw_list, title_font, ImVec2(x + w2 * 0.5f, middle), glyph, look, second, alpha);
       } else {
         if (first_key) {
           x += AlboriaKey(draw_list, title_font, x, middle, glyph, first_key, alpha) + 2.0f * unit;
-          draw_list->AddText(body_font, detail_size, ImVec2(x, middle - detail_size * 0.55f), Ink(alpha), "+");
+          AddTextMiddleLeft(draw_list, body_font, detail_size, ImVec2(x, middle), Ink(alpha), "+");
           x += body_font->CalcTextSizeA(detail_size, FLT_MAX, 0.0f, "+").x + 2.0f * unit;
         }
         x += AlboriaKey(draw_list, title_font, x, middle, glyph, second_key, alpha);
       }
       x += 5.0f * unit;
-      draw_list->AddText(body_font, detail_size, ImVec2(x, middle - detail_size * 0.55f), Ink(alpha), what);
+      AddTextMiddleLeft(draw_list, body_font, detail_size, ImVec2(x, middle), Ink(alpha), what);
       x += body_font->CalcTextSizeA(detail_size, FLT_MAX, 0.0f, what).x + kHintGap * unit;
     };
     chord(PadControl::kBack, PadControl::kRightTrigger, "Shift", key.c_str(), texts.accept);

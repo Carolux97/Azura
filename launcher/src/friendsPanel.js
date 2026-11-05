@@ -13,7 +13,18 @@
  * comes back the lists are read again and only what still holds is shown (friends.js).
  */
 
-import { canJoin, createEventQueue, friendActivity, onlineCount, requestName, sortFriends, stillValid } from "./friends.js";
+import {
+  cameOnline,
+  canJoin,
+  createEventQueue,
+  friendActivity,
+  noticesAllowed,
+  onlineCount,
+  ownAvailability,
+  requestName,
+  sortFriends,
+  stillValid,
+} from "./friends.js";
 import {
   alboriaFriends,
   joinRoom,
@@ -41,6 +52,10 @@ export const setupFriends = ({ state, t, toast, inFront, serviceBlock, startGame
   const queue = createEventQueue(inFront);
 
   const gameName = () => t("alboriaService.gameName");
+  /** A notice the service pushed (a request, an invitation, a friend online): quiet while busy or invisible. */
+  const notice = (text) => {
+    if (noticesAllowed(lists)) toast(text);
+  };
   const errorText = (error) => {
     if (error?.error === "list_full") return t("friends.listFull");
     if (error?.error === "invite_only" || error?.error === "room_not_found") return t("friends.roomGone");
@@ -162,7 +177,14 @@ export const setupFriends = ({ state, t, toast, inFront, serviceBlock, startGame
     if (menuOpen) more.append(foldArrow());
     actions.push(more);
     const row = personRow(`${friend.favourite ? "★ " : ""}${friend.name}`, detail, ...actions);
-    row.dataset.state = friend.presence?.status ?? "offline";
+    // The friend's picture in its golden frame, with the light of their state in the setting at its
+    // top right: green online, red busy, off while offline or invisible. Playing is not a state of
+    // its own: it keeps the light of the state, and the line under the name says what they play.
+    const avatar = document.createElement("span");
+    avatar.className = "friend-avatar";
+    avatar.dataset.light = friend.presence?.status === "offline" || !friend.presence ? "off" : friend.presence.busy ? "busy" : "online";
+    row.classList.add("has-avatar");
+    row.prepend(avatar);
     const wrap = document.createElement("div");
     wrap.className = "friend";
     wrap.append(row);
@@ -242,6 +264,9 @@ export const setupFriends = ({ state, t, toast, inFront, serviceBlock, startGame
     panel.hidden = !shown;
     if (!shown) return;
     $("friends-count").textContent = t("friends.onlineCount", { count: onlineCount(lists.friends) });
+    const availability = $("friends-availability");
+    if (document.activeElement !== availability) availability.value = ownAvailability(lists);
+    availability.dataset.state = availability.value;
 
     const invitations = lists.invitations.map((invitation) =>
       personRow(
@@ -285,8 +310,8 @@ export const setupFriends = ({ state, t, toast, inFront, serviceBlock, startGame
 
   // --- Events ------------------------------------------------------------------------------
 
-  /** What an event does when it runs: presence changes the friend at once, the rest reads again. */
-  const run = (event) => {
+  /** What an event changes in the lists: presence changes the friend at once, the rest reads again. */
+  const apply = (event) => {
     if (event.event === "presence" && lists) {
       const friend = lists.friends.find((entry) => entry.id === event.data?.id);
       if (friend) {
@@ -300,9 +325,18 @@ export const setupFriends = ({ state, t, toast, inFront, serviceBlock, startGame
       render();
       return;
     }
-    if (event.event === "friend_request") toast(t("friends.requestToast", { name: event.data?.name ?? "" }));
-    if (event.event === "invitation") toast(t("friends.invitation", { name: event.data?.from?.name ?? "" }));
     load();
+  };
+
+  /** What an event does with the launcher in front: its notice, when it has one, and its change. */
+  const run = (event) => {
+    if (event.event === "friend_request") notice(t("friends.requestToast", { name: event.data?.name ?? "" }));
+    if (event.event === "invitation") notice(t("friends.invitation", { name: event.data?.from?.name ?? "" }));
+    if (event.event === "presence" && lists) {
+      const friend = lists.friends.find((entry) => entry.id === event.data?.id);
+      if (friend && cameOnline(friend.presence, event.data.presence)) notice(t("friends.cameOnline", { name: friend.name }));
+    }
+    apply(event);
   };
 
   /** Once the launcher is in front again: reads the lists, then shows what waited and still holds. */
@@ -312,18 +346,32 @@ export const setupFriends = ({ state, t, toast, inFront, serviceBlock, startGame
     await load();
     for (const event of waited) {
       if (!lists || !stillValid(event, lists)) continue;
-      if (event.event === "friend_request") toast(t("friends.requestToast", { name: event.data?.name ?? "" }));
-      if (event.event === "invitation") toast(t("friends.invitation", { name: event.data?.from?.name ?? "" }));
+      if (event.event === "friend_request") notice(t("friends.requestToast", { name: event.data?.name ?? "" }));
+      if (event.event === "invitation") notice(t("friends.invitation", { name: event.data?.from?.name ?? "" }));
     }
   };
 
-  onAlboriaEvent((event) => queue.offer(event, run));
+  onAlboriaEvent((event) => {
+    // Behind another window, with the game closed, the lists still follow every change, quietly:
+    // the launcher costs the game nothing then. Notices wait for the launcher to be in front either
+    // way, and while the game runs the lists wait too (its own overlay shows the friends).
+    if (!inFront() && state.game === "idle") apply(event);
+    queue.offer(event, run);
+  });
   // A channel that opens again may have missed events: the lists are read again.
   onAlboriaEventsState(({ connected }) => {
     if (connected && listening) load();
   });
   window.addEventListener("focus", () => flush());
   document.addEventListener("visibilitychange", () => flush());
+
+  // What the player shows their friends; the service answers with what it keeps.
+  $("friends-availability").addEventListener("change", (event) => {
+    const availability = event.target.value;
+    // The control takes the new state's colour at once, before the service answers.
+    event.target.dataset.state = availability;
+    act("/v1/friends/availability", { availability }, t(`friends.availabilityChanged.${availability}`));
+  });
 
   $("friends-add").addEventListener("submit", (event) => {
     event.preventDefault();

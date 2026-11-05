@@ -283,6 +283,16 @@
               <div class="friends-head">
                 <p class="tagline">Alboria</p>
                 <h2 class="panel-title"><span data-i18n="friends.title"></span> <span class="friends-count" id="friends-count"></span></h2>
+                <!-- What the player shows their friends: the control itself takes the colour of the
+                     state chosen; its name is for screen readers only. -->
+                <label class="friends-availability">
+                  <span class="visually-hidden" data-i18n="friends.availability"></span>
+                  <select id="friends-availability">
+                    <option value="online" data-i18n="friends.availabilityOption.online"></option>
+                    <option value="busy" data-i18n="friends.availabilityOption.busy"></option>
+                    <option value="invisible" data-i18n="friends.availabilityOption.invisible"></option>
+                  </select>
+                </label>
               </div>
               <form class="friends-add" id="friends-add">
                 <input class="path" id="friends-add-name" type="text" maxlength="20" autocomplete="off" spellcheck="false" data-i18n-attr="placeholder:friends.addPlaceholder">

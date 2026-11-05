@@ -40,6 +40,12 @@ std::string Fit(ImFont* font, float size, const std::string& text, float max_wid
 // `center`, so a short label sits in the middle of a key cap or a button.
 void AddTextCentered(ImDrawList* draw_list, ImFont* font, float size, ImVec2 center, ImU32 color, const char* text);
 
+// Draws `text` from `left_middle.x` with the middle of the font's capitals (the ink of an "H") at
+// `left_middle.y`: a label beside a glyph or in a pill sits on the same line whatever its letters
+// (accents and descenders do not move it).
+void AddTextMiddleLeft(ImDrawList* draw_list, ImFont* font, float size, ImVec2 left_middle, ImU32 color,
+                       const char* text);
+
 // A panel with the launcher's cut corners (top left and bottom right).
 void DrawCutPanel(ImDrawList* draw_list, ImVec2 min, ImVec2 max, float cut, ImU32 fill, ImU32 line,
                   float thickness);

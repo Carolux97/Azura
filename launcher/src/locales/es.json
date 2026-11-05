@@ -552,7 +552,21 @@
       "gamertag": "Gamertag ofensivo",
       "impersonation": "Suplantación",
       "other": "Otra cosa"
-    }
+    },
+    "availability": "Tu estado",
+    "availabilityOption": {
+      "online": "En línea",
+      "busy": "Ocupado",
+      "invisible": "Invisible"
+    },
+    "availabilityChanged": {
+      "online": "Tus amigos te ven en línea",
+      "busy": "Tus amigos te ven ocupado; no te saltarán avisos",
+      "invisible": "Tus amigos te ven desconectado; no te saltarán avisos"
+    },
+    "busy": "Ocupado",
+    "playingBusy": "Ocupado · jugando a {game}",
+    "cameOnline": "{name} se ha conectado"
   },
   "devServer": {
     "title": "Desarrollo",

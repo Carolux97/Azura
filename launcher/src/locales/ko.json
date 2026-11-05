@@ -552,7 +552,21 @@
       "gamertag": "불쾌한 게이머태그",
       "impersonation": "사칭",
       "other": "기타"
-    }
+    },
+    "availability": "내 상태",
+    "availabilityOption": {
+      "online": "온라인",
+      "busy": "다른 용무 중",
+      "invisible": "오프라인으로 표시"
+    },
+    "availabilityChanged": {
+      "online": "친구에게 온라인으로 보입니다",
+      "busy": "친구에게 다른 용무 중으로 보입니다. 알림이 뜨지 않습니다",
+      "invisible": "친구에게 오프라인으로 보입니다. 알림이 뜨지 않습니다"
+    },
+    "busy": "다른 용무 중",
+    "playingBusy": "다른 용무 중 · {game} 플레이 중",
+    "cameOnline": "{name}님이 온라인이 되었습니다"
   },
   "devServer": {
     "title": "개발",

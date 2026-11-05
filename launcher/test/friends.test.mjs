@@ -7,7 +7,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { canJoin, createEventQueue, friendActivity, onlineCount, requestName, sortFriends, stillValid } from "../src/friends.js";
+import {
+  cameOnline,
+  canJoin,
+  createEventQueue,
+  friendActivity,
+  noticesAllowed,
+  onlineCount,
+  ownAvailability,
+  requestName,
+  sortFriends,
+  stillValid,
+} from "../src/friends.js";
 
 const playing = (party) => ({ status: "playing", title_id: "4D5308AB", party });
 
@@ -77,4 +88,24 @@ test("a waited event is only shown if it still holds", () => {
   // The invitation's room closed while the game ran: it is gone from the lists.
   assert.equal(stillValid({ event: "invitation", data: { id: "b" } }, lists), false);
   assert.equal(stillValid({ event: "presence", data: { id: 1 } }, lists), false);
+});
+
+test("a busy friend shows busy, online or playing", () => {
+  assert.deepEqual(friendActivity({ presence: { status: "online", busy: true } }), ["busy", {}]);
+  assert.deepEqual(friendActivity({ presence: { ...playing("joinable"), busy: true } }), ["playingBusy", {}]);
+});
+
+test("notices pop up only while the player shows themselves online", () => {
+  assert.equal(ownAvailability(null), "online");
+  assert.equal(noticesAllowed({ me: { availability: "online" } }), true);
+  assert.equal(noticesAllowed({}), true);
+  assert.equal(noticesAllowed({ me: { availability: "busy" } }), false);
+  assert.equal(noticesAllowed({ me: { availability: "invisible" } }), false);
+});
+
+test("a friend comes online when they were offline and now are online or playing", () => {
+  assert.equal(cameOnline({ status: "offline" }, { status: "online" }), true);
+  assert.equal(cameOnline(undefined, playing("joinable")), true);
+  assert.equal(cameOnline({ status: "online" }, playing("joinable")), false);
+  assert.equal(cameOnline({ status: "online" }, { status: "offline" }), false);
 });

@@ -552,7 +552,21 @@
       "gamertag": "Gamertag offensivo",
       "impersonation": "Furto d'identità",
       "other": "Altro"
-    }
+    },
+    "availability": "Il tuo stato",
+    "availabilityOption": {
+      "online": "Online",
+      "busy": "Occupato",
+      "invisible": "Invisibile"
+    },
+    "availabilityChanged": {
+      "online": "I tuoi amici ti vedono online",
+      "busy": "I tuoi amici ti vedono occupato; nessun avviso a schermo",
+      "invisible": "I tuoi amici ti vedono offline; nessun avviso a schermo"
+    },
+    "busy": "Occupato",
+    "playingBusy": "Occupato · gioca a {game}",
+    "cameOnline": "{name} è online"
   },
   "devServer": {
     "title": "Sviluppo",

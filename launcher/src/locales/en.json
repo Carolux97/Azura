@@ -552,7 +552,21 @@
       "gamertag": "Offensive gamertag",
       "impersonation": "Impersonation",
       "other": "Something else"
-    }
+    },
+    "availability": "Your status",
+    "availabilityOption": {
+      "online": "Online",
+      "busy": "Busy",
+      "invisible": "Invisible"
+    },
+    "availabilityChanged": {
+      "online": "Friends see you online",
+      "busy": "Friends see you busy; notices stay quiet",
+      "invisible": "Friends see you offline; notices stay quiet"
+    },
+    "busy": "Busy",
+    "playingBusy": "Busy · playing {game}",
+    "cameOnline": "{name} is online"
   },
   "devServer": {
     "title": "Development",

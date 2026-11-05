@@ -1261,7 +1261,7 @@ void ControlsMenu::DrawHints(ImDrawList* draw_list, float left, float right, flo
   for (auto it = hints.rbegin(); it != hints.rend(); ++it) {
     const float text_width = body_font->CalcTextSizeA(13.0f * u, FLT_MAX, 0.0f, it->text).x;
     x -= text_width;
-    draw_list->AddText(body_font, 13.0f * u, ImVec2(x, y), Text(255), it->text);
+    AddTextMiddleLeft(draw_list, body_font, 13.0f * u, ImVec2(x, y + 8.0f * u), Text(255), it->text);
     x -= 6.0f * u;
     if (!it->pad.empty()) {
       for (auto control = it->pad.rbegin(); control != it->pad.rend(); ++control) {

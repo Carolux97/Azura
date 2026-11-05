@@ -552,7 +552,21 @@
       "gamertag": "Urážlivý gamertag",
       "impersonation": "Vydávání se za někoho",
       "other": "Něco jiného"
-    }
+    },
+    "availability": "Tvůj stav",
+    "availabilityOption": {
+      "online": "Online",
+      "busy": "Zaneprázdněn",
+      "invisible": "Neviditelný"
+    },
+    "availabilityChanged": {
+      "online": "Přátelé tě vidí online",
+      "busy": "Přátelé tě vidí jako zaneprázdněného; oznámení se nezobrazí",
+      "invisible": "Přátelé tě vidí offline; oznámení se nezobrazí"
+    },
+    "busy": "Zaneprázdněn",
+    "playingBusy": "Zaneprázdněn · hraje {game}",
+    "cameOnline": "{name} je online"
   },
   "devServer": {
     "title": "Vývoj",

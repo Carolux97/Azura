@@ -552,7 +552,21 @@
       "gamertag": "Sértő gamertag",
       "impersonation": "Megszemélyesítés",
       "other": "Valami más"
-    }
+    },
+    "availability": "Állapotod",
+    "availabilityOption": {
+      "online": "Elérhető",
+      "busy": "Elfoglalt",
+      "invisible": "Láthatatlan"
+    },
+    "availabilityChanged": {
+      "online": "A barátaid elérhetőnek látnak",
+      "busy": "A barátaid elfoglaltnak látnak; nem ugranak fel értesítések",
+      "invisible": "A barátaid offline-nak látnak; nem ugranak fel értesítések"
+    },
+    "busy": "Elfoglalt",
+    "playingBusy": "Elfoglalt · {game} játékban",
+    "cameOnline": "{name} elérhető lett"
   },
   "devServer": {
     "title": "Fejlesztés",

@@ -22,14 +22,26 @@ export const onlineCount = (friends) => friends.filter((friend) => friend.presen
 
 /**
  * What a friend is doing, as a locale key under `friends` and its values: playing (with whether
- * the room is open to join), online, or offline with when they were last seen.
+ * the room is open to join), online, busy (online or playing), or offline with when they were last
+ * seen.
  */
 export const friendActivity = (friend) => {
   const presence = friend.presence ?? { status: "offline" };
+  if (presence.status === "playing" && presence.busy) return ["playingBusy", {}];
   if (presence.status === "playing") return presence.party === "joinable" ? ["playingOpen", {}] : ["playing", {}];
-  if (presence.status === "online") return ["online", {}];
+  if (presence.status === "online") return presence.busy ? ["busy", {}] : ["online", {}];
   return presence.last_seen ? ["lastSeen", { at: Date.parse(presence.last_seen) }] : ["offline", {}];
 };
+
+/** What the player chose to show their friends (`me` of the lists): online, busy or invisible. */
+export const ownAvailability = (lists) => lists?.me?.availability ?? "online";
+
+/** Whether notices may pop up: only while the player shows themselves online, not busy or invisible. */
+export const noticesAllowed = (lists) => ownAvailability(lists) === "online";
+
+/** Whether a friend's presence going from `before` to `after` is them coming online (or into a game). */
+export const cameOnline = (before, after) =>
+  (before?.status ?? "offline") === "offline" && Boolean(after?.status) && after.status !== "offline";
 
 /**
  * Whether a friend's room can be joined from the launcher: they play with a joinable room, and the

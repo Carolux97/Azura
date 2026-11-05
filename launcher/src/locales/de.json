@@ -552,7 +552,21 @@
       "gamertag": "Anstößiger Gamertag",
       "impersonation": "Identitätsbetrug",
       "other": "Etwas anderes"
-    }
+    },
+    "availability": "Dein Status",
+    "availabilityOption": {
+      "online": "Online",
+      "busy": "Beschäftigt",
+      "invisible": "Unsichtbar"
+    },
+    "availabilityChanged": {
+      "online": "Deine Freunde sehen dich online",
+      "busy": "Deine Freunde sehen dich beschäftigt; Hinweise bleiben stumm",
+      "invisible": "Deine Freunde sehen dich offline; Hinweise bleiben stumm"
+    },
+    "busy": "Beschäftigt",
+    "playingBusy": "Beschäftigt · spielt {game}",
+    "cameOnline": "{name} ist jetzt online"
   },
   "devServer": {
     "title": "Entwicklung",
