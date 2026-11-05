@@ -9,6 +9,7 @@
 
 #include "perf_overlay.h"
 #include "script_hooks.h"
+#include "menu_language.h"
 
 namespace azura {
 
@@ -102,14 +103,14 @@ Texts LocalizedTexts(uint32_t language) {
     case 4:  // French
       return {"SALON EN LIGNE", "Cr\xC3\xA9""ation du salon\xE2\x80\xA6", "Connexion au salon\xE2\x80\xA6", "EN LIGNE",
               "Impossible de joindre Alboria", "Aucune partie n'a ce code", "La partie est pleine",
-              "Le salon a \xC3\xA9t\xC3\xA9 ferm\xC3\xA9", "Tu as \xC3\xA9t\xC3\xA9 banni d'Alboria",
-              "Mets \xC3\xA0 jour Azura pour jouer en ligne", "Connecte-toi \xC3\xA0 Alboria depuis le launcher",
-              "Alboria est en maintenance, r\xC3\xA9""essaie plus tard",
+              "Le salon a \xC3\xA9t\xC3\xA9 ferm\xC3\xA9", "Vous avez \xC3\xA9t\xC3\xA9 banni d'Alboria",
+              "Mettez \xC3\xA0 jour Azura pour jouer en ligne", "Connectez-vous \xC3\xA0 Alboria depuis le launcher",
+              "Alboria est en maintenance, r\xC3\xA9""essayez plus tard",
               "Le jeu en ligne est d\xC3\xA9sactiv\xC3\xA9 pour ce jeu",
-              "Alboria n'a pas r\xC3\xA9pondu", "Il n'y a plus de place dans l'\xC3\xA9quipe de ton ami",
-              "Le match commence, r\xC3\xA9""essaie dans un instant",
-              "Ton groupe ne tient pas dans celui de ton ami",
-              "Tu es d\xC3\xA9j\xC3\xA0 dans ce salon"};
+              "Alboria n'a pas r\xC3\xA9pondu", "Il n'y a plus de place dans l'\xC3\xA9quipe de votre ami",
+              "Le match commence, r\xC3\xA9""essayez dans un instant",
+              "Votre groupe ne tient pas dans celui de votre ami",
+              "Vous \xC3\xAAtes d\xC3\xA9j\xC3\xA0 dans ce salon"};
     case 5:  // Spanish
       return {"SALA ONLINE", "Creando la sala\xE2\x80\xA6", "Entrando en la sala\xE2\x80\xA6", "ONLINE",
               "No se puede conectar con Alboria", "Ninguna partida tiene ese c\xC3\xB3""digo",
@@ -155,6 +156,22 @@ Texts LocalizedTexts(uint32_t language) {
               "Mecz si\xC4\x99 zaczyna, spr\xC3\xB3""buj za chwil\xC4\x99",
               "Twoja dru\xC5\xBCyna nie zmie\xC5\x9B""ci si\xC4\x99 w dru\xC5\xBCynie znajomego",
               "Ju\xC5\xBC jeste\xC5\x9B w tym pokoju"};
+    case kLanguageCzech:
+      return {"ONLINE MÍSTNOST", "Vytváření místnosti…", "Připojování k místnosti…", "ONLINE",
+              "Nelze se spojit s Alborií", "Žádná hra nemá tento kód", "Hra je plná", "Místnost byla zavřena",
+              "Alboria vám zablokovala přístup", "Pro hraní online aktualizujte Azura",
+              "Přihlaste se k Alborii v launcheru", "Alboria je v údržbě, zkuste to později",
+              "Online hraní této hry je vypnuto", "Alboria neodpověděla", "V týmu vašeho přítele už není místo",
+              "Zápas začíná; zkuste to za chvíli znovu", "Vaše skupina se nevejde do skupiny vašeho přítele",
+              "V této místnosti už jste"};
+    case kLanguageHungarian:
+      return {"ONLINE SZOBA", "Szoba létrehozása…", "Csatlakozás a szobához…", "ONLINE", "Az Alboria nem érhető el",
+              "Nincs ilyen kódú játék", "A játék megtelt", "A szobát bezárták", "Az Alboria kitiltott",
+              "Frissítsd az Azurát az online játékhoz", "Jelentkezz be az Alboriába a launcherben",
+              "Az Alboria karbantartás alatt áll, próbáld újra később",
+              "Ennek a játéknak az online módja ki van kapcsolva", "Az Alboria nem válaszolt",
+              "A barátod csapatában nincs több hely", "A meccs most indul; próbáld újra egy kicsit később",
+              "A csoportod nem fér be a barátod csoportjába", "Már ebben a szobában vagy"};
     default:
       return {"ONLINE ROOM", "Creating the room\xE2\x80\xA6", "Joining the room\xE2\x80\xA6", "ONLINE", "Cannot reach Alboria",
               "No game has that code", "The game is full", "The room was closed",

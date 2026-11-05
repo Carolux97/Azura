@@ -20,6 +20,7 @@
 #include "alboria_sounds.h"
 #include "alboria_style.h"
 #include "online_room_overlay.h"
+#include "menu_language.h"
 
 namespace azura {
 
@@ -178,11 +179,11 @@ Texts LocalizedTexts(uint32_t language) {
       return {"Alboria", "Amis", "Invitations", "Salon", "Rejoindre", "Inviter", "Pas maintenant", "Copier",
               "Rejoindre par code", "Fermer", "Changer de page", "Joue \xC3\xA0 %s \xC2\xB7 salon ouvert",
               "Joue \xC3\xA0 %s \xC2\xB7 sur invitation", "Joue", "En ligne", "Hors ligne", "Vu il y a %s", "%d min",
-              "%d h", "%d j", "Tu n'as pas encore d'amis sur Alboria. Ajoute-les depuis le launcher.",
-              "Tu n'as aucune invitation.", "%s t'invite dans son salon", "Tu n'es dans aucun salon.",
-              "Code de ton salon", "Code copi\xC3\xA9", "Connexion au salon\xE2\x80\xA6", "Envoi de l'invitation\xE2\x80\xA6",
+              "%d h", "%d j", "Vous n'avez pas encore d'amis sur Alboria. Ajoutez-les depuis le launcher.",
+              "Vous n'avez aucune invitation.", "%s vous invite dans son salon", "Vous n'êtes dans aucun salon.",
+              "Code de votre salon", "Code copi\xC3\xA9", "Connexion au salon\xE2\x80\xA6", "Envoi de l'invitation\xE2\x80\xA6",
               "Invitation envoy\xC3\xA9""e \xC3\xA0 %s", "Invitation refus\xC3\xA9""e", "Alboria n'est pas disponible pour le moment",
-              "V\xC3\xA9rifie ta connexion et que ton compte est li\xC3\xA9 dans le launcher.", "Impossible : %s"};
+              "V\xC3\xA9rifiez votre connexion et que votre compte est li\xC3\xA9 dans le launcher.", "Impossible : %s"};
     case 6:  // Italian
       return {"Alboria", "Amici", "Inviti", "Stanza", "Unisciti", "Invita", "Non ora", "Copia",
               "Unisciti con codice", "Chiudi", "Cambia pagina", "Gioca a %s \xC2\xB7 stanza aperta",
@@ -210,6 +211,24 @@ Texts LocalizedTexts(uint32_t language) {
               "Kod twojego pokoju", "Skopiowano kod", "Do\xC5\x82\xC4\x85""czanie do pokoju\xE2\x80\xA6", "Wysy\xC5\x82""anie zaproszenia\xE2\x80\xA6",
               "Wys\xC5\x82""ano zaproszenie do %s", "Odrzucono zaproszenie", "Alboria jest teraz niedost\xC4\x99pna",
               "Sprawd\xC5\xBA po\xC5\x82\xC4\x85""czenie i czy konto jest po\xC5\x82\xC4\x85""czone w launcherze.", "Nie uda\xC5\x82o si\xC4\x99: %s"};
+    case kLanguageCzech:
+      return {"Alboria", "Přátelé", "Pozvánky", "Místnost", "Připojit se", "Pozvat", "Teď ne", "Kopírovat",
+              "Připojit se kódem", "Zavřít", "Změnit stránku", "Hraje %s · otevřená místnost",
+              "Hraje %s · jen na pozvání", "Hraje", "Online", "Offline", "Naposledy před %s", "%d min", "%d h",
+              "%d d", "Na Alborii zatím nemáte žádné přátele. Přidejte je v launcheru.", "Nemáte žádné pozvánky.",
+              "%s vás zve do své místnosti", "Nejste v žádné místnosti.", "Kód vaší místnosti", "Kód zkopírován",
+              "Připojování k místnosti…", "Odesílání pozvánky…", "Pozvánka odeslána: %s", "Pozvánka odmítnuta",
+              "Alboria teď není dostupná", "Zkontrolujte připojení a to, zda je váš účet propojen v launcheru.",
+              "Nepodařilo se: %s"};
+    case kLanguageHungarian:
+      return {"Alboria", "Barátok", "Meghívók", "Szoba", "Csatlakozás", "Meghívás", "Most nem", "Másolás",
+              "Csatlakozás kóddal", "Bezárás", "Lapozás", "Játszik: %s · nyitott szoba",
+              "Játszik: %s · csak meghívással", "Játszik", "Online", "Offline", "Utoljára %s ezelőtt", "%d p", "%d ó",
+              "%d n", "Még nincsenek barátaid az Alborián. Add hozzá őket a launcherben.", "Nincsenek meghívóid.",
+              "%s meghívott a szobájába", "Nem vagy szobában.", "A szobád kódja", "Kód másolva",
+              "Csatlakozás a szobához…", "Meghívó küldése…", "Meghívó elküldve: %s", "Meghívó elutasítva",
+              "Az Alboria most nem érhető el",
+              "Ellenőrizd a kapcsolatot, és hogy a fiókod össze van-e kapcsolva a launcherben.", "Nem sikerült: %s"};
     default:
       return {"Alboria", "Friends", "Invitations", "Room", "Join", "Invite", "Not now", "Copy", "Join by code",
               "Close", "Change page", "Playing %s \xC2\xB7 open room", "Playing %s \xC2\xB7 invite only", "Playing",
@@ -266,9 +285,9 @@ AddTexts LocalizedAddTexts(uint32_t language) {
               "Senden", "Gro\xC3\x9F", "Leerzeichen", "L\xC3\xB6schen", "Zur\xC3\xBC""ck", "Anfrage wird gesendet\xE2\x80\xA6",
               "Anfrage an %s gesendet", "Du und %s seid jetzt Freunde", "Gib Gamertag und Nummer ein"};
     case 4:
-      return {"Ajouter un ami", "Saisis son Gamertag et son num\xC3\xA9ro, comme Nimbus#4827.", "Gamertag", "Num\xC3\xA9ro",
+      return {"Ajouter un ami", "Saisissez son Gamertag et son num\xC3\xA9ro, comme Nimbus#4827.", "Gamertag", "Num\xC3\xA9ro",
               "Envoyer", "Maj", "Espace", "Effacer", "Retour", "Envoi de la demande\xE2\x80\xA6", "Demande envoy\xC3\xA9""e \xC3\xA0 %s",
-              "%s et toi \xC3\xAAtes maintenant amis", "Saisis le Gamertag et son num\xC3\xA9ro"};
+              "Vous et %s \xC3\xAAtes maintenant amis", "Saisissez le Gamertag et son num\xC3\xA9ro"};
     case 6:
       return {"Aggiungi amico", "Scrivi il suo Gamertag e il numero, come Nimbus#4827.", "Gamertag", "Numero", "Invia",
               "Maiusc", "Spazio", "Cancella", "Indietro", "Invio della richiesta\xE2\x80\xA6", "Richiesta inviata a %s",
@@ -281,6 +300,14 @@ AddTexts LocalizedAddTexts(uint32_t language) {
       return {"Dodaj znajomego", "Wpisz Gamertag i numer, np. Nimbus#4827.", "Gamertag", "Numer", "Wy\xC5\x9Blij", "Shift",
               "Spacja", "Usu\xC5\x84", "Wr\xC3\xB3\xC4\x87", "Wysy\xC5\x82""anie zaproszenia\xE2\x80\xA6",
               "Wys\xC5\x82""ano zaproszenie do %s", "Ty i %s jeste\xC5\x9B""cie znajomymi", "Wpisz Gamertag i numer"};
+    case kLanguageCzech:
+      return {"Přidat přítele", "Zadejte jeho Gamertag a číslo, např. Nimbus#4827.", "Gamertag", "Číslo", "Odeslat",
+              "Shift", "Mezerník", "Smazat", "Zpět", "Odesílání žádosti…", "Žádost odeslána: %s",
+              "Vy a %s jste nyní přátelé", "Zadejte Gamertag a jeho číslo"};
+    case kLanguageHungarian:
+      return {"Barát hozzáadása", "Írd be a Gamertagjét és a számát, pl. Nimbus#4827.", "Gamertag", "Szám", "Küldés",
+              "Shift", "Szóköz", "Törlés", "Vissza", "Kérés küldése…", "Kérés elküldve: %s",
+              "Mostantól barátok vagytok: %s", "Írd be a Gamertaget és a számát"};
     default:
       return {"Add friend", "Type their Gamertag and number, like Nimbus#4827.", "Gamertag", "Number", "Send", "Shift",
               "Space", "Delete", "Back", "Sending the request\xE2\x80\xA6", "Request sent to %s", "You and %s are friends now",
@@ -380,6 +407,8 @@ const char* NavigateText(uint32_t language) {
     case 6: return "Naviga";
     case 9: return "Navegar";
     case 11: return "Nawigacja";
+    case kLanguageCzech: return "Procházet";
+    case kLanguageHungarian: return "Navigálás";
     default: return "Navigate";
   }
 }
@@ -425,6 +454,12 @@ SettingsTexts LocalizedSettingsTexts(uint32_t language) {
     case 11:
       return {"Ustawienia", "Dźwięki menu", "Poruszanie się, wybór i powrót na ekranach Alborii", "Powiadomienia",
               "Zaproszenia i inne powiadomienia nad grą", "Dostosuj"};
+    case kLanguageCzech:
+      return {"Nastavení", "Zvuky nabídky", "Pohyb, výběr a návrat na obrazovkách Alborie", "Oznámení",
+              "Pozvánky a další oznámení nad hrou", "Upravit"};
+    case kLanguageHungarian:
+      return {"Beállítások", "Menühangok", "Mozgás, kiválasztás és visszalépés az Alboria képernyőin", "Értesítések",
+              "Meghívók és egyéb értesítések a játék felett", "Beállítás"};
     default:
       return {"Settings", "Menu sounds", "Moving, choosing and going back in Alboria's screens", "Notifications",
               "Invitations and other notices over the game", "Adjust"};

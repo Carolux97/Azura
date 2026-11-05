@@ -16,6 +16,7 @@
 #include "input/player_assignment.h"
 #include "online_room_overlay.h"
 #include "script_hooks.h"
+#include "menu_language.h"
 
 namespace azura {
 
@@ -95,6 +96,12 @@ Texts LocalizedTexts(uint32_t language) {
       return {"DO\xC5\x81\xC4\x84""CZ KODEM", "Wpisz kod pokoju, kt\xC3\xB3ry poda\xC5\x82 ci gospodarz.", "USU\xC5\x83",
               "WR\xC3\x93\xC4\x86", "DO\xC5\x81\xC4\x84""CZ", "Naci\xC5\x9Bnij", "Wpisz kod",
               "Do\xC5\x82\xC4\x85""czanie do pokoju\xE2\x80\xA6", "Kod ma 8 znak\xC3\xB3w"};
+    case kLanguageCzech:
+      return {"PŘIPOJIT SE KÓDEM", "Zadejte kód místnosti, který vám dal hostitel.", "SMAZAT", "ZPĚT", "PŘIPOJIT",
+              "Stiskněte", "Zadejte kód", "Připojování k místnosti…", "Kód má 8 znaků"};
+    case kLanguageHungarian:
+      return {"CSATLAKOZÁS KÓDDAL", "Írd be a szoba kódját, amelyet a házigazdától kaptál.", "TÖRLÉS", "VISSZA",
+              "CSATLAKOZÁS", "Nyomd meg", "Írd be a kódot", "Csatlakozás a szobához…", "A kód 8 karakterből áll"};
     default:
       return {"JOIN BY CODE", "Type the code of the room the host gave you.", "DELETE", "BACK", "JOIN", "Press",
               "Type the code", "Joining the room\xE2\x80\xA6", "The code has 8 characters"};

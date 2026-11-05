@@ -16,6 +16,7 @@
 #include "input/player_assignment.h"
 #include "menu/pc_options.h"
 #include "script_hooks.h"
+#include "menu_language.h"
 
 REXCVAR_DECLARE(bool, alboria_direct);
 REXCVAR_DECLARE(bool, latency_overlay);
@@ -108,7 +109,7 @@ Texts LocalizedTexts(uint32_t language) {
     case 5:  // Spanish
       return {"ALBORIA", "CUENTA", "Iniciando sesi\xC3\xB3n\xE2\x80\xA6", "No se puede conectar con Alboria",
               "CONEXI\xC3\x93N DIRECTA",
-              "Le conecta directamente con los dem\xC3\xA1s jugadores de la sala cuando la red lo permite, con el "
+              "Te conecta directamente con los dem\xC3\xA1s jugadores de la sala cuando la red lo permite, con el "
               "relay como respaldo. Menos retardo, pero los otros jugadores pueden conocer la IP p\xC3\xBA""blica "
               "de este equipo. Se aplica a partir de la pr\xC3\xB3xima sala.",
               "MOSTRAR LATENCIA",
@@ -149,6 +150,24 @@ Texts LocalizedTexts(uint32_t language) {
               "i czy po\xC5\x82\xC4\x85""czenie jest bezpo\xC5\x9Brednie, czy przez przeka\xC5\xBAnik.",
               "W\xC5\x82\xC4\x85""czone", "Wy\xC5\x82\xC4\x85""czone", "Zmie\xC5\x84", "Wr\xC3\xB3\xC4\x87", "Enter",
               "Nie mo\xC5\xBCna zmieni\xC4\x87, gdy w pokoju s\xC4\x85 gracze"};
+    case kLanguageCzech:
+      return {"ALBORIA", "ÚČET", "Přihlašování…", "Nelze se spojit s Alborií", "PŘÍMÉ PŘIPOJENÍ",
+              "Když to síť dovolí, připojí vás přímo k ostatním hráčům v místnosti, jinak použije přenosový "
+              "server. Nižší odezva, ale ostatní hráči mohou zjistit veřejnou IP adresu tohoto počítače. "
+              "Projeví se od příští místnosti.",
+              "ZOBRAZIT ODEZVU",
+              "V online místnosti zobrazí v rohu ukazatele výkonu dobu odezvy k hostiteli a to, zda je "
+              "připojení přímé, nebo vede přes přenosový server.",
+              "Zapnuto", "Vypnuto", "Změnit", "Zpět", "Enter", "Nelze změnit, dokud jsou v místnosti hráči"};
+    case kLanguageHungarian:
+      return {"ALBORIA", "FIÓK", "Bejelentkezés…", "Az Alboria nem érhető el", "KÖZVETLEN KAPCSOLAT",
+              "Ha a hálózat engedi, közvetlenül kapcsol a szoba többi játékosához, különben a továbbító "
+              "szervert használja. Kisebb késleltetés, de a többi játékos megtudhatja ennek a számítógépnek "
+              "a nyilvános IP-címét. A következő szobától lép életbe.",
+              "KÉSLELTETÉS MEGJELENÍTÉSE",
+              "Online szobában a teljesítményjelző sarkában mutatja a házigazdáig mért oda-vissza időt, és "
+              "hogy a kapcsolat közvetlen-e, vagy a továbbító szerveren megy át.",
+              "Be", "Ki", "Módosítás", "Vissza", "Enter", "Nem módosítható, amíg játékosok vannak a szobában"};
     default:
       return {"ALBORIA", "ACCOUNT", "Signing in\xE2\x80\xA6", "Cannot reach Alboria",
               "DIRECT CONNECTION",
