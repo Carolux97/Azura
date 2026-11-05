@@ -287,6 +287,18 @@ int PatchMenuStructure(CoalescedSection& section) {
       });
     });
   }
+  // The campaign's public matches (Create public, Join public, in the standard and Arcade campaign
+  // menus), which Azura does not offer. The standard menu's Recap comes after them; its choice is
+  // turned back into the game's own position (CampaignStandardPosition in script_hooks.cpp).
+  if (REXCVAR_GET(menu_remove_unused)) {
+    for (const char* screen : {"MAINMENUOP_CampaignStandard", "MAINMENUOP_CampaignArcade"}) {
+      EditScreen(section, screen, [](std::vector<std::u16string>& entries) {
+        std::erase_if(entries, [](const std::u16string& e) {
+          return EntryLabel(e) == u"CreatePublic" || EntryLabel(e) == u"JoinPublic";
+        });
+      });
+    }
+  }
   // With RAAM's Shadow ready to play, the campaign menu's DLC option ("Coming Soon!" and greyed
   // out on the disc) opens the standard campaign choices; the runtime remembers it was chosen and
   // starts the DLC's chapters (see PatchTravelURL in script_hooks.cpp).
