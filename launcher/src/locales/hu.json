@@ -48,7 +48,7 @@
     "gpuValueLinux": "{gpu} · Vulkan",
     "gpuUnknown": "Nem észlelhető · Vulkan",
     "runtimeMissing": "Nem található build",
-    "player": "Player",
+    "player": "Játékos",
     "runtimeNotInstalled": "A Játék gomb megnyomásakor települ",
     "runtimeUpdate": "Frissítés kész, a Játék gomb megnyomásakor települ",
     "compiler": "Fordító",

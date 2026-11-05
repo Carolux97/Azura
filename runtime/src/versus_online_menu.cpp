@@ -20,6 +20,7 @@
 #include <rex/system/xam/alboria.h>
 
 #include "menu/pc_options.h"
+#include "menu_language.h"
 #include "script_hooks.h"
 
 REXCVAR_DEFINE_STRING(versus_online_modes, "11,15,13", "Azura/Online",
@@ -149,7 +150,7 @@ Texts LocalizedTexts(uint32_t language) {
               "マップとモードは全員で選びます", "オンライン対戦", "Alboria に接続できません",
               "インターネット接続を確認して、もう一度お試しください。",
               "ランチャーから Alboria にサインインしてください。", "もう一度検索", "Enter", "Space",
-              {"5人ずつの2チームがリスポーン回数を共有します。相手チームの残り回数をゼロにすればラウンド勝利。", "フィールドを移動するリングを確保して守り、得点を重ねます。リスポーンあり。", "リスポーンなし。ダウンした敵は処刑でしか倒せません。", "リスポーンなしの1ラウンド1ライフ。最後まで生き残ったチームの勝ち。", "相手のリーダーを捕まえて得点しつつ、自分たちのリーダーを守ります。", "2人1組の5チームで戦います。先に目標スコアに届いたペアの勝ち。"}, "隠す", "グループのリーダーが検索中", "統計と報酬", "グループの人数が多すぎます", "公開マッチに参加できるグループは5人までです。"};
+              {"5人ずつの2チームがリスポーン回数を共有します。相手チームの残り回数をゼロにすればラウンド勝利。", "フィールドを移動するリングを確保して守り、得点を重ねます。リスポーンあり。", "リスポーンなし。ダウンした敵は処刑でしか倒せません。", "リスポーンなしの1ラウンド1ライフ。最後まで生き残ったチームの勝ち。", "相手のリーダーを捕まえて得点しつつ、自分たちのリーダーを守ります。", "2人1組の5チームで戦います。先に目標スコアに届いたペアの勝ち。"}, "隠す", "パーティーのリーダーが検索中", "統計と報酬", "パーティーの人数が多すぎます", "公開マッチに参加できるパーティーは5人までです。"};
     case 7:  // Korean
       return {"VERSUS · ALBORIA", "온라인 대전", "전 세계 플레이어와 대결", "오픈 매치", "스탠다드",
               "언제든 참가하고 나갈 수 있습니다 · 업적에 포함됩니다", "랭크", "출시 예정", "디비전과 시즌 랭크",
@@ -180,7 +181,7 @@ Texts LocalizedTexts(uint32_t language) {
               "Карту и режим выбирают все вместе", "VERSUS ОНЛАЙН", "Нет связи с Alboria",
               "Проверьте подключение к интернету и попробуйте снова.", "Войдите в Alboria в лаунчере.",
               "Искать снова", "Enter", "Пробел",
-              {"Две команды по пять человек с общим запасом возрождений. Исчерпайте запас противника, чтобы выиграть раунд.", "Захватывайте и удерживайте кольцо, которое перемещается по карте, чтобы набирать очки. Возрождения есть.", "Без возрождений. Поверженного врага можно добить только казнью.", "Без возрождений, одна жизнь за раунд. Побеждает последняя выжившая команда.", "Захватите лидера противника, чтобы набирать очки, и защищайте своего.", "Пять команд по двое. Побеждает пара, первой набравшая нужный счёт."}, "Скрыть", "Лидер вашей группы ищет матч", "Статистика и награды", "Слишком большая группа", "В открытые матчи можно искать группой не больше чем из 5 игроков."};
+              {"Две команды по пять человек с общим запасом возрождений. Исчерпайте запас противника, чтобы выиграть раунд.", "Захватывайте и удерживайте кольцо, которое перемещается по карте, чтобы набирать очки. Возрождения есть.", "Без возрождений. Поверженного врага можно добить только казнью.", "Без возрождений, одна жизнь за раунд. Побеждает последняя выжившая команда.", "Захватите лидера противника, чтобы набирать очки, и защищайте своего.", "Пять команд по двое. Побеждает пара, первой набравшая нужный счёт."}, "Скрыть", "Лидер вашей группы ищет матч", "Статистика и награды", "Слишком большая группа", "В открытые матчи можно войти группой не более чем из 5 игроков."};
     case 3:  // German
       return {"VERSUS · ALBORIA", "VERSUS ONLINE", "Spiele gegen die Welt", "OFFENE MATCHES", "STANDARD",
               "Jederzeit beitreten und gehen · zählt für Erfolge", "RANGLISTE", "DEMNÄCHST",
@@ -194,7 +195,7 @@ Texts LocalizedTexts(uint32_t language) {
               "VERSUS ONLINE", "Keine Verbindung zu Alboria",
               "Prüfe deine Internetverbindung und versuche es erneut.",
               "Melde dich im Launcher bei Alboria an.", "Erneut suchen", "Eingabe", "Leertaste",
-              {"Zwei Teams zu fünft mit gemeinsamen Wiederbelebungen. Nimm dem Gegner alle, um die Runde zu gewinnen.", "Erobere und halte den Ring, der über die Karte wandert, um zu punkten. Mit Wiederbelebung.", "Keine Wiederbelebung. Niedergestreckte Gegner fallen nur durch eine Hinrichtung.", "Keine Wiederbelebung, ein Leben pro Runde. Das letzte stehende Team gewinnt.", "Schnapp dir den gegnerischen Anführer, um zu punkten, und beschütze deinen eigenen.", "Fünf Teams zu zweit. Das Paar, das zuerst die Punktzahl erreicht, gewinnt."}, "Ausblenden", "Dein Gruppenleiter sucht", "Statistiken und Auszeichnungen", "Deine Gruppe ist zu groß", "Öffentliche Matches nehmen Gruppen mit bis zu 5 Spielern."};
+              {"Zwei Teams zu fünft mit gemeinsamem Respawn-Pool. Bring den Gegner um alle Respawns, um die Runde zu gewinnen.", "Erobere und halte den Ring, der über die Karte wandert, um zu punkten. Mit Respawns.", "Kein Respawn. Niedergestreckte Gegner fallen nur durch eine Hinrichtung.", "Kein Respawn, ein Leben pro Runde. Das letzte stehende Team gewinnt.", "Schnapp dir den gegnerischen Anführer, um zu punkten, und beschütze deinen eigenen.", "Fünf Teams zu zweit. Das Paar, das zuerst die Punktzahl erreicht, gewinnt."}, "Ausblenden", "Dein Gruppenleiter sucht", "Statistiken und Auszeichnungen", "Deine Gruppe ist zu groß", "Öffentliche Matches nehmen nur Gruppen mit bis zu 5 Spielern auf."};
     case 4:  // French
       return {"VERSUS · ALBORIA", "VERSUS EN LIGNE", "Affrontez le monde entier", "PARTIES OUVERTES", "STANDARD",
               "Rejoignez et quittez quand vous voulez · compte pour les succès", "CLASSÉE",
@@ -209,7 +210,7 @@ Texts LocalizedTexts(uint32_t language) {
               "Vérifiez votre connexion internet et réessayez.",
               "Connectez-vous à Alboria depuis le launcher.", "Rechercher à nouveau", "Entrée",
               "Espace",
-              {"Deux équipes de cinq partagent leurs réapparitions. Épuisez celles de l'adversaire pour gagner la manche.", "Prenez et tenez l'anneau qui se déplace sur la carte pour marquer. Avec réapparitions.", "Pas de réapparition. Un ennemi à terre ne peut être achevé que par une exécution.", "Pas de réapparition, une vie par manche. La dernière équipe debout gagne.", "Capturez le chef adverse pour marquer, tout en protégeant le vôtre.", "Cinq équipes de deux. Le premier binôme à atteindre le score gagne."}, "Masquer", "Le chef de ton groupe cherche", "Statistiques et récompenses", "Ton groupe est trop grand", "Les parties publiques acceptent des groupes de 5 joueurs au plus."};
+              {"Deux équipes de cinq partagent leurs réapparitions. Épuisez celles de l'adversaire pour gagner la manche.", "Prenez et tenez l'anneau qui se déplace sur la carte pour marquer. Avec réapparitions.", "Pas de réapparition. Un ennemi à terre ne peut être achevé que par une exécution.", "Pas de réapparition, une vie par manche. La dernière équipe debout gagne.", "Capturez le chef adverse pour marquer, tout en protégeant le vôtre.", "Cinq équipes de deux. Le premier binôme à atteindre le score gagne."}, "Masquer", "Le chef de votre groupe cherche", "Statistiques et récompenses", "Votre groupe est trop grand", "Les parties publiques acceptent des groupes de 5 joueurs au plus."};
     case 5:  // Spanish
       return {"VERSUS · ALBORIA", "VERSUS ONLINE", "Juega contra el mundo", "PARTIDAS ABIERTAS", "ESTÁNDAR",
               "Entra y sal cuando quieras · cuenta para los logros", "CLASIFICATORIA", "PRÓXIMAMENTE",
@@ -254,18 +255,42 @@ Texts LocalizedTexts(uint32_t language) {
               {"Duas equipes de cinco dividem os renascimentos. Esgote os do rival para vencer a rodada.", "Tome e defenda o anel, que muda de lugar pelo mapa, para pontuar. Com renascimentos.", "Sem renascimentos. Um inimigo caído só morre com uma execução.", "Sem renascimentos, uma vida por rodada. Vence a última equipe de pé.", "Capture o líder rival para pontuar enquanto protege o seu.", "Cinco equipes de dois. Vence a dupla que chegar primeiro à pontuação."}, "Ocultar", "O líder do seu grupo está buscando", "Estatísticas e prêmios", "Seu grupo é grande demais", "As partidas públicas aceitam grupos de até 5 jogadores."};
     case 11:  // Polish
       return {"VERSUS · ALBORIA", "VERSUS ONLINE", "Zagraj przeciwko światu", "OTWARTE MECZE", "STANDARD",
-              "Dołączaj i wychodź kiedy chcesz · liczy się do osiągnięć",
+              "Dołączaj i wychodź, kiedy chcesz · liczy się do osiągnięć",
               "RANKINGOWY", "WKRÓTCE", "Dywizje i rangi sezonowe", "TRYBY · JEDEN LUB WIĘCEJ",
               {"Drużynowy deathmatch", "Król wzgórza", "Egzekucja", "Strefa wojny",
                "Schwytaj przywódcę", "Skrzydłowy"},
               "Wybierz co najmniej jeden tryb", "Szukaj", "Zaznacz tryb", "Wróć", "SZUKANIE",
               {"Alboria", "Szukanie", "Gracze", "Gotowi"}, "wolne",
               "%d z %d · wolne miejsca zajmą boty", "Anuluj szukanie", "MECZ GOTOWY",
-              "Wszyscy połączeni", "+ %d botów", "Przechodzimy do głosowania",
+              "Wszyscy połączeni", "+ boty: %d", "Przechodzimy do głosowania",
               "Mapę i tryb wybierają wszyscy", "VERSUS ONLINE", "Brak połączenia z Alborią",
               "Sprawdź połączenie z internetem i spróbuj ponownie.",
               "Zaloguj się do Alborii w launcherze.", "Szukaj ponownie", "Enter", "Spacja",
-              {"Dwie pięcioosobowe drużyny dzielą się odrodzeniami. Wyczerpij odrodzenia rywali, by wygrać rundę.", "Zdobywaj i utrzymuj krąg, który przenosi się po mapie, by zdobywać punkty. Z odrodzeniami.", "Bez odrodzeń. Powalonego wroga można dobić tylko egzekucją.", "Bez odrodzeń, jedno życie na rundę. Wygrywa ostatnia stojąca drużyna.", "Schwytaj przywódcę rywali, by zdobywać punkty, i chroń swojego.", "Pięć drużyn po dwie osoby. Wygrywa para, która pierwsza zdobędzie wynik."}, "Ukryj", "Lider twojej drużyny szuka", "Statystyki i nagrody", "Twoja drużyna jest za duża", "Mecze publiczne przyjmują drużyny do 5 graczy."};
+              {"Dwie pięcioosobowe drużyny dzielą się odrodzeniami. Wyczerpij odrodzenia rywali, by wygrać rundę.", "Zdobywaj i utrzymuj krąg, który przenosi się po mapie, by zdobywać punkty. Z odrodzeniami.", "Bez odrodzeń. Powalonego wroga można dobić tylko egzekucją.", "Bez odrodzeń, jedno życie na rundę. Wygrywa ostatnia stojąca drużyna.", "Schwytaj przywódcę rywali, by zdobywać punkty, i chroń swojego.", "Pięć drużyn po dwie osoby. Wygrywa para, która pierwsza zdobędzie wynik."}, "Ukryj", "Lider twojej grupy szuka", "Statystyki i nagrody", "Twoja grupa jest za duża", "Mecze publiczne przyjmują grupy do 5 graczy."};
+    case kLanguageCzech:
+      return {"VERSUS · ALBORIA", "VERSUS ONLINE", "Hrajte proti celému světu", "OTEVŘENÉ ZÁPASY", "STANDARD",
+              "Připojte se a odejděte kdykoli · započítává se do úspěchů", "HODNOCENÉ", "JIŽ BRZY",
+              "Divize a sezónní hodnosti", "REŽIMY · JEDEN NEBO VÍCE",
+              {"Týmový deathmatch", "Král kopce", "Poprava", "Válečná zóna", "Zajetí velitele", "Wingman"},
+              "Zvolte alespoň jeden režim", "Hledat", "Označit režim", "Zpět", "HLEDÁNÍ",
+              {"Alboria", "Hledání", "Hráči", "Připraveno"}, "volné",
+              "%d z %d · volná místa na začátku obsadí boti", "Zrušit hledání", "ZÁPAS PŘIPRAVEN",
+              "Všichni připojeni", "+ boti: %d", "Přecházíme k hlasování", "Mapu a režim volí všichni",
+              "VERSUS ONLINE", "Nelze se připojit k Alborii", "Zkontrolujte připojení k internetu a zkuste to znovu.",
+              "Přihlaste se k Alborii v launcheru.", "Hledat znovu", "Enter", "Mezerník",
+              {"Dva pětičlenné týmy sdílejí zásobu respawnů. Připravte soupeře o všechny a vyhrajte kolo.", "Obsaďte a udržte kruh, který se přesouvá po mapě, a získávejte body. S respawny.", "Bez respawnů. Sraženého nepřítele lze dorazit jen popravou.", "Bez respawnů, jeden život na kolo. Vyhrává poslední tým, který zůstane stát.", "Zajměte velitele soupeřů a získávejte body, zatímco chráníte svého.", "Pět dvoučlenných týmů. Vyhrává dvojice, která první dosáhne cílového skóre."}, "Skrýt", "Vedoucí vaší skupiny hledá", "Statistiky a ocenění", "Vaše skupina je příliš velká", "Veřejné zápasy přijímají skupiny až do 5 hráčů."};
+    case kLanguageHungarian:
+      return {"VERSUS · ALBORIA", "VERSUS ONLINE", "Játssz az egész világ ellen", "NYÍLT MECCSEK", "STANDARD",
+              "Bármikor beléphetsz és kiléphetsz · beleszámít a teljesítményekbe", "RANGSOROLT", "HAMAROSAN",
+              "Divíziók és szezonrangok", "MÓDOK · EGY VAGY TÖBB",
+              {"Csapatos deathmatch", "A domb királya", "Kivégzés", "Háborús övezet", "A vezér elfogása", "Wingman"},
+              "Válassz legalább egy módot", "Keresés", "Mód kijelölése", "Vissza", "KERESÉS",
+              {"Alboria", "Keresés", "Játékosok", "Kész"}, "szabad",
+              "%d / %d · a kezdéskor szabad helyeket botok töltik ki", "Keresés megszakítása", "MECCS KÉSZ",
+              "Mindenki csatlakozott", "+ %d bot", "Irány a szavazás", "A pályát és a módot mindenki együtt választja",
+              "VERSUS ONLINE", "Az Alboria nem érhető el", "Ellenőrizd az internetkapcsolatot, és próbáld újra.",
+              "Jelentkezz be az Alboriába a launcherben.", "Új keresés", "Enter", "Szóköz",
+              {"Két ötfős csapat közös újraéledési kerettel. Fogyaszd el az ellenfél újraéledéseit, és megnyered a kört.", "Foglald el és tartsd meg a pályán vándorló kört a pontokért. Újraéledéssel.", "Nincs újraéledés. A földre került ellenséget csak kivégzéssel lehet legyőzni.", "Nincs újraéledés, körönként egy élet. Az utolsó talpon maradt csapat nyer.", "Fogd el az ellenséges vezért a pontokért, és közben védd a sajátodat.", "Öt kétfős csapat. Az a páros nyer, amelyik elsőként éri el a célpontszámot."}, "Elrejtés", "A csoportod vezetője keres", "Statisztikák és kitüntetések", "Túl nagy a csoportod", "A nyilvános meccsekre legfeljebb 5 fős csoportok léphetnek be."};
     default:
       return {"VERSUS · ALBORIA", "VERSUS ONLINE", "Play against the world", "OPEN MATCHES", "STANDARD",
               "Join and leave at any time · counts for achievements", "RANKED", "COMING SOON",
@@ -346,6 +371,16 @@ GameTexts LocalizedGameTexts(uint32_t language, OnlineGame game) {
                                "Pięciu graczy odpiera 50 fal Szarańczy, a między falami buduje i ulepsza umocnienia.", "%d z %d"}
                    : GameTexts{"BEAST · ALBORIA", "Bestia online", "Do 5 graczy jako Szarańcza poluje na ludzi", "Bestia",
                                "Pięciu graczy wciela się w Szarańczę i likwiduje fale ludzkich obrońców, zanim skończy się czas.", "%d z %d"};
+    case kLanguageCzech:
+      return horde ? GameTexts{"HORDE · ALBORIA", "Horda online", "Až 5 hráčů proti vlnám Locustů", "Horda",
+                               "Pět hráčů odolává 50 vlnám Locustů a mezi vlnami staví a vylepšuje opevnění.", "%d z %d"}
+                   : GameTexts{"BEAST · ALBORIA", "Bestie online", "Až 5 hráčů jako Locusti na lovu lidí", "Bestie",
+                               "Pět hráčů se přidá na stranu Locustů a likviduje vlny lidských obránců, než vyprší čas.", "%d z %d"};
+    case kLanguageHungarian:
+      return horde ? GameTexts{"HORDE · ALBORIA", "Horda online", "Legfeljebb 5 játékos a Locust-hullámok ellen", "Horda",
+                               "Öt játékos tart ki 50 Locust-hullámmal szemben, és a hullámok között erődítéseket épít és fejleszt.", "%d / %d"}
+                   : GameTexts{"BEAST · ALBORIA", "Fenevad online", "Legfeljebb 5 játékos Locustként vadászik az emberekre", "Fenevad",
+                               "Öt játékos a Locustok oldalára áll, és az idő lejárta előtt végez az emberi védők hullámaival.", "%d / %d"};
     default:  // English
       return horde ? GameTexts{"HORDE · ALBORIA", "Horde online", "Up to 5 players against waves of Locust", "Horde",
                                "Five players hold out against 50 waves of Locust, building and upgrading fortifications between waves.", "%d of %d"}
@@ -365,11 +400,11 @@ struct NoticeTexts {
 NoticeTexts LocalizedRoomClosedTexts(uint32_t language) {
   switch (language) {
     case 2:  // Japanese
-      return {"ロビーが閉じられました", "マッチを続けられませんでした。グループはオンラインのままです。もう一度検索できます。"};
+      return {"ロビーが閉じられました", "マッチを続けられませんでした。パーティーはオンラインのままです。もう一度検索できます。"};
     case 7:  // Korean
       return {"로비가 닫혔습니다", "매치를 계속할 수 없었습니다. 파티는 계속 온라인 상태입니다. 다시 검색할 수 있습니다."};
     case 8:  // Traditional Chinese
-      return {"大廳已關閉", "對戰無法繼續。你的群組仍在線上，可以再次搜尋。"};
+      return {"大廳已關閉", "對戰無法繼續。你的隊伍仍在線上，可以再次搜尋。"};
     case 12:  // Russian
       return {"Лобби закрыто", "Матч не смог продолжиться. Ваша группа по-прежнему в сети, можно искать снова."};
     case 3:  // German
@@ -384,6 +419,10 @@ NoticeTexts LocalizedRoomClosedTexts(uint32_t language) {
       return {"A sala foi fechada", "A partida não pôde continuar. Seu grupo continua online e você pode buscar outra vez."};
     case 11:  // Polish
       return {"Poczekalnia została zamknięta", "Mecz nie mógł być kontynuowany. Twoja grupa jest nadal online i możesz szukać ponownie."};
+    case kLanguageCzech:
+      return {"Lobby bylo zavřeno", "Zápas nemohl pokračovat. Vaše skupina je stále online a můžete hledat znovu."};
+    case kLanguageHungarian:
+      return {"A lobbi bezárult", "A meccs nem folytatódhatott. A csoportod továbbra is online, és újra kereshetsz."};
     default:  // English
       return {"The lobby closed", "The match couldn't go on. Your party is still online and you can search again."};
   }
@@ -394,11 +433,11 @@ NoticeTexts LocalizedRoomClosedTexts(uint32_t language) {
 NoticeTexts LocalizedJoinFailedTexts(uint32_t language) {
   switch (language) {
     case 2:  // Japanese
-      return {"マッチに参加できませんでした", "マッチ側が参加を受け付けませんでした。グループはオンラインに戻っています。もう一度検索できます。"};
+      return {"マッチに参加できませんでした", "マッチ側が参加を受け付けませんでした。パーティーはオンラインに戻っています。もう一度検索できます。"};
     case 7:  // Korean
       return {"매치에 참가할 수 없었습니다", "매치가 참가를 받아들이지 않았습니다. 파티는 다시 온라인 상태입니다. 다시 검색할 수 있습니다."};
     case 8:  // Traditional Chinese
-      return {"無法加入對戰", "對戰沒有接受你的加入。你的群組已重新上線，可以再次搜尋。"};
+      return {"無法加入對戰", "對戰沒有接受你的加入。你的隊伍已重新上線，可以再次搜尋。"};
     case 12:  // Russian
       return {"Не удалось войти в матч", "Матч не принял подключение. Ваша группа снова в сети, можно искать снова."};
     case 3:  // German
@@ -413,6 +452,10 @@ NoticeTexts LocalizedJoinFailedTexts(uint32_t language) {
       return {"Não foi possível entrar na partida", "A partida não aceitou a entrada. Seu grupo está online de novo e você pode buscar outra vez."};
     case 11:  // Polish
       return {"Nie udało się dołączyć do meczu", "Mecz nie przyjął dołączenia. Twoja grupa jest znów online i możesz szukać ponownie."};
+    case kLanguageCzech:
+      return {"K zápasu se nepodařilo připojit", "Zápas vás nepřijal. Vaše skupina je opět online a můžete hledat znovu."};
+    case kLanguageHungarian:
+      return {"Nem sikerült csatlakozni a meccshez", "A meccs nem fogadott be. A csoportod újra online, és ismét kereshetsz."};
     default:  // English
       return {"Couldn't join the match", "The match didn't take you in. Your party is online again and you can search again."};
   }

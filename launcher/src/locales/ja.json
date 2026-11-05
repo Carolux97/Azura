@@ -48,7 +48,7 @@
     "gpuValueLinux": "{gpu} · Vulkan",
     "gpuUnknown": "検出されません · Vulkan",
     "runtimeMissing": "ビルドが見つかりません",
-    "player": "Player",
+    "player": "プレイヤー",
     "runtimeNotInstalled": "「プレイ」を押すとインストールされます",
     "runtimeUpdate": "アップデートの準備完了。「プレイ」を押すとインストールされます",
     "compiler": "コンパイラ",

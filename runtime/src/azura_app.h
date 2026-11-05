@@ -57,6 +57,7 @@
 #include "hle_gfx/hle_gfx.h"
 #include "menu/menu_patches.h"
 #include "menu/pc_options.h"
+#include "menu_language.h"
 #include "perf_marker.h"
 #include "prompts/button_prompts.h"
 #include "relaunch.h"
@@ -199,7 +200,7 @@ class AzuraApp : public rex::ReXApp {
       auto* input = runtime() ? static_cast<rex::input::InputSystem*>(runtime()->input_system()) : nullptr;
       if (!shutting_down_ && dialog_drawer_ && input && !coop_notices_) {
         coop_notices_ = new azura::LocalCoopNotices(dialog_drawer_, input, azura::input::InstalledPlayerAssignment(),
-                                                    REXCVAR_GET(user_language), REXCVAR_GET(user_name),
+                                                    azura::MenuLanguage(), REXCVAR_GET(user_name),
                                                     title_font_, body_font_);
       }
     });
@@ -251,7 +252,7 @@ class AzuraApp : public rex::ReXApp {
         app_context().CallInUIThread([this, graphics_system] {
           if (!shutting_down_ && dialog_drawer_ && !shader_compile_overlay_) {
             shader_compile_overlay_ = new azura::ShaderCompileOverlay(
-                dialog_drawer_, graphics_system, REXCVAR_GET(user_language), title_font_,
+                dialog_drawer_, graphics_system, azura::MenuLanguage(), title_font_,
                 body_font_, &shader_compile_overlay_);
           }
         });
@@ -263,7 +264,7 @@ class AzuraApp : public rex::ReXApp {
     }
     if (REXCVAR_GET(network_mode) == "online" && dialog_drawer_) {
       online_room_overlay_ = new azura::OnlineRoomOverlay(
-          dialog_drawer_, REXCVAR_GET(user_language), title_font_, body_font_, &online_room_overlay_);
+          dialog_drawer_, azura::MenuLanguage(), title_font_, body_font_, &online_room_overlay_);
     }
     // Manage/Invite's RB, with online play on, opens the Join by code screen, on the UI thread.
     azura::script::SetJoinByCodeHandler([this] { app_context().CallInUIThread([this] { OpenJoinByCode(); }); });
@@ -277,7 +278,7 @@ class AzuraApp : public rex::ReXApp {
       azura::alboria_sounds::Prepare();
       if (dialog_drawer_ && input) {
         alboria_notices_ = new azura::AlboriaNotices(dialog_drawer_, input, azura::input::InstalledPlayerAssignment(),
-                                                     REXCVAR_GET(user_language), alboria_title_font_,
+                                                     azura::MenuLanguage(), alboria_title_font_,
                                                      alboria_body_font_, &alboria_notices_);
       }
       azura::input::InstallOverlayInput(
@@ -304,7 +305,7 @@ class AzuraApp : public rex::ReXApp {
         auto* input = runtime() ? static_cast<rex::input::InputSystem*>(runtime()->input_system()) : nullptr;
         if (!shutting_down_ && dialog_drawer_ && input && !local_coop_menu_) {
           local_coop_menu_ = new azura::LocalCoopMenu(
-              dialog_drawer_, input, azura::input::InstalledPlayerAssignment(), REXCVAR_GET(user_language),
+              dialog_drawer_, input, azura::input::InstalledPlayerAssignment(), azura::MenuLanguage(),
               REXCVAR_GET(user_name), title_font_, body_font_, &local_coop_menu_);
         }
       });
@@ -315,7 +316,7 @@ class AzuraApp : public rex::ReXApp {
         auto* input = runtime() ? static_cast<rex::input::InputSystem*>(runtime()->input_system()) : nullptr;
         if (!shutting_down_ && dialog_drawer_ && input && !connection_menu_) {
           connection_menu_ = new azura::ConnectionMenu(dialog_drawer_, input, azura::input::InstalledPlayerAssignment(),
-                                                       REXCVAR_GET(user_language), title_font_, body_font_,
+                                                       azura::MenuLanguage(), title_font_, body_font_,
                                                        &connection_menu_);
         }
       });
@@ -329,7 +330,7 @@ class AzuraApp : public rex::ReXApp {
           const azura::OnlineGame online_game =
               game == 1 ? azura::OnlineGame::kHorde : game == 2 ? azura::OnlineGame::kBeast : azura::OnlineGame::kVersus;
           versus_online_menu_ = new azura::VersusOnlineMenu(dialog_drawer_, input, azura::input::InstalledPlayerAssignment(),
-                                                            REXCVAR_GET(user_language), title_font_, body_font_,
+                                                            azura::MenuLanguage(), title_font_, body_font_,
                                                             &versus_online_menu_, false, online_game);
         }
       });
@@ -343,7 +344,7 @@ class AzuraApp : public rex::ReXApp {
           return;
         }
         versus_online_menu_ = new azura::VersusOnlineMenu(dialog_drawer_, input, azura::input::InstalledPlayerAssignment(),
-                                                          REXCVAR_GET(user_language), title_font_, body_font_,
+                                                          azura::MenuLanguage(), title_font_, body_font_,
                                                           &versus_online_menu_, true);
       });
     });
@@ -364,7 +365,7 @@ class AzuraApp : public rex::ReXApp {
               dialog_drawer_, input, azura::input::InstalledPlayerAssignment(),
               menu == azura::script::ControlsMenu::kController ? azura::ControlsMenu::Kind::kController
                                                                : azura::ControlsMenu::Kind::kKeyboardMouse,
-              REXCVAR_GET(user_language), title_font_, body_font_, &controls_menu_);
+              azura::MenuLanguage(), title_font_, body_font_, &controls_menu_);
         }
       });
     });
@@ -451,7 +452,7 @@ class AzuraApp : public rex::ReXApp {
       return atlas->AddFontFromFileTTF(path.string().c_str(), 48.0f, &config);
     };
     const char* cjk = nullptr;
-    switch (REXCVAR_GET(user_language)) {
+    switch (azura::MenuLanguage()) {
       case 2: cjk = "NotoSansJP-Medium.ttf"; break;
       case 7: cjk = "NotoSansKR-Medium.ttf"; break;
       case 8: cjk = "NotoSansTC-Medium.ttf"; break;
@@ -486,7 +487,7 @@ class AzuraApp : public rex::ReXApp {
       return nullptr;
     }
     return std::make_unique<azura::AchievementToast>(imgui_drawer(), immediate_drawer(), runtime(),
-                                                     REXCVAR_GET(user_language), title_font_,
+                                                     azura::MenuLanguage(), title_font_,
                                                      body_font_);
   }
 
@@ -578,7 +579,7 @@ class AzuraApp : public rex::ReXApp {
     auto* input = runtime() ? static_cast<rex::input::InputSystem*>(runtime()->input_system()) : nullptr;
     if (!shutting_down_ && dialog_drawer_ && input && !join_by_code_menu_ && !alboria_overlay_) {
       join_by_code_menu_ = new azura::JoinByCodeMenu(dialog_drawer_, input, azura::input::InstalledPlayerAssignment(),
-                                                     REXCVAR_GET(user_language), title_font_, body_font_,
+                                                     azura::MenuLanguage(), title_font_, body_font_,
                                                      &join_by_code_menu_);
     }
   }
@@ -618,7 +619,7 @@ class AzuraApp : public rex::ReXApp {
     }
     if (azura::script::WhereInMenus() == azura::script::Menus::kPlaying) azura::input::PressStartForGame();
     alboria_overlay_ = new azura::AlboriaOverlay(
-        dialog_drawer_, input, azura::input::InstalledPlayerAssignment(), REXCVAR_GET(user_language), page,
+        dialog_drawer_, input, azura::input::InstalledPlayerAssignment(), azura::MenuLanguage(), page,
         alboria_title_font_, alboria_body_font_, AlboriaHeader(),
         [this] { app_context().CallInUIThread([this] { OpenJoinByCode(); }); }, &alboria_overlay_);
   }

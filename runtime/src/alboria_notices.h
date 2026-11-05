@@ -54,8 +54,8 @@ class AlboriaNotices : public rex::ui::ImGuiDialog {
  public:
   using Page = rex::system::xam::alboria::OverlayPage;
 
-  // `owner` is cleared when the dialog closes and deletes itself. `language` is the Xbox 360
-  // language ID of the user_language setting. The fonts may be null (ImGui's default is used).
+  // `owner` is cleared when the dialog closes and deletes itself. `language` is MenuLanguage()
+  // (an Xbox 360 language ID, or Czech or Hungarian). The fonts may be null (ImGui's default is used).
   AlboriaNotices(rex::ui::ImGuiDrawer* drawer, rex::input::InputSystem* input, input::PlayerAssignment* assignment,
                  uint32_t language, ImFont* title_font, ImFont* body_font, AlboriaNotices** owner);
 

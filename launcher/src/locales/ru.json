@@ -48,7 +48,7 @@
     "gpuValueLinux": "{gpu} · Vulkan",
     "gpuUnknown": "Не определена · Vulkan",
     "runtimeMissing": "Сборка не найдена",
-    "player": "Player",
+    "player": "Игрок",
     "runtimeNotInstalled": "Установится при нажатии «Играть»",
     "runtimeUpdate": "Обновление готово, установится при нажатии «Играть»",
     "compiler": "Компилятор",

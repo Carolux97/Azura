@@ -96,6 +96,7 @@ set(AZURA_SOURCES
     src/input/scripted_pad.cpp
     src/menu/menu_patches.cpp
     src/menu/pc_options.cpp
+    src/menu_language.cpp
     src/prompts/button_prompts.cpp
     src/prompts/glyph_art.cpp
     src/prompts/glyph_raster.cpp

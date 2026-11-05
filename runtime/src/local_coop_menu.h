@@ -39,9 +39,9 @@ class PlayerAssignment;
 
 class LocalCoopMenu : public rex::ui::ImGuiDialog {
  public:
-  // `owner` is cleared when the menu closes and deletes itself. `language` is the Xbox 360
-  // language ID of the user_language setting; `gamertag` names the players (LocalPlayerName). The
-  // fonts may be null (ImGui's default is used).
+  // `owner` is cleared when the menu closes and deletes itself. `language` is MenuLanguage()
+  // (an Xbox 360 language ID, or Czech or Hungarian); `gamertag` names the players
+  // (LocalPlayerName). The fonts may be null (ImGui's default is used).
   LocalCoopMenu(rex::ui::ImGuiDrawer* drawer, rex::input::InputSystem* input,
                 input::PlayerAssignment* assignment, uint32_t language, std::string gamertag,
                 ImFont* title_font, ImFont* body_font, LocalCoopMenu** owner);

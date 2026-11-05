@@ -62,9 +62,9 @@ class AlboriaOverlay : public rex::ui::ImGuiDialog {
  public:
   using Page = rex::system::xam::alboria::OverlayPage;
 
-  // `owner` is cleared when the overlay closes and deletes itself. `language` is the Xbox 360
-  // language ID of the user_language setting. `join_by_code` opens the Join by code screen once the
-  // overlay has closed. The fonts may be null (ImGui's default is used).
+  // `owner` is cleared when the overlay closes and deletes itself. `language` is MenuLanguage()
+  // (an Xbox 360 language ID, or Czech or Hungarian). `join_by_code` opens the Join by code screen
+  // once the overlay has closed. The fonts may be null (ImGui's default is used).
   // `header` is the painting of Alboria's Ring Plaza its head shows (null: none).
   AlboriaOverlay(rex::ui::ImGuiDrawer* drawer, rex::input::InputSystem* input,
                  input::PlayerAssignment* assignment, uint32_t language, Page page, ImFont* title_font,

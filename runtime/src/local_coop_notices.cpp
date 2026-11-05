@@ -14,6 +14,7 @@
 
 #include "coop_ui.h"
 #include "input/player_assignment.h"
+#include "menu_language.h"
 
 namespace azura {
 
@@ -66,9 +67,9 @@ Texts LocalizedTexts(uint32_t language) {
               "sur une autre manette pour l'utiliser.", "MANETTE CONNECTÉE",
               "Attribuez-la à un joueur dans Options > Coopération locale."};
     case 5:  // Spanish
-      return {"MANDO DESCONECTADO", "JUGADOR %d", "Vuelva a conectar el mando o pulse",
+      return {"MANDO DESCONECTADO", "JUGADOR %d", "Vuelve a conectar el mando o pulsa",
               "en otro mando para usarlo.", "MANDO CONECTADO",
-              "Asígnelo a un jugador en Opciones > Cooperativo local."};
+              "Asígnalo a un jugador en Opciones > Cooperativo local."};
     case 6:  // Italian
       return {"CONTROLLER DISCONNESSO", "GIOCATORE %d", "Ricollega il controller o premi",
               "su un altro controller per usarlo.", "CONTROLLER CONNESSO",
@@ -79,7 +80,15 @@ Texts LocalizedTexts(uint32_t language) {
     case 11:  // Polish
       return {"KONTROLER ODŁĄCZONY", "GRACZ %d", "Podłącz ponownie kontroler lub naciśnij",
               "na innym kontrolerze, aby go użyć.", "KONTROLER PODŁĄCZONY",
-              "Przypisz go graczowi w Opcje > Lokalna kooperacja."};
+              "Przypisz go graczowi w menu Opcje > Lokalna kooperacja."};
+    case kLanguageCzech:
+      return {"OVLADAČ ODPOJEN", "HRÁČ %d", "Znovu připojte ovladač, nebo stiskněte",
+              "na jiném ovladači a použijte ho.", "OVLADAČ PŘIPOJEN",
+              "Přiřaďte ho hráči v nabídce Možnosti > Místní kooperace."};
+    case kLanguageHungarian:
+      return {"KONTROLLER LEVÁLASZTVA", "%d. JÁTÉKOS", "Csatlakoztasd újra a kontrollert, vagy nyomd meg a",
+              "gombot egy másik kontrolleren, hogy azt használd.", "KONTROLLER CSATLAKOZTATVA",
+              "Rendeld hozzá egy játékoshoz: Beállítások > Helyi kooperatív."};
     default:
       return {"CONTROLLER DISCONNECTED", "PLAYER %d", "Reconnect the controller, or press",
               "on another controller to use it.", "CONTROLLER CONNECTED",

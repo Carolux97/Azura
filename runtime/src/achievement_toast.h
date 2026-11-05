@@ -34,8 +34,8 @@ namespace azura {
 
 class AchievementToast : public rex::ui::AchievementNotificationDialog {
  public:
-  // `language` is the Xbox 360 language ID of the user_language setting. The fonts may be null
-  // (ImGui's default is used).
+  // `language` is MenuLanguage() (an Xbox 360 language ID, or Czech or Hungarian). The fonts may
+  // be null (ImGui's default is used).
   AchievementToast(rex::ui::ImGuiDrawer* drawer, rex::ui::ImmediateDrawer* immediate_drawer,
                    rex::Runtime* runtime, uint32_t language, ImFont* title_font,
                    ImFont* body_font);

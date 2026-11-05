@@ -17,6 +17,7 @@
 #include "alboria_style.h"
 #include "input/overlay_input.h"
 #include "online_room_overlay.h"
+#include "menu_language.h"
 
 namespace azura {
 
@@ -95,8 +96,8 @@ Texts LocalizedTexts(uint32_t language) {
               "ist deinem Raum beigetreten", "Annehmen", "Alboria", "Raum wird betreten\xE2\x80\xA6", "MATCH",
               "Das Match ist beendet"};
     case 4:  // French
-      return {"INVITATION", "DEMANDE D'AMI", "DANS TON SALON", "t'invite dans son salon",
-              "veut \xC3\xAAtre ton ami", "R\xC3\xA9ponds-y depuis le launcher Alboria", "a rejoint ton salon",
+      return {"INVITATION", "DEMANDE D'AMI", "DANS VOTRE SALON", "vous invite dans son salon",
+              "veut \xC3\xAAtre votre ami", "R\xC3\xA9pondez-y depuis le launcher Alboria", "a rejoint votre salon",
               "Accepter", "Alboria", "Connexion au salon\xE2\x80\xA6", "PARTIE",
               "La partie est termin\xC3\xA9""e"};
     case 6:  // Italian
@@ -114,6 +115,14 @@ Texts LocalizedTexts(uint32_t language) {
               "do\xC5\x82\xC4\x85""czy\xC5\x82 do twojego pokoju", "Akceptuj", "Alboria",
               "Do\xC5\x82\xC4\x85""czanie do pokoju\xE2\x80\xA6", "MECZ",
               "Mecz si\xC4\x99 zako\xC5\x84""czy\xC5\x82"};
+    case kLanguageCzech:
+      return {"POZVÁNKA", "ŽÁDOST O PŘÁTELSTVÍ", "VE VAŠÍ MÍSTNOSTI", "vás zve do své místnosti",
+              "si vás chce přidat mezi přátele", "Odpovězte v launcheru Alboria", "je teď ve vaší místnosti",
+              "Přijmout", "Alboria", "Připojování k místnosti…", "ZÁPAS", "Zápas skončil"};
+    case kLanguageHungarian:
+      return {"MEGHÍVÓ", "BARÁTKÉRELEM", "A SZOBÁDBAN", "meghívott a szobájába", "szeretne a barátod lenni",
+              "Válaszolj rá az Alboria launcherben", "csatlakozott a szobádhoz", "Elfogadás", "Alboria",
+              "Csatlakozás a szobához…", "MECCS", "A meccs véget ért"};
     default:
       return {"INVITATION", "FRIEND REQUEST", "IN YOUR ROOM", "invites you to their room",
               "wants to be your friend", "Answer it from the Alboria launcher", "joined your room", "Accept",

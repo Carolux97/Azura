@@ -22,6 +22,7 @@
 #endif
 
 #include "coalesced.h"
+#include "../menu_language.h"
 
 REXCVAR_DEFINE_DOUBLE(frame_rate_limit, 30.0, "Azura/Graphics",
                       "Most frames per second: 30 as on the Xbox 360, 60, 90 or 120; 150 or more "
@@ -263,35 +264,35 @@ const std::map<std::string, Texts>& LocalizedTexts() {
           "Draw the game below the screen's resolution and scale it up to the screen. Custom keeps Render resolution and Image scaling as set. Takes effect the next time the game starts."}},
         "Off", "On", "FXAA", "FXAA extreme", "Open", "Bilinear (original)", "AMD CAS (sharpening)", "AMD FSR 1", "Automatic", {"Top left", "Top right", "Bottom left", "Bottom right"}, "Detailed", "Advanced", {"Custom", "Native", "Quality", "Balanced", "Performance"}}},
       {"esn",
-       {{"TECLADO Y RATÓN", "Ajuste las opciones del teclado y el ratón."},
-        {{"CALIBRAR BRILLO", "Abra la pantalla de calibración del brillo."},
-         {"PANTALLA COMPLETA", "Juegue a pantalla completa o en una ventana."},
+       {{"TECLADO Y RATÓN", "Ajusta las opciones del teclado y el ratón."},
+        {{"CALIBRAR BRILLO", "Abre la pantalla de calibración del brillo."},
+         {"PANTALLA COMPLETA", "Juega a pantalla completa o en una ventana."},
          {"LÍMITE DE FOTOGRAMAS", "Máximo de fotogramas por segundo. 30 es el de Xbox 360."},
-         {"ANTIALIASING", "Suavice los bordes dentados. Se aplica la próxima vez que inicie el juego."},
+         {"ANTIALIASING", "Suaviza los bordes dentados. Se aplica la próxima vez que inicies el juego."},
          {"DESENFOQUE DE MOVIMIENTO",
-          "Desenfoque la imagen en los movimientos rápidos. Se aplica la próxima vez que inicie el juego."},
-         {"SENSIBILIDAD DEL RATÓN", "Ajuste la velocidad a la que gira la cámara con el ratón."},
-         {"FILTRADO ANISOTRÓPICO", "Mantenga nítidas las texturas vistas en ángulo."},
-         {"ESCALADO DE IMAGEN", "Cómo se escala la imagen a la ventana. Se aplica la próxima vez que inicie el juego."},
+          "Desenfoca la imagen en los movimientos rápidos. Se aplica la próxima vez que inicies el juego."},
+         {"SENSIBILIDAD DEL RATÓN", "Ajusta la velocidad a la que gira la cámara con el ratón."},
+         {"FILTRADO ANISOTRÓPICO", "Mantiene nítidas las texturas vistas en ángulo."},
+         {"ESCALADO DE IMAGEN", "Cómo se escala la imagen a la ventana. Se aplica la próxima vez que inicies el juego."},
          {"RESOLUCIÓN DE RENDERIZADO",
-          "Resolución a la que se dibuja el juego, antes del escalado de imagen. Automática elige una para este equipo. Se aplica la próxima vez que inicie el juego."},
+          "Resolución a la que se dibuja el juego, antes del escalado de imagen. Automática elige una para este equipo. Se aplica la próxima vez que inicies el juego."},
          {"NITIDEZ",
           "Cuánto enfoque añade el escalado de imagen. 0 deja el suyo propio."},
-         {"COOPERATIVO LOCAL", "Elija qué mando o teclado usa cada jugador para jugar la campaña juntos en este equipo."},
-         {"INDICADOR DE RENDIMIENTO", "Muestre los fotogramas por segundo del juego en una esquina de la pantalla."},
+         {"COOPERATIVO LOCAL", "Elige qué mando o teclado usa cada jugador para jugar la campaña juntos en este equipo."},
+         {"INDICADOR DE RENDIMIENTO", "Muestra los fotogramas por segundo del juego en una esquina de la pantalla."},
          {"POSICIÓN DEL INDICADOR", "Esquina de la pantalla en la que se muestra el indicador de rendimiento."},
          {"CAMPO DE VISIÓN", "Amplitud de la vista de la cámara. 80 es el original; apuntar y cubrirse cambian en la misma proporción."},
          {"GRANO DE PELÍCULA", "El ruido de grano de película que el juego añade a la imagen."},
-         {"PROFUNDIDAD DE CAMPO", "El desenfoque de lo que queda fuera de foco. Desactívela para que el juego vaya más rápido."},
-         {"SOMBRAS DINÁMICAS", "Las sombras de los personajes y de los objetos que se mueven. Desactívelas para que el juego vaya más rápido."},
+         {"PROFUNDIDAD DE CAMPO", "El desenfoque de lo que queda fuera de foco. Desactívala para que el juego vaya más rápido."},
+         {"SOMBRAS DINÁMICAS", "Las sombras de los personajes y de los objetos que se mueven. Desactívalas para que el juego vaya más rápido."},
          {"OCLUSIÓN AMBIENTAL", "Las sombras suaves en las esquinas y donde se juntan los objetos."},
          {"RESPLANDOR", "El halo que rodea las luces intensas."},
          {"DESTELLOS DE LENTE", "Los destellos que las luces intensas dibujan sobre la imagen."},
          {"CALIDAD DE ESCALADO",
-          "Dibuje el juego por debajo de la resolución de la pantalla y escálelo hasta ella. Personalizado usa la resolución de renderizado y el escalado de imagen elegidos. Se aplica la próxima vez que inicie el juego."}},
+          "Dibuja el juego por debajo de la resolución de la pantalla y lo escala hasta ella. Personalizado usa la resolución de renderizado y el escalado de imagen elegidos. Se aplica la próxima vez que inicies el juego."}},
         "Desactivado", "Activado", "FXAA", "FXAA extremo", "Abrir", "Bilineal (original)", "AMD CAS (nitidez)", "AMD FSR 1", "Automática", {"Arriba a la izquierda", "Arriba a la derecha", "Abajo a la izquierda", "Abajo a la derecha"}, "Detallado", "Avanzado", {"Personalizado", "Nativo", "Calidad", "Equilibrado", "Rendimiento"}}},
       {"deu",
-       {{"TASTATUR UND MAUS", "Passen Sie die Einstellungen für Tastatur und Maus an."},
+       {{"TASTATUR UND MAUS", "Passe die Einstellungen für Tastatur und Maus an."},
         {{"HELLIGKEIT KALIBRIEREN", "Öffnet den Bildschirm zur Kalibrierung der Helligkeit."},
          {"VOLLBILD", "Im Vollbild oder in einem Fenster spielen."},
          {"BILDRATENBEGRENZUNG", "Höchstzahl der Bilder pro Sekunde. 30 entspricht der Xbox 360."},
@@ -304,7 +305,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
           "Auflösung, in der das Spiel vor der Bildskalierung gezeichnet wird. Automatisch wählt eine für diesen Computer. Wird beim nächsten Spielstart wirksam."},
          {"SCHÄRFE",
           "Wie viel zusätzliche Schärfe die Bildskalierung hinzufügt. 0 behält ihre eigene."},
-         {"LOKALER KOOP", "Wählen Sie, welchen Controller oder welche Tastatur jeder Spieler verwendet, um die Kampagne gemeinsam an diesem Computer zu spielen."},
+         {"LOKALER KOOP", "Wähle, welchen Controller oder welche Tastatur jeder Spieler verwendet, um die Kampagne gemeinsam an diesem Computer zu spielen."},
          {"LEISTUNGSANZEIGE", "Zeigt die Bildrate des Spiels in einer Ecke des Bildschirms an."},
          {"POSITION DER ANZEIGE", "Bildschirmecke, in der die Leistungsanzeige erscheint."},
          {"SICHTFELD", "Wie weit die Kamera sieht. 80 ist der ursprüngliche Wert; Zielen und Deckung ändern sich im gleichen Verhältnis."},
@@ -341,7 +342,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"OCCLUSIONE AMBIENTALE", "Le ombre morbide negli angoli e dove gli oggetti si incontrano."},
          {"BLOOM", "Il bagliore attorno alle luci intense."},
          {"RIFLESSI DELLA LENTE", "I riflessi che le luci intense disegnano sull'immagine."},
-         {"QUALITÀ DI UPSCALING",
+         {"QUALITÀ DI RIDIMENSIONAMENTO",
           "Disegna il gioco sotto la risoluzione dello schermo e lo scala fino ad essa. Personalizzato usa la risoluzione di rendering e il ridimensionamento scelti. Ha effetto al prossimo avvio del gioco."}},
         "Disattivato", "Attivato", "FXAA", "FXAA estremo", "Apri", "Bilineare (originale)", "AMD CAS (nitidezza)", "AMD FSR 1", "Automatica", {"In alto a sinistra", "In alto a destra", "In basso a sinistra", "In basso a destra"}, "Dettagliato", "Avanzato", {"Personalizzato", "Nativo", "Qualità", "Bilanciato", "Prestazioni"}}},
       {"jpn",
@@ -360,7 +361,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
           "画像スケーリングに加えるシャープ化の強さです。0 は標準のままです。"},
          {"ローカル協力プレイ", "このコンピューターでキャンペーンを一緒にプレイするため、各プレイヤーが使うコントローラーまたはキーボードを選びます。"},
          {"パフォーマンス表示", "ゲームのフレームレートを画面の隅に表示します。"},
-         {"表示位置", "パフォーマンス表示を出す画面の隅。"},
+         {"表示位置", "パフォーマンス表示を出す画面の隅です。"},
          {"視野角", "カメラの視野の広さです。80 がオリジナルです。エイムやカバーも同じ割合で変わります。"},
          {"フィルムグレイン", "ゲームが映像に加えるフィルムグレインのノイズです。"},
          {"被写界深度", "ピントの合っていない部分のぼかしです。オフにするとゲームが軽くなります。"},
@@ -370,7 +371,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"レンズフレア", "明るい光が画面に描くフレアです。"},
          {"アップスケーリング品質",
           "画面より低い解像度でゲームを描画し、画面の解像度まで拡大します。カスタムは選択したレンダリング解像度と画像スケーリングを使用します。次回ゲーム起動時に適用されます。"}},
-        "オフ", "オン", "FXAA", "FXAA (最大)", "開く", "バイリニア（オリジナル）", "AMD CAS（シャープ化）", "AMD FSR 1", "自動", {"左上", "右上", "左下", "右下"}, "詳細", "高度", {"カスタム", "ネイティブ", "クオリティ", "バランス", "パフォーマンス"}}},
+        "オフ", "オン", "FXAA", "FXAA（最大）", "開く", "バイリニア（オリジナル）", "AMD CAS（シャープ化）", "AMD FSR 1", "自動", {"左上", "右上", "左下", "右下"}, "詳細", "高度", {"カスタム", "ネイティブ", "クオリティ", "バランス", "パフォーマンス"}}},
       {"fra",
        {{"CLAVIER ET SOURIS", "Réglez les options du clavier et de la souris."},
         {{"CALIBRER LA LUMINOSITÉ", "Ouvrez l'écran de calibrage de la luminosité."},
@@ -396,7 +397,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"BLOOM", "Le halo autour des lumières vives."},
          {"REFLETS DE LENTILLE", "Les reflets que les lumières vives dessinent sur l'image."},
          {"QUALITÉ DE MISE À L'ÉCHELLE",
-          "Affiche le jeu sous la résolution de l'écran puis l'agrandit à celle-ci. Personnalisé utilise la résolution de rendu et la mise à l'échelle choisies. Prend effet au prochain démarrage du jeu."}},
+          "Affiche le jeu sous la résolution de l'écran puis l'agrandit à celle-ci. Personnalisé utilise la résolution de rendu et la mise à l'échelle choisies. Prend effet au prochain lancement du jeu."}},
         "Désactivé", "Activé", "FXAA", "FXAA extrême", "Ouvrir", "Bilinéaire (d'origine)", "AMD CAS (netteté)", "AMD FSR 1", "Automatique", {"En haut à gauche", "En haut à droite", "En bas à gauche", "En bas à droite"}, "Détaillé", "Avancé", {"Personnalisé", "Natif", "Qualité", "Équilibré", "Performances"}}},
       {"ptb",
        {{"TECLADO E MOUSE", "Ajuste as opções do teclado e do mouse."},
@@ -424,7 +425,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"BLOOM", "O brilho em volta das luzes fortes."},
          {"REFLEXOS DE LENTE", "Os reflexos que as luzes fortes desenham sobre a imagem."},
          {"QUALIDADE DE ESCALA",
-          "Desenha o jogo abaixo da resolução da tela e o amplia até ela. Personalizado usa a resolução de renderização e a escala de imagem escolhidas. É aplicado na próxima vez que o jogo iniciar."}},
+          "Desenha o jogo abaixo da resolução da tela e o amplia até ela. Personalizado usa a resolução de renderização e a escala de imagem escolhidas. Aplica-se na próxima vez que o jogo for iniciado."}},
         "Desativado", "Ativado", "FXAA", "FXAA extremo", "Abrir", "Bilinear (original)", "AMD CAS (nitidez)", "AMD FSR 1", "Automática", {"Superior esquerdo", "Superior direito", "Inferior esquerdo", "Inferior direito"}, "Detalhado", "Avançado", {"Personalizado", "Nativo", "Qualidade", "Equilibrado", "Desempenho"}}},
       {"pol",
        {{"KLAWIATURA I MYSZ", "Dostosuj ustawienia klawiatury i myszy."},
@@ -451,7 +452,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"POŚWIATA", "Blask wokół jasnych świateł."},
          {"ODBLASKI SOCZEWKI", "Odblaski, które jasne światła rysują na obrazie."},
          {"JAKOŚĆ SKALOWANIA",
-          "Renderuje grę poniżej rozdzielczości ekranu i skaluje ją do niej. Niestandardowe używa wybranej rozdzielczości renderowania i skalowania obrazu. Zadziała przy następnym uruchomieniu gry."}},
+          "Renderuje grę poniżej rozdzielczości ekranu i skaluje ją do niej. Niestandardowe używa wybranej rozdzielczości renderowania i skalowania obrazu. Zadziała po ponownym uruchomieniu gry."}},
         "Wyłączone", "Włączone", "FXAA", "FXAA ekstremalne", "Otwórz", "Dwuliniowe (oryginalne)", "AMD CAS (wyostrzanie)", "AMD FSR 1", "Automatyczna", {"Lewy górny róg", "Prawy górny róg", "Lewy dolny róg", "Prawy dolny róg"}, "Szczegółowy", "Zaawansowany", {"Niestandardowe", "Natywne", "Jakość", "Zrównoważone", "Wydajność"}}},
       {"rus",
        {{"КЛАВИАТУРА И МЫШЬ", "Настройте параметры клавиатуры и мыши."},
@@ -479,7 +480,7 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"БЛИКИ ОБЪЕКТИВА", "Блики, которые яркий свет рисует поверх изображения."},
          {"КАЧЕСТВО МАСШТАБИРОВАНИЯ",
           "Игра рисуется в разрешении ниже экранного и масштабируется до него. «Своё» использует выбранные разрешение рендеринга и масштабирование. Вступит в силу при следующем запуске игры."}},
-        "Выкл.", "Вкл.", "FXAA", "FXAA (макс.)", "Открыть", "Билинейное (оригинал)", "AMD CAS (резкость)", "AMD FSR 1", "Автоматически", {"Сверху слева", "Сверху справа", "Снизу слева", "Снизу справа"}, "Подробно", "Расширенный", {"Своё", "Родное", "Качество", "Баланс", "Производительность"}}},
+        "Выкл.", "Вкл.", "FXAA", "FXAA (макс.)", "Открыть", "Билинейное (оригинал)", "AMD CAS (резкость)", "AMD FSR 1", "Автоматически", {"Сверху слева", "Сверху справа", "Снизу слева", "Снизу справа"}, "Подробный", "Расширенный", {"Своё", "Родное", "Качество", "Баланс", "Производительность"}}},
       {"cze",
        {{"KLÁVESNICE A MYŠ", "Upravte nastavení klávesnice a myši."},
         {{"KALIBRACE JASU", "Otevřete obrazovku kalibrace jasu."},
@@ -532,13 +533,13 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"RAGYOGÁS", "Az erős fények körüli fényudvar."},
          {"LENCSECSILLANÁS", "A csillanások, amelyeket az erős fények a képre rajzolnak."},
          {"FELSKÁLÁZÁSI MINŐSÉG",
-          "A játékot a képernyő felbontása alatt rajzolja meg, majd felnagyítja arra. Az Egyéni a kiválasztott renderelési felbontást és képméretezést használja. A játék következő indításakor lép életbe."}},
+          "A játékot a képernyő felbontása alatt rajzolja meg, majd felnagyítja arra. Az Egyéni a kiválasztott renderelési felbontást és képskálázást használja. A játék következő indításakor lép életbe."}},
         "Ki", "Be", "FXAA", "FXAA (extrém)", "Megnyitás", "Bilineáris (eredeti)", "AMD CAS (élesítés)", "AMD FSR 1", "Automatikus", {"Bal felső sarok", "Jobb felső sarok", "Bal alsó sarok", "Jobb alsó sarok"}, "Részletes", "Haladó", {"Egyéni", "Natív", "Minőség", "Kiegyensúlyozott", "Teljesítmény"}}},
       {"chn",
        {{"鍵盤與滑鼠", "調整鍵盤與滑鼠設定。"},
         {{"校正亮度", "開啟亮度校正畫面。"},
          {"全螢幕", "以全螢幕或視窗模式進行遊戲。"},
-         {"畫面更新率上限", "每秒最多的畫面數。30 與 Xbox 360 相同。"},
+         {"影格率上限", "每秒最多繪製的影格數。30 與 Xbox 360 相同。"},
          {"反鋸齒", "讓鋸齒狀的邊緣更平滑。下次啟動遊戲時生效。"},
          {"動態模糊", "在快速移動時模糊畫面。下次啟動遊戲時生效。"},
          {"滑鼠靈敏度", "調整用滑鼠轉動鏡頭的速度。"},
@@ -556,11 +557,11 @@ const std::map<std::string, Texts>& LocalizedTexts() {
          {"景深", "焦點以外部分的模糊效果。關閉可讓遊戲執行得更快。"},
          {"動態陰影", "角色與移動物體的陰影。關閉可讓遊戲執行得更快。"},
          {"環境光遮蔽", "角落與物體相接處的柔和陰影。"},
-         {"光暈", "明亮光源周圍的光暈。"},
+         {"泛光", "明亮光源周圍的泛光。"},
          {"鏡頭光暈", "明亮光源在畫面上產生的鏡頭光斑。"},
          {"升頻品質",
           "以低於螢幕的解析度繪製遊戲，再放大至螢幕解析度。自訂會使用選擇的渲染解析度與影像縮放。下次啟動遊戲時生效。"}},
-        "關閉", "開啟", "FXAA", "FXAA 極致", "開啟", "雙線性（原始）", "AMD CAS（銳利化）", "AMD FSR 1", "自動", {"左上角", "右上角", "左下角", "右下角"}, "詳細", "進階", {"自訂", "原生", "品質", "平衡", "效能"}}},
+        "關閉", "開啟", "FXAA", "FXAA 極致", "進入", "雙線性（原始）", "AMD CAS（銳利化）", "AMD FSR 1", "自動", {"左上角", "右上角", "左下角", "右下角"}, "詳細", "進階", {"自訂", "原生", "品質", "平衡", "效能"}}},
       {"kor",
        {{"키보드 및 마우스", "키보드 및 마우스 설정을 조정합니다."},
         {{"밝기 보정", "밝기 보정 화면을 엽니다."},
@@ -598,14 +599,15 @@ const Texts& TextsFor(const std::string& language) {
   return found != LocalizedTexts().end() ? found->second : LocalizedTexts().at("int");
 }
 
-// The extension of the localization files in the player's language (user_language, an Xbox 360
-// language ID). The value names of our lists are asked for while the menu is open, after every
+// The extension of the localization files in the player's language (MenuLanguage: an Xbox 360
+// language ID, or Czech or Hungarian). The value names of our lists are asked for while the menu is open, after every
 // language's file has been patched, so they follow the language the game shows.
 std::string PlayerLanguage() {
   static const std::map<uint32_t, const char*> extensions = {
       {1, "int"}, {2, "jpn"}, {3, "deu"}, {4, "fra"},  {5, "esn"},  {6, "ita"},
-      {7, "kor"}, {8, "chn"}, {9, "ptb"}, {11, "pol"}, {12, "rus"}};
-  const auto found = extensions.find(REXCVAR_GET(user_language));
+      {7, "kor"}, {8, "chn"}, {9, "ptb"}, {11, "pol"}, {12, "rus"},
+      {kLanguageCzech, "cze"}, {kLanguageHungarian, "hun"}};
+  const auto found = extensions.find(MenuLanguage());
   return found != extensions.end() ? found->second : "int";
 }
 
@@ -912,12 +914,13 @@ bool PcOptionValueNames(int psid, std::vector<std::u16string>& names) {
     if (option.psid != psid || option.kind != Kind::kChoice || option.mapping >= 0) continue;
     names.clear();
     if (option.label == Label::kFrameRateLimit) {
-      // Xbox 360 language IDs (user_language).
+      // By MenuLanguage.
       static const std::map<uint32_t, const char16_t*> unlimited = {
           {1, u"Unlimited"},  {2, u"無制限"},     {3, u"Unbegrenzt"},    {4, u"Illimité"},
           {5, u"Sin límite"}, {6, u"Illimitato"}, {7, u"무제한"},        {8, u"無限制"},
-          {9, u"Ilimitado"},  {11, u"Bez limitu"}, {12, u"Без ограничения"}};
-      const auto found = unlimited.find(REXCVAR_GET(user_language));
+          {9, u"Ilimitado"},  {11, u"Bez limitu"}, {12, u"Без ограничения"},
+          {kLanguageCzech, u"Neomezeno"}, {kLanguageHungarian, u"Korlátlan"}};
+      const auto found = unlimited.find(MenuLanguage());
       names = {u"30", u"60", u"90", u"120", found != unlimited.end() ? found->second : u"Unlimited"};
     }
     if (option.label == Label::kFilmGrain || option.label == Label::kDepthOfField ||
@@ -1203,20 +1206,21 @@ namespace {
 std::pair<const char*, const char*> ConnectionCategoryTexts(const std::string& language) {
   static const std::map<std::string, std::pair<const char*, const char*>> texts = {
       {"int", {"CONNECTION", "Your Alboria account and how you connect to online games."}},
-      {"esn", {"CONEXIÓN", "Su cuenta de Alboria y cómo se conecta a las partidas online."}},
-      {"deu", {"VERBINDUNG", "Ihr Alboria-Konto und wie Sie sich mit Online-Spielen verbinden."}},
+      {"esn", {"CONEXIÓN", "Tu cuenta de Alboria y cómo te conectas a las partidas online."}},
+      {"deu", {"VERBINDUNG", "Dein Alboria-Konto und wie du dich mit Online-Spielen verbindest."}},
       {"ita", {"CONNESSIONE", "Il tuo account Alboria e come ti colleghi alle partite online."}},
       {"jpn", {"接続", "Alboria アカウントとオンラインゲームへの接続方法。"}},
       {"fra", {"CONNEXION", "Votre compte Alboria et votre façon de rejoindre les parties en ligne."}},
       {"ptb", {"CONEXÃO", "Sua conta Alboria e como você se conecta às partidas online."}},
       {"pol", {"POŁĄCZENIE", "Twoje konto Alboria i sposób łączenia z grami online."}},
-      {"rus", {"ПОДКЛЮЧЕНИЕ", "Ваша учетная запись Alboria и способ подключения к играм по сети."}},
+      {"rus", {"ПОДКЛЮЧЕНИЕ", "Ваша учётная запись Alboria и способ подключения к играм по сети."}},
       {"cze", {"PŘIPOJENÍ", "Váš účet Alboria a způsob připojení k online hrám."}},
       {"hun", {"KAPCSOLAT", "Az Alboria-fiókod és az online játékokhoz való kapcsolódás módja."}},
-      {"chn", {"連線", "您的 Alboria 帳號以及連線到線上遊戲的方式。"}},
+      {"chn", {"連線", "你的 Alboria 帳號以及連線到線上遊戲的方式。"}},
       {"kor", {"연결", "Alboria 계정과 온라인 게임 연결 방식."}},
   };
-  const auto found = texts.find(language);
+  // Latin American Spanish (esm) uses the Spanish texts.
+  const auto found = texts.find(language == "esm" ? "esn" : language);
   return found != texts.end() ? found->second : texts.at("int");
 }
 

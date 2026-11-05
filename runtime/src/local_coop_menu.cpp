@@ -16,6 +16,7 @@
 #include "coop_ui.h"
 #include "input/player_assignment.h"
 #include "script_hooks.h"
+#include "menu_language.h"
 
 namespace azura {
 
@@ -74,7 +75,7 @@ Texts LocalizedTexts(uint32_t language) {
               "Termin\xC3\xA9", "Entr\xC3\xA9""e", "Retour"};
     case 5:  // Spanish
       return {"COOPERATIVO LOCAL",
-              "Pulse izquierda o derecha en un dispositivo para pas\xC3\xA1rselo a otro jugador.",
+              "Pulsa izquierda o derecha en un dispositivo para pas\xC3\xA1rselo a otro jugador.",
               "SIN ASIGNAR", "JUGADOR %d", "Teclado y rat\xC3\xB3n", "Sin dispositivo", "Mover", "Listo", "Intro", "Volver"};
     case 6:  // Italian
       return {"COOPERATIVA LOCALE",
@@ -90,6 +91,13 @@ Texts LocalizedTexts(uint32_t language) {
               "Naci\xC5\x9Bnij w lewo lub w prawo na urz\xC4\x85""dzeniu, aby da\xC4\x87 je innemu graczowi.",
               "NIEPRZYPISANE", "GRACZ %d", "Klawiatura i mysz", "Brak urz\xC4\x85""dzenia", "Przenie\xC5\x9B",
               "Gotowe", "Enter", "Wr\xC3\xB3\xC4\x87"};
+    case kLanguageCzech:
+      return {"MÍSTNÍ KOOPERACE", "Stiskněte na zařízení doleva nebo doprava a předejte ho jinému hráči.",
+              "NEPŘIŘAZENO", "HRÁČ %d", "Klávesnice a myš", "Žádné zařízení", "Přesunout", "Hotovo", "Enter", "Zpět"};
+    case kLanguageHungarian:
+      return {"HELYI KOOPERATÍV", "Nyomj balra vagy jobbra egy eszközön, hogy átadd egy másik játékosnak.",
+              "NINCS HOZZÁRENDELVE", "%d. JÁTÉKOS", "Billentyűzet és egér", "Nincs eszköz", "Áthelyezés", "Kész",
+              "Enter", "Vissza"};
     default:
       return {"LOCAL CO-OP", "Press left or right on a device to give it to another player.", "UNASSIGNED",
               "PLAYER %d", "Keyboard and mouse", "No device", "Move", "Done", "Enter", "Back"};
