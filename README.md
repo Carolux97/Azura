@@ -79,9 +79,10 @@ To build from source:
 | --- | --- | --- |
 | World | `58122AD6` | English, French, Portuguese (Brazil), Chinese, Korean, Polish, Russian, Czech, Hungarian |
 | España | `6EF14DF9` | English, Spanish |
+| Latinoamérica | `02EEE060` | English, Spanish (Latin America), Portuguese (Brazil) |
 
-Both editions run the same code (their executables differ only in the signed header), so one
-recompilation serves either.
+All three editions run the same code (their executables differ only in the signed header), so one
+recompilation serves any of them.
 
 A disc dump is an XGD3 image; [extract-xiso](https://github.com/XboxDev/extract-xiso) extracts it
 (`extract-xiso -s -d <destination> <image.iso>`; options go before the image). To add another
