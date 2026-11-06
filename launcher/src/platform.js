@@ -520,6 +520,21 @@ export const alboriaDeleteCode = async (language) => {
   return simulatedCodesOff ? { codeNeeded: false } : { expiresIn: 600, resendIn: 60 };
 };
 
+/**
+ * Which browser waits on Alboria's website with `code`: `{ browser, place, expires_in }`. In a
+ * browser a simulated one answers to any code of 8 letters and digits.
+ */
+export const alboriaWebLink = async (code, language) => {
+  if (isNativeApp) return tauri.core.invoke("alboria_web_link", { code, language });
+  if (code.replace(/[^A-Za-z0-9]/g, "").length !== 8) throw simulatedError("no_link");
+  return { browser: "Chrome · Windows", place: "Madrid, Comunidad de Madrid, España", expires_in: 104 };
+};
+
+/** Allows (or refuses) the browser waiting on the website with `code`. */
+export const alboriaWebLinkAnswer = async (code, allow) => {
+  if (isNativeApp) return tauri.core.invoke("alboria_web_link_answer", { code, allow });
+};
+
 /** Asks for a code to verify the account's email (an account made while codes were off). */
 export const alboriaVerifyEmailCode = async (language) => {
   if (isNativeApp) return tauri.core.invoke("alboria_verify_email_code", { language });
