@@ -3051,14 +3051,16 @@ void DeliverLateInvite() {
 // online, menu_patches.cpp), and only starts its host migration then. The engine closes a
 // connection once its net driver's time is ConnectionTimeout past the connection's LastReceiveTime,
 // so that is put far back on the host's connection: the game closes it on its next tick, the way it
-// would have. The engine's net driver is the global at 0x83429828, +292 (an IpNetDriverLive); its
-// time is a double at +320. A client's connection to the host is the driver's +4 (an
-// IpConnectionLive), whose LastReceiveTime is a double at +276; the connections to the other
-// players, in its array at +68, keep hearing from them and are left alone.
-constexpr uint32_t kEngineGlobal = 0x83429828;
-constexpr uint32_t kEngineNetDriver = 292;
+// would have. The world is the global at 0x83429828; it holds two net drivers (IpNetDriverLive), at
+// +216 and +292, whose order is not fixed from one session to another: the game's own, which has the
+// client's connection to the host, and another with no connections. A driver's time is a double at
+// +320. The connection to the host (an IpConnectionLive, whose LastReceiveTime is a double at +276)
+// is in one of the driver's fields +80 and +4 (found in each on different days); the connections to
+// the other players keep hearing from them and are left alone.
+constexpr uint32_t kWorldGlobal = 0x83429828;
+constexpr uint32_t kWorldNetDrivers[] = {216, 292};
 constexpr uint32_t kNetDriverTime = 320;
-constexpr uint32_t kNetDriverHostConnection = 4;
+constexpr uint32_t kNetDriverHostConnections[] = {80, 4};
 constexpr uint32_t kConnectionLastReceiveTime = 276;
 
 double LoadF64(const uint8_t* base, uint32_t address) {
@@ -3076,11 +3078,28 @@ void CloseSilentHost(uint8_t* base) {
   if (rex::system::xam::alboria::TakeHostMovedOut()) moved_out_since = Clock::now();
   const bool moved_out = moved_out_since.has_value();
   if (!silent && !moved_out) return;
-  const uint32_t engine = LoadU32(base, kEngineGlobal);
-  const uint32_t driver = engine ? LoadU32(base, engine + kEngineNetDriver) : 0;
-  const uint32_t connection = driver ? LoadU32(base, driver + kNetDriverHostConnection) : 0;
-  const uint32_t connection_class = connection >= 0x10000 ? LoadU32(base, connection + kObjectClass) : 0;
-  if (connection_class < 0x10000 || ObjectName(base, connection_class).find("Connection") == std::string::npos) {
+  // The driver that has the connection to the host, and that connection. Both are pointer fields of
+  // the game's native objects: null or an object, so reading an object's class there is safe.
+  uint32_t driver = 0;
+  uint32_t connection = 0;
+  uint32_t driver_at = 0;
+  uint32_t connection_at = 0;
+  const uint32_t world = LoadU32(base, kWorldGlobal);
+  for (const uint32_t at : kWorldNetDrivers) {
+    const uint32_t candidate = world ? LoadU32(base, world + at) : 0;
+    if (candidate < 0x10000 || ObjectName(base, LoadU32(base, candidate + kObjectClass)) != "IpNetDriverLive") continue;
+    for (const uint32_t field : kNetDriverHostConnections) {
+      const uint32_t object = LoadU32(base, candidate + field);
+      if (object < 0x10000 || ObjectName(base, LoadU32(base, object + kObjectClass)) != "IpConnectionLive") continue;
+      driver = candidate;
+      connection = object;
+      driver_at = at;
+      connection_at = field;
+      break;
+    }
+    if (connection) break;
+  }
+  if (!connection) {
     static int logged = 0;
     if (logged++ < 3) REXLOG_WARN("[Azura online] The match's host is gone, but the game has no connection to it");
     if (moved_out && Clock::now() - *moved_out_since > kRetry) moved_out_since.reset();
@@ -3098,8 +3117,9 @@ void CloseSilentHost(uint8_t* base) {
   const uint64_t bits = std::bit_cast<uint64_t>(now - 1000.0);
   StoreU32(base, connection + kConnectionLastReceiveTime, static_cast<uint32_t>(bits >> 32));
   StoreU32(base, connection + kConnectionLastReceiveTime + 4, static_cast<uint32_t>(bits));
-  REXLOG_INFO("[Azura online] The match's host is {} ({:.1f} s since heard): its connection closes now",
-              moved_out ? "gone from the match room on Alboria" : "silent", now - heard);
+  REXLOG_INFO("[Azura online] The match's host is {} ({:.1f} s since heard): its connection closes now "
+              "(world's driver +{}, its field +{})",
+              moved_out ? "gone from the match room on Alboria" : "silent", now - heard, driver_at, connection_at);
 }
 
 // Every Int, Float and Byte value of `object` its classes up to `stop`
