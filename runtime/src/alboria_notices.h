@@ -68,6 +68,8 @@ class AlboriaNotices : public rex::ui::ImGuiDialog {
 
   // Only while a notice is on screen (its animation needs every frame).
   bool NeedsContinuousPaint() const override;
+  // Over Azura's menus and overlays, which draw on the same foreground list and were added later.
+  bool DrawsOnTop() const override { return true; }
 
  protected:
   void OnDraw(ImGuiIO& io) override;

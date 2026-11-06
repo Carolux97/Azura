@@ -519,7 +519,7 @@ void AlboriaNotices::OnDraw(ImGuiIO& io) {
   const float full_width =
       std::min(badge + text_offset + content + (hints ? hints_width + 20.0f * unit : 0.0f) + 20.0f * unit,
                game_height * 16.0f / 9.0f - 80.0f * unit);
-  // With a help line, room for it above the time bar along the bottom.
+  // Room for the text, a help line's too.
   const float height = (help ? 104.0f : 80.0f) * unit;
 
   // The panel and the planet's badge on its left end, the whole centred when unfolded.
@@ -532,21 +532,6 @@ void AlboriaNotices::OnDraw(ImGuiIO& io) {
     const ImVec2 min(center_x, middle - height * 0.5f);
     const ImVec2 max(center_x + width, middle + height * 0.5f);
     DrawCarvedPanel(draw_list, min, max, height * 0.5f, unit, panel_alpha);
-
-    // The time left, as a thread of golden rune light along the bottom that runs down.
-    if (shown_->seconds != FLT_MAX && !shown_->leaving) {
-      const float total = shown_->seconds - kTextStart;
-      const float left = Clamp01(1.0f - (t - kTextStart) / total);
-      const float bar_left = center_x + badge * 0.6f;
-      const float bar_right = max.x - height * 0.4f;
-      const float bar_y = max.y - 11.0f * unit;
-      draw_list->AddLine(ImVec2(bar_left, bar_y), ImVec2(bar_right, bar_y), Gold(panel_alpha * 60 / 255), 3.0f * unit);
-      if (left > 0.0f) {
-        const ImVec2 end(bar_left + (bar_right - bar_left) * left, bar_y);
-        draw_list->AddLine(ImVec2(bar_left, bar_y), end, IM_COL32(255, 200, 70, panel_alpha * 70 / 255), 7.0f * unit);
-        draw_list->AddLine(ImVec2(bar_left, bar_y), end, IM_COL32(255, 212, 94, panel_alpha), 3.0f * unit);
-      }
-    }
 
     // The text, clipped to the panel while it unfolds.
     const int a = static_cast<int>(255.0f * text);
@@ -581,6 +566,26 @@ void AlboriaNotices::OnDraw(ImGuiIO& io) {
     draw_list->AddCircleFilled(ImVec2(center.x, center.y + 5.0f * unit), radius * 1.1f, IM_COL32(0, 0, 0, alpha / 4), 48);
     DrawMedallion(draw_list, center, radius, alpha);
     DrawAlboriaPlanet(draw_list, center, 1.5f * unit * grow, alpha, 1.0f + t * kMoonSpeed);
+    // The time left, as a ring of golden light around the medallion that empties clockwise from
+    // the top, with round ends; a faint track shows the whole ring.
+    if (shown_->seconds != FLT_MAX && !shown_->leaving) {
+      const float total = shown_->seconds - kTextStart;
+      const float left = Clamp01(1.0f - (t - kTextStart) / total);
+      const float ring = radius + 4.5f * unit;
+      const float width = 3.0f * unit;
+      draw_list->AddCircle(center, ring, Gold(alpha * 60 / 255), 64, width);
+      if (left > 0.0f) {
+        constexpr float kTop = -3.14159265f * 0.5f;
+        const float end = kTop + 2.0f * 3.14159265f * left;
+        const int segments = std::max(4, static_cast<int>(64.0f * left));
+        // Opaque, so its round ends (discs over the arc) do not show where they overlap it.
+        const ImU32 color = IM_COL32(255, 212, 94, alpha);
+        draw_list->PathArcTo(center, ring, kTop, end, segments);
+        draw_list->PathStroke(color, 0, width);
+        draw_list->AddCircleFilled(ImVec2(center.x + ring * std::cos(kTop), center.y + ring * std::sin(kTop)), width * 0.5f, color, 12);
+        draw_list->AddCircleFilled(ImVec2(center.x + ring * std::cos(end), center.y + ring * std::sin(end)), width * 0.5f, color, 12);
+      }
+    }
   }
 }
 
