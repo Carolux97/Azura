@@ -1127,6 +1127,18 @@ void PcOptionStoreValue(int option, float value) {
   if (entry.label == Label::kFrameRateLimit) ApplyFrameRateLimit();
   if (entry.label == Label::kSharpness) ApplyUpscalingSharpness(true);
   if (!config_path.empty()) UpsertTomlKey(config_path, entry.cvar, FormatValue(entry, value, true));
+  // A preset other than custom picks the render resolution and the image scaling at every start
+  // (ApplyRenderResolution), so one chosen by hand would last only this run: choosing either turns
+  // the preset to custom, which keeps the player's choice.
+  if ((entry.label == Label::kRenderResolution || entry.label == Label::kUpscaling) &&
+      REXCVAR_GET(upscaling_preset) != "custom") {
+    for (size_t i = 0; i < Options().size(); ++i) {
+      if (Options()[i].label != Label::kUpscalingPreset) continue;
+      REXLOG_INFO("[Azura options] {} chosen by hand: the upscaling preset becomes custom", entry.cvar);
+      PcOptionStoreValue(static_cast<int>(i), 0.0f);  // "custom", the preset's first value
+      break;
+    }
+  }
 }
 
 void PcOptionsResetDefaults(int category) {
