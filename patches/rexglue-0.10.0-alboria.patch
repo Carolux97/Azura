@@ -1,9 +1,9 @@
 diff --git a/include/rex/system/xam/alboria.h b/include/rex/system/xam/alboria.h
 new file mode 100644
-index 0000000..d83e4f3
+index 0000000..651eedd
 --- /dev/null
 +++ b/include/rex/system/xam/alboria.h
-@@ -0,0 +1,621 @@
+@@ -0,0 +1,623 @@
 +/**
 + * @file        system/xam/alboria.h
 + * @brief       Alboria: System Link over the internet through our relay
@@ -451,8 +451,10 @@ index 0000000..d83e4f3
 +// them (/v1/rooms/current: each party on one team, the players shared out), for the game to place
 +// them so. Empty otherwise.
 +std::vector<std::vector<std::string>> MatchTeams();
-+// Reads the room again in the background, MatchTeams among it.
-+void RefreshMatchTeams();
++// Reads the room again in the background, MatchTeams among it. `in_lobby`, when given, tells Alboria
++// whether this match room's host has its match in the pre-game lobby now, where the teams may be
++// shared out again as players come and go (not given: unknown, as it was).
++void RefreshMatchTeams(std::optional<bool> in_lobby = std::nullopt);
 +// The title's search request (its XOVERLAPPED) running a matchmaking search, and its cancelling:
 +// a cancelled request whose search is running stops it.
 +void SetSearchRequest(uint32_t overlapped_ptr);
@@ -665,10 +667,10 @@ index 0000000..c7fc5de
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria.cpp b/src/system/xam/alboria.cpp
 new file mode 100644
-index 0000000..e5d77f8
+index 0000000..df2ec42
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,3181 @@
+@@ -0,0 +1,3184 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -1590,7 +1592,7 @@ index 0000000..e5d77f8
 +}
 +
 +void PublishHostedSession(std::string code, SessionInfo session);
-+void RefreshCurrentRoom();
++void RefreshCurrentRoom(std::optional<bool> in_lobby = std::nullopt);
 +// A party member keeps with its party as it moves (section 4.9; after RefreshCurrentRoom).
 +void FollowPartyAfterMove(bool left_match, bool merged);
 +void PublishHostedQos(std::string code, std::array<uint8_t, 8> kid, std::vector<uint8_t> data);
@@ -1919,9 +1921,12 @@ index 0000000..e5d77f8
 +// Sends the session of the Live party this installation hosts to Alboria, for the room `code`.
 +// Reads what this installation's room is now (POST /v1/rooms/current), after the relay said it moved
 +// (section 4.9): its party's code and type, its roles, its host's address, and the host's QoS data
-+// by session, which the title reads the match's settings from when it joins.
-+void RefreshCurrentRoom() {
-+  const auto room = CallSignedIn("/v1/rooms/current", nlohmann::json::object());
++// by session, which the title reads the match's settings from when it joins. `in_lobby`, from a match
++// room's host, says whether its match is in the pre-game lobby now (RefreshMatchTeams).
++void RefreshCurrentRoom(std::optional<bool> in_lobby) {
++  nlohmann::json request = nlohmann::json::object();
++  if (in_lobby) request["lobby"] = *in_lobby;
++  const auto room = CallSignedIn("/v1/rooms/current", request);
 +  if (!room.error.empty()) {
 +    REXSYS_WARN("Alboria: the room it moved to could not be read ({})", room.error);
 +    return;
@@ -3096,8 +3101,8 @@ index 0000000..e5d77f8
 +  return g_match_teams;
 +}
 +
-+void RefreshMatchTeams() {
-+  RunDetached("reading the match's teams", [] { RefreshCurrentRoom(); });
++void RefreshMatchTeams(std::optional<bool> in_lobby) {
++  RunDetached("reading the match's teams", [in_lobby] { RefreshCurrentRoom(in_lobby); });
 +}
 +
 +namespace {
