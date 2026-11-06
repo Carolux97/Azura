@@ -6,6 +6,15 @@ it as the update's notes (`scripts/release-common.sh`). Bumping the version adds
 release without one fails. One list item (`- `) per change, in English; an item may continue on
 indented lines.
 
+## 0.6.4
+
+- The Video settings have a menu of their own, with the settings grouped and what each one does. What
+  you choose is kept: a resolution or image scaling chosen by hand no longer goes back to what the
+  upscaling preset picks, and the menu shows what the preset picks while it decides them. It also
+  opens the brightness calibration and can put every Video setting back to its default.
+- Alboria's notices show over the game's menus and ours, and their time left is a ring around
+  Alboria's planet that no longer crosses the notice's frame.
+
 ## 0.6.3
 
 - Public matches: you are sent to the closest host, measured without anyone seeing anyone's address,
