@@ -966,6 +966,18 @@ fn open_alboria_blog(app: tauri::AppHandle, language: String) -> Result<(), Stri
     app.opener().open_url(alboria_blog_url(&language), None::<&str>).map_err(|e| e.to_string())
 }
 
+/// Alboria's official Discord server. The website redirects this address to the server's current
+/// invite, so a new invite needs no launcher release.
+const ALBORIA_DISCORD: &str = "https://alboria.org/discord";
+
+/// Opens Alboria's official Discord server in the system browser. The address is fixed here: the
+/// interface can open nothing else.
+#[tauri::command]
+fn open_alboria_discord(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener().open_url(ALBORIA_DISCORD, None::<&str>).map_err(|e| e.to_string())
+}
+
 /// Where players report an edition of the game the launcher does not support yet: a new issue on the
 /// project's repository.
 const EDITION_REPORT_PAGE: &str = "https://github.com/Carolux97/Azura/issues/new";
@@ -1095,6 +1107,7 @@ pub fn run() {
             alboria_delete,
             open_alboria_site,
             open_alboria_blog,
+            open_alboria_discord,
             open_edition_report,
             open_notice_link,
             join_room,
@@ -1132,7 +1145,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod notice_link_tests {
-    use super::{alboria_blog_url, notice_link_allowed, room_code_valid, FRIENDS_PATHS};
+    use super::{alboria_blog_url, notice_link_allowed, ALBORIA_DISCORD, room_code_valid, FRIENDS_PATHS};
 
     #[test]
     fn the_development_launcher_chooses_its_server() {
@@ -1164,6 +1177,7 @@ mod notice_link_tests {
         assert_eq!(alboria_blog_url("es"), "https://alboria.org/es/blog/");
         assert_eq!(alboria_blog_url("zh-Hant"), "https://alboria.org/zh-Hant/blog/");
         assert_eq!(alboria_blog_url("../evil"), "https://alboria.org/en/blog/");
+        assert_eq!(ALBORIA_DISCORD, "https://alboria.org/discord");
         assert!(notice_link_allowed("https://alboria.org/estado"));
         assert!(notice_link_allowed("HTTPS://alboria.org"));
         assert!(notice_link_allowed("mailto:hola@alboria.org"));

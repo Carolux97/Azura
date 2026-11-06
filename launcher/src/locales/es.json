@@ -392,6 +392,7 @@
   },
   "account": {
     "blog": "Blog",
+    "discord": "Discord",
     "title": "Cuenta",
     "identityTitle": "Tu identidad en Alboria",
     "identityHelp": "Así te ven los demás jugadores, en este juego y en los demás que usan Alboria. La etiqueta la pone Alboria y distingue a jugadores con el mismo gamertag.",

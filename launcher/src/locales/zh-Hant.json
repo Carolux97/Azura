@@ -392,6 +392,7 @@
   },
   "account": {
     "blog": "部落格",
+    "discord": "Discord",
     "title": "帳號",
     "identityTitle": "你的 Alboria 身分",
     "identityHelp": "其他玩家在這款遊戲以及其他使用 Alboria 的遊戲中看到的你。標籤由 Alboria 加上，用來區分相同玩家代號的玩家。",

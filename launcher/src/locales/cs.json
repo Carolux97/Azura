@@ -392,6 +392,7 @@
   },
   "account": {
     "blog": "Blog",
+    "discord": "Discord",
     "title": "Účet",
     "identityTitle": "Vaše identita v Alborii",
     "identityHelp": "Takhle vás vidí ostatní hráči, v této hře i v dalších, které používají Alborii. Alboria přidává tag, který rozlišuje hráče se stejným gamertagem.",
