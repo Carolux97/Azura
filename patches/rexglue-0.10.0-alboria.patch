@@ -665,10 +665,10 @@ index 0000000..c7fc5de
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria.cpp b/src/system/xam/alboria.cpp
 new file mode 100644
-index 0000000..9316ec3
+index 0000000..e5d77f8
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,3023 @@
+@@ -0,0 +1,3181 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -713,6 +713,7 @@ index 0000000..9316ec3
 +#include <arpa/inet.h>
 +#include <netdb.h>
 +#include <netinet/in.h>
++#include <fcntl.h>
 +#include <netinet/tcp.h>
 +#include <sys/socket.h>
 +#include <sys/time.h>
@@ -2852,6 +2853,156 @@ index 0000000..9316ec3
 +std::atomic<bool> g_hold_next_match{false};
 +std::atomic<bool> g_match_refresher{false};
 +constexpr auto kMatchRefresh = std::chrono::seconds(10);
++// --- Landmarks (alboria-notes:azura/alboria-relay.md, section 4.8) ----------------------------------
++// Matchmaking prefers the open matches whose hosts are closest to the searcher. No player learns
++// another's address for that: each game measures its round trip to a few public landmarks spread
++// over the world (a TCP handshake to each, nothing sent) and reports only those numbers, with its
++// search's polls and with the match it hosts; Alboria compares the numbers. The landmarks come with
++// the search's answer, so Alboria can change them without a new build.
++struct Landmark {
++  std::string id;
++  std::string host;
++  uint16_t port = 0;
++};
++std::mutex g_landmark_mutex;
++// The landmarks Alboria last gave, the round trips measured to them (milliseconds, by ID) and when.
++std::vector<Landmark> g_landmarks;
++std::map<std::string, int> g_landmark_ms;
++Clock::time_point g_landmarks_measured{};
++std::atomic<bool> g_landmarks_measuring{false};
++// Measured again after this long: the network a computer uses changes rarely during a session.
++constexpr auto kLandmarksLife = std::chrono::minutes(10);
++// A landmark that does not answer within this long is left out.
++constexpr auto kLandmarkTimeout = std::chrono::milliseconds(1500);
++// Handshakes per landmark; the shortest counts, so one slow packet does not make it look far.
++constexpr int kLandmarkTries = 2;
++
++// The round trip of one TCP handshake with `address`, in milliseconds; -1 when it does not complete
++// within kLandmarkTimeout. The connection is closed at once, before anything is sent.
++int HandshakeMs(const sockaddr_in& address) {
++  const NativeSocket handle = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
++  if (handle == kNoSocket) return -1;
++#if REX_PLATFORM_WIN32
++  u_long non_blocking = 1;
++  ioctlsocket(handle, FIONBIO, &non_blocking);
++#else
++  fcntl(handle, F_SETFL, fcntl(handle, F_GETFL, 0) | O_NONBLOCK);
++#endif
++  const auto start = Clock::now();
++  int result = -1;
++  if (connect(handle, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) == 0) {
++    result = 0;
++  } else {
++    fd_set writable;
++    fd_set failed;
++    FD_ZERO(&writable);
++    FD_ZERO(&failed);
++    FD_SET(handle, &writable);
++    FD_SET(handle, &failed);
++    const auto timeout_us = std::chrono::duration_cast<std::chrono::microseconds>(kLandmarkTimeout).count();
++    timeval timeout{static_cast<long>(timeout_us / 1000000), static_cast<int>(timeout_us % 1000000)};
++    // Windows reports a refused connection in the failed set, the others as writable with an error.
++    if (select(static_cast<int>(handle) + 1, nullptr, &writable, &failed, &timeout) > 0 && FD_ISSET(handle, &writable) &&
++        !FD_ISSET(handle, &failed)) {
++      int error = 0;
++      socklen_t length = sizeof(error);
++      if (getsockopt(handle, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&error), &length) == 0 && error == 0) {
++        result = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - start).count());
++      }
++    }
++  }
++  CloseNativeSocket(handle);
++  return result;
++}
++
++// The shortest of kLandmarkTries handshakes with `landmark`, -1 when none completed or its name
++// does not resolve. The name is resolved first, so the lookup is not counted.
++int LandmarkMs(const Landmark& landmark) {
++  addrinfo hints{};
++  hints.ai_family = AF_INET;
++  hints.ai_socktype = SOCK_STREAM;
++  addrinfo* found = nullptr;
++  const std::string port = std::to_string(landmark.port);
++  if (getaddrinfo(landmark.host.c_str(), port.c_str(), &hints, &found) != 0 || !found) return -1;
++  sockaddr_in address{};
++  std::memcpy(&address, found->ai_addr, sizeof(address));
++  freeaddrinfo(found);
++  int best = -1;
++  for (int attempt = 0; attempt < kLandmarkTries; ++attempt) {
++    const int ms = HandshakeMs(address);
++    if (ms >= 0 && (best < 0 || ms < best)) best = ms;
++  }
++  return best;
++}
++
++// Measures the round trips to `landmarks` in the background, all at once, unless the same ones were
++// measured less than kLandmarksLife ago or a measurement is running.
++void MeasureLandmarks(std::vector<Landmark> landmarks) {
++  if (landmarks.empty()) return;
++  {
++    std::lock_guard lock(g_landmark_mutex);
++    const bool same = landmarks.size() == g_landmarks.size() &&
++                      std::equal(landmarks.begin(), landmarks.end(), g_landmarks.begin(), [](const Landmark& a, const Landmark& b) {
++                        return a.id == b.id && a.host == b.host && a.port == b.port;
++                      });
++    if (same && !g_landmark_ms.empty() && Clock::now() - g_landmarks_measured < kLandmarksLife) return;
++  }
++  if (g_landmarks_measuring.exchange(true)) return;
++  std::thread([landmarks = std::move(landmarks)] {
++#if REX_PLATFORM_WIN32
++    // Winsock counts its users: this start and cleanup leave the others' alone.
++    WSADATA wsa_data;
++    const bool started = WSAStartup(MAKEWORD(2, 2), &wsa_data) == 0;
++#endif
++    std::vector<int> results(landmarks.size(), -1);
++    std::vector<std::thread> workers;
++    for (size_t i = 0; i < landmarks.size(); ++i) {
++      workers.emplace_back([&, i] { results[i] = LandmarkMs(landmarks[i]); });
++    }
++    for (auto& worker : workers) worker.join();
++#if REX_PLATFORM_WIN32
++    if (started) WSACleanup();
++#endif
++    std::map<std::string, int> measured;
++    std::string summary;
++    for (size_t i = 0; i < landmarks.size(); ++i) {
++      if (results[i] < 0) continue;
++      measured[landmarks[i].id] = results[i];
++      summary += fmt::format("{}{} {} ms", summary.empty() ? "" : ", ", landmarks[i].id, results[i]);
++    }
++    REXSYS_INFO("Alboria: round trips to the landmarks: {}", summary.empty() ? "none answered" : summary);
++    {
++      std::lock_guard lock(g_landmark_mutex);
++      g_landmarks = landmarks;
++      g_landmark_ms = std::move(measured);
++      g_landmarks_measured = Clock::now();
++    }
++    g_landmarks_measuring.store(false);
++  }).detach();
++}
++
++// The landmarks of a search's answer (its "landmarks": ID, host and port of each).
++std::vector<Landmark> LandmarksOf(const nlohmann::json& answer) {
++  std::vector<Landmark> out;
++  if (!answer.contains("landmarks") || !answer["landmarks"].is_array()) return out;
++  for (const auto& entry : answer["landmarks"]) {
++    if (!entry.is_object() || !entry.contains("port") || !entry["port"].is_number_integer()) continue;
++    const std::string id = Text(entry, "id");
++    const std::string host = Text(entry, "host");
++    const int port = entry["port"].get<int>();
++    if (id.empty() || host.empty() || port <= 0 || port > 65535) continue;
++    out.push_back({id, host, static_cast<uint16_t>(port)});
++  }
++  return out;
++}
++
++// Adds the round trips measured to the landmarks to `request` as its "landmarks", when there are.
++void AddLandmarks(nlohmann::json& request) {
++  std::lock_guard lock(g_landmark_mutex);
++  if (g_landmark_ms.empty()) return;
++  request["landmarks"] = g_landmark_ms;
++}
++
 +// How long after Alboria said to host a new search is answered "host" at once.
 +constexpr auto kHostTold = std::chrono::seconds(15);
 +
@@ -2881,12 +3032,15 @@ index 0000000..9316ec3
 +    if (!said.exchange(true)) REXSYS_INFO("Alboria: a hosted session outside a match room is not offered to matchmaking");
 +    return;
 +  }
-+  const auto answer = CallSignedIn("/v1/matchmaking/open", {{"code", status.code},
-+                                                             {"title_id", TitleIdText()},
-+                                                             {"mode", match.mode},
-+                                                             {"capacity", match.capacity},
-+                                                             {"started", match.started},
-+                                                             {"session", EncodeBase64(*match.session)}});
++  nlohmann::json request = {{"code", status.code},
++                            {"title_id", TitleIdText()},
++                            {"mode", match.mode},
++                            {"capacity", match.capacity},
++                            {"started", match.started},
++                            {"session", EncodeBase64(*match.session)}};
++  // How far this host is from the landmarks, for searchers to be sent to the closest match.
++  AddLandmarks(request);
++  const auto answer = CallSignedIn("/v1/matchmaking/open", request);
 +  if (!answer.error.empty()) {
 +    REXSYS_WARN("Alboria: the open match was not taken ({})", answer.error);
 +    return;
@@ -3153,6 +3307,8 @@ index 0000000..9316ec3
 +    return {MatchOutcome::kHost, {}};
 +  }
 +  const std::string id = Text(ticket.json, "ticket");
++  // Measured while the search waits; the polls report them once they are known.
++  MeasureLandmarks(LandmarksOf(ticket.json));
 +  REXSYS_INFO("Alboria: searching for a match ({})", request.contains("modes") ? request["modes"].dump() : mode);
 +  for (;;) {
 +    if (g_stop_search.load()) {
@@ -3162,7 +3318,9 @@ index 0000000..9316ec3
 +      SetSearchPhaseLocked(SearchPhase::kStopped);
 +      return {MatchOutcome::kStopped, {}};
 +    }
-+    const auto answer = CallSignedIn("/v1/matchmaking/poll", {{"ticket", id}});
++    nlohmann::json poll = {{"ticket", id}};
++    AddLandmarks(poll);
++    const auto answer = CallSignedIn("/v1/matchmaking/poll", poll);
 +    const std::string state = answer.error.empty() ? Text(answer.json, "state") : std::string("host");
 +    // The players found (waiting) or already in the match sent into (join).
 +    if (state == "waiting" || state == "join") {
