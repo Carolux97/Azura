@@ -78,6 +78,10 @@ REXCVAR_DEFINE_BOOL(ambient_occlusion, kAmbientOcclusionDefault, "Azura/Graphics
                     "game runs. Off by default on Linux");
 REXCVAR_DEFINE_BOOL(bloom, true, "Azura/Graphics",
                     "The game's bloom (SystemSettings.Bloom); applies while the game runs");
+REXCVAR_DEFINE_BOOL(graphics_menu, true, "Azura/Graphics",
+                    "Video in the Options opens Azura's own graphics menu; false shows the game's list "
+                    "of rows instead. Read when the game starts")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_BOOL(lens_flares, true, "Azura/Graphics",
                     "The game's lens flares (SystemSettings.LensFlares); applies while the game runs");
 
@@ -1109,7 +1113,12 @@ float PcOptionDisplayValue(int option) {
   return found->second;
 }
 
-void PcOptionStoreValue(int option, float value) {
+namespace {
+
+// Applies and saves `value` for `option`. Without `force`, nothing is done when it is the value
+// shown already; with it, the value is written to azura.toml anyway (the shown value of the image
+// scaling can be the one a preset put in effect, not the one azura.toml holds).
+void StoreValue(int option, float value, bool force) {
   if (!Valid(option) || PcOptionIsAction(option)) return;
   const Option& entry = Options()[option];
   std::filesystem::path config_path;
@@ -1118,7 +1127,7 @@ void PcOptionStoreValue(int option, float value) {
     const auto found = g_values.find(option);
     const float shown = found != g_values.end() ? found->second : ReadCvar(entry);
     g_started.emplace(option, shown);
-    if (FormatValue(entry, shown, false) == FormatValue(entry, value, false)) return;
+    if (!force && FormatValue(entry, shown, false) == FormatValue(entry, value, false)) return;
     g_values[option] = value;
     config_path = g_config_path;
   }
@@ -1127,18 +1136,12 @@ void PcOptionStoreValue(int option, float value) {
   if (entry.label == Label::kFrameRateLimit) ApplyFrameRateLimit();
   if (entry.label == Label::kSharpness) ApplyUpscalingSharpness(true);
   if (!config_path.empty()) UpsertTomlKey(config_path, entry.cvar, FormatValue(entry, value, true));
-  // A preset other than custom picks the render resolution and the image scaling at every start
-  // (ApplyRenderResolution), so one chosen by hand would last only this run: choosing either turns
-  // the preset to custom, which keeps the player's choice.
-  if ((entry.label == Label::kRenderResolution || entry.label == Label::kUpscaling) &&
-      REXCVAR_GET(upscaling_preset) != "custom") {
-    for (size_t i = 0; i < Options().size(); ++i) {
-      if (Options()[i].label != Label::kUpscalingPreset) continue;
-      REXLOG_INFO("[Azura options] {} chosen by hand: the upscaling preset becomes custom", entry.cvar);
-      PcOptionStoreValue(static_cast<int>(i), 0.0f);  // "custom", the preset's first value
-      break;
-    }
-  }
+}
+
+}  // namespace
+
+void PcOptionStoreValue(int option, float value) {
+  StoreValue(option, value, false);
 }
 
 void PcOptionsResetDefaults(int category) {
@@ -1246,9 +1249,11 @@ void PatchOptionsMenu(CoalescedSection& section, const std::string& language) {
   const std::string back = buttons.size() > 0 ? buttons[0] : "BACK";
   const std::string defaults = buttons.size() > 1 ? buttons[1] : "DEFAULTS";
 
-  // Video: a list of our rows. The category keeps its texts from the file; OnSelectedCallback is
-  // cleared so that choosing it opens the list instead of the calibration screen (now the first
-  // row). Buttons as in the game's categories (ButtonType 1 = B, 2 = X): Back and Defaults.
+  // Video: a list of our rows. The category keeps its texts from the file. With our graphics menu
+  // (UseGraphicsMenu), choosing it runs Callback_VideoOptions, as in the game, and script_hooks.cpp
+  // opens the menu there; the rows stay for the fallback. Without it, OnSelectedCallback is cleared
+  // so that choosing it opens the list instead of the calibration screen (then the first row).
+  // Buttons as in the game's categories (ButtonType 1 = B, 2 = X): Back and Defaults.
   const std::u16string video = CategoryText(section, kVideoCategory);
   const auto video_title = Quoted(video, u"CategoryDescription");
   const auto video_tooltip = Quoted(video, u"CategoryTooltip");
@@ -1259,7 +1264,8 @@ void PatchOptionsMenu(CoalescedSection& section, const std::string& language) {
   SetKey(section, "OptionCategories[" + std::to_string(kVideoCategory) + "]",
          "(CategoryDescription=\"" + (video_title.empty() ? std::string("VIDEO") : video_title[0]) +
              "\",CategoryTooltip=\"" + (video_tooltip.empty() ? std::string() : video_tooltip[0]) +
-             "\",OnSelectedCallback=\"\",bIsGlobalValue=false,CategoryOptions=(" + rows +
+             "\",OnSelectedCallback=\"" + (UseGraphicsMenu() ? "Callback_VideoOptions" : "") +
+             "\",bIsGlobalValue=false,CategoryOptions=(" + rows +
              "),MenuButtons=((ButtonDescription=\"" + back +
              "\",ButtonType=1,ButtonHandler=OBH_MAX),(ButtonDescription=\"" + defaults +
              "\",ButtonType=2,ButtonHandler=OBH_Defaults)))");
@@ -1636,6 +1642,126 @@ void ApplyUpscalingSharpness(bool show_now) {
     handler = g_sharpness_changed;
   }
   if (show_now && handler) handler();
+}
+
+bool UseGraphicsMenu() {
+  static const bool use = REXCVAR_GET(graphics_menu);
+  return use;
+}
+
+PcOptionInfo PcOptionDescribe(int option) {
+  PcOptionInfo info;
+  if (!Valid(option)) return info;
+  const Option& entry = Options()[option];
+  const Texts& texts = TextsFor(PlayerLanguage());
+  info.label = texts.labels[static_cast<int>(entry.label)].first;
+  info.help = texts.labels[static_cast<int>(entry.label)].second;
+  switch (entry.kind) {
+    case Kind::kAction:
+      info.action = true;
+      break;
+    case Kind::kToggle:
+      info.values = {texts.off, texts.on};
+      break;
+    case Kind::kSlider:
+      info.slider = true;
+      info.slider_min = entry.slider_min;
+      info.slider_max = entry.slider_max;
+      info.slider_step = entry.slider_step;
+      break;
+    case Kind::kChoice:
+      // Lists defined in the game's profile mappings have their names written by PatchValueNames;
+      // ours come from PcOptionValueNames, as the game's list asks for them.
+      if (entry.label == Label::kAntialiasing) {
+        info.values = {texts.off, texts.fxaa, texts.fxaa_extreme};
+      } else if (entry.label == Label::kAnisotropic) {
+        info.values = {texts.off, "4\xC3\x97", "16\xC3\x97"};
+      } else {
+        std::vector<std::u16string> names;
+        if (PcOptionValueNames(entry.psid, names)) {
+          for (const std::u16string& name : names) info.values.push_back(Utf8(name));
+        }
+      }
+      break;
+  }
+  return info;
+}
+
+int PcOptionByCvar(const std::string& cvar) {
+  for (size_t i = 0; i < Options().size(); ++i) {
+    if (Options()[i].cvar && cvar == Options()[i].cvar) return static_cast<int>(i);
+  }
+  return -1;
+}
+
+int PcOptionCalibrate() {
+  return FindPcOption(kVideoCategory, kCalibrateRow);
+}
+
+bool PcOptionShown(int option) {
+  return Valid(option) && Shown(Options()[option]);
+}
+
+namespace {
+
+// The upscaling preset chosen in the menu ("custom" when there is no such row).
+std::string ChosenPreset() {
+  const int preset = PcOptionByCvar("upscaling_preset");
+  return preset < 0 ? std::string("custom") : FormatValue(Options()[preset], PcOptionDisplayValue(preset), false);
+}
+
+// The value `option` (the render resolution or the image scaling) takes with upscaling preset
+// `preset` on this screen, as ApplyRenderResolution picks it; empty when the screen size is unknown
+// or the preset leaves it as set.
+std::string PresetPick(const Option& option, const std::string& preset) {
+  const int screen_height = ScreenSize().second;
+  if (screen_height <= 0) return {};
+  const std::string resolution = PresetRenderResolution(preset, screen_height);
+  if (option.label == Label::kRenderResolution) return resolution;
+  if (std::atoi(resolution.c_str() + resolution.find('x') + 1) >= screen_height) return {};
+#if defined(__APPLE__)
+  return "metalfx";
+#else
+  return "fsr";
+#endif
+}
+
+}  // namespace
+
+bool PcOptionDecidedByPreset(int option, float& value) {
+  if (!Valid(option)) return false;
+  const Option& entry = Options()[option];
+  if (entry.label != Label::kRenderResolution && entry.label != Label::kUpscaling) return false;
+  const std::string preset = ChosenPreset();
+  if (preset == "custom") return false;
+  value = PcOptionDisplayValue(option);
+  const std::string pick = PresetPick(entry, preset);
+  const std::vector<const char*> choices = ChoicesOf(entry);
+  for (size_t i = 0; i < choices.size(); ++i) {
+    if (pick == choices[i]) value = static_cast<float>(i);
+  }
+  return true;
+}
+
+void PcOptionsLeavePreset() {
+  const int preset = PcOptionByCvar("upscaling_preset");
+  if (preset < 0 || ChosenPreset() == "custom") return;
+  REXLOG_INFO("[Azura options] The upscaling preset becomes custom, from what {} picked", ChosenPreset());
+  for (const char* cvar : {"render_resolution", "present_effect"}) {
+    const int option = PcOptionByCvar(cvar);
+    float value = 0.0f;
+    if (option >= 0 && PcOptionDecidedByPreset(option, value)) StoreValue(option, value, true);
+  }
+  StoreValue(preset, 0.0f, false);  // custom, the list's first value
+}
+
+bool PcOptionPendingRestart(int option) {
+  if (!Valid(option) || !NeedsRestart(Options()[option])) return false;
+  const float value = PcOptionDisplayValue(option);
+  std::lock_guard lock(g_mutex);
+  const auto started = g_started.find(option);
+  return started != g_started.end() &&
+         FormatValue(Options()[option], started->second, false) != FormatValue(Options()[option], value, false);
 }
 
 }  // namespace azura::menu

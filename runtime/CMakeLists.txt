@@ -79,6 +79,7 @@ set(AZURA_SOURCES
     src/alboria_sounds.cpp
     src/alboria_style.cpp
     src/connection_menu.cpp
+    src/graphics_menu.cpp
     src/versus_online_menu.cpp
     src/shader_precompile.cpp
     src/system_settings.cpp

@@ -298,6 +298,16 @@ std::function<void()> g_restart_handler;
 std::function<void()> g_local_coop_handler;
 // Opens the Alboria menu (SetConnectionHandler).
 std::function<void()> g_connection_handler;
+// Opens our graphics menu (SetGraphicsMenuHandler).
+std::function<void()> g_graphics_menu_handler;
+// The Options scene the graphics menu was opened over, and what the menu asked to run on it
+// (RunGraphicsMenuRequests).
+std::atomic<uint32_t> g_graphics_scene{0};
+std::atomic<bool> g_calibration_request{false};
+std::atomic<bool> g_graphics_closed{false};
+// The brightness calibration screen the graphics menu opened is open: the menu opens again when it
+// closes.
+std::atomic<bool> g_calibration_from_graphics{false};
 // Opens the Versus online menu (SetVersusOnlineHandler).
 std::function<void(int)> g_versus_online_handler;
 // The game whose online menu was opened last (0 Versus, 1 Horde, 2 Beast), to open it again when the
@@ -1016,6 +1026,8 @@ constexpr uint8_t kNativeGreaterEqualIntInt = 0x99;
 //     the 5 (a one-byte int constant) becomes 4;
 //   - in `SelectedOption == 1` the one (EX_IntOne, one byte) becomes EX_Self, also one byte: it
 //     evaluates to the scene's own address, which is never a position.
+// With our graphics menu (menu::UseGraphicsMenu) only the first change is made: Video opens it
+// through its OnSelectedCallback, as the categories that open other screens.
 // The bytecode keeps its size and its jump offsets. The ones patched are those of this condition
 // (from `SelectedOption == 5` on), so an earlier one that only picks a sound is left alone. Done
 // once.
@@ -1035,6 +1047,11 @@ void LetListsShow(uint8_t* base, uint32_t function) {
       base[code + i] = kNativeGreaterEqualIntInt;
       base[code + i + kOperand + 1] = azura::menu::kControllerCategory;
       after_five = true;
+      // With our graphics menu Video opens it, as the categories that open screens: it stays skipped.
+      if (azura::menu::UseGraphicsMenu()) {
+        REXLOG_INFO("[Azura options] Video opens the graphics menu; the categories from Controller on open menus of ours");
+        return;
+      }
     } else if (after_five && token == kTokenIntOne && value == kTokenEndFunctionParms) {
       base[code + i + kOperand] = kTokenSelf;
       REXLOG_INFO("[Azura options] Video shows its list; the categories from Controller on open menus of ours");
@@ -2485,11 +2502,14 @@ bool IsInFrontEnd(PPCContext& ctx, uint8_t* base, uint32_t return_to_main) {
 
 // Opens the restart message box. `ctx` holds the frame of Callback_ReturnToMain, which has just
 // run, on the options scene; `return_to_main` is that function (its class has the Defaults one).
-void OpenRestartDialog(PPCContext& ctx, uint8_t* base, uint32_t return_to_main) {
+// With `scene` set, `ctx` is any frame (a player input one) and the box opens over that options
+// scene, `return_to_main` then being unused.
+void OpenRestartDialog(PPCContext& ctx, uint8_t* base, uint32_t return_to_main, uint32_t scene = 0) {
   const int32_t reset_accept = g_names[kResetAcceptAlias].load();
   const int32_t generic_accept = g_names[kGenericAcceptAlias].load();
   const uint32_t reset_defaults =
-      FindClassFunction(base, LoadU32(base, return_to_main + kObjectOuter), "Callback_ResetDefaults");
+      scene ? FindInheritedFunction(base, LoadU32(base, scene + kObjectClass), "Callback_ResetDefaults")
+            : FindClassFunction(base, LoadU32(base, return_to_main + kObjectOuter), "Callback_ResetDefaults");
   if (!reset_defaults || reset_accept < 0 || generic_accept < 0) {
     REXLOG_WARN("[Azura options] The restart message box is not available");
     return;
@@ -2516,7 +2536,11 @@ void OpenRestartDialog(PPCContext& ctx, uint8_t* base, uint32_t return_to_main) 
   std::memcpy(base + code + message, message_key.data(), message_key.size());
   StoreU32(base, code + alias, static_cast<uint32_t>(generic_accept));
   g_restart_dialog.store(true);
-  RunInstead(ctx, base, reset_defaults, g_dialog_locals);
+  if (scene) {
+    RunOnObject(ctx, base, scene, reset_defaults, g_dialog_locals);
+  } else {
+    RunInstead(ctx, base, reset_defaults, g_dialog_locals);
+  }
   std::memcpy(base + code + title, "ResetOptions_Title", title_key.size());
   std::memcpy(base + code + message, "ResetOptions_Message", message_key.size());
   StoreU32(base, code + alias, static_cast<uint32_t>(reset_accept));
@@ -2745,6 +2769,7 @@ bool TakeKeyboardStartAsMenuKey(PPCContext& ctx, uint8_t* base, uint32_t functio
 bool HandleOptionsButton(PPCContext& ctx, uint8_t* base, uint32_t function) {
   const uint32_t scene = ctx.r3.u32;
   if (ObjectName(base, LoadU32(base, function + kObjectOuter)) != "UIScene_Options") return false;
+  if (azura::menu::UseGraphicsMenu()) return false;  // no Video list: the graphics menu has the row
   if (CurrentMode(base, scene) != azura::menu::kVideoCategory || g_calibration_open.load()) return false;
   const uint32_t locals = LoadU32(base, ctx.r4.u32 + kFrameLocals);
   const uint8_t event = base[locals + kFilterInputEvent];
@@ -3485,6 +3510,19 @@ void SetLocalCoopHandler(std::function<void()> handler) {
 void SetConnectionHandler(std::function<void()> handler) {
   std::lock_guard lock(g_quit_mutex);
   g_connection_handler = std::move(handler);
+}
+
+void SetGraphicsMenuHandler(std::function<void()> handler) {
+  std::lock_guard lock(g_quit_mutex);
+  g_graphics_menu_handler = std::move(handler);
+}
+
+void RequestBrightnessCalibration() {
+  g_calibration_request.store(true);
+}
+
+void GraphicsMenuClosed() {
+  g_graphics_closed.store(true);
 }
 
 const char* TakeOnlineMenuNotice() {
@@ -4661,6 +4699,33 @@ void AnswerReservationFromAlboria(PPCContext& ctx, uint8_t* base, uint32_t funct
   StoreU32(base, result, static_cast<uint32_t>(GameTeamOf(team)));
 }
 
+// On a player input frame (`ctx`, about to run PlayerInput), in the main menu or a paused game:
+// does what the graphics menu asked for on the Options scene it was opened over. The calibration
+// is Callback_VideoOptions, what Video ran in the game; RunOnObject runs it straight in the
+// interpreter, so it does not reach the hook that turns Video's call of it into the menu.
+void RunGraphicsMenuRequests(PPCContext& ctx, uint8_t* base) {
+  const uint32_t scene = g_graphics_scene.load();
+  if (!scene) return;
+  if (g_calibration_request.exchange(false)) {
+    const uint32_t video_options =
+        FindInheritedFunction(base, LoadU32(base, scene + kObjectClass), "Callback_VideoOptions");
+    if (video_options) {
+      constexpr uint32_t kLocalsSize = 64;
+      static const uint32_t locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kLocalsSize);
+      std::memset(base + locals, 0, kLocalsSize);
+      g_calibration_from_graphics.store(true);
+      REXLOG_INFO("[Azura options] Opening the brightness calibration screen from the graphics menu");
+      RunOnObject(ctx, base, scene, video_options, locals);
+    } else {
+      REXLOG_WARN("[Azura options] Callback_VideoOptions not found; brightness calibration unavailable");
+    }
+  }
+  if (g_graphics_closed.exchange(false) && g_front_end.load(std::memory_order_relaxed) &&
+      azura::menu::PcOptionsCategoryClosed(azura::menu::kVideoCategory)) {
+    OpenRestartDialog(ctx, base, 0, scene);
+  }
+}
+
 // On a player input frame (`ctx`, about to run PlayerInput) in the front end: does what the Versus
 // online menu asked for once Alboria decided. Told to host, the party opens the lobby of the
 // decided mode's playlist (LaunchMatchmadeLobby; its matchmaking is idle, nothing to cancel); sent
@@ -5460,6 +5525,7 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     }
     CreatePendingStartupParty(ctx, base);
     RunVersusOnlineRequests(ctx, base);
+    RunGraphicsMenuRequests(ctx, base);
     NoteMatchPlayers(ctx, base);
     PlaceAlboriaTeams(ctx, base);
     JoinRoomFromLauncher(base);
@@ -6466,6 +6532,18 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     const uint32_t result = ctx.r5.u32;
     const int category = CurrentMode(base, scene);
     __imp__sub_822DF9E0(ctx, base);
+    // The calibration screen the graphics menu opened closed: back to the menu, which offers the
+    // restart itself when it closes.
+    if (g_calibration_from_graphics.exchange(false)) {
+      std::function<void()> handler;
+      {
+        std::lock_guard lock(g_quit_mutex);
+        handler = g_graphics_menu_handler;
+      }
+      REXLOG_INFO("[Azura options] The brightness calibration closed: back to the graphics menu");
+      if (handler) handler();
+      return;
+    }
     // In the middle of a game a restart would lose progress: only the rows' descriptions say when
     // those options apply.
     ctx.r3.u64 = scene;
@@ -6489,6 +6567,21 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   if (Is(base, function, kClientMenuSelected) &&
       ObjectName(base, LoadU32(base, function + kObjectOuter)) == "UIScene_FrontEnd") {
     ClientMenuPosition(ctx, base);
+  }
+  // Video runs Callback_VideoOptions, as in the game, and with our graphics menu it opens that menu
+  // instead of the calibration screen (which the menu's brightness row opens:
+  // RunGraphicsMenuRequests).
+  if (Is(base, function, kCallbackVideoOptions) && azura::menu::UseGraphicsMenu() &&
+      ObjectName(base, LoadU32(base, function + kObjectOuter)) == "UIScene_Options") {
+    g_graphics_scene.store(ctx.r3.u32);
+    std::function<void()> handler;
+    {
+      std::lock_guard lock(g_quit_mutex);
+      handler = g_graphics_menu_handler;
+    }
+    REXLOG_INFO("[Azura options] Opening the graphics menu");
+    if (handler) handler();
+    return;
   }
   // Connection, at the credits' place, runs Callback_Credits: it opens the Alboria menu. (The
   // credits' own button runs the function without passing here: HandleCreditsButton.)
