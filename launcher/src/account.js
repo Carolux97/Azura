@@ -237,6 +237,12 @@ export const setupAccount = ({ state, persist, renderPlay, toast, t, getLocale }
       if (Date.now() >= flow.resendAt) clearInterval(resendTimer);
     }, 1000);
     showStep("code");
+    // A development server (the local Alboria) sends the code itself: filled in and used at once.
+    if (/^\d{6}$/.test(sent?.devCode ?? "")) {
+      $("code-input").value = sent.devCode;
+      renderCodeBoxes();
+      await attempt(confirmCode);
+    }
   };
 
   /** Runs a step's request, showing its error in the step when it fails. */

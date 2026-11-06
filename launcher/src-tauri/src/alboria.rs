@@ -323,6 +323,10 @@ pub struct CodeSent {
     pub expires_in: u64,
     pub resend_in: u64,
     pub code_needed: bool,
+    /// The code itself, which only a development server sends (its ALBORIA_DEV_CODES), for the
+    /// launcher to fill in; never from the published service.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dev_code: Option<String>,
 }
 
 /// What the service says about itself (`/v1/status`, alboria-notes:azura/alboria-relay.md section
@@ -660,6 +664,11 @@ fn code_sent(answer: &Value) -> CodeSent {
         expires_in: answer.get("expires_in").and_then(Value::as_u64).unwrap_or(600),
         resend_in: answer.get("resend_in").and_then(Value::as_u64).unwrap_or(60),
         code_needed: answer.get("code_needed").and_then(Value::as_bool).unwrap_or(true),
+        dev_code: answer
+            .get("dev_code")
+            .and_then(Value::as_str)
+            .filter(|code| code.len() == 6 && code.bytes().all(|b| b.is_ascii_digit()))
+            .map(str::to_owned),
     }
 }
 
@@ -746,6 +755,9 @@ mod tests {
         // While the service sends no codes, it says so, and the account it makes is unverified.
         assert!(!code_sent(&json!({ "code_needed": false })).code_needed);
         assert!(code_sent(&json!({ "expires_in": 600, "resend_in": 60 })).code_needed);
+        assert_eq!(code_sent(&json!({ "expires_in": 600 })).dev_code, None);
+        assert_eq!(code_sent(&json!({ "dev_code": "012345" })).dev_code.as_deref(), Some("012345"));
+        assert_eq!(code_sent(&json!({ "dev_code": "12ab56" })).dev_code, None);
         let unverified = session_from(&json!({
             "token": "t", "gamertag": "Anya", "tag": 1500, "email_verified": false, "verify_by": "2026-11-03T12:00:00.000Z"
         }));
