@@ -474,6 +474,11 @@ enum WatchedName {
   kSoundClose,
   kSoundSliderLeft,
   kSoundSliderRight,
+  // The main menu's own events (Theme_Frontend), for the themes without the options' ones.
+  kFrontSelectionChanged,
+  kFrontSelectItem,
+  kFrontGoBack,
+  kFrontGoForward,
   kWatchedNameCount,
 };
 constexpr const char* kWatchedNames[kWatchedNameCount] = {
@@ -503,7 +508,8 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "OnConfirm_ReturnToMenu", "ConstructActList",      "DLCEnumerationFinished",
     "ProcessSoundEvent",     "Options_StepUp",         "Options_StepDown",   "ValueChangeLeft",
     "ValueChangeRight",      "Options_AcceptButton",   "Options_BackButton", "Options_DetailsEnter",
-    "Options_DetailsLeave",  "Options_SliderLeft",     "Options_SliderRight"};
+    "Options_DetailsLeave",  "Options_SliderLeft",     "Options_SliderRight", "Host_SelectionChanged",
+    "Host_SelectItem",       "Host_GoBack",            "Host_GoForward"};
 
 // FName index of each watched name, -1 until found (0 is a valid index: None).
 std::atomic<int32_t> g_names[kWatchedNameCount];
@@ -5032,10 +5038,13 @@ void AnswerPartyType(PPCContext& ctx, uint8_t* base) {
 // Every sound of the game's menus goes through UISoundTheme.ProcessSoundEvent(SoundEventName,
 // SoundOwner): Flash calls it for moving and changing values, the script through
 // GFxMoviePlayer.PlaySoundFromTheme for the rest. The theme maps the event's name to a SoundCue in
-// its SoundEventBindings and the owner (the player's controller) plays it. Our own menus over the
-// game play the same events: the theme is kept as the game uses it (the title screen already plays
-// one), and each sound a menu asks for (PlayMenuSound) runs ProcessSoundEvent on the next player
-// input frame, borrowing that frame as the System Link join does. A sound asked for before the
+// its SoundEventBindings and the owner (the player's controller) plays it. The game has several
+// themes: Theme_Pause for the options and the pause menu, Theme_Frontend for the title screen and the
+// main menu, Theme_Alerts for pop-ups. Our own menus over the game play the options' events, or,
+// with the main menu's theme, which has none of them, the main menu's own (FrontendEventName): the
+// theme is kept as the game uses it (the title screen already plays one), and each sound a menu asks
+// for (PlayMenuSound) runs ProcessSoundEvent on the next player input frame, borrowing that frame as
+// the System Link join does. A sound asked for before the
 // theme is known, or while no input runs, is dropped rather than played late.
 
 using azura::script::MenuSound;
@@ -5054,6 +5063,41 @@ uint32_t g_sound_locals = 0;
 
 WatchedName SoundEventName(MenuSound sound) {
   return static_cast<WatchedName>(kSoundStepUp + static_cast<int>(sound));
+}
+
+// The main menu's event for `sound` (Theme_Frontend has none of the options' events): moving and
+// changing a value sound as moving in the main menu, choosing as choosing, going back and closing as
+// going back, opening as going forward.
+WatchedName FrontendEventName(MenuSound sound) {
+  switch (sound) {
+    case MenuSound::kAccept:
+      return kFrontSelectItem;
+    case MenuSound::kBack:
+    case MenuSound::kClose:
+      return kFrontGoBack;
+    case MenuSound::kOpen:
+      return kFrontGoForward;
+    default:
+      return kFrontSelectionChanged;
+  }
+}
+
+// An element of a UISoundTheme's SoundEventBindings: SoundEventName (an FName: its GNames index,
+// then its number), then SoundToPlay (a SoundCue).
+constexpr uint32_t kSoundBindingSize = 12;
+constexpr uint32_t kMaxSoundBindings = 1024;
+
+// Whether `theme` plays the event `name` (a GNames index): whether its SoundEventBindings has it.
+bool ThemeBinds(const uint8_t* base, uint32_t theme, int32_t name) {
+  if (name < 0) return false;
+  const int32_t at = ClassPropertyOffset(base, LoadU32(base, theme + kObjectClass), "SoundEventBindings");
+  if (at < 0) return false;
+  const uint32_t data = LoadU32(base, theme + static_cast<uint32_t>(at));
+  const uint32_t count = std::min(LoadU32(base, theme + static_cast<uint32_t>(at) + 4), kMaxSoundBindings);
+  for (uint32_t i = 0; data && i < count; ++i) {
+    if (LoadU32(base, data + i * kSoundBindingSize) == static_cast<uint32_t>(name)) return true;
+  }
+  return false;
 }
 
 // Whether `object`'s class is UISoundTheme or one of its subclasses.
@@ -5097,9 +5141,23 @@ void PlayQueuedMenuSounds(PPCContext& ctx, uint8_t* base) {
   const uint32_t frame = ctx.r4.u32;
   const uint32_t own_object = LoadU32(base, frame + kFrameObject);
   const uint64_t own_r3 = ctx.r3.u64;
+  // The same event twice in a row within this time plays once: going back and closing, which in
+  // the main menu's theme are the same event, come together when a menu closes.
+  constexpr auto kRepeatWithin = std::chrono::milliseconds(150);
+  static int32_t last_name = -1;
+  static std::chrono::steady_clock::time_point last_at;
   for (const MenuSound sound : sounds) {
-    const int32_t name = g_names[SoundEventName(sound)].load(std::memory_order_relaxed);
-    if (name < 0) continue;
+    // The options' event, which the options and pause theme has; in any other theme (the main
+    // menu's, over which the online menus open) the main menu's own event, as long as it has it.
+    int32_t name = g_names[SoundEventName(sound)].load(std::memory_order_relaxed);
+    if (!ThemeBinds(base, theme, name)) {
+      name = g_names[FrontendEventName(sound)].load(std::memory_order_relaxed);
+      if (!ThemeBinds(base, theme, name)) continue;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (name == last_name && now - last_at < kRepeatWithin) continue;
+    last_name = name;
+    last_at = now;
     std::memset(base + g_sound_locals, 0, kSoundLocalsSize);
     // An FName: its index in GNames, then its number (0, no suffix).
     StoreU32(base, g_sound_locals + static_cast<uint32_t>(name_at), static_cast<uint32_t>(name));
@@ -5357,8 +5415,11 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     CreateStartupParty(ctx, base);
     return;
   }
-  // The theme the game plays its menu sounds with, for ours.
-  if (Is(base, function, kProcessSoundEvent) && IsSoundTheme(base, ctx.r3.u32)) {
+  // The theme the game plays its menu sounds with, for ours: one with the options' events or the
+  // main menu's (not the alerts' theme, which has neither).
+  if (Is(base, function, kProcessSoundEvent) && IsSoundTheme(base, ctx.r3.u32) &&
+      (ThemeBinds(base, ctx.r3.u32, g_names[kSoundStepUp].load(std::memory_order_relaxed)) ||
+       ThemeBinds(base, ctx.r3.u32, g_names[kFrontSelectionChanged].load(std::memory_order_relaxed)))) {
     g_sound_theme.store(ctx.r3.u32, std::memory_order_relaxed);
   }
   // Before it runs: an Alboria account that starts Lambency is a developer to the game.
