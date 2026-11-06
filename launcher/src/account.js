@@ -37,6 +37,7 @@ import {
   alboriaVerifyEmail,
   alboriaVerifyEmailCode,
   openAlboriaSite,
+  openAlboriaBlog,
 } from "./platform.js";
 import { TEXT_RULES } from "./textRules.js";
 
@@ -611,6 +612,9 @@ export const setupAccount = ({ state, persist, renderPlay, toast, t, getLocale }
   // The links to alboria.org: under the brand and in the Account section.
   for (const button of document.querySelectorAll("[data-alboria-site]")) {
     button.addEventListener("click", () => openAlboriaSite().catch((error) => console.warn("Opening alboria.org failed:", error)));
+  }
+  for (const button of document.querySelectorAll("[data-alboria-blog]")) {
+    button.addEventListener("click", () => openAlboriaBlog(getLocale()).catch((error) => console.warn("Opening the blog failed:", error)));
   }
   for (const button of document.querySelectorAll("[data-account-open]")) {
     button.addEventListener("click", () => openDialog(button.dataset.accountOpen));

@@ -391,6 +391,7 @@
     "bubbleDone": "Welcome to Alboria!"
   },
   "account": {
+    "blog": "Blog",
     "title": "Account",
     "identityTitle": "Your Alboria identity",
     "identityHelp": "How other players see you, in this game and in the others that use Alboria. Alboria adds the tag, which tells apart players with the same gamertag.",

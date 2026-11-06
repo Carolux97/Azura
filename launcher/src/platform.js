@@ -549,6 +549,12 @@ export const openAlboriaSite = async () => {
   window.open("https://alboria.org", "_blank", "noopener");
 };
 
+/** Opens Alboria's blog in `language` in the system browser (the address is built on the Rust side). */
+export const openAlboriaBlog = async (language) => {
+  if (isNativeApp) return tauri.core.invoke("open_alboria_blog", { language });
+  window.open(`https://alboria.org/${encodeURIComponent(language)}/blog/`, "_blank", "noopener");
+};
+
 // --- Friends (alboria-notes:azura/alboria-relay.md, section 4.7) ---------------------------------
 // In a browser a small simulation answers, with a few friends whose state changes now and then, so
 // the panel can be designed without the service.
