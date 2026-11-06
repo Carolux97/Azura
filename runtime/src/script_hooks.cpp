@@ -4452,6 +4452,64 @@ void ClearPartyHostMarks(uint8_t* base, uint32_t panel) {
   }
 }
 
+// The party panel `panel` lists each team's players in its block (NumPlayersPerTeam slots a team, in
+// team order) in the order the game registered them (GRI.PRIArray), where a matchmade match's host
+// always comes first: the first player of a team would be its host, which Alboria's rule forbids
+// showing (alboria-server/online-rules.md). In Alboria's match rooms each block's players are sorted
+// by name instead, the same on every machine, right after UpdatePlayerList fills the slots and before
+// they go to Flash. Only the slots move (whole PartySlotData structs, their strings with them); the
+// game's own player order is left alone. A player slot is one with a PRI and SlotType 1.
+void SortPartySlotsByName(uint8_t* base, uint32_t panel) {
+  const uint32_t panel_class = LoadU32(base, panel + kObjectClass);
+  const int32_t slots_at = ClassPropertyOffset(base, panel_class, "SlotList");
+  const int32_t teams_at = ClassPropertyOffset(base, panel_class, "NumTeams");
+  const int32_t per_team_at = ClassPropertyOffset(base, panel_class, "NumPlayersPerTeam");
+  if (slots_at < 0 || teams_at < 0 || per_team_at < 0) return;
+  uint32_t slot_struct = 0;
+  for (uint32_t owner = panel_class; owner && !slot_struct; owner = LoadU32(base, owner + kStructSuper)) {
+    for (uint32_t field = LoadU32(base, owner + kStructChildren); field; field = LoadU32(base, field + kFieldNext)) {
+      if (ObjectName(base, field) == "PartySlotData") slot_struct = field;
+    }
+  }
+  if (!slot_struct) return;
+  uint32_t size = 0;  // the struct's size: past its last field, rounded up to 4 bytes
+  int32_t type_at = -1;
+  int32_t pri_at = -1;
+  for (uint32_t field = LoadU32(base, slot_struct + kStructChildren); field; field = LoadU32(base, field + kFieldNext)) {
+    const uint32_t offset = LoadU32(base, field + kPropertyOffset);
+    const std::string type = ObjectName(base, LoadU32(base, field + kObjectClass));
+    const uint32_t field_size = type == "StrProperty" || type == "ArrayProperty" ? 12 : type == "ByteProperty" ? 1 : 4;
+    size = std::max(size, (offset + field_size + 3) & ~3u);
+    const std::string name = ObjectName(base, field);
+    if (name == "SlotType") type_at = static_cast<int32_t>(offset);
+    if (name == "PRI") pri_at = static_cast<int32_t>(offset);
+  }
+  if (!size || size > 256 || type_at < 0 || pri_at < 0) return;
+  const uint32_t data = LoadU32(base, panel + static_cast<uint32_t>(slots_at));
+  const uint32_t count = std::min<uint32_t>(LoadU32(base, panel + static_cast<uint32_t>(slots_at) + 4), 32);
+  const uint32_t teams = LoadU32(base, panel + static_cast<uint32_t>(teams_at));
+  const uint32_t per_team = LoadU32(base, panel + static_cast<uint32_t>(per_team_at));
+  if (!data || !per_team || per_team > 16 || teams > 4) return;
+  constexpr uint8_t kPlayerSlot = 1;
+  for (uint32_t team = 0; team < std::max<uint32_t>(teams, 1); ++team) {
+    // The block's player slots, and each one's name.
+    std::vector<uint32_t> slots;
+    std::vector<std::pair<std::string, std::vector<uint8_t>>> players;
+    for (uint32_t i = team * per_team; i < (team + 1) * per_team && i < count; ++i) {
+      const uint32_t at = data + i * size;
+      const uint32_t pri = LoadU32(base, at + static_cast<uint32_t>(pri_at));
+      if (base[at + static_cast<uint32_t>(type_at)] != kPlayerSlot || pri < 0x10000) continue;
+      const int32_t name_at = ClassPropertyOffset(base, LoadU32(base, pri + kObjectClass), "PlayerName");
+      slots.push_back(at);
+      players.emplace_back(name_at >= 0 ? FStringText(base, pri + static_cast<uint32_t>(name_at)) : std::string(),
+                           std::vector<uint8_t>(base + at, base + at + size));
+    }
+    if (players.size() < 2) continue;
+    std::stable_sort(players.begin(), players.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    for (size_t i = 0; i < slots.size(); ++i) std::memcpy(base + slots[i], players[i].second.data(), size);
+  }
+}
+
 // Alboria answers the game's questions about a match's reservations. A playlist match (match type 4)
 // asks its reservation beacons (GearGameMP_Base.HostPlayerMatchBeacon in the match,
 // HostPregameLobbyPlayerMatchBeacon in the pre-game lobby, both GearPlayerMatchBeaconHost) for the
@@ -6290,7 +6348,8 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   }
   // The panel's slots (SlotList, PartySlotData) carry the same mark, bIsPartyHost, which
   // UpdatePlayerList sets and the list's data for Flash shows as its crown: in Alboria's match rooms
-  // it is cleared from every slot once they are filled.
+  // it is cleared from every slot once they are filled, and each team's players are sorted by name
+  // (the host would otherwise come first).
   // Before the party panel's frame: a player who changed team or left since the last one has it
   // built again.
   if (Is(base, function, kUpdatePartyPanel)) RedrawPartyPanel(ctx, base);
@@ -6298,6 +6357,7 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     const uint32_t panel = LoadU32(base, ctx.r4.u32 + kFrameObject);
     __imp__sub_822DF9E0(ctx, base);
     ClearPartyHostMarks(base, panel);
+    SortPartySlotsByName(base, panel);
     return;
   }
   // The front end's menus show the party's NAT type (UIWidget_MainMenu.UpdateNatType: NATTypeLabel,
