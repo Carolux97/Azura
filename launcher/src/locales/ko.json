@@ -392,6 +392,7 @@
   },
   "account": {
     "blog": "블로그",
+    "discord": "Discord",
     "title": "계정",
     "identityTitle": "Alboria 아이덴티티",
     "identityHelp": "이 게임과 Alboria를 쓰는 다른 게임에서 다른 플레이어에게 보이는 모습입니다. 태그는 Alboria가 붙이며 같은 게이머태그를 쓰는 플레이어를 구별합니다.",

@@ -38,6 +38,7 @@ import {
   alboriaVerifyEmailCode,
   openAlboriaSite,
   openAlboriaBlog,
+  openAlboriaDiscord,
 } from "./platform.js";
 import { TEXT_RULES } from "./textRules.js";
 
@@ -615,6 +616,9 @@ export const setupAccount = ({ state, persist, renderPlay, toast, t, getLocale }
   }
   for (const button of document.querySelectorAll("[data-alboria-blog]")) {
     button.addEventListener("click", () => openAlboriaBlog(getLocale()).catch((error) => console.warn("Opening the blog failed:", error)));
+  }
+  for (const button of document.querySelectorAll("[data-alboria-discord]")) {
+    button.addEventListener("click", () => openAlboriaDiscord().catch((error) => console.warn("Opening the Discord server failed:", error)));
   }
   for (const button of document.querySelectorAll("[data-account-open]")) {
     button.addEventListener("click", () => openDialog(button.dataset.accountOpen));
