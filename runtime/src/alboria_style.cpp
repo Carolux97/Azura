@@ -71,17 +71,22 @@ void DrawAlboriaPlanet(ImDrawList* draw_list, ImVec2 center, float scale, int al
     return ImVec2(center.x + x * std::cos(kTilt) - y * std::sin(kTilt), center.y + x * std::sin(kTilt) + y * std::cos(kTilt));
   };
   const float wrapped = moon >= 0.0f ? std::fmod(moon, 2.0f * 3.14159265f) : -1.0f;
-  const bool moon_in_front = wrapped >= 0.0f && wrapped <= 3.14159265f;
   const float moon_radius = 2.6f * scale;
+  // The moon goes behind only where the planet hides it (on the back half, over the planet's disc);
+  // anywhere else it is drawn last, so the front half's ends never cut it as it passes them.
+  const ImVec2 moon_at = wrapped >= 0.0f ? on_ring(wrapped) : center;
+  const float reach = 12.0f * scale + moon_radius;
+  const bool over_planet = (moon_at.x - center.x) * (moon_at.x - center.x) + (moon_at.y - center.y) * (moon_at.y - center.y) < reach * reach;
+  const bool moon_behind = wrapped > 3.14159265f && over_planet;
   draw_list->AddEllipse(center, ring, SkyDeep(alpha), kTilt, 48, line);
-  if (wrapped >= 0.0f && !moon_in_front) draw_list->AddCircleFilled(on_ring(wrapped), moon_radius, Navy(alpha));
+  if (wrapped >= 0.0f && moon_behind) draw_list->AddCircleFilled(moon_at, moon_radius, Navy(alpha));
   draw_list->AddCircleFilled(center, 12.0f * scale, IM_COL32(255, 224, 122, alpha));
   draw_list->AddCircle(center, 12.0f * scale, Navy(alpha), 48, line);
   // The front half.
   constexpr int kSteps = 24;
   for (int i = 0; i <= kSteps; ++i) draw_list->PathLineTo(on_ring(3.14159265f * i / kSteps));
   draw_list->PathStroke(SkyDeep(alpha), 0, line);
-  if (moon_in_front) draw_list->AddCircleFilled(on_ring(wrapped), moon_radius, Navy(alpha));
+  if (wrapped >= 0.0f && !moon_behind) draw_list->AddCircleFilled(moon_at, moon_radius, Navy(alpha));
 }
 
 float AlboriaArrowsGlyph(ImDrawList* draw_list, ImVec2 center, float height, bool pad, bool vertical, int alpha) {
