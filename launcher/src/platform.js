@@ -520,6 +520,21 @@ export const alboriaDeleteCode = async (language) => {
   return simulatedCodesOff ? { codeNeeded: false } : { expiresIn: 600, resendIn: 60 };
 };
 
+/**
+ * Which browser waits on Alboria's website with `code`: `{ browser, place, expires_in }`. In a
+ * browser a simulated one answers to any code of 8 letters and digits.
+ */
+export const alboriaWebLink = async (code, language) => {
+  if (isNativeApp) return tauri.core.invoke("alboria_web_link", { code, language });
+  if (code.replace(/[^A-Za-z0-9]/g, "").length !== 8) throw simulatedError("no_link");
+  return { browser: "Chrome · Windows", place: "Madrid, Comunidad de Madrid, España", expires_in: 104 };
+};
+
+/** Allows (or refuses) the browser waiting on the website with `code`. */
+export const alboriaWebLinkAnswer = async (code, allow) => {
+  if (isNativeApp) return tauri.core.invoke("alboria_web_link_answer", { code, allow });
+};
+
 /** Asks for a code to verify the account's email (an account made while codes were off). */
 export const alboriaVerifyEmailCode = async (language) => {
   if (isNativeApp) return tauri.core.invoke("alboria_verify_email_code", { language });
@@ -547,6 +562,18 @@ export const alboriaDelete = async (code) => {
 export const openAlboriaSite = async () => {
   if (isNativeApp) return tauri.core.invoke("open_alboria_site");
   window.open("https://alboria.org", "_blank", "noopener");
+};
+
+/** Opens Alboria's blog in `language` in the system browser (the address is built on the Rust side). */
+export const openAlboriaBlog = async (language) => {
+  if (isNativeApp) return tauri.core.invoke("open_alboria_blog", { language });
+  window.open(`https://alboria.org/${encodeURIComponent(language)}/blog/`, "_blank", "noopener");
+};
+
+/** Opens Alboria's official Discord server in the system browser (the address is fixed on the Rust side). */
+export const openAlboriaDiscord = async () => {
+  if (isNativeApp) return tauri.core.invoke("open_alboria_discord");
+  window.open("https://alboria.org/discord", "_blank", "noopener");
 };
 
 // --- Friends (alboria-notes:azura/alboria-relay.md, section 4.7) ---------------------------------

@@ -391,6 +391,8 @@
     "bubbleDone": "Witaj w Alborii!"
   },
   "account": {
+    "blog": "Blog",
+    "discord": "Discord",
     "title": "Konto",
     "identityTitle": "Twoja tożsamość w Alborii",
     "identityHelp": "Tak widzą Cię inni gracze, w tej grze i w innych, które używają Alborii. Alboria dodaje tag, który odróżnia graczy o tym samym gamertagu.",
@@ -427,6 +429,19 @@
     "emailText": "Wpisz nowy adres. Wyślemy na niego kod, aby potwierdzić, że należy do Ciebie.",
     "newEmail": "Nowy e-mail",
     "deleteTitle": "Usuń konto",
+    "approveBrowser": "Zatwierdź przeglądarkę",
+    "approveTitle": "Zatwierdź przeglądarkę",
+    "approveText": "Jeśli logujesz się w alboria.org launcherem, strona pokazuje kod. Wpisz go tutaj.",
+    "approveCode": "Kod ze strony",
+    "approveCheck": "Sprawdź",
+    "approveAsk": "Przeglądarka chce się zalogować na twoje konto",
+    "approveWho": "{browser} · {place} · kod {code}",
+    "approveSomewhere": "nieznane miejsce",
+    "approveWarning": "Zezwól tylko, jeśli to ty logujesz się teraz w alboria.org. Nikt z Alborii nigdy nie poprosi cię o zatwierdzenie kodu.",
+    "approveRefuse": "To nie ja",
+    "approveAllow": "Zezwól",
+    "approveAllowed": "Przeglądarka zatwierdzona: jesteś zalogowany w alboria.org.",
+    "approveRefused": "Przeglądarka odrzucona.",
     "deleteText": "Usunięcie konta kasuje Twój e-mail, gamertag z tagiem i wszystkie urządzenia, we wszystkich grach. Tego nie można cofnąć. Wyślemy kod na adres {email}, aby to potwierdzić.",
     "exported": "Dane zapisane.",
     "emailChanged": "E-mail zmieniony.",
@@ -442,6 +457,7 @@
     "overlayKey": "Klawisz nakładki Alborii"
   },
   "accountErrors": {
+    "no_link": "Żadna przeglądarka nie czeka z tym kodem. Sprawdź go albo pobierz nowy na stronie.",
     "network": "Brak połączenia z Alborią. Sprawdź połączenie i spróbuj ponownie.",
     "email_taken": "Ten e-mail ma już konto. Zaloguj się nim.",
     "no_account": "Żadne konto nie ma tego e-maila. Utwórz nowe.",

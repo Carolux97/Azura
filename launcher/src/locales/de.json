@@ -391,6 +391,8 @@
     "bubbleDone": "Willkommen bei Alboria!"
   },
   "account": {
+    "blog": "Blog",
+    "discord": "Discord",
     "title": "Konto",
     "identityTitle": "Deine Alboria-Identität",
     "identityHelp": "So sehen dich andere Spieler, in diesem Spiel und in den anderen, die Alboria nutzen. Alboria fügt den Tag hinzu, der Spieler mit demselben Gamertag unterscheidet.",
@@ -427,6 +429,19 @@
     "emailText": "Gib die neue Adresse ein. Wir senden dorthin einen Code, um zu bestätigen, dass sie dir gehört.",
     "newEmail": "Neue E-Mail-Adresse",
     "deleteTitle": "Konto löschen",
+    "approveBrowser": "Browser freigeben",
+    "approveTitle": "Browser freigeben",
+    "approveText": "Wenn du dich auf alboria.org mit einem Launcher anmeldest, zeigt dir die Website einen Code. Gib ihn hier ein.",
+    "approveCode": "Code von der Website",
+    "approveCheck": "Prüfen",
+    "approveAsk": "Ein Browser möchte sich in deinem Konto anmelden",
+    "approveWho": "{browser} · {place} · Code {code}",
+    "approveSomewhere": "unbekannter Ort",
+    "approveWarning": "Erlaube es nur, wenn du dich gerade selbst auf alboria.org anmeldest. Niemand von Alboria wird dich je bitten, einen Code freizugeben.",
+    "approveRefuse": "Das war ich nicht",
+    "approveAllow": "Erlauben",
+    "approveAllowed": "Browser freigegeben: Du bist auf alboria.org angemeldet.",
+    "approveRefused": "Browser abgelehnt.",
     "deleteText": "Wenn du dein Konto löschst, werden deine E-Mail-Adresse, dein Gamertag mit seinem Tag und alle deine Geräte gelöscht, in allen Spielen. Das kann nicht rückgängig gemacht werden. Zur Bestätigung senden wir einen Code an {email}.",
     "exported": "Daten gespeichert.",
     "emailChanged": "E-Mail-Adresse geändert.",
@@ -442,6 +457,7 @@
     "overlayKey": "Taste des Alboria-Overlays"
   },
   "accountErrors": {
+    "no_link": "Kein Browser wartet mit diesem Code. Prüfe ihn oder hol dir auf der Website einen neuen.",
     "network": "Alboria ist nicht erreichbar. Prüfe deine Verbindung und versuche es erneut.",
     "email_taken": "Für diese E-Mail-Adresse gibt es schon ein Konto. Melde dich damit an.",
     "no_account": "Kein Konto hat diese E-Mail-Adresse. Erstelle eines.",

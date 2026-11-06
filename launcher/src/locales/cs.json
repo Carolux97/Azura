@@ -391,6 +391,8 @@
     "bubbleDone": "Vítej v Alboria!"
   },
   "account": {
+    "blog": "Blog",
+    "discord": "Discord",
     "title": "Účet",
     "identityTitle": "Vaše identita v Alborii",
     "identityHelp": "Takhle vás vidí ostatní hráči, v této hře i v dalších, které používají Alborii. Alboria přidává tag, který rozlišuje hráče se stejným gamertagem.",
@@ -427,6 +429,19 @@
     "emailText": "Zadejte nový e-mail. Pošleme na něj kód, abychom ověřili, že je váš.",
     "newEmail": "Nový e-mail",
     "deleteTitle": "Smazat účet",
+    "approveBrowser": "Schválit prohlížeč",
+    "approveTitle": "Schválit prohlížeč",
+    "approveText": "Pokud se na alboria.org přihlašuješ launcherem, web ti ukáže kód. Zadej ho sem.",
+    "approveCode": "Kód z webu",
+    "approveCheck": "Ověřit",
+    "approveAsk": "Prohlížeč se chce přihlásit k tvému účtu",
+    "approveWho": "{browser} · {place} · kód {code}",
+    "approveSomewhere": "neznámé místo",
+    "approveWarning": "Povol to jen tehdy, když se právě ty přihlašuješ na alboria.org. Nikdo z Alborie tě nikdy nepožádá o schválení kódu.",
+    "approveRefuse": "To jsem nebyl já",
+    "approveAllow": "Povolit",
+    "approveAllowed": "Prohlížeč schválen: jsi přihlášený na alboria.org.",
+    "approveRefused": "Prohlížeč odmítnut.",
     "deleteText": "Smazáním účtu odstraníte svůj e-mail, gamertag s tagem a všechna zařízení, ve všech hrách. Nelze to vrátit. Pro potvrzení pošleme kód na {email}.",
     "exported": "Údaje uloženy.",
     "emailChanged": "E-mail změněn.",
@@ -442,6 +457,7 @@
     "overlayKey": "Klávesa překryvu Alborie"
   },
   "accountErrors": {
+    "no_link": "S tímto kódem nečeká žádný prohlížeč. Zkontroluj ho nebo si na webu vyžádej nový.",
     "network": "Nelze se připojit k Alborii. Zkontrolujte připojení a zkuste to znovu.",
     "email_taken": "Tento e-mail už má účet. Přihlaste se s ním.",
     "no_account": "Žádný účet nemá tento e-mail. Vytvořte si nový.",

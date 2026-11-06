@@ -1630,3 +1630,5 @@ body:has(> .welcome:not([hidden])) .shell { visibility: hidden; }
   .field-grid, .ach-columns { grid-template-columns: 1fr; }
   .ach-side { position: static; }
 }
+.approve-code { font-family: var(--mono, ui-monospace, monospace); font-size: 22px; letter-spacing: 0.18em; text-transform: uppercase; text-align: center; }
+.approve-who { font-weight: 700; }

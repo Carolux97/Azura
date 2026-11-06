@@ -910,6 +910,31 @@ async fn alboria_export(app: tauri::AppHandle, alboria: tauri::State<'_, Alboria
     Ok(true)
 }
 
+/// Which browser waits on Alboria's website with `code` (the website shows it when the player signs
+/// in there "with a launcher"), and roughly from where, before the player allows it.
+#[tauri::command]
+async fn alboria_web_link(
+    app: tauri::AppHandle,
+    alboria: tauri::State<'_, Alboria>,
+    code: String,
+    language: String,
+) -> Result<serde_json::Value, AlboriaError> {
+    alboria_account_request(&app, &alboria, "/v1/account/web-link", serde_json::json!({ "code": code, "language": language })).await
+}
+
+/// The player's answer for the browser waiting with `code`: allowed, it is signed in to this
+/// account on the website; refused, the website is told so.
+#[tauri::command]
+async fn alboria_web_link_answer(
+    app: tauri::AppHandle,
+    alboria: tauri::State<'_, Alboria>,
+    code: String,
+    allow: bool,
+) -> Result<(), AlboriaError> {
+    alboria_account_request(&app, &alboria, "/v1/account/web-link/answer", serde_json::json!({ "code": code, "allow": allow })).await?;
+    Ok(())
+}
+
 /// Asks for the code that confirms deleting the account, sent to its email.
 #[tauri::command]
 async fn alboria_delete_code(
@@ -947,6 +972,35 @@ const ALBORIA_SITE: &str = "https://alboria.org";
 fn open_alboria_site(app: tauri::AppHandle) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
     app.opener().open_url(ALBORIA_SITE, None::<&str>).map_err(|e| e.to_string())
+}
+
+/// The languages of Alboria's website, each with its own blog at alboria.org/<language>/blog/.
+const SITE_LANGUAGES: [&str; 13] = ["en", "es", "fr", "de", "it", "pt", "pl", "cs", "hu", "ru", "ja", "ko", "zh-Hant"];
+
+/// The address of Alboria's blog in `language`, or in English when the website has no such language.
+fn alboria_blog_url(language: &str) -> String {
+    let language = SITE_LANGUAGES.iter().find(|code| **code == language).copied().unwrap_or("en");
+    format!("{ALBORIA_SITE}/{language}/blog/")
+}
+
+/// Opens Alboria's blog in the system browser, in the launcher's language. Like the site, the
+/// address is built here: the interface only says the language.
+#[tauri::command]
+fn open_alboria_blog(app: tauri::AppHandle, language: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener().open_url(alboria_blog_url(&language), None::<&str>).map_err(|e| e.to_string())
+}
+
+/// Alboria's official Discord server. The website redirects this address to the server's current
+/// invite, so a new invite needs no launcher release.
+const ALBORIA_DISCORD: &str = "https://alboria.org/discord";
+
+/// Opens Alboria's official Discord server in the system browser. The address is fixed here: the
+/// interface can open nothing else.
+#[tauri::command]
+fn open_alboria_discord(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener().open_url(ALBORIA_DISCORD, None::<&str>).map_err(|e| e.to_string())
 }
 
 /// Where players report an edition of the game the launcher does not support yet: a new issue on the
@@ -1075,8 +1129,12 @@ pub fn run() {
             alboria_change_email,
             alboria_export,
             alboria_delete_code,
+            alboria_web_link,
+            alboria_web_link_answer,
             alboria_delete,
             open_alboria_site,
+            open_alboria_blog,
+            open_alboria_discord,
             open_edition_report,
             open_notice_link,
             join_room,
@@ -1114,7 +1172,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod notice_link_tests {
-    use super::{notice_link_allowed, room_code_valid, FRIENDS_PATHS};
+    use super::{alboria_blog_url, notice_link_allowed, ALBORIA_DISCORD, room_code_valid, FRIENDS_PATHS};
 
     #[test]
     fn the_development_launcher_chooses_its_server() {
@@ -1143,6 +1201,10 @@ mod notice_link_tests {
 
     #[test]
     fn only_https_and_mailto_links_open() {
+        assert_eq!(alboria_blog_url("es"), "https://alboria.org/es/blog/");
+        assert_eq!(alboria_blog_url("zh-Hant"), "https://alboria.org/zh-Hant/blog/");
+        assert_eq!(alboria_blog_url("../evil"), "https://alboria.org/en/blog/");
+        assert_eq!(ALBORIA_DISCORD, "https://alboria.org/discord");
         assert!(notice_link_allowed("https://alboria.org/estado"));
         assert!(notice_link_allowed("HTTPS://alboria.org"));
         assert!(notice_link_allowed("mailto:hola@alboria.org"));

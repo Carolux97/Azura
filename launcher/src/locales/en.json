@@ -391,6 +391,8 @@
     "bubbleDone": "Welcome to Alboria!"
   },
   "account": {
+    "blog": "Blog",
+    "discord": "Discord",
     "title": "Account",
     "identityTitle": "Your Alboria identity",
     "identityHelp": "How other players see you, in this game and in the others that use Alboria. Alboria adds the tag, which tells apart players with the same gamertag.",
@@ -427,6 +429,19 @@
     "emailText": "Type the new email. We will send a code there to confirm it is yours.",
     "newEmail": "New email",
     "deleteTitle": "Delete account",
+    "approveBrowser": "Approve a browser",
+    "approveTitle": "Approve a browser",
+    "approveText": "If you are signing in on alboria.org with a launcher, the website shows you a code. Type it here.",
+    "approveCode": "Code from the website",
+    "approveCheck": "Check",
+    "approveAsk": "A browser wants to sign in to your account",
+    "approveWho": "{browser} · {place} · code {code}",
+    "approveSomewhere": "unknown place",
+    "approveWarning": "Only allow it if you are the one signing in on alboria.org right now. Nobody from Alboria will ever ask you to approve a code.",
+    "approveRefuse": "It wasn't me",
+    "approveAllow": "Allow",
+    "approveAllowed": "Browser approved: you are signed in on alboria.org.",
+    "approveRefused": "Browser refused.",
     "deleteText": "Deleting your account removes your email, your gamertag with its tag and all your devices, in every game. It cannot be undone. We will send a code to {email} to confirm.",
     "exported": "Data saved.",
     "emailChanged": "Email changed.",
@@ -442,6 +457,7 @@
     "overlayKey": "Key of the Alboria overlay"
   },
   "accountErrors": {
+    "no_link": "No browser is waiting with that code. Check it or get another one on the website.",
     "network": "Alboria cannot be reached. Check your connection and try again.",
     "email_taken": "That email already has an account. Sign in with it.",
     "no_account": "No account has that email. Create one.",

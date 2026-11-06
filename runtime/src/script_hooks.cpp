@@ -102,6 +102,9 @@ REXCVAR_DEFINE_STRING(script_dump_classes, "", "Azura/Debug",
                       "Comma-separated script classes whose functions and properties are logged once loaded");
 REXCVAR_DEFINE_BOOL(script_dump_code, false, "Azura/Debug",
                     "With script_dump_classes: also log a rough listing of each function's bytecode");
+REXCVAR_DEFINE_BOOL(online_idle_kick, true, "Azura/Online",
+                    "A matchmade match's host removes players who do nothing for its MaxIdleTime, itself "
+                    "included (off, for tests with idle test players: nobody is removed for idling)");
 REXCVAR_DEFINE_BOOL(host_migration, true, "Azura/Online",
                     "When an online match's host leaves, the game's own host migration carries the match on "
                     "with another player as its host (off: the match ends for everyone, as on Xbox Live "
@@ -128,6 +131,10 @@ REXCVAR_DECLARE(double, mnk_run_turn_limit);
 extern "C" void __imp__sub_822DF4D0(PPCContext& __restrict ctx, uint8_t* base);
 extern "C" void __imp__sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base);
 extern "C" void __imp__sub_822B0E30(PPCContext& __restrict ctx, uint8_t* base);
+// UObject::ProcessEvent (r3 = object, r4 = UFunction*, r5 = parameters, r6 = result): how native
+// code calls a script function. It copies UFunction::ParmsSize bytes of parameters into a new
+// frame and runs the function (through ProcessInternal, for a script function).
+extern "C" void __imp__sub_822DFBC8(PPCContext& __restrict ctx, uint8_t* base);
 
 
 // Online play through Alboria, and whether its matches migrate their host (defined further down).
@@ -456,6 +463,8 @@ enum WatchedName {
   kServerSetDLCFlag,         // GearPC: a player's game tells the host its map packs (map packs)
   kNotifyConnectionError,    // GearGameViewportClient: a connection is lost or refused, with the engine's reason
   kOnConfirmReturnToMenu,    // UIScene_Pause: the player confirmed leaving the match for the main menu
+  kConstructActList,         // UIWidget_MainMenu: builds the campaign's act list (Select chapter)
+  kDLCEnumerationFinished,   // UIScene_FrontEnd: the add-ons are installed and the acts updated
   kProcessSoundEvent,        // UISoundTheme: plays a menu sound by its event name (Menu sounds)
   // The menu sound events our menus play (MenuSound), in its order.
   kSoundStepUp,
@@ -468,6 +477,12 @@ enum WatchedName {
   kSoundClose,
   kSoundSliderLeft,
   kSoundSliderRight,
+  // The main menu's own events (Theme_Frontend), for the themes without the options' ones.
+  kFrontSelectionChanged,
+  kFrontSelectItem,
+  kFrontGoBack,
+  kFrontGoForward,
+  kUpdatePartyPanel,         // UIWidget_SmallPartyPanel: the party panel's every frame
   kWatchedNameCount,
 };
 constexpr const char* kWatchedNames[kWatchedNameCount] = {
@@ -494,10 +509,11 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "GetAdjustedAimFor",     "NotifyInviteFailed",     "CancelPartyMatchmaking", "CreatePlayerVersusMatch", "OnNoPartialPartyAvailable", "PostBeginPlay", "ContinueCreateMatch", "InitializeGameSelectionInternal", "UpdateCountdowns", "InitializeMapSelectionInternal", "GetTeamForCurrentPlayer", "HandleGameSessionJIP", "InitializePreGameGameSettings", "PreLogin", "PostLogin", "SetNumBots", "BeginMatch", "EndOfGameTransition", "GetNextMap", "CheckMapAgainstPlaylist", "GetNumberOfSupportedMapsForPlaylist", "IsEpicDev", "InitGameReplicationInfo", "UpdateGRI", "DelayedGameSessionDelete", "PlacePlayerOnSmallestTeam", "GetOccupiedTeamSize", "GetGameSummaryFromProviderIndex", "HandleHordeSelection", "HandleSiegeSelection", "HandleHordeAndSiegeMatchModeSelection", "UpdateNatType", "UpdatePopulationNumbers", "SetHostIcon", "UpdatePlayerList", "OnLeaveGame", "CanBackUpToMapSelect", "CanLeaveGame", "IsOfficialMatch", "IsPlayerMatch", "OnLeaveLobby_Confirmed", "ReturnToMainMenu", "ShowUIMessage", "ClientWasKicked",
     "BuildSortedMapList",    "GetResourceProviders",   "PopulateMapList",    "SubmitMapSelectionByName",
     "PlayersLackRequiredDLC", "ServerSetDLCFlag", "NotifyConnectionError",
-    "OnConfirm_ReturnToMenu",
+    "OnConfirm_ReturnToMenu", "ConstructActList",      "DLCEnumerationFinished",
     "ProcessSoundEvent",     "Options_StepUp",         "Options_StepDown",   "ValueChangeLeft",
     "ValueChangeRight",      "Options_AcceptButton",   "Options_BackButton", "Options_DetailsEnter",
-    "Options_DetailsLeave",  "Options_SliderLeft",     "Options_SliderRight"};
+    "Options_DetailsLeave",  "Options_SliderLeft",     "Options_SliderRight", "Host_SelectionChanged",
+    "Host_SelectItem",       "Host_GoBack",            "Host_GoForward",      "UpdatePartyPanel"};
 
 // FName index of each watched name, -1 until found (0 is a valid index: None).
 std::atomic<int32_t> g_names[kWatchedNameCount];
@@ -786,6 +802,89 @@ void NoteCampaignChoice(const uint8_t* base, uint32_t frame) {
   if (g_dlc_campaign_chosen.exchange(dlc) != dlc) {
     REXLOG_INFO("[Azura campaign] {} chosen", dlc ? "RAAM's Shadow" : "The main campaign");
   }
+}
+
+// Select chapter with an add-on's campaign. The main menu builds its campaign act list
+// (UIWidget_MainMenu.ConstructActList) while the front end starts, before the game has enumerated
+// the installed add-ons. UIScene_FrontEnd.DLCEnumerationFinished then creates the act providers
+// again, now with the add-on's act (RAAM's Shadow: chapters 31 to 35), and the disc's script does
+// not build the list again. So once DLCEnumerationFinished is over, the list is built again with
+// the game's own call, through UObject::ProcessEvent, on the same widget and page.
+
+// UFunction::ParmsSize (16 bits): the size of a function's parameters, which ProcessEvent copies.
+constexpr uint32_t kFunctionParmsSize = 126;
+
+// The last act list the game built: the menu widget, its class (to tell the widget is still
+// there), ConstructActList, and the page it was built for (-1 before the first).
+struct ActListBuild {
+  uint32_t widget = 0;
+  uint32_t widget_class = 0;
+  uint32_t function = 0;
+  int32_t page_id = -1;
+};
+std::mutex g_act_list_mutex;
+ActListBuild g_act_list;
+
+// Notes a ConstructActList call (`ctx`, about to run) for RebuildActList.
+void NoteActListBuild(const PPCContext& ctx, const uint8_t* base) {
+  const uint32_t function = LoadU32(base, ctx.r4.u32 + kFrameNode);
+  const int32_t page_id = SmallParam(base, function, ctx.r4.u32, "PageId");
+  if (page_id < 0) return;
+  std::lock_guard lock(g_act_list_mutex);
+  g_act_list = {ctx.r3.u32, LoadU32(base, ctx.r3.u32 + kObjectClass), function, page_id};
+}
+
+// Builds the act list again on the widget and page of the last ConstructActList, after
+// DLCEnumerationFinished (`ctx`, over) has updated the act providers.
+void RebuildActList(PPCContext& ctx, uint8_t* base) {
+  ActListBuild build;
+  {
+    std::lock_guard lock(g_act_list_mutex);
+    build = g_act_list;
+  }
+  if (build.page_id < 0) {
+    REXLOG_INFO("[Azura DLC] The add-ons are installed before the act list is built: nothing to rebuild");
+    return;
+  }
+  if (LoadU32(base, build.widget + kObjectClass) != build.widget_class) {
+    REXLOG_WARN("[Azura DLC] The main menu that built the act list is gone: the list is not rebuilt");
+    return;
+  }
+  // The parameters go on the guest stack, below the caller's frame and above ProcessEvent's own
+  // (which it makes below the stack pointer it is given).
+  constexpr uint32_t kParmsRoom = 128;
+  const uint32_t parms_size = (static_cast<uint32_t>(base[build.function + kFunctionParmsSize]) << 8) |
+                              base[build.function + kFunctionParmsSize + 1];
+  const int32_t page_at = ParamOffset(base, build.function, "PageId");
+  const uint32_t page_size = ParamSize(base, build.function, "PageId");
+  if (parms_size > kParmsRoom || page_at < 0 || (page_size != 1 && page_size != 4)) {
+    REXLOG_WARN("[Azura DLC] ConstructActList's parameters are not as expected ({} bytes): the act list is not rebuilt",
+                parms_size);
+    return;
+  }
+  const uint32_t r1 = ctx.r1.u32;
+  const uint32_t parms = (r1 - kParmsRoom) & ~UINT32_C(15);
+  std::memset(base + parms, 0, kParmsRoom);
+  if (page_size == 1) {
+    base[parms + static_cast<uint32_t>(page_at)] = static_cast<uint8_t>(build.page_id);
+  } else {
+    StoreU32(base, parms + static_cast<uint32_t>(page_at), static_cast<uint32_t>(build.page_id));
+  }
+  const uint64_t r3 = ctx.r3.u64, r4 = ctx.r4.u64, r5 = ctx.r5.u64, r6 = ctx.r6.u64, lr = ctx.lr;
+  StoreU32(base, parms - 64, r1);  // the back chain, as a stwu would have left it
+  ctx.r1.u64 = parms - 64;
+  ctx.r3.u64 = build.widget;
+  ctx.r4.u64 = build.function;
+  ctx.r5.u64 = parms;
+  ctx.r6.u64 = 0;
+  __imp__sub_822DFBC8(ctx, base);
+  ctx.r1.u64 = r1;
+  ctx.r3.u64 = r3;
+  ctx.r4.u64 = r4;
+  ctx.r5.u64 = r5;
+  ctx.r6.u64 = r6;
+  ctx.lr = lr;
+  REXLOG_INFO("[Azura DLC] The act list (page {}) is built again with the installed add-ons", build.page_id);
 }
 
 // The standard campaign's menu without its public matches (menu_patches.cpp): UIScene_FrontEnd.
@@ -2956,14 +3055,16 @@ void DeliverLateInvite() {
 // online, menu_patches.cpp), and only starts its host migration then. The engine closes a
 // connection once its net driver's time is ConnectionTimeout past the connection's LastReceiveTime,
 // so that is put far back on the host's connection: the game closes it on its next tick, the way it
-// would have. The engine's net driver is the global at 0x83429828, +292 (an IpNetDriverLive); its
-// time is a double at +320. A client's connection to the host is the driver's +4 (an
-// IpConnectionLive), whose LastReceiveTime is a double at +276; the connections to the other
-// players, in its array at +68, keep hearing from them and are left alone.
-constexpr uint32_t kEngineGlobal = 0x83429828;
-constexpr uint32_t kEngineNetDriver = 292;
+// would have. The world is the global at 0x83429828; it holds two net drivers (IpNetDriverLive), at
+// +216 and +292, whose order is not fixed from one session to another: the game's own, which has the
+// client's connection to the host, and another with no connections. A driver's time is a double at
+// +320. The connection to the host (an IpConnectionLive, whose LastReceiveTime is a double at +276)
+// is in one of the driver's fields +80 and +4 (found in each on different days); the connections to
+// the other players keep hearing from them and are left alone.
+constexpr uint32_t kWorldGlobal = 0x83429828;
+constexpr uint32_t kWorldNetDrivers[] = {216, 292};
 constexpr uint32_t kNetDriverTime = 320;
-constexpr uint32_t kNetDriverHostConnection = 4;
+constexpr uint32_t kNetDriverHostConnections[] = {80, 4};
 constexpr uint32_t kConnectionLastReceiveTime = 276;
 
 double LoadF64(const uint8_t* base, uint32_t address) {
@@ -2981,11 +3082,28 @@ void CloseSilentHost(uint8_t* base) {
   if (rex::system::xam::alboria::TakeHostMovedOut()) moved_out_since = Clock::now();
   const bool moved_out = moved_out_since.has_value();
   if (!silent && !moved_out) return;
-  const uint32_t engine = LoadU32(base, kEngineGlobal);
-  const uint32_t driver = engine ? LoadU32(base, engine + kEngineNetDriver) : 0;
-  const uint32_t connection = driver ? LoadU32(base, driver + kNetDriverHostConnection) : 0;
-  const uint32_t connection_class = connection >= 0x10000 ? LoadU32(base, connection + kObjectClass) : 0;
-  if (connection_class < 0x10000 || ObjectName(base, connection_class).find("Connection") == std::string::npos) {
+  // The driver that has the connection to the host, and that connection. Both are pointer fields of
+  // the game's native objects: null or an object, so reading an object's class there is safe.
+  uint32_t driver = 0;
+  uint32_t connection = 0;
+  uint32_t driver_at = 0;
+  uint32_t connection_at = 0;
+  const uint32_t world = LoadU32(base, kWorldGlobal);
+  for (const uint32_t at : kWorldNetDrivers) {
+    const uint32_t candidate = world ? LoadU32(base, world + at) : 0;
+    if (candidate < 0x10000 || ObjectName(base, LoadU32(base, candidate + kObjectClass)) != "IpNetDriverLive") continue;
+    for (const uint32_t field : kNetDriverHostConnections) {
+      const uint32_t object = LoadU32(base, candidate + field);
+      if (object < 0x10000 || ObjectName(base, LoadU32(base, object + kObjectClass)) != "IpConnectionLive") continue;
+      driver = candidate;
+      connection = object;
+      driver_at = at;
+      connection_at = field;
+      break;
+    }
+    if (connection) break;
+  }
+  if (!connection) {
     static int logged = 0;
     if (logged++ < 3) REXLOG_WARN("[Azura online] The match's host is gone, but the game has no connection to it");
     if (moved_out && Clock::now() - *moved_out_since > kRetry) moved_out_since.reset();
@@ -3003,8 +3121,9 @@ void CloseSilentHost(uint8_t* base) {
   const uint64_t bits = std::bit_cast<uint64_t>(now - 1000.0);
   StoreU32(base, connection + kConnectionLastReceiveTime, static_cast<uint32_t>(bits >> 32));
   StoreU32(base, connection + kConnectionLastReceiveTime + 4, static_cast<uint32_t>(bits));
-  REXLOG_INFO("[Azura online] The match's host is {} ({:.1f} s since heard): its connection closes now",
-              moved_out ? "gone from the match room on Alboria" : "silent", now - heard);
+  REXLOG_INFO("[Azura online] The match's host is {} ({:.1f} s since heard): its connection closes now "
+              "(world's driver +{}, its field +{})",
+              moved_out ? "gone from the match room on Alboria" : "silent", now - heard, driver_at, connection_at);
 }
 
 // Every Int, Float and Byte value of `object` its classes up to `stop`
@@ -4227,6 +4346,77 @@ void PlaceAlboriaTeams(PPCContext& ctx, uint8_t* base) {
   }
 }
 
+// The party panel of a pre-game lobby (UIWidget_SmallPartyPanel, its every frame in `ctx`) puts
+// each player in its team's block when it builds its list, and the game rebuilds it when it swaps
+// two players (TeamChangeOccuredCallback). Alboria's teams move one player at a time (PlaceAlboriaTeams,
+// ChangeTeam on the host, replicated to the others), and a player whose game closed is removed by
+// Alboria, neither of which the panel notices: it kept a moved player in the old team's block and the
+// old player count in its title. On every machine, host or not, when a player there the frame before
+// is on another team or gone, the panel is built again from the lobby's players (RebuildPartyList:
+// its title, its count, the players, the open slots and bots, and the list for Flash). A player keeps
+// the slot it had when the list is built, so one who changed team first has its slot emptied, as the
+// game does for one player moving alone (TeamChangeOccuredCallback with no second player): built
+// again, it takes a free slot in its new team's block.
+void RedrawPartyPanel(PPCContext& ctx, uint8_t* base) {
+  if (!LiveMode() || !rex::system::xam::alboria::GetStatus().in_match) return;
+  const uint32_t panel = LoadU32(base, ctx.r4.u32 + kFrameObject);
+  if (panel < 0x10000) return;
+  const uint32_t panel_class = LoadU32(base, panel + kObjectClass);
+  const int32_t gri_at = ClassPropertyOffset(base, panel_class, "PreGameGRI");
+  const uint32_t gri = gri_at >= 0 ? LoadU32(base, panel + static_cast<uint32_t>(gri_at)) : 0;
+  if (gri < 0x10000) return;
+  const int32_t pri_array = ClassPropertyOffset(base, LoadU32(base, gri + kObjectClass), "PRIArray");
+  if (pri_array < 0) return;
+  // Each player (PRI) and its team index.
+  std::map<uint32_t, int32_t> teams;
+  for (uint32_t i = 0; i < LoadU32(base, gri + pri_array + 4) && i < 32; ++i) {
+    const uint32_t pri = LoadU32(base, LoadU32(base, gri + pri_array) + i * 4);
+    if (pri < 0x10000) continue;
+    const int32_t team_at = ClassPropertyOffset(base, LoadU32(base, pri + kObjectClass), "Team");
+    const uint32_t info = team_at >= 0 ? LoadU32(base, pri + static_cast<uint32_t>(team_at)) : 0;
+    const int32_t index_at = info >= 0x10000 ? ClassPropertyOffset(base, LoadU32(base, info + kObjectClass), "TeamIndex") : -1;
+    teams[pri] = index_at >= 0 ? static_cast<int32_t>(LoadU32(base, info + static_cast<uint32_t>(index_at))) : -1;
+  }
+  // A player already there on another team, or gone; one who comes the panel shows itself.
+  static uint32_t last_panel = 0;
+  static std::map<uint32_t, int32_t> last_teams;
+  const char* why = nullptr;
+  std::vector<uint32_t> moved;
+  if (panel == last_panel) {
+    for (const auto& [pri, team] : last_teams) {
+      const auto now = teams.find(pri);
+      if (now == teams.end()) {
+        if (!why) why = "a player left";
+      } else if (now->second != team) {
+        why = "a player changed team";
+        moved.push_back(pri);
+      }
+    }
+  }
+  last_panel = panel;
+  last_teams = std::move(teams);
+  if (!why) return;
+  const uint32_t rebuild = FindInheritedFunction(base, panel_class, "RebuildPartyList");
+  if (!rebuild) {
+    REXLOG_WARN("[Azura online] RebuildPartyList not found; the lobby's party panel is not drawn again");
+    return;
+  }
+  REXLOG_INFO("[Azura online] In the lobby {}: its party panel is built again", why);
+  constexpr uint32_t kLocalsSize = 64;
+  static const uint32_t locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kLocalsSize);
+  if (!locals) return;
+  const uint32_t empty_slot = FindInheritedFunction(base, panel_class, "TeamChangeOccuredCallback");
+  const int32_t first = empty_slot ? ParamOffset(base, empty_slot, "PRI1") : -1;
+  for (const uint32_t pri : moved) {
+    if (first < 0) break;
+    std::memset(base + locals, 0, kLocalsSize);
+    StoreU32(base, locals + static_cast<uint32_t>(first), pri);
+    RunOnObject(ctx, base, panel, empty_slot, locals);
+  }
+  std::memset(base + locals, 0, kLocalsSize);
+  RunOnObject(ctx, base, panel, rebuild, locals);
+}
+
 // Clears bIsPartyHost in every slot of the party panel `panel` (UIWidget_SmallPartyPanel.SlotList, a
 // TArray of PartySlotData), so it marks nobody as the party's host. The struct's layout (each field's
 // offset, the bool's bit) is read from the game's own definition.
@@ -4259,6 +4449,64 @@ void ClearPartyHostMarks(uint8_t* base, uint32_t panel) {
   for (uint32_t i = 0; data && i < count && i < 32; ++i) {
     const uint32_t at = data + i * size + static_cast<uint32_t>(host.offset);
     StoreU32(base, at, LoadU32(base, at) & ~host.mask);
+  }
+}
+
+// The party panel `panel` lists each team's players in its block (NumPlayersPerTeam slots a team, in
+// team order) in the order the game registered them (GRI.PRIArray), where a matchmade match's host
+// always comes first: the first player of a team would be its host, which Alboria's rule forbids
+// showing (alboria-server/online-rules.md). In Alboria's match rooms each block's players are sorted
+// by name instead, the same on every machine, right after UpdatePlayerList fills the slots and before
+// they go to Flash. Only the slots move (whole PartySlotData structs, their strings with them); the
+// game's own player order is left alone. A player slot is one with a PRI and SlotType 1.
+void SortPartySlotsByName(uint8_t* base, uint32_t panel) {
+  const uint32_t panel_class = LoadU32(base, panel + kObjectClass);
+  const int32_t slots_at = ClassPropertyOffset(base, panel_class, "SlotList");
+  const int32_t teams_at = ClassPropertyOffset(base, panel_class, "NumTeams");
+  const int32_t per_team_at = ClassPropertyOffset(base, panel_class, "NumPlayersPerTeam");
+  if (slots_at < 0 || teams_at < 0 || per_team_at < 0) return;
+  uint32_t slot_struct = 0;
+  for (uint32_t owner = panel_class; owner && !slot_struct; owner = LoadU32(base, owner + kStructSuper)) {
+    for (uint32_t field = LoadU32(base, owner + kStructChildren); field; field = LoadU32(base, field + kFieldNext)) {
+      if (ObjectName(base, field) == "PartySlotData") slot_struct = field;
+    }
+  }
+  if (!slot_struct) return;
+  uint32_t size = 0;  // the struct's size: past its last field, rounded up to 4 bytes
+  int32_t type_at = -1;
+  int32_t pri_at = -1;
+  for (uint32_t field = LoadU32(base, slot_struct + kStructChildren); field; field = LoadU32(base, field + kFieldNext)) {
+    const uint32_t offset = LoadU32(base, field + kPropertyOffset);
+    const std::string type = ObjectName(base, LoadU32(base, field + kObjectClass));
+    const uint32_t field_size = type == "StrProperty" || type == "ArrayProperty" ? 12 : type == "ByteProperty" ? 1 : 4;
+    size = std::max(size, (offset + field_size + 3) & ~3u);
+    const std::string name = ObjectName(base, field);
+    if (name == "SlotType") type_at = static_cast<int32_t>(offset);
+    if (name == "PRI") pri_at = static_cast<int32_t>(offset);
+  }
+  if (!size || size > 256 || type_at < 0 || pri_at < 0) return;
+  const uint32_t data = LoadU32(base, panel + static_cast<uint32_t>(slots_at));
+  const uint32_t count = std::min<uint32_t>(LoadU32(base, panel + static_cast<uint32_t>(slots_at) + 4), 32);
+  const uint32_t teams = LoadU32(base, panel + static_cast<uint32_t>(teams_at));
+  const uint32_t per_team = LoadU32(base, panel + static_cast<uint32_t>(per_team_at));
+  if (!data || !per_team || per_team > 16 || teams > 4) return;
+  constexpr uint8_t kPlayerSlot = 1;
+  for (uint32_t team = 0; team < std::max<uint32_t>(teams, 1); ++team) {
+    // The block's player slots, and each one's name.
+    std::vector<uint32_t> slots;
+    std::vector<std::pair<std::string, std::vector<uint8_t>>> players;
+    for (uint32_t i = team * per_team; i < (team + 1) * per_team && i < count; ++i) {
+      const uint32_t at = data + i * size;
+      const uint32_t pri = LoadU32(base, at + static_cast<uint32_t>(pri_at));
+      if (base[at + static_cast<uint32_t>(type_at)] != kPlayerSlot || pri < 0x10000) continue;
+      const int32_t name_at = ClassPropertyOffset(base, LoadU32(base, pri + kObjectClass), "PlayerName");
+      slots.push_back(at);
+      players.emplace_back(name_at >= 0 ? FStringText(base, pri + static_cast<uint32_t>(name_at)) : std::string(),
+                           std::vector<uint8_t>(base + at, base + at + size));
+    }
+    if (players.size() < 2) continue;
+    std::stable_sort(players.begin(), players.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    for (size_t i = 0; i < slots.size(); ++i) std::memcpy(base + slots[i], players[i].second.data(), size);
   }
 }
 
@@ -4318,7 +4566,8 @@ int NotePlayersOf(uint8_t* base, uint32_t game) {
 }
 
 // Every kMatchPlayersEvery on a player input frame (`ctx`) of a match room's host: reads Alboria's
-// teams again and notes the UniqueId and name of each player of the world's game (lobby or match).
+// teams again, telling it whether the match is in its pre-game lobby, and notes the UniqueId and
+// name of each player of the world's game (lobby or match).
 // Names noted stay (the match after the lobby has the same players, with the same UniqueIds).
 void NoteMatchPlayers(PPCContext& ctx, uint8_t* base) {
   namespace alboria = rex::system::xam::alboria;
@@ -4332,8 +4581,10 @@ void NoteMatchPlayers(PPCContext& ctx, uint8_t* base) {
     g_match_player_names.clear();
     return;
   }
-  alboria::RefreshMatchTeams();
   const uint32_t game = WorldGame(base, ctx.r3.u32, "");
+  // Whether the match is in its pre-game lobby now: only there may Alboria share the teams out again
+  // as players come and go (never once the match is being played).
+  alboria::RefreshMatchTeams(game != 0 && WorldGame(base, ctx.r3.u32, "PreGameLobbyGame") != 0);
   g_noted_game.store(game);
   if (game) NotePlayersOf(base, game);
 }
@@ -4943,10 +5194,13 @@ void AnswerPartyType(PPCContext& ctx, uint8_t* base) {
 // Every sound of the game's menus goes through UISoundTheme.ProcessSoundEvent(SoundEventName,
 // SoundOwner): Flash calls it for moving and changing values, the script through
 // GFxMoviePlayer.PlaySoundFromTheme for the rest. The theme maps the event's name to a SoundCue in
-// its SoundEventBindings and the owner (the player's controller) plays it. Our own menus over the
-// game play the same events: the theme is kept as the game uses it (the title screen already plays
-// one), and each sound a menu asks for (PlayMenuSound) runs ProcessSoundEvent on the next player
-// input frame, borrowing that frame as the System Link join does. A sound asked for before the
+// its SoundEventBindings and the owner (the player's controller) plays it. The game has several
+// themes: Theme_Pause for the options and the pause menu, Theme_Frontend for the title screen and the
+// main menu, Theme_Alerts for pop-ups. Our own menus over the game play the options' events, or,
+// with the main menu's theme, which has none of them, the main menu's own (FrontendEventName): the
+// theme is kept as the game uses it (the title screen already plays one), and each sound a menu asks
+// for (PlayMenuSound) runs ProcessSoundEvent on the next player input frame, borrowing that frame as
+// the System Link join does. A sound asked for before the
 // theme is known, or while no input runs, is dropped rather than played late.
 
 using azura::script::MenuSound;
@@ -4965,6 +5219,41 @@ uint32_t g_sound_locals = 0;
 
 WatchedName SoundEventName(MenuSound sound) {
   return static_cast<WatchedName>(kSoundStepUp + static_cast<int>(sound));
+}
+
+// The main menu's event for `sound` (Theme_Frontend has none of the options' events): moving and
+// changing a value sound as moving in the main menu, choosing as choosing, going back and closing as
+// going back, opening as going forward.
+WatchedName FrontendEventName(MenuSound sound) {
+  switch (sound) {
+    case MenuSound::kAccept:
+      return kFrontSelectItem;
+    case MenuSound::kBack:
+    case MenuSound::kClose:
+      return kFrontGoBack;
+    case MenuSound::kOpen:
+      return kFrontGoForward;
+    default:
+      return kFrontSelectionChanged;
+  }
+}
+
+// An element of a UISoundTheme's SoundEventBindings: SoundEventName (an FName: its GNames index,
+// then its number), then SoundToPlay (a SoundCue).
+constexpr uint32_t kSoundBindingSize = 12;
+constexpr uint32_t kMaxSoundBindings = 1024;
+
+// Whether `theme` plays the event `name` (a GNames index): whether its SoundEventBindings has it.
+bool ThemeBinds(const uint8_t* base, uint32_t theme, int32_t name) {
+  if (name < 0) return false;
+  const int32_t at = ClassPropertyOffset(base, LoadU32(base, theme + kObjectClass), "SoundEventBindings");
+  if (at < 0) return false;
+  const uint32_t data = LoadU32(base, theme + static_cast<uint32_t>(at));
+  const uint32_t count = std::min(LoadU32(base, theme + static_cast<uint32_t>(at) + 4), kMaxSoundBindings);
+  for (uint32_t i = 0; data && i < count; ++i) {
+    if (LoadU32(base, data + i * kSoundBindingSize) == static_cast<uint32_t>(name)) return true;
+  }
+  return false;
 }
 
 // Whether `object`'s class is UISoundTheme or one of its subclasses.
@@ -5008,9 +5297,23 @@ void PlayQueuedMenuSounds(PPCContext& ctx, uint8_t* base) {
   const uint32_t frame = ctx.r4.u32;
   const uint32_t own_object = LoadU32(base, frame + kFrameObject);
   const uint64_t own_r3 = ctx.r3.u64;
+  // The same event twice in a row within this time plays once: going back and closing, which in
+  // the main menu's theme are the same event, come together when a menu closes.
+  constexpr auto kRepeatWithin = std::chrono::milliseconds(150);
+  static int32_t last_name = -1;
+  static std::chrono::steady_clock::time_point last_at;
   for (const MenuSound sound : sounds) {
-    const int32_t name = g_names[SoundEventName(sound)].load(std::memory_order_relaxed);
-    if (name < 0) continue;
+    // The options' event, which the options and pause theme has; in any other theme (the main
+    // menu's, over which the online menus open) the main menu's own event, as long as it has it.
+    int32_t name = g_names[SoundEventName(sound)].load(std::memory_order_relaxed);
+    if (!ThemeBinds(base, theme, name)) {
+      name = g_names[FrontendEventName(sound)].load(std::memory_order_relaxed);
+      if (!ThemeBinds(base, theme, name)) continue;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (name == last_name && now - last_at < kRepeatWithin) continue;
+    last_name = name;
+    last_at = now;
     std::memset(base + g_sound_locals, 0, kSoundLocalsSize);
     // An FName: its index in GNames, then its number (0, no suffix).
     StoreU32(base, g_sound_locals + static_cast<uint32_t>(name_at), static_cast<uint32_t>(name));
@@ -5104,6 +5407,11 @@ void KickIdleHost(PPCContext& ctx, uint8_t* base) {
   const int32_t game_at = world ? ClassPropertyOffset(base, LoadU32(base, world + kObjectClass), "Game") : -1;
   const uint32_t game = game_at >= 0 ? LoadU32(base, world + static_cast<uint32_t>(game_at)) : 0;
   const int32_t max_idle_at = game ? ClassPropertyOffset(base, LoadU32(base, game + kObjectClass), "MaxIdleTime") : -1;
+  // Idle kicks off (online_idle_kick): the game's MaxIdleTime at 0, as in the pre-game lobby, makes
+  // KickIdler remove nobody, and the host is not watched either.
+  if (!REXCVAR_GET(online_idle_kick) && max_idle_at >= 0) {
+    StoreU32(base, game + static_cast<uint32_t>(max_idle_at), 0);
+  }
   const float max_idle = max_idle_at >= 0 ? LoadF32(base, game + static_cast<uint32_t>(max_idle_at)) : 0.0f;
   if (max_idle <= 0.0f) {
     stop_watching();
@@ -5268,8 +5576,11 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     CreateStartupParty(ctx, base);
     return;
   }
-  // The theme the game plays its menu sounds with, for ours.
-  if (Is(base, function, kProcessSoundEvent) && IsSoundTheme(base, ctx.r3.u32)) {
+  // The theme the game plays its menu sounds with, for ours: one with the options' events or the
+  // main menu's (not the alerts' theme, which has neither).
+  if (Is(base, function, kProcessSoundEvent) && IsSoundTheme(base, ctx.r3.u32) &&
+      (ThemeBinds(base, ctx.r3.u32, g_names[kSoundStepUp].load(std::memory_order_relaxed)) ||
+       ThemeBinds(base, ctx.r3.u32, g_names[kFrontSelectionChanged].load(std::memory_order_relaxed)))) {
     g_sound_theme.store(ctx.r3.u32, std::memory_order_relaxed);
   }
   // Before it runs: an Alboria account that starts Lambency is a developer to the game.
@@ -5718,6 +6029,14 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
     if (result && rex::system::xam::alboria::GetStatus().host) StoreU32(base, result, 1);
     return;
   }
+  // Select chapter with an add-on's campaign: the act list the menu builds, and built again once
+  // the add-ons are installed (see RebuildActList).
+  if (Is(base, function, kConstructActList)) NoteActListBuild(ctx, base);
+  if (Is(base, function, kDLCEnumerationFinished)) {
+    __imp__sub_822DF9E0(ctx, base);
+    RebuildActList(ctx, base);
+    return;
+  }
   // Leaving confirmed. A matchmade lobby's host does not run it: its LeaveMatch ends the lobby as a
   // custom match's host does, taking everyone into its own party. Its game goes back to the main menu
   // by itself instead (HostLeaveMatchmadeLobby), and the others' lobby closes under them, so each
@@ -6029,11 +6348,16 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   }
   // The panel's slots (SlotList, PartySlotData) carry the same mark, bIsPartyHost, which
   // UpdatePlayerList sets and the list's data for Flash shows as its crown: in Alboria's match rooms
-  // it is cleared from every slot once they are filled.
+  // it is cleared from every slot once they are filled, and each team's players are sorted by name
+  // (the host would otherwise come first).
+  // Before the party panel's frame: a player who changed team or left since the last one has it
+  // built again.
+  if (Is(base, function, kUpdatePartyPanel)) RedrawPartyPanel(ctx, base);
   if (Is(base, function, kUpdatePlayerList) && LiveMode() && rex::system::xam::alboria::GetStatus().in_match) {
     const uint32_t panel = LoadU32(base, ctx.r4.u32 + kFrameObject);
     __imp__sub_822DF9E0(ctx, base);
     ClearPartyHostMarks(base, panel);
+    SortPartySlotsByName(base, panel);
     return;
   }
   // The front end's menus show the party's NAT type (UIWidget_MainMenu.UpdateNatType: NATTypeLabel,

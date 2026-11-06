@@ -4318,10 +4318,10 @@ index 8f2fcb0..2f60d10 100644
    // SCOPE_profile_cpu_f("gpu");
 diff --git a/src/graphics/metal/metal_command_processor.h b/src/graphics/metal/metal_command_processor.h
 new file mode 100644
-index 0000000..9f110d0
+index 0000000..e14de52
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.h
-@@ -0,0 +1,413 @@
+@@ -0,0 +1,415 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.h
 + * @brief       Xenos command processing with Metal
@@ -4683,6 +4683,8 @@ index 0000000..9f110d0
 +  // Frames.
 +  bool frame_open_ = false;
 +  uint64_t frame_current_ = 1;
++  // The completed submission the texture cache last evicted textures for.
++  uint64_t texture_cache_completed_submission_ = 0;
 +  uint64_t frame_completed_ = 0;
 +  std::array<uint64_t, kMaxFramesInFlight> closed_frame_submissions_{};
 +  bool cache_clear_requested_ = false;
@@ -4737,10 +4739,10 @@ index 0000000..9f110d0
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_command_processor.mm b/src/graphics/metal/metal_command_processor.mm
 new file mode 100644
-index 0000000..a3d198b
+index 0000000..e1f8154
 --- /dev/null
 +++ b/src/graphics/metal/metal_command_processor.mm
-@@ -0,0 +1,2899 @@
+@@ -0,0 +1,2906 @@
 +/**
 + * @file        graphics/metal/metal_command_processor.mm
 + * @brief       Xenos command processing with Metal
@@ -5387,6 +5389,13 @@ index 0000000..a3d198b
 +    }
 +    submission_completed_ = submission.first;
 +    submissions_in_flight_.pop_front();
++  }
++  // Textures the GPU is done with are destroyed once the cache is over its memory limits
++  // (texture_cache_memory_limit_soft and _hard). The game puts a level's textures at new guest
++  // addresses on every load, so the previous levels' textures are only freed here.
++  if (texture_cache_ && submission_completed_ != texture_cache_completed_submission_) {
++    texture_cache_completed_submission_ = submission_completed_;
++    texture_cache_->CompletedSubmissionUpdated(submission_completed_);
 +  }
 +}
 +
@@ -17289,10 +17298,10 @@ index 0000000..d68960b
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/metal_texture_cache.mm b/src/graphics/metal/metal_texture_cache.mm
 new file mode 100644
-index 0000000..fd1b37e
+index 0000000..df30d32
 --- /dev/null
 +++ b/src/graphics/metal/metal_texture_cache.mm
-@@ -0,0 +1,2352 @@
+@@ -0,0 +1,2357 @@
 +/**
 + * @file        graphics/metal/metal_texture_cache.mm
 + * @brief       Guest textures as Metal textures, loaded from the shared memory with compute shaders
@@ -19518,7 +19527,12 @@ index 0000000..fd1b37e
 +  SetHostMemoryUsage(uint64_t(texture.allocatedSize));
 +}
 +
-+MetalTextureCache::MetalTexture::~MetalTexture() = default;
++MetalTextureCache::MetalTexture::~MetalTexture() {
++  // The resolve checks are keyed by the texture, and ForgetResolveTextureChecks reads the key of
++  // each: the entry of a texture the cache destroys (evicted, or the whole cache cleared) goes with
++  // it, together with its comparison target.
++  static_cast<MetalTextureCache&>(texture_cache()).resolve_texture_checks_.erase(this);
++}
 +
 +id<MTLTexture> MetalTextureCache::MetalTexture::GetView(bool is_signed, uint32_t host_swizzle,
 +                                                        bool is_array) {

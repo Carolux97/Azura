@@ -1,9 +1,9 @@
 diff --git a/include/rex/system/xam/alboria.h b/include/rex/system/xam/alboria.h
 new file mode 100644
-index 0000000..d83e4f3
+index 0000000..fc447ab
 --- /dev/null
 +++ b/include/rex/system/xam/alboria.h
-@@ -0,0 +1,621 @@
+@@ -0,0 +1,628 @@
 +/**
 + * @file        system/xam/alboria.h
 + * @brief       Alboria: System Link over the internet through our relay
@@ -335,6 +335,11 @@ index 0000000..d83e4f3
 +                     // (the player's party did not fit, section 5 of the online rules)
 +    kMapNotShared,   // the host chose a map that a player of its pre-game lobby does not have (a map
 +                     // pack's), and the game kept the one it had
++    kServiceNotice,  // a notice of Alboria's (/v1/status' motd) that appeared while playing: `id` is
++                     // its text, without markup, and `from_name` its scope ("all" or "game")
++    kServiceWarning, // a scheduled action of Alboria's is near: `id` is the action ("maint_on",
++                     // "restart", "game_off", "close_rooms"), `from_name` its scope ("all" or
++                     // "game") and `from_id` the whole minutes left (at least 1)
 +  };
 +  Kind kind = Kind::kInvitation;
 +  std::string id;
@@ -451,8 +456,10 @@ index 0000000..d83e4f3
 +// them (/v1/rooms/current: each party on one team, the players shared out), for the game to place
 +// them so. Empty otherwise.
 +std::vector<std::vector<std::string>> MatchTeams();
-+// Reads the room again in the background, MatchTeams among it.
-+void RefreshMatchTeams();
++// Reads the room again in the background, MatchTeams among it. `in_lobby`, when given, tells Alboria
++// whether this match room's host has its match in the pre-game lobby now, where the teams may be
++// shared out again as players come and go (not given: unknown, as it was).
++void RefreshMatchTeams(std::optional<bool> in_lobby = std::nullopt);
 +// The title's search request (its XOVERLAPPED) running a matchmaking search, and its cancelling:
 +// a cancelled request whose search is running stops it.
 +void SetSearchRequest(uint32_t overlapped_ptr);
@@ -665,10 +672,10 @@ index 0000000..c7fc5de
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria.cpp b/src/system/xam/alboria.cpp
 new file mode 100644
-index 0000000..9316ec3
+index 0000000..16d27d9
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,3023 @@
+@@ -0,0 +1,3323 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -689,6 +696,8 @@ index 0000000..9316ec3
 +#include <mutex>
 +#include <random>
 +#include <set>
++#include <cstdio>
++#include <ctime>
 +#include <thread>
 +#include <utility>
 +
@@ -713,6 +722,7 @@ index 0000000..9316ec3
 +#include <arpa/inet.h>
 +#include <netdb.h>
 +#include <netinet/in.h>
++#include <fcntl.h>
 +#include <netinet/tcp.h>
 +#include <sys/socket.h>
 +#include <sys/time.h>
@@ -1589,7 +1599,7 @@ index 0000000..9316ec3
 +}
 +
 +void PublishHostedSession(std::string code, SessionInfo session);
-+void RefreshCurrentRoom();
++void RefreshCurrentRoom(std::optional<bool> in_lobby = std::nullopt);
 +// A party member keeps with its party as it moves (section 4.9; after RefreshCurrentRoom).
 +void FollowPartyAfterMove(bool left_match, bool merged);
 +void PublishHostedQos(std::string code, std::array<uint8_t, 8> kid, std::vector<uint8_t> data);
@@ -1918,9 +1928,12 @@ index 0000000..9316ec3
 +// Sends the session of the Live party this installation hosts to Alboria, for the room `code`.
 +// Reads what this installation's room is now (POST /v1/rooms/current), after the relay said it moved
 +// (section 4.9): its party's code and type, its roles, its host's address, and the host's QoS data
-+// by session, which the title reads the match's settings from when it joins.
-+void RefreshCurrentRoom() {
-+  const auto room = CallSignedIn("/v1/rooms/current", nlohmann::json::object());
++// by session, which the title reads the match's settings from when it joins. `in_lobby`, from a match
++// room's host, says whether its match is in the pre-game lobby now (RefreshMatchTeams).
++void RefreshCurrentRoom(std::optional<bool> in_lobby) {
++  nlohmann::json request = nlohmann::json::object();
++  if (in_lobby) request["lobby"] = *in_lobby;
++  const auto room = CallSignedIn("/v1/rooms/current", request);
 +  if (!room.error.empty()) {
 +    REXSYS_WARN("Alboria: the room it moved to could not be read ({})", room.error);
 +    return;
@@ -2638,13 +2651,150 @@ index 0000000..9316ec3
 +  });
 +}
 +
++std::string TitleIdText();
++
++// --- Alboria's notices and scheduled actions over the game ------------------------------------------
++// The launcher shows what /v1/status says (its notices, the countdowns to scheduled actions); a
++// player already in the game is told too: a notice that appears while playing, once, and each
++// scheduled action when first seen and again as it comes within 10, 5 and 1 minutes. They are the
++// service's, not friends', so they show while busy or invisible as well.
++constexpr auto kServiceInterval = std::chrono::seconds(30);
++// The scheduled actions told about: the ones the launcher counts down to.
++constexpr const char* kServiceActions[] = {"maint_on", "restart", "game_off", "close_rooms"};
++bool g_service_read = false;                              // the service reader only
++std::set<std::string> g_service_notices;                  // the notices already seen
++std::map<std::string, int> g_service_warned;              // each action (action|scope|at): the last step told
++
++// `html` (a notice, which may hold the launcher's few tags) as plain text: tags and comments left
++// out, the common entities turned back, spaces collapsed.
++std::string PlainNotice(const std::string& html) {
++  std::string text;
++  for (size_t i = 0; i < html.size();) {
++    if (html.compare(i, 4, "<!--") == 0) {
++      const size_t end = html.find("-->", i + 4);
++      i = end == std::string::npos ? html.size() : end + 3;
++      continue;
++    }
++    if (html[i] == '<') {
++      const size_t end = html.find('>', i);
++      // A tag that ends a block leaves a space.
++      if (!text.empty() && text.back() != ' ') text.push_back(' ');
++      i = end == std::string::npos ? html.size() : end + 1;
++      continue;
++    }
++    static const std::pair<const char*, const char*> kEntities[] = {
++        {"&amp;", "&"}, {"&lt;", "<"}, {"&gt;", ">"}, {"&quot;", "\""}, {"&#39;", "'"}, {"&nbsp;", " "}};
++    bool entity = false;
++    for (const auto& [name, value] : kEntities) {
++      if (html.compare(i, std::strlen(name), name) == 0) {
++        text += value;
++        i += std::strlen(name);
++        entity = true;
++        break;
++      }
++    }
++    if (entity) continue;
++    const char c = html[i++];
++    if (c == '\n' || c == '\r' || c == '\t' || c == ' ') {
++      if (!text.empty() && text.back() != ' ') text.push_back(' ');
++    } else {
++      text.push_back(c);
++    }
++  }
++  while (!text.empty() && text.back() == ' ') text.pop_back();
++  return text;
++}
++
++// Which countdown step `minutes` left is in: 1, 5, 10, or 60 for anything further.
++int WarningStep(int minutes) {
++  return minutes <= 1 ? 1 : minutes <= 5 ? 5 : minutes <= 10 ? 10 : 60;
++}
++
++// Reads /v1/status for this title and queues what is new for the title's notices. The first read
++// only notes the notices there already (the launcher showed them before the game started).
++void ReadServiceStatus() {
++  const HttpResponse response = PostJson(REXCVAR_GET(alboria_api_url) + "/v1/status",
++                                         nlohmann::json{{"title_id", TitleIdText()}}.dump(), {});
++  if (response.status != 200) return;
++  const auto status = nlohmann::json::parse(response.body, nullptr, false);
++  if (!status.is_object()) return;
++  std::vector<Notice> found;
++  // The notices: the service's ("all") and this game's ("game").
++  std::vector<std::pair<std::string, std::string>> notices;
++  if (status.contains("motd") && status["motd"].is_string()) notices.emplace_back(status["motd"].get<std::string>(), "all");
++  if (status.contains("game") && status["game"].is_object() && status["game"].contains("motd") && status["game"]["motd"].is_string()) {
++    notices.emplace_back(status["game"]["motd"].get<std::string>(), "game");
++  }
++  for (const auto& [notice, scope] : notices) {
++    const std::string text = PlainNotice(notice);
++    if (text.empty() || !g_service_notices.insert(notice).second || !g_service_read) continue;
++    found.push_back({Notice::Kind::kServiceNotice, text, 0, scope});
++  }
++  // The scheduled actions coming, but not maintenance already on.
++  const bool maintenance = Flag(status, "maintenance", false);
++  const bool game_maintenance = status.contains("game") && status["game"].is_object() && Flag(status["game"], "maintenance", false);
++  if (status.contains("warnings") && status["warnings"].is_array()) {
++    const auto now = std::chrono::system_clock::now();
++    for (const auto& warning : status["warnings"]) {
++      if (!warning.is_object()) continue;
++      const std::string action = Text(warning, "action");
++      const std::string scope = Text(warning, "scope");
++      const std::string at = Text(warning, "at");
++      if (std::find_if(std::begin(kServiceActions), std::end(kServiceActions), [&](const char* known) { return action == known; }) ==
++              std::end(kServiceActions) ||
++          (scope != "all" && scope != "game")) {
++        continue;
++      }
++      if (action == "maint_on" && (scope == "all" ? maintenance : game_maintenance)) continue;
++      // An ISO time, such as 2026-11-07T10:30:00.000Z.
++      std::tm when{};
++      int millis = 0;
++      if (std::sscanf(at.c_str(), "%d-%d-%dT%d:%d:%d.%dZ", &when.tm_year, &when.tm_mon, &when.tm_mday, &when.tm_hour,
++                      &when.tm_min, &when.tm_sec, &millis) < 6) {
++        continue;
++      }
++      when.tm_year -= 1900;
++      when.tm_mon -= 1;
++#if REX_PLATFORM_WIN32
++      const std::time_t utc = _mkgmtime(&when);
++#else
++      const std::time_t utc = timegm(&when);
++#endif
++      const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::from_time_t(utc) - now).count();
++      if (seconds <= 0) continue;
++      const int minutes = static_cast<int>((seconds + 59) / 60);
++      const std::string key = action + "|" + scope + "|" + at;
++      const auto told = g_service_warned.find(key);
++      const int step = WarningStep(minutes);
++      if (told != g_service_warned.end() && told->second <= step) continue;
++      g_service_warned[key] = step;
++      found.push_back({Notice::Kind::kServiceWarning, action, static_cast<uint32_t>(minutes), scope});
++    }
++  }
++  g_service_read = true;
++  if (found.empty()) return;
++  for (const Notice& notice : found) {
++    REXSYS_INFO("Alboria: a service notice for the title ({}{})", notice.kind == Notice::Kind::kServiceWarning ? notice.id : "notice",
++                notice.kind == Notice::Kind::kServiceWarning ? fmt::format(", {} min", notice.from_id) : "");
++  }
++  std::lock_guard lock(g_friends_mutex);
++  g_notices.insert(g_notices.end(), found.begin(), found.end());
++}
++
 +// Starts the friends reader once: it reads the list every kFriendsInterval while the player is
-+// signed in to Live, for as long as the title runs.
++// signed in to Live, and Alboria's status every kServiceInterval, for as long as the title runs.
 +void StartFriendsReader() {
 +  if (g_friends_reader.exchange(true)) return;
 +  std::thread([] {
++    auto service_read = std::chrono::steady_clock::time_point{};
 +    for (;;) {
-+      if (LiveSignedIn()) ReadFriends();
++      if (LiveSignedIn()) {
++        ReadFriends();
++        if (std::chrono::steady_clock::now() - service_read >= kServiceInterval) {
++          service_read = std::chrono::steady_clock::now();
++          ReadServiceStatus();
++        }
++      }
 +      std::this_thread::sleep_for(kFriendsInterval);
 +    }
 +  }).detach();
@@ -2852,6 +3002,156 @@ index 0000000..9316ec3
 +std::atomic<bool> g_hold_next_match{false};
 +std::atomic<bool> g_match_refresher{false};
 +constexpr auto kMatchRefresh = std::chrono::seconds(10);
++// --- Landmarks (alboria-notes:azura/alboria-relay.md, section 4.8) ----------------------------------
++// Matchmaking prefers the open matches whose hosts are closest to the searcher. No player learns
++// another's address for that: each game measures its round trip to a few public landmarks spread
++// over the world (a TCP handshake to each, nothing sent) and reports only those numbers, with its
++// search's polls and with the match it hosts; Alboria compares the numbers. The landmarks come with
++// the search's answer, so Alboria can change them without a new build.
++struct Landmark {
++  std::string id;
++  std::string host;
++  uint16_t port = 0;
++};
++std::mutex g_landmark_mutex;
++// The landmarks Alboria last gave, the round trips measured to them (milliseconds, by ID) and when.
++std::vector<Landmark> g_landmarks;
++std::map<std::string, int> g_landmark_ms;
++Clock::time_point g_landmarks_measured{};
++std::atomic<bool> g_landmarks_measuring{false};
++// Measured again after this long: the network a computer uses changes rarely during a session.
++constexpr auto kLandmarksLife = std::chrono::minutes(10);
++// A landmark that does not answer within this long is left out.
++constexpr auto kLandmarkTimeout = std::chrono::milliseconds(1500);
++// Handshakes per landmark; the shortest counts, so one slow packet does not make it look far.
++constexpr int kLandmarkTries = 2;
++
++// The round trip of one TCP handshake with `address`, in milliseconds; -1 when it does not complete
++// within kLandmarkTimeout. The connection is closed at once, before anything is sent.
++int HandshakeMs(const sockaddr_in& address) {
++  const NativeSocket handle = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
++  if (handle == kNoSocket) return -1;
++#if REX_PLATFORM_WIN32
++  u_long non_blocking = 1;
++  ioctlsocket(handle, FIONBIO, &non_blocking);
++#else
++  fcntl(handle, F_SETFL, fcntl(handle, F_GETFL, 0) | O_NONBLOCK);
++#endif
++  const auto start = Clock::now();
++  int result = -1;
++  if (connect(handle, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) == 0) {
++    result = 0;
++  } else {
++    fd_set writable;
++    fd_set failed;
++    FD_ZERO(&writable);
++    FD_ZERO(&failed);
++    FD_SET(handle, &writable);
++    FD_SET(handle, &failed);
++    const auto timeout_us = std::chrono::duration_cast<std::chrono::microseconds>(kLandmarkTimeout).count();
++    timeval timeout{static_cast<long>(timeout_us / 1000000), static_cast<int>(timeout_us % 1000000)};
++    // Windows reports a refused connection in the failed set, the others as writable with an error.
++    if (select(static_cast<int>(handle) + 1, nullptr, &writable, &failed, &timeout) > 0 && FD_ISSET(handle, &writable) &&
++        !FD_ISSET(handle, &failed)) {
++      int error = 0;
++      socklen_t length = sizeof(error);
++      if (getsockopt(handle, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&error), &length) == 0 && error == 0) {
++        result = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - start).count());
++      }
++    }
++  }
++  CloseNativeSocket(handle);
++  return result;
++}
++
++// The shortest of kLandmarkTries handshakes with `landmark`, -1 when none completed or its name
++// does not resolve. The name is resolved first, so the lookup is not counted.
++int LandmarkMs(const Landmark& landmark) {
++  addrinfo hints{};
++  hints.ai_family = AF_INET;
++  hints.ai_socktype = SOCK_STREAM;
++  addrinfo* found = nullptr;
++  const std::string port = std::to_string(landmark.port);
++  if (getaddrinfo(landmark.host.c_str(), port.c_str(), &hints, &found) != 0 || !found) return -1;
++  sockaddr_in address{};
++  std::memcpy(&address, found->ai_addr, sizeof(address));
++  freeaddrinfo(found);
++  int best = -1;
++  for (int attempt = 0; attempt < kLandmarkTries; ++attempt) {
++    const int ms = HandshakeMs(address);
++    if (ms >= 0 && (best < 0 || ms < best)) best = ms;
++  }
++  return best;
++}
++
++// Measures the round trips to `landmarks` in the background, all at once, unless the same ones were
++// measured less than kLandmarksLife ago or a measurement is running.
++void MeasureLandmarks(std::vector<Landmark> landmarks) {
++  if (landmarks.empty()) return;
++  {
++    std::lock_guard lock(g_landmark_mutex);
++    const bool same = landmarks.size() == g_landmarks.size() &&
++                      std::equal(landmarks.begin(), landmarks.end(), g_landmarks.begin(), [](const Landmark& a, const Landmark& b) {
++                        return a.id == b.id && a.host == b.host && a.port == b.port;
++                      });
++    if (same && !g_landmark_ms.empty() && Clock::now() - g_landmarks_measured < kLandmarksLife) return;
++  }
++  if (g_landmarks_measuring.exchange(true)) return;
++  std::thread([landmarks = std::move(landmarks)] {
++#if REX_PLATFORM_WIN32
++    // Winsock counts its users: this start and cleanup leave the others' alone.
++    WSADATA wsa_data;
++    const bool started = WSAStartup(MAKEWORD(2, 2), &wsa_data) == 0;
++#endif
++    std::vector<int> results(landmarks.size(), -1);
++    std::vector<std::thread> workers;
++    for (size_t i = 0; i < landmarks.size(); ++i) {
++      workers.emplace_back([&, i] { results[i] = LandmarkMs(landmarks[i]); });
++    }
++    for (auto& worker : workers) worker.join();
++#if REX_PLATFORM_WIN32
++    if (started) WSACleanup();
++#endif
++    std::map<std::string, int> measured;
++    std::string summary;
++    for (size_t i = 0; i < landmarks.size(); ++i) {
++      if (results[i] < 0) continue;
++      measured[landmarks[i].id] = results[i];
++      summary += fmt::format("{}{} {} ms", summary.empty() ? "" : ", ", landmarks[i].id, results[i]);
++    }
++    REXSYS_INFO("Alboria: round trips to the landmarks: {}", summary.empty() ? "none answered" : summary);
++    {
++      std::lock_guard lock(g_landmark_mutex);
++      g_landmarks = landmarks;
++      g_landmark_ms = std::move(measured);
++      g_landmarks_measured = Clock::now();
++    }
++    g_landmarks_measuring.store(false);
++  }).detach();
++}
++
++// The landmarks of a search's answer (its "landmarks": ID, host and port of each).
++std::vector<Landmark> LandmarksOf(const nlohmann::json& answer) {
++  std::vector<Landmark> out;
++  if (!answer.contains("landmarks") || !answer["landmarks"].is_array()) return out;
++  for (const auto& entry : answer["landmarks"]) {
++    if (!entry.is_object() || !entry.contains("port") || !entry["port"].is_number_integer()) continue;
++    const std::string id = Text(entry, "id");
++    const std::string host = Text(entry, "host");
++    const int port = entry["port"].get<int>();
++    if (id.empty() || host.empty() || port <= 0 || port > 65535) continue;
++    out.push_back({id, host, static_cast<uint16_t>(port)});
++  }
++  return out;
++}
++
++// Adds the round trips measured to the landmarks to `request` as its "landmarks", when there are.
++void AddLandmarks(nlohmann::json& request) {
++  std::lock_guard lock(g_landmark_mutex);
++  if (g_landmark_ms.empty()) return;
++  request["landmarks"] = g_landmark_ms;
++}
++
 +// How long after Alboria said to host a new search is answered "host" at once.
 +constexpr auto kHostTold = std::chrono::seconds(15);
 +
@@ -2881,12 +3181,15 @@ index 0000000..9316ec3
 +    if (!said.exchange(true)) REXSYS_INFO("Alboria: a hosted session outside a match room is not offered to matchmaking");
 +    return;
 +  }
-+  const auto answer = CallSignedIn("/v1/matchmaking/open", {{"code", status.code},
-+                                                             {"title_id", TitleIdText()},
-+                                                             {"mode", match.mode},
-+                                                             {"capacity", match.capacity},
-+                                                             {"started", match.started},
-+                                                             {"session", EncodeBase64(*match.session)}});
++  nlohmann::json request = {{"code", status.code},
++                            {"title_id", TitleIdText()},
++                            {"mode", match.mode},
++                            {"capacity", match.capacity},
++                            {"started", match.started},
++                            {"session", EncodeBase64(*match.session)}};
++  // How far this host is from the landmarks, for searchers to be sent to the closest match.
++  AddLandmarks(request);
++  const auto answer = CallSignedIn("/v1/matchmaking/open", request);
 +  if (!answer.error.empty()) {
 +    REXSYS_WARN("Alboria: the open match was not taken ({})", answer.error);
 +    return;
@@ -2942,8 +3245,8 @@ index 0000000..9316ec3
 +  return g_match_teams;
 +}
 +
-+void RefreshMatchTeams() {
-+  RunDetached("reading the match's teams", [] { RefreshCurrentRoom(); });
++void RefreshMatchTeams(std::optional<bool> in_lobby) {
++  RunDetached("reading the match's teams", [in_lobby] { RefreshCurrentRoom(in_lobby); });
 +}
 +
 +namespace {
@@ -3153,6 +3456,8 @@ index 0000000..9316ec3
 +    return {MatchOutcome::kHost, {}};
 +  }
 +  const std::string id = Text(ticket.json, "ticket");
++  // Measured while the search waits; the polls report them once they are known.
++  MeasureLandmarks(LandmarksOf(ticket.json));
 +  REXSYS_INFO("Alboria: searching for a match ({})", request.contains("modes") ? request["modes"].dump() : mode);
 +  for (;;) {
 +    if (g_stop_search.load()) {
@@ -3162,7 +3467,9 @@ index 0000000..9316ec3
 +      SetSearchPhaseLocked(SearchPhase::kStopped);
 +      return {MatchOutcome::kStopped, {}};
 +    }
-+    const auto answer = CallSignedIn("/v1/matchmaking/poll", {{"ticket", id}});
++    nlohmann::json poll = {{"ticket", id}};
++    AddLandmarks(poll);
++    const auto answer = CallSignedIn("/v1/matchmaking/poll", poll);
 +    const std::string state = answer.error.empty() ? Text(answer.json, "state") : std::string("host");
 +    // The players found (waiting) or already in the match sent into (join).
 +    if (state == "waiting" || state == "join") {

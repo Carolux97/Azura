@@ -6,6 +6,22 @@ it as the update's notes (`scripts/release-common.sh`). Bumping the version adds
 release without one fails. One list item (`- `) per change, in English; an item may continue on
 indented lines.
 
+## 0.6.3
+
+- Public matches: you are sent to the closest host, measured without anyone seeing anyone's address,
+  and never back into a match you just failed to join.
+- Public matches: in the lobby, the teams are shared out again when someone joins or leaves, and the
+  lobby's list shows each team right.
+- Public matches go on much sooner when the host drops: the match moves to another player in about 9
+  seconds instead of 16.
+- Who hosts a public match no longer shows in the lobby's list or by which side they play.
+- Alboria's notices and the countdowns to a restart or maintenance now show in the game too.
+- The Versus, Horde and Beast online menus play their sounds.
+- RAAM's Shadow: its chapters show in Select chapter when it is the only add-on you have.
+- macOS: the game's memory no longer grows with each map or chapter you load.
+- The launcher has Blog and Discord buttons in Account, and can approve a browser signing in to your
+  account on alboria.org.
+
 ## 0.6.2
 
 - RAAM's Shadow starts again when you play in an Alboria party: choosing it no longer starts the

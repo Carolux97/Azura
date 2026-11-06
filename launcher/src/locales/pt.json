@@ -391,6 +391,8 @@
     "bubbleDone": "Boas-vindas à Alboria!"
   },
   "account": {
+    "blog": "Blog",
+    "discord": "Discord",
     "title": "Conta",
     "identityTitle": "Sua identidade no Alboria",
     "identityHelp": "É assim que os outros jogadores veem você, neste jogo e nos outros que usam o Alboria. O Alboria adiciona a etiqueta, que diferencia jogadores com o mesmo gamertag.",
@@ -427,6 +429,19 @@
     "emailText": "Digite o novo e-mail. Vamos enviar um código para lá para confirmar que é seu.",
     "newEmail": "Novo e-mail",
     "deleteTitle": "Excluir a conta",
+    "approveBrowser": "Aprovar um navegador",
+    "approveTitle": "Aprovar um navegador",
+    "approveText": "Se você está entrando em alboria.org com um launcher, o site mostra um código. Digite-o aqui.",
+    "approveCode": "Código do site",
+    "approveCheck": "Verificar",
+    "approveAsk": "Um navegador quer entrar na sua conta",
+    "approveWho": "{browser} · {place} · código {code}",
+    "approveSomewhere": "local desconhecido",
+    "approveWarning": "Permita só se for você entrando em alboria.org agora. Ninguém da Alboria vai pedir que você aprove um código.",
+    "approveRefuse": "Não fui eu",
+    "approveAllow": "Permitir",
+    "approveAllowed": "Navegador aprovado: você entrou em alboria.org.",
+    "approveRefused": "Navegador recusado.",
     "deleteText": "Excluir a conta apaga seu e-mail, seu gamertag com a etiqueta e todos os seus dispositivos, em todos os jogos. Não dá para desfazer. Vamos enviar um código para {email} para confirmar.",
     "exported": "Dados salvos.",
     "emailChanged": "E-mail alterado.",
@@ -442,6 +457,7 @@
     "overlayKey": "Tecla do overlay da Alboria"
   },
   "accountErrors": {
+    "no_link": "Nenhum navegador está esperando com esse código. Confira ou peça outro no site.",
     "network": "Não foi possível conectar ao Alboria. Verifique sua conexão e tente de novo.",
     "email_taken": "Esse e-mail já tem uma conta. Entre com ele.",
     "no_account": "Nenhuma conta tem esse e-mail. Crie uma.",
