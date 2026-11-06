@@ -37,6 +37,8 @@ import {
   alboriaVerifyEmail,
   alboriaVerifyEmailCode,
   openAlboriaSite,
+  alboriaWebLink,
+  alboriaWebLinkAnswer,
   openAlboriaBlog,
   openAlboriaDiscord,
 } from "./platform.js";
@@ -66,6 +68,7 @@ const KNOWN_ERRORS = new Set([
   "client_too_old",
   "codes_unavailable",
   "already_verified",
+  "no_link",
 ]);
 
 /**
@@ -526,6 +529,10 @@ export const setupAccount = ({ state, persist, renderPlay, toast, t, getLocale }
     } else if (step === "delete") {
       Object.assign(flow, { purpose: "delete", email: state.alboria.account?.email ?? "", gamertag: "" });
       attempt(sendCode);
+    } else if (step === "approve") {
+      attempt(checkBrowser);
+    } else if (step === "approve-confirm") {
+      attempt(() => answerBrowser(true));
     } else if (step === "code") {
       attempt(confirmCode);
     } else if (step === "local") {
@@ -589,6 +596,39 @@ export const setupAccount = ({ state, persist, renderPlay, toast, t, getLocale }
   $("account-delete").addEventListener("click", () => {
     $("delete-text").textContent = t("account.deleteText", { email: state.alboria.account?.email ?? "" });
     openDialog("delete");
+  });
+  // Approving a browser on Alboria's website: the website shows a code, the player types it here,
+  // sees which browser asks and roughly from where, and allows it or not. The approval always
+  // happens here, on a device already signed in, so a code read out to someone else is worth nothing.
+  let approving = "";
+  const checkBrowser = async () => {
+    const code = $("approve-code").value.trim().toUpperCase();
+    if (code.replace(/[^A-Z0-9]/g, "").length !== 8) return showError(t("accountErrors.no_link"));
+    const link = await alboriaWebLink(code, getLocale());
+    approving = code;
+    $("approve-who").textContent = t("account.approveWho", {
+      browser: link.browser,
+      place: link.place ?? t("account.approveSomewhere"),
+      code,
+    });
+    showStep("approve-confirm");
+  };
+  const answerBrowser = async (allow) => {
+    await alboriaWebLinkAnswer(approving, allow);
+    approving = "";
+    closeDialog();
+    toast(t(allow ? "account.approveAllowed" : "account.approveRefused"));
+  };
+  $("approve-code").addEventListener("input", () => {
+    // Letters in capitals, and the hyphen after the first four, as the website shows the code.
+    const raw = $("approve-code").value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
+    $("approve-code").value = raw.length > 4 ? `${raw.slice(0, 4)}-${raw.slice(4)}` : raw;
+    showError(null);
+  });
+  $("approve-refuse").addEventListener("click", () => attempt(() => answerBrowser(false)));
+  $("account-approve-browser").addEventListener("click", () => {
+    $("approve-code").value = "";
+    openDialog("approve");
   });
   $("account-export").addEventListener("click", async () => {
     try {

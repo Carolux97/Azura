@@ -610,6 +610,7 @@
               <p class="help" data-i18n="account.dataHelp"></p>
             </div>
             <div class="account-actions">
+              <button class="btn" id="account-approve-browser" data-i18n="account.approveBrowser"></button>
               <button class="btn" id="account-export" data-i18n="account.download"></button>
               <button class="btn" id="account-sign-out" data-i18n="account.signOut"></button>
               <button class="btn btn-danger" id="account-delete" data-i18n="account.delete"></button>
@@ -741,6 +742,32 @@
         <div class="account-actions">
           <button class="btn" type="button" data-welcome-close data-pad-back data-i18n="welcome.cancel"></button>
           <button class="btn btn-danger" type="submit" data-i18n="welcome.sendCode"></button>
+        </div>
+      </form>
+
+      <!-- Approving a browser on Alboria's website (account.js): the code it shows, then which browser
+           asks and from roughly where, to allow it or not. -->
+      <form data-step="approve" hidden>
+        <h2 class="panel-title" data-i18n="account.approveTitle"></h2>
+        <p class="help" data-i18n="account.approveText"></p>
+        <div class="field-grid one">
+          <label class="field"><span data-i18n="account.approveCode"></span><input class="path approve-code" id="approve-code" type="text" maxlength="9" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="ABCD-EFGH"></label>
+        </div>
+        <p class="save-detail-msg is-error" data-step-error hidden></p>
+        <div class="account-actions">
+          <button class="btn" type="button" data-welcome-close data-pad-back data-i18n="welcome.cancel"></button>
+          <button class="btn btn-primary" type="submit" data-i18n="account.approveCheck"></button>
+        </div>
+      </form>
+
+      <form data-step="approve-confirm" hidden>
+        <h2 class="panel-title" data-i18n="account.approveAsk"></h2>
+        <p class="help approve-who" id="approve-who"></p>
+        <p class="help" data-i18n="account.approveWarning"></p>
+        <p class="save-detail-msg is-error" data-step-error hidden></p>
+        <div class="account-actions">
+          <button class="btn" type="button" id="approve-refuse" data-pad-back data-i18n="account.approveRefuse"></button>
+          <button class="btn btn-primary" type="submit" data-i18n="account.approveAllow"></button>
         </div>
       </form>
 

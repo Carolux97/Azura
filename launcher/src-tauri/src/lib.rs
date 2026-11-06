@@ -910,6 +910,31 @@ async fn alboria_export(app: tauri::AppHandle, alboria: tauri::State<'_, Alboria
     Ok(true)
 }
 
+/// Which browser waits on Alboria's website with `code` (the website shows it when the player signs
+/// in there "with a launcher"), and roughly from where, before the player allows it.
+#[tauri::command]
+async fn alboria_web_link(
+    app: tauri::AppHandle,
+    alboria: tauri::State<'_, Alboria>,
+    code: String,
+    language: String,
+) -> Result<serde_json::Value, AlboriaError> {
+    alboria_account_request(&app, &alboria, "/v1/account/web-link", serde_json::json!({ "code": code, "language": language })).await
+}
+
+/// The player's answer for the browser waiting with `code`: allowed, it is signed in to this
+/// account on the website; refused, the website is told so.
+#[tauri::command]
+async fn alboria_web_link_answer(
+    app: tauri::AppHandle,
+    alboria: tauri::State<'_, Alboria>,
+    code: String,
+    allow: bool,
+) -> Result<(), AlboriaError> {
+    alboria_account_request(&app, &alboria, "/v1/account/web-link/answer", serde_json::json!({ "code": code, "allow": allow })).await?;
+    Ok(())
+}
+
 /// Asks for the code that confirms deleting the account, sent to its email.
 #[tauri::command]
 async fn alboria_delete_code(
@@ -1104,6 +1129,8 @@ pub fn run() {
             alboria_change_email,
             alboria_export,
             alboria_delete_code,
+            alboria_web_link,
+            alboria_web_link_answer,
             alboria_delete,
             open_alboria_site,
             open_alboria_blog,
