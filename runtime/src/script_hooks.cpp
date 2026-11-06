@@ -102,6 +102,9 @@ REXCVAR_DEFINE_STRING(script_dump_classes, "", "Azura/Debug",
                       "Comma-separated script classes whose functions and properties are logged once loaded");
 REXCVAR_DEFINE_BOOL(script_dump_code, false, "Azura/Debug",
                     "With script_dump_classes: also log a rough listing of each function's bytecode");
+REXCVAR_DEFINE_BOOL(online_idle_kick, true, "Azura/Online",
+                    "A matchmade match's host removes players who do nothing for its MaxIdleTime, itself "
+                    "included (off, for tests with idle test players: nobody is removed for idling)");
 REXCVAR_DEFINE_BOOL(host_migration, true, "Azura/Online",
                     "When an online match's host leaves, the game's own host migration carries the match on "
                     "with another player as its host (off: the match ends for everyone, as on Xbox Live "
@@ -479,6 +482,7 @@ enum WatchedName {
   kFrontSelectItem,
   kFrontGoBack,
   kFrontGoForward,
+  kUpdatePartyPanel,         // UIWidget_SmallPartyPanel: the party panel's every frame
   kWatchedNameCount,
 };
 constexpr const char* kWatchedNames[kWatchedNameCount] = {
@@ -509,7 +513,7 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "ProcessSoundEvent",     "Options_StepUp",         "Options_StepDown",   "ValueChangeLeft",
     "ValueChangeRight",      "Options_AcceptButton",   "Options_BackButton", "Options_DetailsEnter",
     "Options_DetailsLeave",  "Options_SliderLeft",     "Options_SliderRight", "Host_SelectionChanged",
-    "Host_SelectItem",       "Host_GoBack",            "Host_GoForward"};
+    "Host_SelectItem",       "Host_GoBack",            "Host_GoForward",      "UpdatePartyPanel"};
 
 // FName index of each watched name, -1 until found (0 is a valid index: None).
 std::atomic<int32_t> g_names[kWatchedNameCount];
@@ -4342,6 +4346,77 @@ void PlaceAlboriaTeams(PPCContext& ctx, uint8_t* base) {
   }
 }
 
+// The party panel of a pre-game lobby (UIWidget_SmallPartyPanel, its every frame in `ctx`) puts
+// each player in its team's block when it builds its list, and the game rebuilds it when it swaps
+// two players (TeamChangeOccuredCallback). Alboria's teams move one player at a time (PlaceAlboriaTeams,
+// ChangeTeam on the host, replicated to the others), and a player whose game closed is removed by
+// Alboria, neither of which the panel notices: it kept a moved player in the old team's block and the
+// old player count in its title. On every machine, host or not, when a player there the frame before
+// is on another team or gone, the panel is built again from the lobby's players (RebuildPartyList:
+// its title, its count, the players, the open slots and bots, and the list for Flash). A player keeps
+// the slot it had when the list is built, so one who changed team first has its slot emptied, as the
+// game does for one player moving alone (TeamChangeOccuredCallback with no second player): built
+// again, it takes a free slot in its new team's block.
+void RedrawPartyPanel(PPCContext& ctx, uint8_t* base) {
+  if (!LiveMode() || !rex::system::xam::alboria::GetStatus().in_match) return;
+  const uint32_t panel = LoadU32(base, ctx.r4.u32 + kFrameObject);
+  if (panel < 0x10000) return;
+  const uint32_t panel_class = LoadU32(base, panel + kObjectClass);
+  const int32_t gri_at = ClassPropertyOffset(base, panel_class, "PreGameGRI");
+  const uint32_t gri = gri_at >= 0 ? LoadU32(base, panel + static_cast<uint32_t>(gri_at)) : 0;
+  if (gri < 0x10000) return;
+  const int32_t pri_array = ClassPropertyOffset(base, LoadU32(base, gri + kObjectClass), "PRIArray");
+  if (pri_array < 0) return;
+  // Each player (PRI) and its team index.
+  std::map<uint32_t, int32_t> teams;
+  for (uint32_t i = 0; i < LoadU32(base, gri + pri_array + 4) && i < 32; ++i) {
+    const uint32_t pri = LoadU32(base, LoadU32(base, gri + pri_array) + i * 4);
+    if (pri < 0x10000) continue;
+    const int32_t team_at = ClassPropertyOffset(base, LoadU32(base, pri + kObjectClass), "Team");
+    const uint32_t info = team_at >= 0 ? LoadU32(base, pri + static_cast<uint32_t>(team_at)) : 0;
+    const int32_t index_at = info >= 0x10000 ? ClassPropertyOffset(base, LoadU32(base, info + kObjectClass), "TeamIndex") : -1;
+    teams[pri] = index_at >= 0 ? static_cast<int32_t>(LoadU32(base, info + static_cast<uint32_t>(index_at))) : -1;
+  }
+  // A player already there on another team, or gone; one who comes the panel shows itself.
+  static uint32_t last_panel = 0;
+  static std::map<uint32_t, int32_t> last_teams;
+  const char* why = nullptr;
+  std::vector<uint32_t> moved;
+  if (panel == last_panel) {
+    for (const auto& [pri, team] : last_teams) {
+      const auto now = teams.find(pri);
+      if (now == teams.end()) {
+        if (!why) why = "a player left";
+      } else if (now->second != team) {
+        why = "a player changed team";
+        moved.push_back(pri);
+      }
+    }
+  }
+  last_panel = panel;
+  last_teams = std::move(teams);
+  if (!why) return;
+  const uint32_t rebuild = FindInheritedFunction(base, panel_class, "RebuildPartyList");
+  if (!rebuild) {
+    REXLOG_WARN("[Azura online] RebuildPartyList not found; the lobby's party panel is not drawn again");
+    return;
+  }
+  REXLOG_INFO("[Azura online] In the lobby {}: its party panel is built again", why);
+  constexpr uint32_t kLocalsSize = 64;
+  static const uint32_t locals = rex::system::kernel_state()->memory()->SystemHeapAlloc(kLocalsSize);
+  if (!locals) return;
+  const uint32_t empty_slot = FindInheritedFunction(base, panel_class, "TeamChangeOccuredCallback");
+  const int32_t first = empty_slot ? ParamOffset(base, empty_slot, "PRI1") : -1;
+  for (const uint32_t pri : moved) {
+    if (first < 0) break;
+    std::memset(base + locals, 0, kLocalsSize);
+    StoreU32(base, locals + static_cast<uint32_t>(first), pri);
+    RunOnObject(ctx, base, panel, empty_slot, locals);
+  }
+  std::memset(base + locals, 0, kLocalsSize);
+  RunOnObject(ctx, base, panel, rebuild, locals);
+}
+
 // Clears bIsPartyHost in every slot of the party panel `panel` (UIWidget_SmallPartyPanel.SlotList, a
 // TArray of PartySlotData), so it marks nobody as the party's host. The struct's layout (each field's
 // offset, the bool's bit) is read from the game's own definition.
@@ -4433,7 +4508,8 @@ int NotePlayersOf(uint8_t* base, uint32_t game) {
 }
 
 // Every kMatchPlayersEvery on a player input frame (`ctx`) of a match room's host: reads Alboria's
-// teams again and notes the UniqueId and name of each player of the world's game (lobby or match).
+// teams again, telling it whether the match is in its pre-game lobby, and notes the UniqueId and
+// name of each player of the world's game (lobby or match).
 // Names noted stay (the match after the lobby has the same players, with the same UniqueIds).
 void NoteMatchPlayers(PPCContext& ctx, uint8_t* base) {
   namespace alboria = rex::system::xam::alboria;
@@ -4447,8 +4523,10 @@ void NoteMatchPlayers(PPCContext& ctx, uint8_t* base) {
     g_match_player_names.clear();
     return;
   }
-  alboria::RefreshMatchTeams();
   const uint32_t game = WorldGame(base, ctx.r3.u32, "");
+  // Whether the match is in its pre-game lobby now: only there may Alboria share the teams out again
+  // as players come and go (never once the match is being played).
+  alboria::RefreshMatchTeams(game != 0 && WorldGame(base, ctx.r3.u32, "PreGameLobbyGame") != 0);
   g_noted_game.store(game);
   if (game) NotePlayersOf(base, game);
 }
@@ -5271,6 +5349,11 @@ void KickIdleHost(PPCContext& ctx, uint8_t* base) {
   const int32_t game_at = world ? ClassPropertyOffset(base, LoadU32(base, world + kObjectClass), "Game") : -1;
   const uint32_t game = game_at >= 0 ? LoadU32(base, world + static_cast<uint32_t>(game_at)) : 0;
   const int32_t max_idle_at = game ? ClassPropertyOffset(base, LoadU32(base, game + kObjectClass), "MaxIdleTime") : -1;
+  // Idle kicks off (online_idle_kick): the game's MaxIdleTime at 0, as in the pre-game lobby, makes
+  // KickIdler remove nobody, and the host is not watched either.
+  if (!REXCVAR_GET(online_idle_kick) && max_idle_at >= 0) {
+    StoreU32(base, game + static_cast<uint32_t>(max_idle_at), 0);
+  }
   const float max_idle = max_idle_at >= 0 ? LoadF32(base, game + static_cast<uint32_t>(max_idle_at)) : 0.0f;
   if (max_idle <= 0.0f) {
     stop_watching();
@@ -6208,6 +6291,9 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
   // The panel's slots (SlotList, PartySlotData) carry the same mark, bIsPartyHost, which
   // UpdatePlayerList sets and the list's data for Flash shows as its crown: in Alboria's match rooms
   // it is cleared from every slot once they are filled.
+  // Before the party panel's frame: a player who changed team or left since the last one has it
+  // built again.
+  if (Is(base, function, kUpdatePartyPanel)) RedrawPartyPanel(ctx, base);
   if (Is(base, function, kUpdatePlayerList) && LiveMode() && rex::system::xam::alboria::GetStatus().in_match) {
     const uint32_t panel = LoadU32(base, ctx.r4.u32 + kFrameObject);
     __imp__sub_822DF9E0(ctx, base);
