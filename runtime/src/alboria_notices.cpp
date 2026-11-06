@@ -42,6 +42,10 @@ constexpr float kShrinkSeconds = 0.28f;
 // How long each kind stays, from its first frame.
 constexpr float kInvitationSeconds = 12.0f;
 constexpr float kOtherSeconds = 7.0f;
+// Alboria's service notices stay longer: they are read, not glanced at.
+constexpr float kServiceSeconds = 12.0f;
+// The game's name in the service notices' texts ({game}).
+constexpr const char* kGameName = "Gears of War 3";
 // How long the end of an accept (joining, or why it failed) stays before the notice leaves.
 constexpr float kAcceptedSeconds = 1.5f;
 constexpr float kFailedSeconds = 4.0f;
@@ -159,6 +163,76 @@ Texts LocalizedTexts(uint32_t language) {
               "FRIEND ONLINE", "is online",
               "A player in the lobby does not have this map"};
   }
+}
+
+// Alboria's service notices over the game: the launcher's own texts (launcher/src/locales,
+// alboriaService), with {game} and {minutes} filled in.
+struct ServiceTexts {
+  const char* warn_maintenance_all;
+  const char* warn_maintenance_game;
+  const char* warn_restart;
+  const char* warn_game_off;
+  const char* warn_close_rooms;
+  const char* then_maintenance;
+  const char* then_restart;
+  const char* then_game_off;
+  const char* then_close_rooms;
+  const char* in_a_minute;
+  const char* in_minutes;
+  const char* for_everyone;
+  const char* for_game;
+};
+
+ServiceTexts LocalizedServiceTexts(uint32_t language) {
+  switch (language) {
+    case 2:  // Japanese
+      return {"Alboria がメンテナンスに入ります", "{game} のオンラインがメンテナンスに入ります", "Alboria が再起動します", "{game} のオンラインプレイが停止します", "{game} のルームが閉じます", "開いているルームは続きます。新しいルームは終了まで待機します。", "新しいルームは復帰まで一時停止します。開いているルームは最大 30 分で終了します。", "そのときルームが閉じます。", "それまでに試合を終えてください。", "1 分後", "{minutes} 分後", "Alboria · 全員へ", "Alboria · {game}"};
+    case 7:  // Korean
+      return {"Alboria가 점검에 들어갑니다", "{game} 온라인이 점검에 들어갑니다", "Alboria가 다시 시작됩니다", "{game} 온라인 플레이가 꺼집니다", "{game} 방이 닫힙니다", "열린 방은 계속되고 새 방은 끝날 때까지 기다립니다.", "새 방은 돌아올 때까지 멈춥니다. 열린 방은 최대 30분 안에 끝내야 합니다.", "그때 방이 닫힙니다.", "그 전에 경기를 마치세요.", "1분 후", "{minutes}분 후", "Alboria · 모두에게", "Alboria · {game}"};
+    case 8:  // Traditional Chinese
+      return {"Alboria 即將進入維護", "{game} 線上即將進入維護", "Alboria 即將重新啟動", "{game} 的線上遊戲即將關閉", "{game} 的房間即將關閉", "已開啟的房間會繼續；新房間需等到結束。", "新房間暫停至恢復為止。已開啟的房間最多有 30 分鐘可完成。", "屆時其房間會關閉。", "請在那之前結束對戰。", "1 分鐘後", "{minutes} 分鐘後", "Alboria · 給所有人", "Alboria · {game}"};
+    case 12:  // Russian
+      return {"Alboria уходит на обслуживание", "Онлайн {game} уходит на обслуживание", "Alboria перезапускается", "Онлайн-игра в {game} отключается", "Комнаты {game} закрываются", "Открытые комнаты продолжают работу; новые ждут окончания.", "Новые комнаты приостановлены до возвращения. У открытых есть до 30 минут, чтобы закончить.", "Тогда её комнаты закроются.", "Закончите матч до этого.", "через минуту", "через {minutes} мин", "Alboria · для всех", "Alboria · {game}"};
+    case 5:  // Spanish
+      return {"Alboria entra en mantenimiento", "El online de {game} entra en mantenimiento", "Alboria se reinicia", "El online de {game} se desactiva", "Las salas de {game} se cierran", "Las salas abiertas siguen; las nuevas esperan hasta que acabe.", "Las salas nuevas se pausan hasta que vuelva. Las abiertas tienen hasta 30 minutos para terminar.", "Entonces se cierran sus salas.", "Termina tu partida antes.", "en un minuto", "en {minutes} min", "Alboria · para todos", "Alboria · {game}"};
+    case 3:  // German
+      return {"Alboria geht in Wartung", "Online von {game} geht in Wartung", "Alboria startet neu", "Onlinespiel von {game} wird ausgeschaltet", "Räume von {game} schließen", "Offene Räume laufen weiter; neue warten bis zum Ende.", "Neue Räume pausieren bis zur Rückkehr. Offene Räume haben bis zu 30 Minuten zum Beenden.", "Dann schließen seine Räume.", "Beende deine Partie vorher.", "in einer Minute", "in {minutes} Min.", "Alboria · für alle", "Alboria · {game}"};
+    case 4:  // French
+      return {"Alboria passe en maintenance", "Le jeu en ligne de {game} passe en maintenance", "Alboria redémarre", "Le jeu en ligne de {game} se désactive", "Les salons de {game} ferment", "Les salons ouverts continuent ; les nouveaux attendent la fin.", "Les nouveaux salons sont suspendus jusqu'au retour. Les salons ouverts ont jusqu'à 30 minutes pour finir.", "Ses salons ferment alors.", "Terminez votre partie avant.", "dans une minute", "dans {minutes} min", "Alboria · pour tous", "Alboria · {game}"};
+    case 6:  // Italian
+      return {"Alboria entra in manutenzione", "L'online di {game} entra in manutenzione", "Alboria si riavvia", "Il gioco online di {game} si disattiva", "Le stanze di {game} chiudono", "Le stanze aperte continuano; le nuove attendono la fine.", "Le nuove stanze si fermano fino al ritorno. Quelle aperte hanno fino a 30 minuti per finire.", "Allora le sue stanze chiudono.", "Finisci la partita prima.", "tra un minuto", "tra {minutes} min", "Alboria · per tutti", "Alboria · {game}"};
+    case 9:  // Portuguese
+      return {"O Alboria entra em manutenção", "O online de {game} entra em manutenção", "O Alboria reinicia", "O jogo online de {game} será desativado", "As salas de {game} fecham", "As salas abertas continuam; as novas esperam até o fim.", "Novas salas pausam até voltar. As abertas têm até 30 minutos para terminar.", "Então as salas fecham.", "Termine sua partida antes.", "em um minuto", "em {minutes} min", "Alboria · para todos", "Alboria · {game}"};
+    case 11:  // Polish
+      return {"Alboria przechodzi w konserwację", "Online {game} przechodzi w konserwację", "Alboria uruchamia się ponownie", "Gra online w {game} zostanie wyłączona", "Pokoje {game} zostaną zamknięte", "Otwarte pokoje działają dalej; nowe czekają do końca.", "Nowe pokoje są wstrzymane do powrotu. Otwarte mają do 30 minut na zakończenie.", "Wtedy jej pokoje zostaną zamknięte.", "Dokończ mecz wcześniej.", "za minutę", "za {minutes} min", "Alboria · dla wszystkich", "Alboria · {game}"};
+    case kLanguageCzech:
+      return {"Alboria přechází do údržby", "Online {game} přechází do údržby", "Alboria se restartuje", "Online hra {game} se vypne", "Místnosti {game} se zavřou", "Otevřené místnosti pokračují; nové čekají do konce.", "Nové místnosti se pozastaví do návratu. Otevřené mají až 30 minut na dokončení.", "Pak se její místnosti zavřou.", "Dohrajte zápas předtím.", "za minutu", "za {minutes} min", "Alboria · pro všechny", "Alboria · {game}"};
+    case kLanguageHungarian:
+      return {"Az Alboria karbantartásba lép", "A(z) {game} online része karbantartásba lép", "Az Alboria újraindul", "A(z) {game} online játéka kikapcsol", "A(z) {game} szobái bezárnak", "A nyitott szobák folytatódnak; az újak a végéig várnak.", "Új szobák szünetelnek a visszatérésig. A nyitottaknak legfeljebb 30 percük van befejezni.", "Ekkor bezárnak a szobái.", "Fejezd be előtte a meccset.", "egy perc múlva", "{minutes} perc múlva", "Alboria · mindenkinek", "Alboria · {game}"};
+    default:
+      return {"Alboria goes into maintenance", "{game} online goes into maintenance", "Alboria restarts", "Online play of {game} switches off", "{game} rooms close", "Rooms already open go on; new rooms wait until it ends.", "New rooms pause until it is back. Open rooms get up to 30 minutes to finish.", "Its rooms close then.", "Finish your match before then.", "in a minute", "in {minutes} min", "Alboria · for everyone", "Alboria · {game}"};
+  }
+}
+
+// `text` with each `{name}` replaced by `value`.
+std::string Fill(std::string text, const char* name, const std::string& value) {
+  const std::string field = std::string("{") + name + "}";
+  for (size_t at = text.find(field); at != std::string::npos; at = text.find(field, at + value.size())) {
+    text.replace(at, field.size(), value);
+  }
+  return text;
+}
+
+// A notice's text cut to about `limit` bytes at a space, with an ellipsis, so the panel stays on screen.
+std::string Shortened(const std::string& text, size_t limit) {
+  if (text.size() <= limit) return text;
+  size_t cut = text.rfind(' ', limit);
+  if (cut == std::string::npos || cut < limit / 2) {
+    cut = limit;
+    // Not inside a UTF-8 character.
+    while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80) --cut;
+  }
+  return text.substr(0, cut) + "\xE2\x80\xA6";
 }
 
 float Clamp01(float value) {
@@ -280,7 +354,8 @@ void AlboriaNotices::OnDraw(ImGuiIO& io) {
           std::any_of(open.begin(), open.end(), [&](const alboria::Invitation& i) { return i.id == notice.id; });
       if (!still_open) return;
     }
-    const float seconds = notice.kind == Notice::Kind::kInvitation ? kInvitationSeconds : kOtherSeconds;
+    const bool service = notice.kind == Notice::Kind::kServiceNotice || notice.kind == Notice::Kind::kServiceWarning;
+    const float seconds = notice.kind == Notice::Kind::kInvitation ? kInvitationSeconds : service ? kServiceSeconds : kOtherSeconds;
     alboria_sounds::Play(notice.kind == Notice::Kind::kInvitation ? alboria_sounds::Sound::kInvitation
                                                                    : alboria_sounds::Sound::kNotice);
     shown_ = Shown{std::move(notice), now, seconds, std::nullopt};
@@ -355,7 +430,7 @@ void AlboriaNotices::OnDraw(ImGuiIO& io) {
   // A match that ended as its host left says only that: who hosted is never shown
   // (alboria-notes:alboria-server/online-rules.md).
   const bool match_ended = notice.kind == Notice::Kind::kHostLeft;
-  const std::string name = match_ended      ? std::string(texts.host_left)
+  std::string name = match_ended      ? std::string(texts.host_left)
                            : map_not_shared ? std::string(texts.map_not_shared)
                            : refused        ? std::string(AlboriaErrorText(language_, notice.id))
                                             : notice.from_name;
@@ -366,6 +441,34 @@ void AlboriaNotices::OnDraw(ImGuiIO& io) {
                                                                         : texts.joined;
   if (!accept_text.empty()) detail = accept_text;
   const char* help = notice.kind == Notice::Kind::kFriendRequest ? texts.answer_in_launcher : nullptr;
+  // Alboria's service notices: a notice's text under who it is for, or what is coming and when, with
+  // what it means on the line below (the launcher's own texts).
+  std::string service_help;
+  if (notice.kind == Notice::Kind::kServiceNotice || notice.kind == Notice::Kind::kServiceWarning) {
+    const ServiceTexts service = LocalizedServiceTexts(language_);
+    const bool game = notice.from_name == "game";
+    label = "ALBORIA";
+    if (notice.kind == Notice::Kind::kServiceNotice) {
+      name = Fill(game ? service.for_game : service.for_everyone, "game", kGameName);
+      detail = Shortened(notice.id, 110);
+    } else {
+      const std::string& action = notice.id;
+      const char* what = action == "restart"      ? service.warn_restart
+                         : action == "game_off"    ? service.warn_game_off
+                         : action == "close_rooms" ? service.warn_close_rooms
+                         : game                    ? service.warn_maintenance_game
+                                                   : service.warn_maintenance_all;
+      const char* then = action == "restart"      ? service.then_restart
+                         : action == "game_off"    ? service.then_game_off
+                         : action == "close_rooms" ? service.then_close_rooms
+                                                   : service.then_maintenance;
+      name = Fill(what, "game", kGameName);
+      detail = notice.from_id <= 1 ? std::string(service.in_a_minute)
+                                   : Fill(service.in_minutes, "minutes", std::to_string(notice.from_id));
+      service_help = then;
+      help = service_help.c_str();
+    }
+  }
 
   // The sizes of what the panel holds, to fit it.
   const float label_size = 13.0f * unit;
@@ -416,7 +519,8 @@ void AlboriaNotices::OnDraw(ImGuiIO& io) {
   const float full_width =
       std::min(badge + text_offset + content + (hints ? hints_width + 20.0f * unit : 0.0f) + 20.0f * unit,
                game_height * 16.0f / 9.0f - 80.0f * unit);
-  const float height = (help ? 92.0f : 80.0f) * unit;
+  // With a help line, room for it above the time bar along the bottom.
+  const float height = (help ? 104.0f : 80.0f) * unit;
 
   // The panel and the planet's badge on its left end, the whole centred when unfolded.
   const float center_x = io.DisplaySize.x * 0.5f - full_width * 0.5f + badge;

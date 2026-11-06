@@ -1,9 +1,9 @@
 diff --git a/include/rex/system/xam/alboria.h b/include/rex/system/xam/alboria.h
 new file mode 100644
-index 0000000..651eedd
+index 0000000..fc447ab
 --- /dev/null
 +++ b/include/rex/system/xam/alboria.h
-@@ -0,0 +1,623 @@
+@@ -0,0 +1,628 @@
 +/**
 + * @file        system/xam/alboria.h
 + * @brief       Alboria: System Link over the internet through our relay
@@ -335,6 +335,11 @@ index 0000000..651eedd
 +                     // (the player's party did not fit, section 5 of the online rules)
 +    kMapNotShared,   // the host chose a map that a player of its pre-game lobby does not have (a map
 +                     // pack's), and the game kept the one it had
++    kServiceNotice,  // a notice of Alboria's (/v1/status' motd) that appeared while playing: `id` is
++                     // its text, without markup, and `from_name` its scope ("all" or "game")
++    kServiceWarning, // a scheduled action of Alboria's is near: `id` is the action ("maint_on",
++                     // "restart", "game_off", "close_rooms"), `from_name` its scope ("all" or
++                     // "game") and `from_id` the whole minutes left (at least 1)
 +  };
 +  Kind kind = Kind::kInvitation;
 +  std::string id;
@@ -667,10 +672,10 @@ index 0000000..c7fc5de
 +}  // namespace rex::system::xam::alboria
 diff --git a/src/system/xam/alboria.cpp b/src/system/xam/alboria.cpp
 new file mode 100644
-index 0000000..df2ec42
+index 0000000..16d27d9
 --- /dev/null
 +++ b/src/system/xam/alboria.cpp
-@@ -0,0 +1,3184 @@
+@@ -0,0 +1,3323 @@
 +/**
 + * @file        system/xam/alboria.cpp
 + * @brief       Alboria: System Link over the internet through our relay (rex/system/xam/alboria.h)
@@ -691,6 +696,8 @@ index 0000000..df2ec42
 +#include <mutex>
 +#include <random>
 +#include <set>
++#include <cstdio>
++#include <ctime>
 +#include <thread>
 +#include <utility>
 +
@@ -2644,13 +2651,150 @@ index 0000000..df2ec42
 +  });
 +}
 +
++std::string TitleIdText();
++
++// --- Alboria's notices and scheduled actions over the game ------------------------------------------
++// The launcher shows what /v1/status says (its notices, the countdowns to scheduled actions); a
++// player already in the game is told too: a notice that appears while playing, once, and each
++// scheduled action when first seen and again as it comes within 10, 5 and 1 minutes. They are the
++// service's, not friends', so they show while busy or invisible as well.
++constexpr auto kServiceInterval = std::chrono::seconds(30);
++// The scheduled actions told about: the ones the launcher counts down to.
++constexpr const char* kServiceActions[] = {"maint_on", "restart", "game_off", "close_rooms"};
++bool g_service_read = false;                              // the service reader only
++std::set<std::string> g_service_notices;                  // the notices already seen
++std::map<std::string, int> g_service_warned;              // each action (action|scope|at): the last step told
++
++// `html` (a notice, which may hold the launcher's few tags) as plain text: tags and comments left
++// out, the common entities turned back, spaces collapsed.
++std::string PlainNotice(const std::string& html) {
++  std::string text;
++  for (size_t i = 0; i < html.size();) {
++    if (html.compare(i, 4, "<!--") == 0) {
++      const size_t end = html.find("-->", i + 4);
++      i = end == std::string::npos ? html.size() : end + 3;
++      continue;
++    }
++    if (html[i] == '<') {
++      const size_t end = html.find('>', i);
++      // A tag that ends a block leaves a space.
++      if (!text.empty() && text.back() != ' ') text.push_back(' ');
++      i = end == std::string::npos ? html.size() : end + 1;
++      continue;
++    }
++    static const std::pair<const char*, const char*> kEntities[] = {
++        {"&amp;", "&"}, {"&lt;", "<"}, {"&gt;", ">"}, {"&quot;", "\""}, {"&#39;", "'"}, {"&nbsp;", " "}};
++    bool entity = false;
++    for (const auto& [name, value] : kEntities) {
++      if (html.compare(i, std::strlen(name), name) == 0) {
++        text += value;
++        i += std::strlen(name);
++        entity = true;
++        break;
++      }
++    }
++    if (entity) continue;
++    const char c = html[i++];
++    if (c == '\n' || c == '\r' || c == '\t' || c == ' ') {
++      if (!text.empty() && text.back() != ' ') text.push_back(' ');
++    } else {
++      text.push_back(c);
++    }
++  }
++  while (!text.empty() && text.back() == ' ') text.pop_back();
++  return text;
++}
++
++// Which countdown step `minutes` left is in: 1, 5, 10, or 60 for anything further.
++int WarningStep(int minutes) {
++  return minutes <= 1 ? 1 : minutes <= 5 ? 5 : minutes <= 10 ? 10 : 60;
++}
++
++// Reads /v1/status for this title and queues what is new for the title's notices. The first read
++// only notes the notices there already (the launcher showed them before the game started).
++void ReadServiceStatus() {
++  const HttpResponse response = PostJson(REXCVAR_GET(alboria_api_url) + "/v1/status",
++                                         nlohmann::json{{"title_id", TitleIdText()}}.dump(), {});
++  if (response.status != 200) return;
++  const auto status = nlohmann::json::parse(response.body, nullptr, false);
++  if (!status.is_object()) return;
++  std::vector<Notice> found;
++  // The notices: the service's ("all") and this game's ("game").
++  std::vector<std::pair<std::string, std::string>> notices;
++  if (status.contains("motd") && status["motd"].is_string()) notices.emplace_back(status["motd"].get<std::string>(), "all");
++  if (status.contains("game") && status["game"].is_object() && status["game"].contains("motd") && status["game"]["motd"].is_string()) {
++    notices.emplace_back(status["game"]["motd"].get<std::string>(), "game");
++  }
++  for (const auto& [notice, scope] : notices) {
++    const std::string text = PlainNotice(notice);
++    if (text.empty() || !g_service_notices.insert(notice).second || !g_service_read) continue;
++    found.push_back({Notice::Kind::kServiceNotice, text, 0, scope});
++  }
++  // The scheduled actions coming, but not maintenance already on.
++  const bool maintenance = Flag(status, "maintenance", false);
++  const bool game_maintenance = status.contains("game") && status["game"].is_object() && Flag(status["game"], "maintenance", false);
++  if (status.contains("warnings") && status["warnings"].is_array()) {
++    const auto now = std::chrono::system_clock::now();
++    for (const auto& warning : status["warnings"]) {
++      if (!warning.is_object()) continue;
++      const std::string action = Text(warning, "action");
++      const std::string scope = Text(warning, "scope");
++      const std::string at = Text(warning, "at");
++      if (std::find_if(std::begin(kServiceActions), std::end(kServiceActions), [&](const char* known) { return action == known; }) ==
++              std::end(kServiceActions) ||
++          (scope != "all" && scope != "game")) {
++        continue;
++      }
++      if (action == "maint_on" && (scope == "all" ? maintenance : game_maintenance)) continue;
++      // An ISO time, such as 2026-11-07T10:30:00.000Z.
++      std::tm when{};
++      int millis = 0;
++      if (std::sscanf(at.c_str(), "%d-%d-%dT%d:%d:%d.%dZ", &when.tm_year, &when.tm_mon, &when.tm_mday, &when.tm_hour,
++                      &when.tm_min, &when.tm_sec, &millis) < 6) {
++        continue;
++      }
++      when.tm_year -= 1900;
++      when.tm_mon -= 1;
++#if REX_PLATFORM_WIN32
++      const std::time_t utc = _mkgmtime(&when);
++#else
++      const std::time_t utc = timegm(&when);
++#endif
++      const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::from_time_t(utc) - now).count();
++      if (seconds <= 0) continue;
++      const int minutes = static_cast<int>((seconds + 59) / 60);
++      const std::string key = action + "|" + scope + "|" + at;
++      const auto told = g_service_warned.find(key);
++      const int step = WarningStep(minutes);
++      if (told != g_service_warned.end() && told->second <= step) continue;
++      g_service_warned[key] = step;
++      found.push_back({Notice::Kind::kServiceWarning, action, static_cast<uint32_t>(minutes), scope});
++    }
++  }
++  g_service_read = true;
++  if (found.empty()) return;
++  for (const Notice& notice : found) {
++    REXSYS_INFO("Alboria: a service notice for the title ({}{})", notice.kind == Notice::Kind::kServiceWarning ? notice.id : "notice",
++                notice.kind == Notice::Kind::kServiceWarning ? fmt::format(", {} min", notice.from_id) : "");
++  }
++  std::lock_guard lock(g_friends_mutex);
++  g_notices.insert(g_notices.end(), found.begin(), found.end());
++}
++
 +// Starts the friends reader once: it reads the list every kFriendsInterval while the player is
-+// signed in to Live, for as long as the title runs.
++// signed in to Live, and Alboria's status every kServiceInterval, for as long as the title runs.
 +void StartFriendsReader() {
 +  if (g_friends_reader.exchange(true)) return;
 +  std::thread([] {
++    auto service_read = std::chrono::steady_clock::time_point{};
 +    for (;;) {
-+      if (LiveSignedIn()) ReadFriends();
++      if (LiveSignedIn()) {
++        ReadFriends();
++        if (std::chrono::steady_clock::now() - service_read >= kServiceInterval) {
++          service_read = std::chrono::steady_clock::now();
++          ReadServiceStatus();
++        }
++      }
 +      std::this_thread::sleep_for(kFriendsInterval);
 +    }
 +  }).detach();
