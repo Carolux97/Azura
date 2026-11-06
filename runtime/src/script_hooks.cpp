@@ -128,6 +128,10 @@ REXCVAR_DECLARE(double, mnk_run_turn_limit);
 extern "C" void __imp__sub_822DF4D0(PPCContext& __restrict ctx, uint8_t* base);
 extern "C" void __imp__sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base);
 extern "C" void __imp__sub_822B0E30(PPCContext& __restrict ctx, uint8_t* base);
+// UObject::ProcessEvent (r3 = object, r4 = UFunction*, r5 = parameters, r6 = result): how native
+// code calls a script function. It copies UFunction::ParmsSize bytes of parameters into a new
+// frame and runs the function (through ProcessInternal, for a script function).
+extern "C" void __imp__sub_822DFBC8(PPCContext& __restrict ctx, uint8_t* base);
 
 
 // Online play through Alboria, and whether its matches migrate their host (defined further down).
@@ -456,6 +460,8 @@ enum WatchedName {
   kServerSetDLCFlag,         // GearPC: a player's game tells the host its map packs (map packs)
   kNotifyConnectionError,    // GearGameViewportClient: a connection is lost or refused, with the engine's reason
   kOnConfirmReturnToMenu,    // UIScene_Pause: the player confirmed leaving the match for the main menu
+  kConstructActList,         // UIWidget_MainMenu: builds the campaign's act list (Select chapter)
+  kDLCEnumerationFinished,   // UIScene_FrontEnd: the add-ons are installed and the acts updated
   kProcessSoundEvent,        // UISoundTheme: plays a menu sound by its event name (Menu sounds)
   // The menu sound events our menus play (MenuSound), in its order.
   kSoundStepUp,
@@ -494,7 +500,7 @@ constexpr const char* kWatchedNames[kWatchedNameCount] = {
     "GetAdjustedAimFor",     "NotifyInviteFailed",     "CancelPartyMatchmaking", "CreatePlayerVersusMatch", "OnNoPartialPartyAvailable", "PostBeginPlay", "ContinueCreateMatch", "InitializeGameSelectionInternal", "UpdateCountdowns", "InitializeMapSelectionInternal", "GetTeamForCurrentPlayer", "HandleGameSessionJIP", "InitializePreGameGameSettings", "PreLogin", "PostLogin", "SetNumBots", "BeginMatch", "EndOfGameTransition", "GetNextMap", "CheckMapAgainstPlaylist", "GetNumberOfSupportedMapsForPlaylist", "IsEpicDev", "InitGameReplicationInfo", "UpdateGRI", "DelayedGameSessionDelete", "PlacePlayerOnSmallestTeam", "GetOccupiedTeamSize", "GetGameSummaryFromProviderIndex", "HandleHordeSelection", "HandleSiegeSelection", "HandleHordeAndSiegeMatchModeSelection", "UpdateNatType", "UpdatePopulationNumbers", "SetHostIcon", "UpdatePlayerList", "OnLeaveGame", "CanBackUpToMapSelect", "CanLeaveGame", "IsOfficialMatch", "IsPlayerMatch", "OnLeaveLobby_Confirmed", "ReturnToMainMenu", "ShowUIMessage", "ClientWasKicked",
     "BuildSortedMapList",    "GetResourceProviders",   "PopulateMapList",    "SubmitMapSelectionByName",
     "PlayersLackRequiredDLC", "ServerSetDLCFlag", "NotifyConnectionError",
-    "OnConfirm_ReturnToMenu",
+    "OnConfirm_ReturnToMenu", "ConstructActList",      "DLCEnumerationFinished",
     "ProcessSoundEvent",     "Options_StepUp",         "Options_StepDown",   "ValueChangeLeft",
     "ValueChangeRight",      "Options_AcceptButton",   "Options_BackButton", "Options_DetailsEnter",
     "Options_DetailsLeave",  "Options_SliderLeft",     "Options_SliderRight"};
@@ -786,6 +792,89 @@ void NoteCampaignChoice(const uint8_t* base, uint32_t frame) {
   if (g_dlc_campaign_chosen.exchange(dlc) != dlc) {
     REXLOG_INFO("[Azura campaign] {} chosen", dlc ? "RAAM's Shadow" : "The main campaign");
   }
+}
+
+// Select chapter with an add-on's campaign. The main menu builds its campaign act list
+// (UIWidget_MainMenu.ConstructActList) while the front end starts, before the game has enumerated
+// the installed add-ons. UIScene_FrontEnd.DLCEnumerationFinished then creates the act providers
+// again, now with the add-on's act (RAAM's Shadow: chapters 31 to 35), and the disc's script does
+// not build the list again. So once DLCEnumerationFinished is over, the list is built again with
+// the game's own call, through UObject::ProcessEvent, on the same widget and page.
+
+// UFunction::ParmsSize (16 bits): the size of a function's parameters, which ProcessEvent copies.
+constexpr uint32_t kFunctionParmsSize = 126;
+
+// The last act list the game built: the menu widget, its class (to tell the widget is still
+// there), ConstructActList, and the page it was built for (-1 before the first).
+struct ActListBuild {
+  uint32_t widget = 0;
+  uint32_t widget_class = 0;
+  uint32_t function = 0;
+  int32_t page_id = -1;
+};
+std::mutex g_act_list_mutex;
+ActListBuild g_act_list;
+
+// Notes a ConstructActList call (`ctx`, about to run) for RebuildActList.
+void NoteActListBuild(const PPCContext& ctx, const uint8_t* base) {
+  const uint32_t function = LoadU32(base, ctx.r4.u32 + kFrameNode);
+  const int32_t page_id = SmallParam(base, function, ctx.r4.u32, "PageId");
+  if (page_id < 0) return;
+  std::lock_guard lock(g_act_list_mutex);
+  g_act_list = {ctx.r3.u32, LoadU32(base, ctx.r3.u32 + kObjectClass), function, page_id};
+}
+
+// Builds the act list again on the widget and page of the last ConstructActList, after
+// DLCEnumerationFinished (`ctx`, over) has updated the act providers.
+void RebuildActList(PPCContext& ctx, uint8_t* base) {
+  ActListBuild build;
+  {
+    std::lock_guard lock(g_act_list_mutex);
+    build = g_act_list;
+  }
+  if (build.page_id < 0) {
+    REXLOG_INFO("[Azura DLC] The add-ons are installed before the act list is built: nothing to rebuild");
+    return;
+  }
+  if (LoadU32(base, build.widget + kObjectClass) != build.widget_class) {
+    REXLOG_WARN("[Azura DLC] The main menu that built the act list is gone: the list is not rebuilt");
+    return;
+  }
+  // The parameters go on the guest stack, below the caller's frame and above ProcessEvent's own
+  // (which it makes below the stack pointer it is given).
+  constexpr uint32_t kParmsRoom = 128;
+  const uint32_t parms_size = (static_cast<uint32_t>(base[build.function + kFunctionParmsSize]) << 8) |
+                              base[build.function + kFunctionParmsSize + 1];
+  const int32_t page_at = ParamOffset(base, build.function, "PageId");
+  const uint32_t page_size = ParamSize(base, build.function, "PageId");
+  if (parms_size > kParmsRoom || page_at < 0 || (page_size != 1 && page_size != 4)) {
+    REXLOG_WARN("[Azura DLC] ConstructActList's parameters are not as expected ({} bytes): the act list is not rebuilt",
+                parms_size);
+    return;
+  }
+  const uint32_t r1 = ctx.r1.u32;
+  const uint32_t parms = (r1 - kParmsRoom) & ~UINT32_C(15);
+  std::memset(base + parms, 0, kParmsRoom);
+  if (page_size == 1) {
+    base[parms + static_cast<uint32_t>(page_at)] = static_cast<uint8_t>(build.page_id);
+  } else {
+    StoreU32(base, parms + static_cast<uint32_t>(page_at), static_cast<uint32_t>(build.page_id));
+  }
+  const uint64_t r3 = ctx.r3.u64, r4 = ctx.r4.u64, r5 = ctx.r5.u64, r6 = ctx.r6.u64, lr = ctx.lr;
+  StoreU32(base, parms - 64, r1);  // the back chain, as a stwu would have left it
+  ctx.r1.u64 = parms - 64;
+  ctx.r3.u64 = build.widget;
+  ctx.r4.u64 = build.function;
+  ctx.r5.u64 = parms;
+  ctx.r6.u64 = 0;
+  __imp__sub_822DFBC8(ctx, base);
+  ctx.r1.u64 = r1;
+  ctx.r3.u64 = r3;
+  ctx.r4.u64 = r4;
+  ctx.r5.u64 = r5;
+  ctx.r6.u64 = r6;
+  ctx.lr = lr;
+  REXLOG_INFO("[Azura DLC] The act list (page {}) is built again with the installed add-ons", build.page_id);
 }
 
 // The standard campaign's menu without its public matches (menu_patches.cpp): UIScene_FrontEnd.
@@ -5716,6 +5805,14 @@ extern "C" void sub_822DF9E0(PPCContext& __restrict ctx, uint8_t* base) {
                   rex::system::xam::alboria::GetStatus().host ? " (the match room's host): yes" : "");
     }
     if (result && rex::system::xam::alboria::GetStatus().host) StoreU32(base, result, 1);
+    return;
+  }
+  // Select chapter with an add-on's campaign: the act list the menu builds, and built again once
+  // the add-ons are installed (see RebuildActList).
+  if (Is(base, function, kConstructActList)) NoteActListBuild(ctx, base);
+  if (Is(base, function, kDLCEnumerationFinished)) {
+    __imp__sub_822DF9E0(ctx, base);
+    RebuildActList(ctx, base);
     return;
   }
   // Leaving confirmed. A matchmade lobby's host does not run it: its LeaveMatch ends the lobby as a
