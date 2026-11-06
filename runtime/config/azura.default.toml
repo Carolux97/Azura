@@ -104,7 +104,7 @@ network_mode = "online"
 # Alboria's control API, and the name and version this build gives it when signing in (the
 # service refuses versions it no longer supports).
 alboria_api_url = "https://api.alboria.org"
-alboria_client = "azura/0.6.3"
+alboria_client = "azura/0.6.4"
 # With online play, the game's own Xbox Live parties are Alboria's: the player is signed in to Xbox
 # Live as far as the game can tell while Alboria answers and accepts the account, and Joinable and
 # Invite only are the game's Live parties, each in a room. Joining a room brings the host's party as

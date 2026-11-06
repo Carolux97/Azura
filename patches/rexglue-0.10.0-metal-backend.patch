@@ -2604,10 +2604,10 @@ index fa2ef60..fd8db27 100644
  REXCVAR_DECLARE(int32_t, vulkan_device);
  REXCVAR_DECLARE(bool, vulkan_prefer_geometry_shader);
 diff --git a/include/rex/ui/imgui_dialog.h b/include/rex/ui/imgui_dialog.h
-index a7ab6b3..f4425b8 100644
+index a7ab6b3..326353c 100644
 --- a/include/rex/ui/imgui_dialog.h
 +++ b/include/rex/ui/imgui_dialog.h
-@@ -39,6 +39,12 @@ class ImGuiDialog {
+@@ -39,6 +39,16 @@ class ImGuiDialog {
  
    void Draw();
  
@@ -2616,6 +2616,10 @@ index a7ab6b3..f4425b8 100644
 +  // which also draws the dialogs; a dialog that only shows something now and then (a notification
 +  // with nothing to show) returns false while idle.
 +  virtual bool NeedsContinuousPaint() const { return true; }
++
++  // Whether the dialog is drawn after the others, over them, whatever the order they were added in
++  // (notifications over menus).
++  virtual bool DrawsOnTop() const { return false; }
 +
   protected:
    ImGuiDialog(ImGuiDrawer* imgui_drawer);
@@ -29690,7 +29694,7 @@ index 2d13ac8..7aea83e 100644
  
  bool XSocket::QueuePacket(uint32_t src_ip, uint16_t src_port, const uint8_t* buf, size_t len) {
 diff --git a/src/ui/imgui_drawer.cpp b/src/ui/imgui_drawer.cpp
-index f270f3c..1e4d411 100644
+index f270f3c..c4a3af9 100644
 --- a/src/ui/imgui_drawer.cpp
 +++ b/src/ui/imgui_drawer.cpp
 @@ -9,6 +9,7 @@
@@ -29701,7 +29705,24 @@ index f270f3c..1e4d411 100644
  #include <cfloat>
  #include <cstring>
  #include <filesystem>
-@@ -436,12 +437,14 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
+@@ -415,9 +416,13 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
+   ImGui::NewFrame();
+ 
+   assert_true(!IsDrawingDialogs());
+-  dialog_loop_next_index_ = 0;
+-  while (dialog_loop_next_index_ < dialogs_.size()) {
+-    dialogs_[dialog_loop_next_index_++]->Draw();
++  // The dialogs in the order they were added, then the ones drawn on top (DrawsOnTop) over them.
++  for (const bool on_top : {false, true}) {
++    dialog_loop_next_index_ = 0;
++    while (dialog_loop_next_index_ < dialogs_.size()) {
++      ImGuiDialog* dialog = dialogs_[dialog_loop_next_index_++];
++      if (dialog->DrawsOnTop() == on_top) dialog->Draw();
++    }
+   }
+   dialog_loop_next_index_ = SIZE_MAX;
+ 
+@@ -436,12 +441,14 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
    // it now if needed.
    DetachIfLastDialogRemoved();
  

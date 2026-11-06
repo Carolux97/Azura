@@ -184,4 +184,46 @@ void ApplyFrameRateLimit();
 // presenter creates its swapchain.
 void ApplyPresentMode();
 
+// --- The Video menu of ours (graphics_menu.h) ---
+//
+// Choosing Video in the Options opens our own menu instead of the game's list of rows, unless the
+// player's azura.toml sets graphics_menu = false (read when the game starts). The menu edits the
+// same options as the list, through the functions below and PcOptionDisplayValue /
+// PcOptionStoreValue, so azura.toml keeps the same keys.
+
+// Whether Video opens our menu (graphics_menu), as it was when the game started.
+bool UseGraphicsMenu();
+
+// What the menu shows of PC option `option`, in the player's language.
+struct PcOptionInfo {
+  std::string label;                // upper case, as the game's own rows
+  std::string help;                 // what it does (the row's tooltip)
+  std::vector<std::string> values;  // the value names of a toggle or a list; empty otherwise
+  bool slider = false;
+  float slider_min = 0, slider_max = 0, slider_step = 0;
+  bool action = false;              // the calibration row: it opens a screen, no value
+};
+PcOptionInfo PcOptionDescribe(int option);
+
+// The PC option that edits cvar `cvar`, or -1; the calibration row is PcOptionCalibrate().
+int PcOptionByCvar(const std::string& cvar);
+int PcOptionCalibrate();
+
+// Whether the Video menu shows `option` now: the sharpness only with an image scaling effect that
+// sharpens.
+bool PcOptionShown(int option);
+
+// Whether `option` is the render resolution or the image scaling while the upscaling preset chosen
+// is not custom: the preset decides it when the game starts. `value` is then what the preset picks
+// for this screen (a list index), which the menu shows dimmed.
+bool PcOptionDecidedByPreset(int option, float& value);
+
+// The player changes a row the preset decides: the preset becomes custom, starting from the render
+// resolution and the image scaling the preset picked, so nothing jumps.
+void PcOptionsLeavePreset();
+
+// Whether the value chosen for `option` only takes effect at the next start and differs from the
+// one the game started with.
+bool PcOptionPendingRestart(int option);
+
 }  // namespace azura::menu

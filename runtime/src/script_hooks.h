@@ -21,6 +21,16 @@ void SetLocalCoopHandler(std::function<void()> handler);
 // What choosing Connection in the Options runs (from the game's script thread): it opens the
 // Alboria menu (connection_menu.h). nullptr to stop.
 void SetConnectionHandler(std::function<void()> handler);
+// What choosing Video in the Options runs (from the game's script thread) when Video opens our
+// graphics menu (menu::UseGraphicsMenu): it opens that menu (graphics_menu.h), also again when the
+// brightness calibration it opened closes. nullptr to stop.
+void SetGraphicsMenuHandler(std::function<void()> handler);
+// What the graphics menu asks for, done on player 1's next input frame on the Options it was opened
+// over (any thread): open the game's brightness calibration screen, as Video did in the game; or,
+// as the menu closes, offer to restart the game when a setting that only applies at start-up
+// changed (in the main menu only: in the middle of a game a restart would lose progress).
+void RequestBrightnessCalibration();
+void GraphicsMenuClosed();
 // What choosing Versus online, Horde online or Beast online in their menus runs (from the game's
 // script thread), with the game (0 Versus, 1 Horde, 2 Beast): it opens the online menu
 // (versus_online_menu.h) for that game. nullptr to stop.
