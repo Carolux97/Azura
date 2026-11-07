@@ -2624,6 +2624,44 @@ index a7ab6b3..326353c 100644
   protected:
    ImGuiDialog(ImGuiDrawer* imgui_drawer);
  
+diff --git a/include/rex/ui/imgui_drawer.h b/include/rex/ui/imgui_drawer.h
+index a570fa0..63c0b77 100644
+--- a/include/rex/ui/imgui_drawer.h
++++ b/include/rex/ui/imgui_drawer.h
+@@ -17,6 +17,7 @@
+ #include <functional>
+ #include <memory>
+ #include <optional>
++#include <unordered_map>
+ #include <vector>
+ 
+ #include <rex/ui/immediate_drawer.h>
+@@ -77,7 +78,13 @@ class ImGuiDrawer : public WindowInputListener, public UIDrawer {
+  private:
+   void Initialize();
+ 
+-  void SetupFontTexture();
++  // Does what ImGui asks of its textures this frame (ImDrawData::Textures): creates, updates or
++  // destroys their immediate drawer textures. ImGui adds glyphs to its font atlas as text first uses
++  // them (ImGuiBackendFlags_RendererHasTextures), in any script the fonts draw.
++  void UpdateTextures(ImDrawData* data);
++  // Destroys every texture made for ImGui, which asks for them again on its next frame (when the
++  // immediate drawer changes).
++  void DestroyTextures();
+ 
+   void RenderDrawLists(ImDrawData* data, UIDrawContext& ui_draw_context);
+ 
+@@ -111,8 +118,8 @@ class ImGuiDrawer : public WindowInputListener, public UIDrawer {
+ 
+   ImmediateDrawer* immediate_drawer_ = nullptr;
+   // Resources specific to an immediate drawer - must be destroyed before
+-  // detaching the presenter.
+-  std::unique_ptr<ImmediateTexture> font_texture_;
++  // detaching the presenter. ImGui's textures (its font atlas), by ImTextureData::UniqueID.
++  std::unordered_map<int, std::unique_ptr<ImmediateTexture>> textures_;
+ 
+   // If there's an active pointer, the ImGui mouse is controlled by this touch.
+   // If it's TouchEvent::kPointerIDNone, the ImGui mouse is controlled by the
 diff --git a/include/rex/ui/overlay/achievement_toast.h b/include/rex/ui/overlay/achievement_toast.h
 index 7642601..b93550d 100644
 --- a/include/rex/ui/overlay/achievement_toast.h
@@ -29694,7 +29732,7 @@ index 2d13ac8..7aea83e 100644
  
  bool XSocket::QueuePacket(uint32_t src_ip, uint16_t src_port, const uint8_t* buf, size_t len) {
 diff --git a/src/ui/imgui_drawer.cpp b/src/ui/imgui_drawer.cpp
-index f270f3c..c4a3af9 100644
+index f270f3c..48133e7 100644
 --- a/src/ui/imgui_drawer.cpp
 +++ b/src/ui/imgui_drawer.cpp
 @@ -9,6 +9,7 @@
@@ -29705,7 +29743,126 @@ index f270f3c..c4a3af9 100644
  #include <cfloat>
  #include <cstring>
  #include <filesystem>
-@@ -415,9 +416,13 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
+@@ -168,6 +169,13 @@ void ImGuiDrawer::Initialize() {
+   // Windows.
+   io.IniFilename = nullptr;
+ 
++  // The font atlas grows as text uses new glyphs, instead of holding only the glyph ranges given
++  // when the fonts were added: UpdateTextures hands the changes to the immediate drawer.
++  io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
++  io.Fonts->TexDesiredFormat = ImTextureFormat_RGBA32;
++  // A size every immediate drawer can create.
++  platform_io.Renderer_TextureMaxWidth = platform_io.Renderer_TextureMaxHeight = 4096;
++
+   // Setup the font glyphs.
+   ImFontConfig font_config;
+   font_config.OversampleH = font_config.OversampleV = 1;
+@@ -328,17 +336,61 @@ std::optional<ImGuiKey> ImGuiDrawer::VirtualKeyToImGuiKey(VirtualKey vkey) {
+   }
+ }
+ 
+-void ImGuiDrawer::SetupFontTexture() {
+-  if (font_texture_ || !immediate_drawer_) {
++void ImGuiDrawer::UpdateTextures(ImDrawData* data) {
++  if (!data->Textures || !immediate_drawer_) {
+     return;
+   }
+-  ImGuiIO& io = GetIO();
+-  unsigned char* pixels;
+-  int width, height;
+-  io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+-  font_texture_ = immediate_drawer_->CreateTexture(width, height, ImmediateTextureFilter::kLinear,
+-                                                   true, reinterpret_cast<uint8_t*>(pixels));
+-  io.Fonts->TexID = reinterpret_cast<ImTextureID>(font_texture_.get());
++  for (ImTextureData* texture : *data->Textures) {
++    switch (texture->Status) {
++      case ImTextureStatus_WantCreate:
++      case ImTextureStatus_WantUpdates: {
++        // The immediate drawers only create textures from whole images, so an update (new glyphs)
++        // makes the texture again from all of its pixels. Glyphs are added a few at a time, the
++        // first time some text uses them, so this is rare. The old texture is released once the
++        // GPU no longer uses it (each immediate drawer keeps it until its last submission ends).
++        std::unique_ptr<ImmediateTexture>& entry = textures_[texture->UniqueID];
++        entry = immediate_drawer_->CreateTexture(uint32_t(texture->Width), uint32_t(texture->Height),
++                                                 ImmediateTextureFilter::kLinear, true,
++                                                 static_cast<const uint8_t*>(texture->GetPixels()));
++        if (!entry) {
++          REXLOG_WARN("ImGui: cannot create a {}x{} texture for its fonts", texture->Width, texture->Height);
++          textures_.erase(texture->UniqueID);
++          texture->SetTexID(ImTextureID_Invalid);
++          texture->SetStatus(ImTextureStatus_Destroyed);
++          break;
++        }
++        texture->SetTexID(reinterpret_cast<ImTextureID>(entry.get()));
++        texture->SetStatus(ImTextureStatus_OK);
++        break;
++      }
++      case ImTextureStatus_WantDestroy:
++        // Only once no frame drew with it: the immediate drawers defer the release by their own
++        // submissions too.
++        if (texture->UnusedFrames > 0) {
++          textures_.erase(texture->UniqueID);
++          texture->SetTexID(ImTextureID_Invalid);
++          texture->SetStatus(ImTextureStatus_Destroyed);
++        }
++        break;
++      default:
++        break;
++    }
++  }
++}
++
++void ImGuiDrawer::DestroyTextures() {
++  if (internal_state_) {
++    ImGui::SetCurrentContext(internal_state_);
++    for (ImTextureData* texture : ImGui::GetPlatformIO().Textures) {
++      if (texture->Status == ImTextureStatus_Destroyed) {
++        continue;
++      }
++      // Destroyed by the backend rather than by ImGui: it creates the texture again.
++      texture->SetTexID(ImTextureID_Invalid);
++      texture->SetStatus(ImTextureStatus_Destroyed);
++    }
++  }
++  textures_.clear();
+ }
+ 
+ void ImGuiDrawer::SetPresenter(Presenter* new_presenter) {
+@@ -363,17 +415,11 @@ void ImGuiDrawer::SetImmediateDrawer(ImmediateDrawer* new_immediate_drawer) {
+     return;
+   }
+   if (immediate_drawer_) {
+-    GetIO().Fonts->TexID = ImTextureID{};
+-    font_texture_.reset();
++    DestroyTextures();
+   }
++  // ImGui's textures are created on the next frame drawn with the new immediate drawer
++  // (UpdateTextures): in detached mode the app's renderer device may only become usable then.
+   immediate_drawer_ = new_immediate_drawer;
+-  // Eagerly upload the font atlas only when a presenter is attached (SDK mode).
+-  // In detached mode (presenter_ == nullptr) the app's renderer device may not
+-  // exist yet at SetupPresentation, so defer to the idempotent Draw-time
+-  // SetupFontTexture().
+-  if (immediate_drawer_ && presenter_) {
+-    SetupFontTexture();
+-  }
+ }
+ 
+ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
+@@ -384,12 +430,6 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
+     return;
+   }
+ 
+-  // In detached mode the app's immediate drawer (and the renderer device
+-  // backing it) may only become usable on the first frame, after the guest
+-  // creates its D3D device. Upload the font atlas lazily and idempotently;
+-  // SetupFontTexture early-returns once font_texture_ is set.
+-  SetupFontTexture();
+-
+   if (dialogs_.empty()) {
+     return;
+   }
+@@ -415,15 +455,20 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
    ImGui::NewFrame();
  
    assert_true(!IsDrawingDialogs());
@@ -29722,7 +29879,14 @@ index f270f3c..c4a3af9 100644
    }
    dialog_loop_next_index_ = SIZE_MAX;
  
-@@ -436,12 +441,14 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
+   ImGui::Render();
+   ImDrawData* draw_data = ImGui::GetDrawData();
+   if (draw_data) {
++    UpdateTextures(draw_data);
+     RenderDrawLists(draw_data, ui_draw_context);
+   }
+ 
+@@ -436,12 +481,14 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
    // it now if needed.
    DetachIfLastDialogRemoved();
  
