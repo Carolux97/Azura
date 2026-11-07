@@ -452,6 +452,8 @@ class AzuraApp : public rex::ReXApp {
   // Japanese, Korean or traditional Chinese font when that is the player's language (each is
   // several megabytes, and their Han characters differ in shape between the three).
   void OnConfigureFonts(ImFontAtlas* atlas) override {
+    // The size every font is rasterized at.
+    constexpr float kRasterSize = 48.0f;
     // `merge` adds the file's glyphs to the font added last instead of making a new font.
     auto load = [&](const char* name, bool merge) -> ImFont* {
       std::filesystem::path path = exe_dir_ / "assets" / "fonts" / name;
@@ -461,7 +463,7 @@ class AzuraApp : public rex::ReXApp {
       }
       ImFontConfig config;
       config.MergeMode = merge;
-      return atlas->AddFontFromFileTTF(path.string().c_str(), 48.0f, &config);
+      return atlas->AddFontFromFileTTF(path.string().c_str(), kRasterSize, &config);
     };
     const char* cjk = nullptr;
     switch (azura::MenuLanguage()) {
@@ -490,6 +492,14 @@ class AzuraApp : public rex::ReXApp {
     alboria_body_font_ = load_alboria("Nunito-SemiBold.ttf");
     if (!alboria_title_font_) alboria_title_font_ = title_font_;
     if (!alboria_body_font_) alboria_body_font_ = body_font_;
+    // The atlas adds glyphs as text first uses them (any letter of any language the fonts draw), but
+    // each font keeps the one size it is rasterized at, drawn larger or smaller as before: a text
+    // whose size changes from frame to frame does not rasterize it again at every size.
+    for (ImFont* font : {title_font_, body_font_, alboria_title_font_, alboria_body_font_}) {
+      if (!font || (font->Flags & ImFontFlags_LockBakedSizes)) continue;
+      font->GetFontBaked(kRasterSize);
+      font->Flags |= ImFontFlags_LockBakedSizes;
+    }
   }
 
   // The notice for unlocked achievements, in place of the SDK's toast.
